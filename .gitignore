@@ -1,0 +1,25 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+*.egg-info/
+
+# Données, modèles et échanges (jamais dans git)
+/data/
+/exchange/
+*.onnx
+*.parquet
+*.f16
+*.f32
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Divers
+.DS_Store
+.env
+.env.*

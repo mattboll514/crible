@@ -1,0 +1,225 @@
+# 05 — API REST v1
+
+## Conventions
+
+- **Format** : base `/v1`, JSON en UTF-8, noms en anglais et en `snake_case`.
+- **Authentification** : en-tête `Authorization: Bearer <clé>`. Les clés sont déclarées dans `crible.toml` sous forme de hash SHA-256, avec un nom et un rôle :
+
+  | Rôle | Droits |
+  |---|---|
+  | `read` | recherche, lecture de documents, liste des index |
+  | `write` | `read` + documents, lots, jobs |
+  | `admin` | `write` + administration des index, compaction, export, instantanés, stats, journal de debug |
+
+- **Traçabilité** : chaque réponse porte l'en-tête `x-request-id`, et chaque réponse de recherche donne la `generation` lue.
+- **Mutations asynchrones** : elles renvoient `202 Accepted` avec un objet `job`.
+  - Avec `?wait=true`, l'appel attend la fin du job (au plus `wait_timeout_ms`, 60 s par défaut) et renvoie le job terminé.
+- **Dates** : ISO 8601 pour les horodatages, `YYYY-MM-DD` pour les champs de type `date`.
+- **Ids** : seuls les ids externes apparaissent (**INV-01**).
+
+## Erreurs
+
+Format unique :
+
+```json
+{ "error": { "code": "invalid_filter", "message": "unknown field 'juridicton' (did you mean 'juridiction'?)",
+             "details": { "path": "$.filter.juridicton" }, "request_id": "…" } }
+```
+
+| Code | HTTP | Cas |
+|---|---|---|
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes |
+| `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
+| `unauthorized` | 401 | Clé absente ou inconnue |
+| `forbidden` | 403 | Rôle insuffisant |
+| `unknown_index` | 404 | Index inexistant |
+| `not_found` | 404 | Document, job ou lot introuvable |
+| `immutable_setting` | 409 | Tentative de modifier un réglage figé |
+| `batch_conflict` | 409 | Même `batch_id`, manifeste différent |
+| `payload_too_large` | 413 | Corps au-delà des limites |
+| `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
+| `acceptance_failed` | 422 | Recette refusée |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte (`Retry-After`) |
+| `timeout` | 504 | Requête trop longue |
+| `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) |
+
+Ces codes servent aussi de catégories d'erreurs dans les analytics.
+
+## Endpoints
+
+| Méthode et chemin | Rôle | Description |
+|---|---|---|
+| `POST /v1/indexes` | admin | Créer un index (config complète) → `201` |
+| `GET /v1/indexes` | read | Lister les index : nom, modèle, comptes, génération |
+| `GET /v1/indexes/{index}` | read | Config + état : époque, génération, documents, passages vivants et morts, ratio de morts, segments, tailles, dernier lot |
+| `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables ; un réglage figé → `409` |
+| `DELETE /v1/indexes/{index}?confirm={index}` | admin | Supprimer l'index (job) |
+| `POST /v1/indexes/{index}/documents` | write | Lot en ligne : documents et passages (texte, ou vecteurs fournis), suppressions → job |
+| `PATCH /v1/indexes/{index}/documents` | write | Mettre à jour des métadonnées de documents → job |
+| `GET /v1/indexes/{index}/documents/{doc_id}` | read | Document, ses passages et son état (`?text=true` pour inclure le texte) |
+| `POST /v1/indexes/{index}/batches` | write | Attacher un lot déposé dans `exchange/inbox/<dossier>` → job |
+| `GET /v1/jobs/{job_id}` · `GET /v1/jobs` | write | Suivre un job ; lister les jobs (filtres `index`, `state`) |
+| `POST /v1/indexes/{index}/search` | read | Recherche dans un index |
+| `POST /v1/search` | read | Recherche multi-index |
+| `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction → job |
+| `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` → job |
+| `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` → job |
+| `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
+| `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
+| `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, générations cohérentes) |
+| `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
+
+### Lot en ligne
+
+```json
+{
+  "batch_id": "manual-2026-10-19-001",
+  "mode": "upsert",
+  "documents": [
+    { "doc_id": "D1", "doc_hash": "optional", "fields": { "juridiction": "cass" },
+      "passages": [ { "text": "…", "fields": { "partie": "motifs" } } ] }
+  ],
+  "deletions": ["D0"]
+}
+```
+
+- Si `doc_hash` est absent, il vaut le blake3 du contenu des passages.
+- Si un passage porte un `vector`, il est encodé en base64 (fp32 little-endian) ; sinon, le serveur encode le texte.
+- Limite : 10 000 passages par requête.
+
+## Grammaire des filtres
+
+- **Un objet est un ET implicite.** Chaque clé est soit un nom de champ, soit `$and`, `$or` ou `$not`.
+- **La valeur d'un champ** est soit un scalaire (qui vaut `eq`), soit un objet d'opérateurs.
+
+| Type | Opérateurs |
+|---|---|
+| `keyword` | `eq`, `ne`, `in`, `nin`, `exists` |
+| `integer`, `float`, `date` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `exists` |
+| `bool` | `eq`, `exists` |
+
+- **Limites** :
+  - `in` et `nin` : 1 000 valeurs au plus ;
+  - profondeur : 8 au plus ;
+  - nombre de clauses : 64 au plus.
+- **Validation** contre le schéma de l'index :
+  - le message d'erreur nomme ce qui était attendu ;
+  - un champ marqué `filterable: false` donne `invalid_filter`.
+
+Exemples tirés de Legifacile :
+
+```json
+{ "fonds": "LEGI", "date_debut": { "lte": "2020-01-01" },
+  "$or": [ { "date_fin": { "gt": "2020-01-01" } }, { "date_fin": { "exists": false } } ] }
+```
+Ce premier filtre sélectionne les articles du fonds LEGI en vigueur au 1er janvier 2020.
+
+```json
+{ "juridiction": { "in": ["cass", "ce"] }, "partie": { "nin": ["moyens", "faits"] } }
+```
+Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'État, sans les passages « moyens » ni « faits ».
+
+## Recherche : requête
+
+`POST /v1/indexes/{index}/search`
+
+| Champ | Type | Défaut | Rôle |
+|---|---|---|---|
+| `query` | string | — | Texte de la requête, encodé par le serveur. Il faut `query` ou `vector` |
+| `vector` | base64 fp32 LE | — | Vecteur fourni (obligatoire pour un modèle `external`) |
+| `mode` | `dense` · `lexical` · `hybrid` | `hybrid` si le lexical est activé, sinon `dense` | Branches à exécuter |
+| `filter` | objet | aucun | Voir la grammaire ci-dessus |
+| `k` | 1 à 1000 | 10 | Nombre de résultats |
+| `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride |
+| `group_by` | `"document"` ou null | null | Regroupement par document |
+| `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé |
+| `dedup` | `"content"` ou null | null | Fusion des passages identiques |
+| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé |
+| `exact` | bool | false | Force le calcul exact (éval, debug) |
+| `debug` | bool | false | Ajoute plan, temps et rangs ; journalise si le journal est activé |
+| `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
+| `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
+
+## Recherche : réponse
+
+```json
+{
+  "results": [
+    { "doc_id": "LEGIARTI…", "passage": 0, "key": "LEGIARTI…#0",
+      "score": 0.0312, "score_type": "rrf",
+      "fields": { "num": "1240", "fonds": "LEGI" },
+      "text": "Code civil > … > Article 1240\n\nTout fait quelconque de l'homme…" }
+  ],
+  "pool_size": 412337,
+  "generation": 1287,
+  "took_ms": 41.7,
+  "truncated_query": false,
+  "request_id": "…"
+}
+```
+
+Avec `debug: true`, la réponse ajoute :
+
+```json
+"debug": {
+  "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 1000,
+            "candidates_per_branch": 100, "fusion": "rrf", "group_by": null },
+  "timings_ms": { "validate": 0.1, "encode": 23.4, "filter": 0.6, "dense": 9.8,
+                  "lexical": 6.1, "fusion": 0.1, "group": 0.0, "fetch": 1.2, "total": 41.7 },
+  "per_result": [ { "key": "LEGIARTI…#0", "dense_rank": 70, "dense_score": 0.61,
+                    "lexical_rank": 2, "lexical_score": 14.2, "fused_rank": 1 } ]
+}
+```
+
+Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
+
+```json
+"explain": [ {
+  "id": "LEGIARTI…", "exists": true, "alive": true,
+  "in_pool": false, "excluded_by": ["$.filter.date_debut"],
+  "dense":   { "exact_rank": 70, "score": 0.61, "in_binary_candidates": true, "binary_rank": 233 },
+  "lexical": { "rank": 2, "score": 14.2, "explanation": { "…": "détail tantivy par terme" } },
+  "fused_rank": null, "grouped_under": null
+} ]
+```
+
+Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé au debug.
+
+## Recherche multi-index
+
+`POST /v1/search`
+
+```json
+{ "query": "responsabilité du fait des choses", "mode": "hybrid", "k": 10,
+  "targets": [ { "index": "articles",  "filter": { "fonds": "LEGI" } },
+               { "index": "decisions", "filter": { "partie": { "nin": ["moyens", "faits"] } } } ],
+  "group_by": "document" }
+```
+
+- Chaque résultat porte `index`. En debug, il porte aussi `target_rank`, son rang dans son index.
+- Les `explain_ids` prennent la forme `{ "index": "...", "id": "..." }`.
+
+## Jobs
+
+```json
+{ "id": "job_…", "kind": "attach_batch", "index": "decisions", "state": "succeeded",
+  "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1288,
+  "progress": { "step": "commit", "done": 932, "total": 932 },
+  "result": { "report": { "added": 932, "replaced": 428, "unchanged": 1230, "deleted": 221,
+                          "acceptance": { "sample": 200, "min_cosine": 0.99971, "p1": 0.9998, "p50": 0.99995 } } },
+  "error": null }
+```
+
+- `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
+- `state` vaut `queued`, `running`, `succeeded` ou `failed`.
+
+## Limites par défaut (configurables)
+
+| Limite | Défaut |
+|---|---|
+| `k` | 1000 au plus |
+| Longueur de requête | `max_tokens` du modèle ; au-delà, la requête est tronquée et `truncated_query: true` |
+| Corps de requête (lot en ligne) | 32 Mo, 10 000 passages |
+| File d'écriture par index | 16 jobs, puis `503` avec `Retry-After` |
+| Recherches concurrentes | 2 × le nombre de cœurs, puis `503` |
+| `timeout_ms` | 2 000 par défaut, 30 000 au plus |

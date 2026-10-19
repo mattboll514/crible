@@ -1,0 +1,94 @@
+# Architecture Decision Records (ADR)
+
+Chaque décision qui engage le projet est écrite ici, **une par fichier**, avec son contexte, ce qui a été décidé, ses conséquences et les alternatives écartées. Ces fichiers sont la mémoire du projet : une décision n'existe pas tant qu'elle n'est pas dans un ADR. Ni la mémoire d'un agent, ni une conversation, ni un message de commit n'en tiennent lieu.
+
+- **Les documents de conception** (`docs/01` à `docs/08`) décrivent **comment est** Crible.
+- **Les ADR** expliquent **pourquoi** il est ainsi, et gardent l'historique des choix, y compris ceux qu'on a remplacés.
+
+## Quand écrire un ADR
+
+**Oui**, pour toute décision qui :
+- change l'architecture, un format (disque, lot, API) ou un invariant ;
+- ajoute, retire ou remplace une dépendance ;
+- fixe un compromis de performance, de qualité ou de sécurité (seuil, valeur par défaut, algorithme) ;
+- tranche une question ouverte (Q-xx) ou un écart à la conception ;
+- change la façon de travailler (outils, processus, règles des agents).
+
+**Non**, pour un détail d'implémentation local et réversible : nom d'une fonction privée, découpage interne d'un module.
+
+## Qui fait quoi
+
+- **N'importe qui propose** : un agent (via `@greffier` ou `/adr`) ou un humain. Un ADR proposé est en statut `Proposé`.
+- **Seul le propriétaire décide** : il passe l'ADR en `Accepté` ou en `Rejeté`, avec la date, puis met à jour l'index ci-dessous.
+- **Les agents ne s'appuient que sur les ADR `Accepté`.** Si une tâche dépend d'un ADR `Proposé`, elle attend qu'il soit décidé.
+
+## Cycle de vie
+
+```
+Proposé ──► Accepté ──► Remplacé par ADR-NNNN
+   │            └─────► Déprécié
+   └──────► Rejeté
+```
+
+- **Un ADR accepté n'est jamais réécrit.** Pour changer d'avis, on écrit un **nouvel** ADR qui le remplace :
+  - le nouveau indique `Remplace : ADR-XXXX` ;
+  - l'ancien passe en `Remplacé par ADR-NNNN`, et c'est la seule modification permise sur un ADR accepté, avec la correction de coquilles.
+- **Un ADR rejeté reste dans le dépôt** : il garde la trace de ce qui a été envisagé et refusé.
+
+## Lien avec le reste du projet
+
+- **Écart à la conception pendant une tâche.** L'agent :
+  1. rédige un ADR `Proposé` (via `@greffier`) ;
+  2. ajoute une ligne dans `docs/suivi.md`, section « Écarts », avec le numéro de l'ADR ;
+  3. passe la tâche en `BLOQUE` et s'arrête.
+- **Quand un ADR accepté change la conception**, les documents `docs/01` à `08` concernés sont mis à jour dans un commit qui cite l'ADR. C'est le propriétaire qui le demande, et `@greffier` qui le fait.
+- **Le code et les docs citent les ADR** par leur numéro (`ADR-0007`).
+
+## Fichiers et numérotation
+
+- Nom : `NNNN-titre-en-kebab-case.md`. Le numéro a 4 chiffres, il est séquentiel et n'est **jamais réutilisé**.
+- Modèle : [`modele.md`](modele.md).
+- Après chaque nouvel ADR ou chaque changement de statut, mettre à jour l'index ci-dessous.
+
+## Index
+
+| ADR | Titre | Statut | Date |
+|---|---|---|---|
+| [ADR-0001](0001-vecteur-dense-seul.md) | Vecteur dense seul, sans late interaction | Accepté | 2026-10-17 |
+| [ADR-0002](0002-une-instance-par-projet.md) | Une instance par projet | Accepté | 2026-10-18 |
+| [ADR-0003](0003-un-index-par-structure.md) | Un index par structure de données | Accepté | 2026-10-18 |
+| [ADR-0004](0004-pas-d-ann-en-v1.md) | Pas d'ANN en v1 : codes binaires, scan du pool et rescoring | Accepté | 2026-10-17 |
+| [ADR-0005](0005-precision-de-reference-figee.md) | Précision de référence figée, étages de recherche réglables | Accepté | 2026-10-17 |
+| [ADR-0006](0006-segments-pierres-tombales-compaction.md) | Segments par lot, pierres tombales et compaction occasionnelle | Accepté | 2026-10-18 |
+| [ADR-0007](0007-tantivy-pour-bm25.md) | tantivy pour la recherche BM25 | Accepté | 2026-10-18 |
+| [ADR-0008](0008-hybride-sur-le-meme-pool.md) | Hybride sur le même pool ; fusion RRF ou relative_score | Accepté | 2026-10-17 |
+| [ADR-0009](0009-recherche-multi-index-dans-le-moteur.md) | Recherche multi-index dans le moteur | Accepté | 2026-10-18 |
+| [ADR-0010](0010-decoupage-chez-le-producteur.md) | Le découpage reste chez le producteur | Accepté | 2026-10-18 |
+| [ADR-0011](0011-stocker-l-entree-encodeur.md) | Stocker le texte exact envoyé à l'encodeur | Accepté | 2026-10-18 |
+| [ADR-0012](0012-format-de-lot-public.md) | Format de lot public (Parquet + manifeste), format interne privé | Accepté | 2026-10-18 |
+| [ADR-0013](0013-producteurs-python-serveur-rust-cpu.md) | Producteurs en Python, serveur Rust sur CPU | Accepté | 2026-10-18 |
+| [ADR-0014](0014-analytics-sans-contenu.md) | Analytics sans contenu, journal de debug à la demande | Accepté | 2026-10-17 |
+| [ADR-0015](0015-api-rest-anglais-licence-nom.md) | API REST v1 en anglais, licence Apache 2.0, nom « Crible » | Accepté | 2026-10-18 |
+| [ADR-0016](0016-point-de-commit-sqlite.md) | Le commit SQLite est l'unique point de commit | Accepté | 2026-10-18 (décidé le 2026-10-19) |
+| [ADR-0017](0017-compaction-suspend-les-ecritures.md) | En v1, la compaction suspend les écritures | Accepté | 2026-10-18 (décidé le 2026-10-19) |
+| [ADR-0018](0018-filtres-intervalle-par-colonnes.md) | Filtres d'intervalle par colonnes de valeurs en RAM | Accepté | 2026-10-18 (décidé le 2026-10-19) |
+| [ADR-0019](0019-champs-en-json-canonique.md) | Champs stockés en JSON canonique dans SQLite | Accepté | 2026-10-18 (décidé le 2026-10-19) |
+| [ADR-0020](0020-texte-bm25-egal-entree-encodeur.md) | Le texte indexé en BM25 est l'entrée encodeur | Accepté | 2026-10-18 |
+| [ADR-0021](0021-tracer-les-decisions-par-des-adr.md) | Tracer les décisions par des ADR | Accepté | 2026-10-19 |
+| [ADR-0022](0022-colgrep-pour-la-recherche-de-code.md) | ColGrep et ColGrep-Agent pour la recherche de code par les agents | Accepté | 2026-10-19 |
+| [ADR-0023](0023-orchestration-des-agents-opencode.md) | Orchestration des agents dans opencode : orchestrateur, pipeline séquentiel, agent git unique | Accepté (point 5 remplacé par ADR-0025) | 2026-10-19 |
+| [ADR-0024](0024-plugins-opencode.md) | Plugins opencode : caveman (avec garde-fous) et notifications | Accepté | 2026-10-19 |
+| [ADR-0025](0025-opencode-v2.md) | Utiliser opencode v2, avec une configuration au format v1 | Accepté | 2026-10-19 |
+
+## Questions ouvertes
+
+Chacune deviendra un ADR quand elle sera tranchée.
+
+| # | Question | À trancher dans |
+|---|---|---|
+| Q-01 | N par défaut et cible de fidélité du scan binaire | MES-01 (P4) |
+| Q-02 | Fusion par défaut (`rrf` ou `relative_score`, et α) | MES-10 (P5) |
+| Q-03 | Champs multivalués (`keyword[]`) nécessaires pour Legifacile ? | `DEFINIR-INDEX-LEGIFACILE` (P9) ; à remonter plus tôt si besoin |
+| Q-04 | Gestion des élisions et des identifiants dans l'analyseur français | MES-11 (P5) |
+| Q-05 | Répéter un en-tête court sur chaque passage (côté producteur) | Mesure en P9 |
+| Q-06 | Seuil `acceptance_min_cosine` pour des vecteurs encodés sur MPS ou CUDA en fp16 | MES-04 (P2) |

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ollama/deepseek-v4.1-flash:1017-cloud",
+  "small_model": "ollama/deepseek-v4.1-flash:1017-cloud",
+  "default_agent": "orchestrateur",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local)",
+      "options": {
+        "baseURL": "http://localhost:11434/v1"
+      },
+      "models": {
+        "deepseek-v4.1-flash:1017-cloud": {
+          "name": "DeepSeek V4.1 Flash (Ollama Cloud)",
+          "limit": {
+            "context": 200000,
+            "output": 32768
+          }
+        }
+      }
+    }
+  },
+  "compaction": {
+    "auto": true
+  },
+  "instructions": ["docs/00-glossaire.md"],
+  "permission": {
+    "edit": "allow",
+    "webfetch": "ask",
+    "external_directory": "ask",
+    "bash": {
+      "*": "ask",
+      "cargo *": "allow",
+      "uv *": "allow",
+      "colgrep *": "allow",
+      "date*": "allow",
+      "rustc --version": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git rev-parse*": "allow",
+      "git branch --show-current": "allow",
+      "git branch --list*": "allow",
+      "ls*": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "wc *": "allow",
+      "grep *": "allow",
+      "rg *": "allow",
+      "find *": "allow",
+      "mkdir *": "allow",
+      "pwd": "allow",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git reset --hard*": "deny",
+      "git rebase*": "deny",
+      "git filter-branch*": "deny",
+      "sudo *": "deny",
+      "docker push*": "deny",
+      "rm -rf /*": "deny",
+      "rm -rf ~*": "deny"
+    }
+  },
+  "watcher": {
+    "ignore": ["target/**", "data/**", "**/.venv/**", "**/__pycache__/**"]
+  }
+}
