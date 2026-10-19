@@ -36,7 +36,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 |---|---|---|---|---|
 | P0 | INITIALISER-WORKSPACE-RUST | FAIT | tache/INITIALISER-WORKSPACE-RUST | Workspace resolver 3, édition 2024, toolchain 1.99.1 ; 6 crates ; dépendances `docs/07` épinglées ; `--version` testé ; fmt/clippy/test/build OK, relecture OK |
 | P0 | CONFIGURER-QUALITE-ET-CI | FAIT | tache/CONFIGURER-QUALITE-ET-CI | Workflow CI (fmt/clippy/test + Python conditionnel), `rustfmt.toml`, `clippy.toml`, lints workspace `unwrap_used`/`expect_used`, `Makefile` (`check`/`fmt`/`lint`/`test`) ; `make check` OK ; relecture OK |
-| P0 | DEFINIR-TYPES-DE-BASE | A-FAIRE | | |
+| P0 | DEFINIR-TYPES-DE-BASE | FAIT | tache/DEFINIR-TYPES-DE-BASE | `DocId`, `PassageKey`, `Iid`, `Generation`, `Epoch`, `ErrorCode` (14 codes/statuts), `CribleError` ; INV-01 prouvé par analyse statique ; 32 tests ; relecture OK |
 | P0 | DEFINIR-CONFIG-INDEX | A-FAIRE | | |
 | P0 | DEFINIR-FORMAT-LOT | A-FAIRE | | |
 | P0 | MESURER-REFERENCE-PGVECTOR | A-FAIRE | | |
@@ -141,6 +141,8 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | INITIALISER-WORKSPACE-RUST | Revérifier la cohabitation `tower-http =0.7.1` / `axum 0.8` (`^0.6.8`) quand `crible-server` utilisera les deux |
 | 2026-10-19 | CONFIGURER-QUALITE-ET-CI | Ajouter `clippy::panic` aux lints workspace pour couvrir la règle 10 d'`AGENTS.md` |
 | 2026-10-19 | CONFIGURER-QUALITE-ET-CI | CI : ajouter `--locked` aux commandes Cargo, épingler `dtolnay/rust-toolchain`, cache Cargo si la CI ralentit |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE | Consigner dans `docs/02` la règle `PassageKey` (découpage sur le dernier `#`, `DocId` pouvant contenir `#`) |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE | Envisager `trybuild` pour un vrai test de compilation négatif d'INV-01 si cette dépendance entre dans `docs/07` |
 
 ## Journal
 
@@ -161,4 +163,6 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | ADR-0026 accepté (permissions des agents, mode `--auto`) ; configuration commitée sur `phase/P0-fondations` |
 | 2026-10-19 | Début de la tâche CONFIGURER-QUALITE-ET-CI sur `tache/CONFIGURER-QUALITE-ET-CI` |
 | 2026-10-19 | CONFIGURER-QUALITE-ET-CI terminée : CI, lints workspace, `Makefile` ; `make check` OK ; revue OK ; actionlint indisponible en local |
+| 2026-10-19 | Début de la tâche DEFINIR-TYPES-DE-BASE sur `tache/DEFINIR-TYPES-DE-BASE` |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE terminée : identifiants et erreurs typées, INV-01 couvert, 32 tests ; revue OK |
 | 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |
