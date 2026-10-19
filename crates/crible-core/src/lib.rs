@@ -2,6 +2,7 @@
 
 //! Shared types for the Crible engine.
 
+pub mod batch;
 pub mod config;
 pub mod error;
 pub mod filter;
