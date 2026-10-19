@@ -117,8 +117,8 @@ impl FromStr for PassageKey {
 /// Dense internal identifier of a passage, stable within an epoch.
 ///
 /// INV-01: an `Iid` never leaves the engine. This type deliberately does not
-/// derive or implement `serde::Serialize`, and this crate does not depend on
-/// `serde`, so no response, log record, analytics row or export can carry one.
+/// implement `serde::Serialize`; no response, log record, analytics row or
+/// export can carry one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Iid(u32);
 
