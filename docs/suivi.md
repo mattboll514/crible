@@ -34,7 +34,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 | Phase | Tâche | Statut | Branche / commit | Notes |
 |---|---|---|---|---|
-| P0 | INITIALISER-WORKSPACE-RUST | A-FAIRE | | |
+| P0 | INITIALISER-WORKSPACE-RUST | FAIT | tache/INITIALISER-WORKSPACE-RUST | Workspace resolver 3, édition 2024, toolchain 1.99.1 ; 6 crates ; dépendances `docs/07` épinglées ; `--version` testé ; fmt/clippy/test/build OK, relecture OK |
 | P0 | CONFIGURER-QUALITE-ET-CI | A-FAIRE | | |
 | P0 | DEFINIR-TYPES-DE-BASE | A-FAIRE | | |
 | P0 | DEFINIR-CONFIG-INDEX | A-FAIRE | | |
@@ -138,6 +138,7 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 
 | Date | Origine (tâche) | Idée |
 |---|---|---|
+| 2026-10-19 | INITIALISER-WORKSPACE-RUST | Revérifier la cohabitation `tower-http =0.7.1` / `axum 0.8` (`^0.6.8`) quand `crible-server` utilisera les deux |
 
 ## Journal
 
@@ -152,3 +153,6 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | ADR-0023 et ADR-0024 acceptés par le propriétaire |
 | 2026-10-19 | ADR-0025 accepté : opencode v2, configuration conservée au format v1 |
 | 2026-10-19 | Environnement installé et vérifié : opencode 2.0.32 relié à Ollama (DeepSeek V4.1 Flash), plugins caveman et notifier chargés, permissions des agents vérifiées par simulation |
+| 2026-10-19 | Commit initial `4bbfb9d` (conception, ADR, agents, configuration opencode) poussé sur `origin/main` |
+| 2026-10-19 | Début de la tâche INITIALISER-WORKSPACE-RUST sur `tache/INITIALISER-WORKSPACE-RUST` |
+| 2026-10-19 | INITIALISER-WORKSPACE-RUST terminée : workspace Cargo et 6 crates, `--version` testé ; revue OK ; Rust 1.99.1 installé hors dépôt (prérequis) |

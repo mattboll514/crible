@@ -1,0 +1,65 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/crible",
+    "crates/crible-core",
+    "crates/crible-encode",
+    "crates/crible-search",
+    "crates/crible-server",
+    "crates/crible-store",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+# HTTP server
+axum = { version = "=0.8.9" }
+tokio = { version = "=1.54.0" }
+tower = { version = "=0.5.3" }
+tower-http = { version = "=0.7.1" }
+
+# OpenAPI
+utoipa = { version = "=6.0.0" }
+utoipa-swagger-ui = { version = "=10.0.1" }
+
+# Snapshots and parallelism
+arc-swap = { version = "=1.9.3" }
+rayon = { version = "=1.12.0" }
+
+# Encoding
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic"] }
+tokenizers = { version = "=0.23.2" }
+
+# Vectors
+memmap2 = { version = "=0.9.11" }
+half = { version = "=2.7.1" }
+
+# Filters and storage
+roaring = { version = "=0.11.5" }
+rusqlite = { version = "=0.40.2", features = ["bundled"] }
+zstd = { version = "=0.14.3" }
+
+# Lexical search and batch format
+tantivy = { version = "=0.27.0" }
+arrow = { version = "=60.0.0" }
+parquet = { version = "=60.0.0" }
+
+# Hashing, errors, logs, configuration and CLI
+blake3 = { version = "=1.8.7" }
+thiserror = { version = "=2.0.21" }
+anyhow = { version = "=1.0.104" }
+tracing = { version = "=0.1.44" }
+tracing-subscriber = { version = "=0.3.23" }
+serde = { version = "=1.0.229" }
+toml = { version = "=1.1.8+spec-1.1.0" }
+clap = { version = "=4.6.7", features = ["derive"] }
+
+# Tests
+proptest = { version = "=1.12.0" }
+criterion = { version = "=0.8.2" }
+tempfile = { version = "=3.27.0" }
