@@ -1,6 +1,6 @@
 # ADR-0027 — Ajouter `serde_json` comme dépendance
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décision du propriétaire le 2026-10-19)
 - **Date** : 2026-10-19
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEFINIR-CONFIG-INDEX

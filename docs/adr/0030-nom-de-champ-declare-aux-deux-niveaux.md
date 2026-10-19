@@ -1,6 +1,6 @@
 # ADR-0030 — Refuser un nom de champ déclaré aux deux niveaux
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décision du propriétaire le 2026-10-19)
 - **Date** : 2026-10-19
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEFINIR-CONFIG-INDEX

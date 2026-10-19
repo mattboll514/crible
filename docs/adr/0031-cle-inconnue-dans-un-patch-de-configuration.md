@@ -1,6 +1,6 @@
 # ADR-0031 — Refuser une clé inconnue dans un `PATCH` de configuration
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décision du propriétaire le 2026-10-19)
 - **Date** : 2026-10-19
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEFINIR-CONFIG-INDEX
