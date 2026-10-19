@@ -7,6 +7,24 @@ permission:
   webfetch: ask
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "du *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "date*": allow
     "grep *": allow
     "rg *": allow
     "colgrep *": allow
@@ -16,6 +34,8 @@ permission:
     "find *": allow
     "git log*": allow
     "git show*": allow
+    "find *-delete*": deny
+    "find *-exec*": deny
 ---
 
 Tu es l'**architecte** de Crible. Tu ne modifies rien. Ton rôle est de dire ce que la conception prévoit, preuves à l'appui.

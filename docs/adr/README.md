@@ -79,6 +79,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0023](0023-orchestration-des-agents-opencode.md) | Orchestration des agents dans opencode : orchestrateur, pipeline séquentiel, agent git unique | Accepté (point 5 remplacé par ADR-0025) | 2026-10-19 |
 | [ADR-0024](0024-plugins-opencode.md) | Plugins opencode : caveman (avec garde-fous) et notifications | Accepté | 2026-10-19 |
 | [ADR-0025](0025-opencode-v2.md) | Utiliser opencode v2, avec une configuration au format v1 | Accepté | 2026-10-19 |
+| [ADR-0026](0026-permissions-et-mode-auto.md) | Permissions des agents : utilitaires autorisés, interdictions renforcées, mode --auto | Accepté | 2026-10-19 |
 
 ## Questions ouvertes
 

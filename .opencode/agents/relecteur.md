@@ -7,6 +7,26 @@ permission:
   webfetch: deny
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "head *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "du *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "date*": allow
+    "find *": allow
     "git diff*": allow
     "git log*": allow
     "git status*": allow
@@ -21,6 +41,8 @@ permission:
     "colgrep *": allow
     "cat *": allow
     "ls*": allow
+    "find *-delete*": deny
+    "find *-exec*": deny
 ---
 
 Tu es le **relecteur** de Crible. On te donne le nom d'une tâche, ou on te demande de relire la branche courante. Tu ne modifies rien. Tu rends un verdict argumenté.

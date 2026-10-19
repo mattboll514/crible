@@ -87,7 +87,31 @@ opencode
 
 - L'agent actif est l'**orchestrateur** (agent par défaut). La touche Tab fait passer d'un agent principal à l'autre.
 - Tape `/etat` : il résume le projet et propose la première tâche, `INITIALISER-WORKSPACE-RUST`.
-- Tape `/tache INITIALISER-WORKSPACE-RUST`. `@git` doit créer `phase/P0-fondations` et la branche de tâche **sans te demander de permission**. C'est vérifié par simulation sur la config convertie par la v2 : les règles d'un agent passent après les règles globales, et c'est la dernière règle qui correspond qui l'emporte. Seul un push te demandera confirmation.
+- Tape `/tache INITIALISER-WORKSPACE-RUST`. `@git` doit créer `phase/P0-fondations` et la branche de tâche **sans te demander de permission**. Les règles d'un agent passent après les règles globales, et c'est la dernière règle qui correspond qui l'emporte. Seul un push te demandera confirmation.
+
+### Mode `--auto` : travailler sans demandes d'autorisation (ADR-0026)
+
+```bash
+alias oc='opencode --auto'      # à mettre dans ~/.zshrc
+cd ~/MattCorp/crible && oc
+```
+
+- `--auto` approuve automatiquement **tout ce qui n'est pas explicitement interdit**. Une règle `deny` n'est jamais levée.
+- **Ce qui reste interdit, même en `--auto`** :
+  - les commandes git qui modifient le dépôt, sauf pour `@git` ;
+  - le push forcé, `reset --hard`, `rebase` ;
+  - `find … -delete` et `find … -exec` ;
+  - `brew`, `npm install -g`, `pip install` ;
+  - les pipes vers un shell (`curl … | sh`) ;
+  - `sudo`, `rm -rf /`, `rm -rf ~`.
+- **Ce qui passe sans demande en `--auto`** : les autres commandes des agents (`python3`, `rm` dans le dépôt…), les accès hors du dépôt, les lectures web, et le push par `@git`. Ce dernier ne pousse que si tu le demandes dans le chat.
+- **Sans `--auto`** (`opencode` seul), tu valides toi-même chacune de ces demandes. C'est utile pour une phase délicate.
+- Une commande composée (`|`, `;`, `&&`) est vérifiée morceau par morceau : un seul morceau interdit fait tout refuser. Les utilitaires courants (`tail`, `echo`, `sort`…) sont autorisés à tous les agents pour éviter ces refus.
+- **Pour repérer des rejets** :
+
+  ```bash
+  sqlite3 -readonly ~/.local/share/opencode/opencode.db "select count(*) from session_message where data like '%permission.rejected%'"
+  ```
 
 ## 6. Comment travailler : sessions et fenêtre de contexte
 

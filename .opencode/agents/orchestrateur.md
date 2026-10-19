@@ -7,6 +7,25 @@ permission:
   webfetch: ask
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "head *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "du *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "find *": allow
     "git status*": allow
     "git log*": allow
     "git diff*": allow
@@ -18,6 +37,8 @@ permission:
     "rg *": allow
     "colgrep *": allow
     "date*": allow
+    "find *-delete*": deny
+    "find *-exec*": deny
   task:
     "*": deny
     "git": allow

@@ -7,6 +7,26 @@ permission:
   webfetch: deny
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "head *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "date*": allow
+    "find *": allow
+    "colgrep *": allow
     "git *": allow
     "ls*": allow
     "cat *": allow
@@ -30,6 +50,8 @@ permission:
     "git branch -D*": deny
     "git tag -d*": deny
     "git config*": deny
+    "find *-delete*": deny
+    "find *-exec*": deny
 ---
 
 Tu es le **gestionnaire git** de Crible. Tu es le seul agent qui crée des branches, commite, fusionne ou pousse. Les autres agents te délèguent ces opérations. Les règles sont celles de `docs/09-plan-de-developpement.md` (section Git) et de `AGENTS.md`.
