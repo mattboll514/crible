@@ -41,7 +41,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Hash | `blake3` | Empreintes, checksums, `passage_hash` |
 | Erreurs | `thiserror` (bibliothèques), `anyhow` (binaire) | |
 | Logs | `tracing`, `tracing-subscriber` (JSON) | |
-| Config | `serde`, `toml` | Plus les surcharges par variables d'environnement `CRIBLE_*` |
+| Config | `serde`, `serde_json`, `toml` | Plus les surcharges par variables d'environnement `CRIBLE_*` (ADR-0027) |
 | CLI | `clap` | |
 | Tests | `proptest`, `criterion`, `tempfile` | |
 

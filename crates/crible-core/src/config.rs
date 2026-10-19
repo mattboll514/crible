@@ -1,0 +1,972 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Index configuration: schema, search settings, and the frozen/replaceable
+//! split enforced by `apply_patch`.
+//!
+//! References: `docs/04-donnees-et-ingestion.md`, section "Configuration d'un
+//! index" and "Ce qui est figé, ce qui est réglable"; ADR-0030; ADR-0031;
+//! INV-16 (`docs/08-invariants-et-tests.md`).
+
+use std::collections::BTreeMap;
+
+use serde_json::{Map, Value};
+
+use crate::error::{CribleError, ErrorCode};
+use crate::filter::Operator;
+use crate::json;
+
+/// Type of a schema field, as documented in `docs/04`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldType {
+    /// Opaque string, compared and grouped by exact value.
+    Keyword,
+    /// Signed integer.
+    Integer,
+    /// Floating-point number.
+    Float,
+    /// Calendar date written `YYYY-MM-DD`.
+    Date,
+    /// Boolean.
+    Bool,
+}
+
+impl FieldType {
+    /// Every documented field type, for exhaustive checks.
+    pub const ALL: [Self; 5] = [
+        Self::Keyword,
+        Self::Integer,
+        Self::Float,
+        Self::Date,
+        Self::Bool,
+    ];
+
+    /// Wire name used in the configuration and in error messages.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyword => "keyword",
+            Self::Integer => "integer",
+            Self::Float => "float",
+            Self::Date => "date",
+            Self::Bool => "bool",
+        }
+    }
+
+    /// Operators allowed on a field of this type (`docs/05-api.md`).
+    #[must_use]
+    pub fn operators(self) -> &'static [Operator] {
+        use Operator::{Eq, Exists, Gt, Gte, In, Lt, Lte, Ne, Nin};
+        match self {
+            Self::Keyword => &[Eq, Ne, In, Nin, Exists],
+            Self::Integer | Self::Float | Self::Date => &[Eq, Ne, Lt, Lte, Gt, Gte, In, Exists],
+            Self::Bool => &[Eq, Exists],
+        }
+    }
+
+    fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let raw = json::string(value, path)?;
+        match raw.as_str() {
+            "keyword" => Ok(Self::Keyword),
+            "integer" => Ok(Self::Integer),
+            "float" => Ok(Self::Float),
+            "date" => Ok(Self::Date),
+            "bool" => Ok(Self::Bool),
+            other => Err(json::invalid(format!(
+                "unknown field type '{other}' at {path}; expected one of keyword, integer, float, date, bool"
+            ))),
+        }
+    }
+}
+
+/// Level at which a field is declared (`docs/04`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldLevel {
+    /// Field carried by the document and inherited by all its passages.
+    Document,
+    /// Field carried by a single passage.
+    Passage,
+}
+
+impl FieldLevel {
+    /// Name of the schema object holding the fields of this level.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Document => "document_fields",
+            Self::Passage => "passage_fields",
+        }
+    }
+}
+
+/// One declared field, with its type and its two options.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldSpec {
+    /// Type of the values.
+    pub field_type: FieldType,
+    /// Whether the field may appear in a filter.
+    pub filterable: bool,
+    /// Whether the field is returned in search results.
+    pub returned: bool,
+}
+
+impl FieldSpec {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["type", "filterable", "returned"])?;
+        let field_type =
+            FieldType::parse(json::member(object, path, "type")?, &format!("{path}.type"))?;
+        let filterable = match object.get("filterable") {
+            Some(value) => json::boolean(value, &format!("{path}.filterable"))?,
+            None => true,
+        };
+        let returned = match object.get("returned") {
+            Some(value) => json::boolean(value, &format!("{path}.returned"))?,
+            None => true,
+        };
+        Ok(Self {
+            field_type,
+            filterable,
+            returned,
+        })
+    }
+}
+
+/// Schema of an index: fields declared at document level and at passage level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Schema {
+    document_fields: BTreeMap<String, FieldSpec>,
+    passage_fields: BTreeMap<String, FieldSpec>,
+}
+
+impl Schema {
+    /// Parses a schema from its JSON form.
+    pub fn from_json_str(raw: &str) -> Result<Self, CribleError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| json::invalid(format!("invalid schema JSON: {error}")))?;
+        Self::from_value(&value, "$")
+    }
+
+    /// Parses a schema from an already-decoded JSON value.
+    pub fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["document_fields", "passage_fields"])?;
+        let document_fields = fields_from_value(
+            json::member(object, path, "document_fields")?,
+            &format!("{path}.document_fields"),
+        )?;
+        let passage_fields = fields_from_value(
+            json::member(object, path, "passage_fields")?,
+            &format!("{path}.passage_fields"),
+        )?;
+        let schema = Self {
+            document_fields,
+            passage_fields,
+        };
+        schema.validate()?;
+        Ok(schema)
+    }
+
+    /// Looks a field up by name, whatever its level.
+    #[must_use]
+    pub fn field(&self, name: &str) -> Option<(&FieldSpec, FieldLevel)> {
+        if let Some(spec) = self.document_fields.get(name) {
+            Some((spec, FieldLevel::Document))
+        } else {
+            self.passage_fields
+                .get(name)
+                .map(|spec| (spec, FieldLevel::Passage))
+        }
+    }
+
+    fn spec_at(&self, level: FieldLevel, name: &str) -> Option<&FieldSpec> {
+        self.map(level).get(name)
+    }
+
+    fn spec_at_mut(&mut self, level: FieldLevel, name: &str) -> Option<&mut FieldSpec> {
+        self.map_mut(level).get_mut(name)
+    }
+
+    fn map(&self, level: FieldLevel) -> &BTreeMap<String, FieldSpec> {
+        match level {
+            FieldLevel::Document => &self.document_fields,
+            FieldLevel::Passage => &self.passage_fields,
+        }
+    }
+
+    fn map_mut(&mut self, level: FieldLevel) -> &mut BTreeMap<String, FieldSpec> {
+        match level {
+            FieldLevel::Document => &mut self.document_fields,
+            FieldLevel::Passage => &mut self.passage_fields,
+        }
+    }
+
+    /// Every declared field name, document level first.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.document_fields
+            .keys()
+            .chain(self.passage_fields.keys())
+            .map(String::as_str)
+    }
+
+    /// Refuses a name declared at both levels (ADR-0030).
+    fn validate(&self) -> Result<(), CribleError> {
+        for name in self.document_fields.keys() {
+            if self.passage_fields.contains_key(name) {
+                return Err(json::invalid(format!(
+                    "field '{name}' is declared in both document_fields and passage_fields; a field name must designate one level"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn fields_from_value(
+    value: &Value,
+    path: &str,
+) -> Result<BTreeMap<String, FieldSpec>, CribleError> {
+    let object = json::object(value, path)?;
+    let mut fields = BTreeMap::new();
+    for (name, spec) in object {
+        fields.insert(
+            name.clone(),
+            FieldSpec::from_value(spec, &format!("{path}.{name}"))?,
+        );
+    }
+    Ok(fields)
+}
+
+/// Precision of the reference vectors, frozen at index creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferencePrecision {
+    /// Half precision.
+    Fp16,
+    /// Single precision.
+    Fp32,
+}
+
+impl ReferencePrecision {
+    fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let raw = json::string(value, path)?;
+        match raw.as_str() {
+            "fp16" => Ok(Self::Fp16),
+            "fp32" => Ok(Self::Fp32),
+            other => Err(json::invalid(format!(
+                "unknown reference_precision '{other}' at {path}; expected fp16 or fp32"
+            ))),
+        }
+    }
+}
+
+/// Scan strategy of the dense branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanStrategy {
+    /// Binary-code scan followed by exact rescoring.
+    Binary,
+    /// Always exact.
+    None,
+}
+
+impl ScanStrategy {
+    fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let raw = json::string(value, path)?;
+        match raw.as_str() {
+            "binary" => Ok(Self::Binary),
+            "none" => Ok(Self::None),
+            other => Err(json::invalid(format!(
+                "unknown scan '{other}' at {path}; expected binary or none"
+            ))),
+        }
+    }
+}
+
+/// How the dense and lexical rankings are combined (`docs/03`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FusionConfig {
+    /// Reciprocal rank fusion.
+    Rrf,
+    /// Relative score with a weight.
+    RelativeScore {
+        /// Weight given to the dense branch, between 0 and 1.
+        alpha: f64,
+    },
+}
+
+impl FusionConfig {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["method", "alpha"])?;
+        let method = json::string_member(object, path, "method")?;
+        match method.as_str() {
+            "rrf" => {
+                if object.contains_key("alpha") {
+                    return Err(json::invalid(format!(
+                        "alpha is not allowed with rrf at {path}.alpha"
+                    )));
+                }
+                Ok(Self::Rrf)
+            }
+            "relative_score" => {
+                let alpha = json::float_member(object, path, "alpha")?;
+                Ok(Self::RelativeScore { alpha })
+            }
+            other => Err(json::invalid(format!(
+                "unknown fusion method '{other}' at {path}.method; expected rrf or relative_score"
+            ))),
+        }
+    }
+}
+
+/// Lexical branch settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexicalConfig {
+    /// Whether the lexical branch is built and queried.
+    pub enabled: bool,
+    /// Language of the analyzer.
+    pub language: String,
+    /// Whether term positions are stored.
+    pub positions: bool,
+}
+
+impl LexicalConfig {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        Ok(Self {
+            enabled: json::boolean_member(object, path, "enabled")?,
+            language: json::string_member(object, path, "language")?,
+            positions: json::boolean_member(object, path, "positions")?,
+        })
+    }
+}
+
+/// Dense search settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchConfig {
+    /// Scan strategy of the dense branch.
+    pub scan: ScanStrategy,
+    /// Number of candidates re-scored exactly.
+    pub rescore_candidates: u32,
+    /// Pool size below which the search is always exact.
+    pub exact_threshold: u32,
+    /// Candidates kept by each branch before fusion.
+    pub candidates_per_branch: u32,
+    /// Fusion of the two rankings.
+    pub fusion: FusionConfig,
+}
+
+impl SearchConfig {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &[
+                "scan",
+                "rescore_candidates",
+                "exact_threshold",
+                "candidates_per_branch",
+                "fusion",
+            ],
+        )?;
+        Ok(Self {
+            scan: ScanStrategy::parse(
+                json::member(object, path, "scan")?,
+                &format!("{path}.scan"),
+            )?,
+            rescore_candidates: json::u32_member(object, path, "rescore_candidates")?,
+            exact_threshold: json::u32_member(object, path, "exact_threshold")?,
+            candidates_per_branch: json::u32_member(object, path, "candidates_per_branch")?,
+            fusion: FusionConfig::from_value(
+                json::member(object, path, "fusion")?,
+                &format!("{path}.fusion"),
+            )?,
+        })
+    }
+}
+
+/// Ingestion settings, including the acceptance check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IngestConfig {
+    /// Number of passages re-encoded during the acceptance check.
+    pub acceptance_sample: u32,
+    /// Minimum cosine similarity accepted for the sample.
+    pub acceptance_min_cosine: f64,
+}
+
+impl IngestConfig {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &["acceptance_sample", "acceptance_min_cosine"],
+        )?;
+        Ok(Self {
+            acceptance_sample: json::u32_member(object, path, "acceptance_sample")?,
+            acceptance_min_cosine: json::float_member(object, path, "acceptance_min_cosine")?,
+        })
+    }
+}
+
+/// Compaction settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompactionConfig {
+    /// Fraction of dead passages that triggers a compaction.
+    pub dead_ratio: f64,
+}
+
+impl CompactionConfig {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["dead_ratio"])?;
+        Ok(Self {
+            dead_ratio: json::float_member(object, path, "dead_ratio")?,
+        })
+    }
+}
+
+/// Configuration of one index, as stored in `index.json`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexConfig {
+    /// Index name, frozen.
+    pub name: String,
+    /// Name of the model directory, frozen.
+    pub model: String,
+    /// Reference vector precision, frozen.
+    pub reference_precision: ReferencePrecision,
+    /// Schema of the index.
+    pub schema: Schema,
+    /// Fields driving the clustering, applied at the next compaction.
+    pub cluster_by: Vec<String>,
+    /// Lexical branch settings.
+    pub lexical: LexicalConfig,
+    /// Dense search settings.
+    pub search: SearchConfig,
+    /// Ingestion settings.
+    pub ingest: IngestConfig,
+    /// Compaction settings.
+    pub compaction: CompactionConfig,
+}
+
+const TOP_LEVEL_KEYS: [&str; 9] = [
+    "name",
+    "model",
+    "reference_precision",
+    "schema",
+    "cluster_by",
+    "lexical",
+    "search",
+    "ingest",
+    "compaction",
+];
+
+impl IndexConfig {
+    /// Parses and validates an index configuration from its JSON form.
+    pub fn from_json_str(raw: &str) -> Result<Self, CribleError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| json::invalid(format!("invalid configuration JSON: {error}")))?;
+        Self::from_value(&value)
+    }
+
+    /// Parses and validates an index configuration from a decoded JSON value.
+    pub fn from_value(value: &Value) -> Result<Self, CribleError> {
+        let object = json::object(value, "$")?;
+        json::reject_unknown_keys(object, "$", &TOP_LEVEL_KEYS)?;
+        let name = json::string_member(object, "$", "name")?;
+        if name.is_empty() {
+            return Err(json::invalid("setting 'name' must not be empty at $.name"));
+        }
+        let model = json::string_member(object, "$", "model")?;
+        if model.is_empty() {
+            return Err(json::invalid(
+                "setting 'model' must not be empty at $.model",
+            ));
+        }
+        Ok(Self {
+            name,
+            model,
+            reference_precision: ReferencePrecision::parse(
+                json::member(object, "$", "reference_precision")?,
+                "$.reference_precision",
+            )?,
+            schema: Schema::from_value(json::member(object, "$", "schema")?, "$.schema")?,
+            cluster_by: string_array(json::member(object, "$", "cluster_by")?, "$.cluster_by")?,
+            lexical: LexicalConfig::from_value(json::member(object, "$", "lexical")?, "$.lexical")?,
+            search: SearchConfig::from_value(json::member(object, "$", "search")?, "$.search")?,
+            ingest: IngestConfig::from_value(json::member(object, "$", "ingest")?, "$.ingest")?,
+            compaction: CompactionConfig::from_value(
+                json::member(object, "$", "compaction")?,
+                "$.compaction",
+            )?,
+        })
+    }
+}
+
+fn string_array(value: &Value, path: &str) -> Result<Vec<String>, CribleError> {
+    let items = value.as_array().ok_or_else(|| {
+        json::invalid(format!(
+            "expected an array of strings at {path}, got {}",
+            json::json_type(value)
+        ))
+    })?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| json::string(item, &format!("{path}[{index}]")))
+        .collect()
+}
+
+/// A `PATCH` body for an index configuration.
+///
+/// Parsing rejects unknown keys at every level (ADR-0031); [`apply_patch`]
+/// rejects changes to frozen settings (INV-16).
+#[derive(Debug, Clone, Default)]
+pub struct IndexPatch {
+    name: Option<String>,
+    model: Option<String>,
+    reference_precision: Option<ReferencePrecision>,
+    schema: Option<SchemaPatch>,
+    cluster_by: Option<Vec<String>>,
+    lexical: Option<LexicalPatch>,
+    search: Option<SearchPatch>,
+    ingest: Option<IngestPatch>,
+    compaction: Option<CompactionPatch>,
+}
+
+impl IndexPatch {
+    /// Parses and validates a patch body from its JSON form.
+    pub fn from_json_str(raw: &str) -> Result<Self, CribleError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| json::invalid(format!("invalid patch JSON: {error}")))?;
+        Self::from_value(&value)
+    }
+
+    /// Parses and validates a patch body from a decoded JSON value.
+    pub fn from_value(value: &Value) -> Result<Self, CribleError> {
+        let object = json::object(value, "$")?;
+        json::reject_unknown_keys(object, "$", &TOP_LEVEL_KEYS)?;
+        Ok(Self {
+            name: optional_string(object, "$", "name")?,
+            model: optional_string(object, "$", "model")?,
+            reference_precision: match object.get("reference_precision") {
+                Some(value) => Some(ReferencePrecision::parse(value, "$.reference_precision")?),
+                None => None,
+            },
+            schema: match object.get("schema") {
+                Some(value) => Some(SchemaPatch::from_value(value, "$.schema")?),
+                None => None,
+            },
+            cluster_by: match object.get("cluster_by") {
+                Some(value) => Some(string_array(value, "$.cluster_by")?),
+                None => None,
+            },
+            lexical: optional_patch(object, "lexical", "$.lexical", LexicalPatch::from_value)?,
+            search: optional_patch(object, "search", "$.search", SearchPatch::from_value)?,
+            ingest: optional_patch(object, "ingest", "$.ingest", IngestPatch::from_value)?,
+            compaction: optional_patch(
+                object,
+                "compaction",
+                "$.compaction",
+                CompactionPatch::from_value,
+            )?,
+        })
+    }
+}
+
+fn optional_string(
+    object: &Map<String, Value>,
+    path: &str,
+    key: &str,
+) -> Result<Option<String>, CribleError> {
+    match object.get(key) {
+        Some(value) => json::string(value, &format!("{path}.{key}")).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn optional_patch<T>(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+    parse: fn(&Value, &str) -> Result<T, CribleError>,
+) -> Result<Option<T>, CribleError> {
+    match object.get(key) {
+        Some(value) => parse(value, path).map(Some),
+        None => Ok(None),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct SchemaPatch {
+    document_fields: BTreeMap<String, FieldPatch>,
+    passage_fields: BTreeMap<String, FieldPatch>,
+}
+
+impl SchemaPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["document_fields", "passage_fields"])?;
+        Ok(Self {
+            document_fields: match object.get("document_fields") {
+                Some(value) => field_patches(value, &format!("{path}.document_fields"))?,
+                None => BTreeMap::new(),
+            },
+            passage_fields: match object.get("passage_fields") {
+                Some(value) => field_patches(value, &format!("{path}.passage_fields"))?,
+                None => BTreeMap::new(),
+            },
+        })
+    }
+
+    fn reject_immutable(&self, config: &IndexConfig) -> Result<(), CribleError> {
+        for (level, fields) in [
+            (FieldLevel::Document, &self.document_fields),
+            (FieldLevel::Passage, &self.passage_fields),
+        ] {
+            for (name, patch) in fields {
+                let path = format!("$.schema.{}.{name}", level.as_str());
+                if let Some(existing) = config.schema.spec_at(level, name)
+                    && let Some(field_type) = patch.field_type
+                    && field_type != existing.field_type
+                {
+                    return Err(CribleError::new(
+                        ErrorCode::ImmutableSetting,
+                        format!(
+                            "field '{name}' type is immutable at {path}.type; the type of an existing field cannot change"
+                        ),
+                    ));
+                }
+                // Declaring the name at the other level is not a move: the
+                // resulting schema would hold it twice, which ADR-0030 refuses
+                // with `invalid_request` during validation (see `apply_patch`).
+            }
+        }
+        Ok(())
+    }
+
+    fn apply(&self, schema: &mut Schema) -> Result<(), CribleError> {
+        for (level, fields) in [
+            (FieldLevel::Document, &self.document_fields),
+            (FieldLevel::Passage, &self.passage_fields),
+        ] {
+            for (name, patch) in fields {
+                patch.apply(name, level, schema)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn field_patches(value: &Value, path: &str) -> Result<BTreeMap<String, FieldPatch>, CribleError> {
+    let object = json::object(value, path)?;
+    let mut patches = BTreeMap::new();
+    for (name, patch) in object {
+        patches.insert(
+            name.clone(),
+            FieldPatch::from_value(patch, &format!("{path}.{name}"))?,
+        );
+    }
+    Ok(patches)
+}
+
+#[derive(Debug, Clone, Default)]
+struct FieldPatch {
+    field_type: Option<FieldType>,
+    filterable: Option<bool>,
+    returned: Option<bool>,
+}
+
+impl FieldPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["type", "filterable", "returned"])?;
+        Ok(Self {
+            field_type: match object.get("type") {
+                Some(value) => Some(FieldType::parse(value, &format!("{path}.type"))?),
+                None => None,
+            },
+            filterable: match object.get("filterable") {
+                Some(value) => Some(json::boolean(value, &format!("{path}.filterable"))?),
+                None => None,
+            },
+            returned: match object.get("returned") {
+                Some(value) => Some(json::boolean(value, &format!("{path}.returned"))?),
+                None => None,
+            },
+        })
+    }
+
+    fn apply(&self, name: &str, level: FieldLevel, schema: &mut Schema) -> Result<(), CribleError> {
+        let path = format!("$.schema.{}.{name}", level.as_str());
+        if let Some(existing) = schema.spec_at_mut(level, name) {
+            if let Some(field_type) = self.field_type {
+                existing.field_type = field_type;
+            }
+            if let Some(filterable) = self.filterable {
+                existing.filterable = filterable;
+            }
+            if let Some(returned) = self.returned {
+                existing.returned = returned;
+            }
+            return Ok(());
+        }
+        if let Some((_, declared_at)) = schema.field(name) {
+            return Err(json::invalid(format!(
+                "field '{name}' is already declared in {} and cannot also be declared in {}; a field name must designate one level",
+                declared_at.as_str(),
+                level.as_str()
+            )));
+        }
+        let Some(field_type) = self.field_type else {
+            return Err(json::invalid(format!(
+                "new field '{name}' at {path} has no type; a 'type' is required to add a field"
+            )));
+        };
+        schema.map_mut(level).insert(
+            name.to_owned(),
+            FieldSpec {
+                field_type,
+                filterable: self.filterable.unwrap_or(true),
+                returned: self.returned.unwrap_or(true),
+            },
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct LexicalPatch {
+    enabled: Option<bool>,
+    language: Option<String>,
+    positions: Option<bool>,
+}
+
+impl LexicalPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        Ok(Self {
+            enabled: match object.get("enabled") {
+                Some(value) => Some(json::boolean(value, &format!("{path}.enabled"))?),
+                None => None,
+            },
+            language: optional_string(object, path, "language")?,
+            positions: match object.get("positions") {
+                Some(value) => Some(json::boolean(value, &format!("{path}.positions"))?),
+                None => None,
+            },
+        })
+    }
+
+    fn apply(&self, config: &mut LexicalConfig) {
+        if let Some(enabled) = self.enabled {
+            config.enabled = enabled;
+        }
+        if let Some(language) = &self.language {
+            config.language.clone_from(language);
+        }
+        if let Some(positions) = self.positions {
+            config.positions = positions;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct SearchPatch {
+    scan: Option<ScanStrategy>,
+    rescore_candidates: Option<u32>,
+    exact_threshold: Option<u32>,
+    candidates_per_branch: Option<u32>,
+    fusion: Option<FusionConfig>,
+}
+
+impl SearchPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &[
+                "scan",
+                "rescore_candidates",
+                "exact_threshold",
+                "candidates_per_branch",
+                "fusion",
+            ],
+        )?;
+        Ok(Self {
+            scan: match object.get("scan") {
+                Some(value) => Some(ScanStrategy::parse(value, &format!("{path}.scan"))?),
+                None => None,
+            },
+            rescore_candidates: optional_u32(object, path, "rescore_candidates")?,
+            exact_threshold: optional_u32(object, path, "exact_threshold")?,
+            candidates_per_branch: optional_u32(object, path, "candidates_per_branch")?,
+            fusion: match object.get("fusion") {
+                Some(value) => Some(FusionConfig::from_value(value, &format!("{path}.fusion"))?),
+                None => None,
+            },
+        })
+    }
+
+    fn apply(&self, config: &mut SearchConfig) {
+        if let Some(scan) = self.scan {
+            config.scan = scan;
+        }
+        if let Some(rescore_candidates) = self.rescore_candidates {
+            config.rescore_candidates = rescore_candidates;
+        }
+        if let Some(exact_threshold) = self.exact_threshold {
+            config.exact_threshold = exact_threshold;
+        }
+        if let Some(candidates_per_branch) = self.candidates_per_branch {
+            config.candidates_per_branch = candidates_per_branch;
+        }
+        if let Some(fusion) = self.fusion {
+            config.fusion = fusion;
+        }
+    }
+}
+
+fn optional_u32(
+    object: &Map<String, Value>,
+    path: &str,
+    key: &str,
+) -> Result<Option<u32>, CribleError> {
+    match object.get(key) {
+        Some(value) => json::u32_value(value, &format!("{path}.{key}")).map(Some),
+        None => Ok(None),
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct IngestPatch {
+    acceptance_sample: Option<u32>,
+    acceptance_min_cosine: Option<f64>,
+}
+
+impl IngestPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &["acceptance_sample", "acceptance_min_cosine"],
+        )?;
+        Ok(Self {
+            acceptance_sample: optional_u32(object, path, "acceptance_sample")?,
+            acceptance_min_cosine: match object.get("acceptance_min_cosine") {
+                Some(value) => Some(json::float(
+                    value,
+                    &format!("{path}.acceptance_min_cosine"),
+                )?),
+                None => None,
+            },
+        })
+    }
+
+    fn apply(&self, config: &mut IngestConfig) {
+        if let Some(acceptance_sample) = self.acceptance_sample {
+            config.acceptance_sample = acceptance_sample;
+        }
+        if let Some(acceptance_min_cosine) = self.acceptance_min_cosine {
+            config.acceptance_min_cosine = acceptance_min_cosine;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct CompactionPatch {
+    dead_ratio: Option<f64>,
+}
+
+impl CompactionPatch {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &["dead_ratio"])?;
+        Ok(Self {
+            dead_ratio: match object.get("dead_ratio") {
+                Some(value) => Some(json::float(value, &format!("{path}.dead_ratio"))?),
+                None => None,
+            },
+        })
+    }
+
+    fn apply(&self, config: &mut CompactionConfig) {
+        if let Some(dead_ratio) = self.dead_ratio {
+            config.dead_ratio = dead_ratio;
+        }
+    }
+}
+
+/// Applies a patch to `config`, or leaves it untouched on error.
+///
+/// Frozen settings are refused with [`ErrorCode::ImmutableSetting`] before any
+/// mutation (INV-16); unknown keys are refused when the patch is parsed
+/// (ADR-0031). A rejected patch changes nothing.
+pub fn apply_patch(config: &mut IndexConfig, patch: &IndexPatch) -> Result<(), CribleError> {
+    reject_immutable(config, patch)?;
+
+    let mut candidate = config.clone();
+    if let Some(name) = &patch.name {
+        candidate.name.clone_from(name);
+    }
+    if let Some(model) = &patch.model {
+        candidate.model.clone_from(model);
+    }
+    if let Some(reference_precision) = patch.reference_precision {
+        candidate.reference_precision = reference_precision;
+    }
+    if let Some(cluster_by) = &patch.cluster_by {
+        candidate.cluster_by.clone_from(cluster_by);
+    }
+    if let Some(lexical) = &patch.lexical {
+        lexical.apply(&mut candidate.lexical);
+    }
+    if let Some(search) = &patch.search {
+        search.apply(&mut candidate.search);
+    }
+    if let Some(ingest) = &patch.ingest {
+        ingest.apply(&mut candidate.ingest);
+    }
+    if let Some(compaction) = &patch.compaction {
+        compaction.apply(&mut candidate.compaction);
+    }
+    if let Some(schema) = &patch.schema {
+        schema.apply(&mut candidate.schema)?;
+    }
+    candidate.schema.validate()?;
+
+    *config = candidate;
+    Ok(())
+}
+
+fn reject_immutable(config: &IndexConfig, patch: &IndexPatch) -> Result<(), CribleError> {
+    if let Some(name) = &patch.name
+        && name != &config.name
+    {
+        return Err(immutable("name", "$.name"));
+    }
+    if let Some(model) = &patch.model
+        && model != &config.model
+    {
+        return Err(immutable("model", "$.model"));
+    }
+    if let Some(reference_precision) = patch.reference_precision
+        && reference_precision != config.reference_precision
+    {
+        return Err(immutable("reference_precision", "$.reference_precision"));
+    }
+    if let Some(schema) = &patch.schema {
+        schema.reject_immutable(config)?;
+    }
+    Ok(())
+}
+
+fn immutable(setting: &str, path: &str) -> CribleError {
+    CribleError::new(
+        ErrorCode::ImmutableSetting,
+        format!("setting '{setting}' is immutable at {path}; recreate the index to change it"),
+    )
+}

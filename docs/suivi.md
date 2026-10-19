@@ -37,7 +37,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 | P0 | INITIALISER-WORKSPACE-RUST | FAIT | tache/INITIALISER-WORKSPACE-RUST | Workspace resolver 3, édition 2024, toolchain 1.99.1 ; 6 crates ; dépendances `docs/07` épinglées ; `--version` testé ; fmt/clippy/test/build OK, relecture OK |
 | P0 | CONFIGURER-QUALITE-ET-CI | FAIT | tache/CONFIGURER-QUALITE-ET-CI | Workflow CI (fmt/clippy/test + Python conditionnel), `rustfmt.toml`, `clippy.toml`, lints workspace `unwrap_used`/`expect_used`, `Makefile` (`check`/`fmt`/`lint`/`test`) ; `make check` OK ; relecture OK |
 | P0 | DEFINIR-TYPES-DE-BASE | FAIT | tache/DEFINIR-TYPES-DE-BASE | `DocId`, `PassageKey`, `Iid`, `Generation`, `Epoch`, `ErrorCode` (14 codes/statuts), `CribleError` ; INV-01 prouvé par analyse statique ; 32 tests ; relecture OK |
-| P0 | DEFINIR-CONFIG-INDEX | A-FAIRE | | |
+| P0 | DEFINIR-CONFIG-INDEX | FAIT | tache/DEFINIR-CONFIG-INDEX | `IndexConfig`, `Schema`, `ModelConfig` avec empreinte canonique UTF-8 (ADR-0028), AST `Filter` et validation (ADR-0029/0030/0031), `apply_patch` atomique (INV-16) ; 116 tests, test croisé Python ; relecture OK |
 | P0 | DEFINIR-FORMAT-LOT | A-FAIRE | | |
 | P0 | MESURER-REFERENCE-PGVECTOR | A-FAIRE | | |
 | P1 | ECRIRE-LOTS-PYTHON | A-FAIRE | | |
@@ -124,6 +124,11 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 
 | Date | Tâche | Écart constaté | ADR proposé | Décision du propriétaire |
 |---|---|---|---|---|
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | `serde_json` est requis pour l'analyse JSON mais absent de `docs/07`, qui ne liste que `serde` et `toml` | ADR-0027 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Forme canonique de l'empreinte du modèle non spécifiée (clés, compacité, champs imbriqués, encodage des hash) | ADR-0028 | Accepté le 2026-10-19, avec UTF-8 sans échappement non ASCII |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comptage de la profondeur et des clauses d'un filtre non défini | ADR-0029 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini quand un nom de champ est déclaré aux deux niveaux du schéma | ADR-0030 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini pour une clé inconnue dans un `PATCH` de configuration | ADR-0031 | Accepté le 2026-10-19 |
 
 ## Décisions en attente
 
@@ -165,4 +170,8 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | CONFIGURER-QUALITE-ET-CI terminée : CI, lints workspace, `Makefile` ; `make check` OK ; revue OK ; actionlint indisponible en local |
 | 2026-10-19 | Début de la tâche DEFINIR-TYPES-DE-BASE sur `tache/DEFINIR-TYPES-DE-BASE` |
 | 2026-10-19 | DEFINIR-TYPES-DE-BASE terminée : identifiants et erreurs typées, INV-01 couvert, 32 tests ; revue OK |
+| 2026-10-19 | Début de la tâche DEFINIR-CONFIG-INDEX sur `tache/DEFINIR-CONFIG-INDEX` |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX bloquée : l'architecte relève 5 points non couverts ; ADR-0027 à 0031 proposés, en attente de décision |
+| 2026-10-19 | ADR-0027 à 0031 acceptés ; documents mis à jour ; reprise de DEFINIR-CONFIG-INDEX |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX terminée : config, modèle, filtres, patch ; test croisé Rust/Python de l'empreinte ; 116 tests ; revue OK |
 | 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |

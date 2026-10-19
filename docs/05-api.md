@@ -52,7 +52,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/indexes` | admin | Créer un index (config complète) → `201` |
 | `GET /v1/indexes` | read | Lister les index : nom, modèle, comptes, génération |
 | `GET /v1/indexes/{index}` | read | Config + état : époque, génération, documents, passages vivants et morts, ratio de morts, segments, tailles, dernier lot |
-| `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables ; un réglage figé → `409` |
+| `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables ; un réglage figé → `409` ; une clé inconnue → `400` |
 | `DELETE /v1/indexes/{index}?confirm={index}` | admin | Supprimer l'index (job) |
 | `POST /v1/indexes/{index}/documents` | write | Lot en ligne : documents et passages (texte, ou vecteurs fournis), suppressions → job |
 | `PATCH /v1/indexes/{index}/documents` | write | Mettre à jour des métadonnées de documents → job |
@@ -68,6 +68,8 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, générations cohérentes) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
+
+Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
 
 ### Lot en ligne
 
@@ -98,10 +100,11 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `integer`, `float`, `date` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `exists` |
 | `bool` | `eq`, `exists` |
 
-- **Limites** :
+- **Limites** (ADR-0029) :
   - `in` et `nin` : 1 000 valeurs au plus ;
-  - profondeur : 8 au plus ;
-  - nombre de clauses : 64 au plus.
+  - profondeur : 8 au plus. On compte les **niveaux d'objets et de tableaux** ; la racine vaut 1 ; un objet d'opérateurs de champ compte pour un niveau ; un tableau `$and` ou `$or` compte pour un niveau, et chacun de ses éléments pour le niveau suivant. Neuf `$not` imbriqués sont refusés, quatre sont acceptés ;
+  - nombre de clauses : 64 au plus. Une **clause** est une **condition de champ**, c'est-à-dire une entrée dont la clé est un nom de champ ; `$and`, `$or` et `$not` ne comptent pas. 64 conditions sont acceptées, la 65e donne `invalid_filter`. Exemple : `{ "a": 1, "$or": [ { "b": 2 }, { "c": 3 } ] }` compte 3 clauses et une profondeur de 3 ;
+  - un dépassement donne `invalid_filter`, avec le chemin JSON de l'élément fautif.
 - **Validation** contre le schéma de l'index :
   - le message d'erreur nomme ce qui était attendu ;
   - un champ marqué `filterable: false` donne `invalid_filter`.

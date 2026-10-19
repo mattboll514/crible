@@ -80,6 +80,11 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0024](0024-plugins-opencode.md) | Plugins opencode : caveman (avec garde-fous) et notifications | Accepté | 2026-10-19 |
 | [ADR-0025](0025-opencode-v2.md) | Utiliser opencode v2, avec une configuration au format v1 | Accepté | 2026-10-19 |
 | [ADR-0026](0026-permissions-et-mode-auto.md) | Permissions des agents : utilitaires autorisés, interdictions renforcées, mode --auto | Accepté | 2026-10-19 |
+| [ADR-0027](0027-serde-json-comme-dependance.md) | Ajouter `serde_json` comme dépendance | Accepté | 2026-10-19 |
+| [ADR-0028](0028-forme-canonique-de-l-empreinte-du-modele.md) | Forme canonique de l'empreinte du modèle | Accepté | 2026-10-19 |
+| [ADR-0029](0029-limites-de-filtre-profondeur-et-clauses.md) | Limites de filtre : comptage de la profondeur et des clauses | Accepté | 2026-10-19 |
+| [ADR-0030](0030-nom-de-champ-declare-aux-deux-niveaux.md) | Refuser un nom de champ déclaré aux deux niveaux | Accepté | 2026-10-19 |
+| [ADR-0031](0031-cle-inconnue-dans-un-patch-de-configuration.md) | Refuser une clé inconnue dans un `PATCH` de configuration | Accepté | 2026-10-19 |
 
 ## Questions ouvertes
 
