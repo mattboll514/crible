@@ -231,8 +231,9 @@ contrôles qui ne demandent pas de lire le Parquet :
 1. `format` et `format_version` sont reconnus.
 2. L'index existe (le nom du manifeste correspond à l'index cible) et le mode
    est valide.
-3. Le modèle du lot est compatible avec celui de l'index, champ par champ,
-   sinon `422 incompatible_model`.
+3. Le modèle du lot est compatible avec celui de l'index : chaque champ est
+   comparé à la configuration résolue du modèle (`ModelConfig`), sinon
+   `422 incompatible_model`.
 4. La forme des checksums et la liste des fichiers sont cohérentes (la
    vérification des valeurs est faite en P1).
 

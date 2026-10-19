@@ -165,7 +165,7 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 
 1. `format` et `format_version` sont reconnus.
 2. L'index existe et le mode est valide.
-3. Le modèle du lot est compatible avec celui de l'index : `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompt_document`. Sinon : `422 incompatible_model`.
+3. Le modèle du lot est compatible avec celui de l'index : chaque champ (`hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompt_document`) est comparé à la configuration résolue du modèle (`ModelConfig`). Sinon : `422 incompatible_model`.
 4. Les checksums des fichiers correspondent au manifeste.
 5. Le schéma Parquet est conforme à celui de l'index : colonnes présentes et types corrects.
 6. Les comptes correspondent au manifeste ; les `ord` sont contigus ; chaque document a au moins un passage.

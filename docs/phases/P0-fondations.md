@@ -77,7 +77,7 @@
 - **À lire** : `04-donnees-et-ingestion.md` (format de lot v1, contrôles 1 à 4).
 - **Livrables** :
   - `BatchManifest` (serde) dans `crible-core` ;
-  - `check_manifest(manifest, index_config) -> Result<(), CribleError>` : format, version, mode, compatibilité du modèle (`incompatible_model`), cohérence des comptes et de la liste des fichiers ;
+  - `check_manifest(manifest, index_config, model_config) -> Result<(), CribleError>` : format, version, mode, compatibilité du modèle (`incompatible_model`), cohérence des comptes et de la liste des fichiers ; `model_config` est la configuration du modèle résolue (`&ModelConfig`), utilisée pour comparer le modèle du manifeste champ par champ ;
   - `docs/format-lot-v1.md` : la spécification de référence, colonnes Parquet comprises, à partir de `04` (c'est elle que le code Python suivra).
 - **Critères d'acceptation** :
   - l'exemple de manifeste du doc 04 est valide ;

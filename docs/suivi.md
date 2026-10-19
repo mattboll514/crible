@@ -148,7 +148,6 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | CONFIGURER-QUALITE-ET-CI | CI : ajouter `--locked` aux commandes Cargo, épingler `dtolnay/rust-toolchain`, cache Cargo si la CI ralentit |
 | 2026-10-19 | DEFINIR-TYPES-DE-BASE | Consigner dans `docs/02` la règle `PassageKey` (découpage sur le dernier `#`, `DocId` pouvant contenir `#`) |
 | 2026-10-19 | DEFINIR-TYPES-DE-BASE | Envisager `trybuild` pour un vrai test de compilation négatif d'INV-01 si cette dépendance entre dans `docs/07` |
-| 2026-10-19 | DEFINIR-FORMAT-LOT | Fiche : `check_manifest` reçoit aussi `&ModelConfig` (config résolue du modèle) en plus de `index_config`, pour comparer chaque champ ; fiche à corriger |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : validation stricte de l'hexadécimal et de la longueur des checksums (contrôle 4) |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
 
@@ -182,3 +181,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | DEFINIR-FORMAT-LOT terminée : manifeste et validation, spécification `format-lot-v1.md` ; 23 tests ; revue OK |
 | 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |
 | 2026-10-19 | ADR-0032 accepté : mesures en production sur le Mac mini, en lecture seule ; accès dans `.env.prod`, non versionné ; fiche MESURER-REFERENCE-PGVECTOR réécrite |
+| 2026-10-19 | Écart de relecture DEFINIR-FORMAT-LOT accepté par le propriétaire : `check_manifest` prend aussi `&ModelConfig` ; fiche, doc 04 et `format-lot-v1.md` alignés |
