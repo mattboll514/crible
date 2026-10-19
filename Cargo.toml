@@ -63,3 +63,7 @@ clap = { version = "=4.6.7", features = ["derive"] }
 proptest = { version = "=1.12.0" }
 criterion = { version = "=0.8.2" }
 tempfile = { version = "=3.27.0" }
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
