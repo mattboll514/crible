@@ -66,7 +66,7 @@ Tu es le **relecteur** de Crible. On te donne le nom d'une tâche, ou on te dema
    - Les erreurs sont typées, avec le bon `ErrorCode`.
    - Chaque `unsafe` a un commentaire `SAFETY`.
    - Les fichiers sont écrits de façon atomique quand c'est requis.
-5. **Sécurité.** Chemins de fichiers confinés, entrées validées, aucun secret ni texte de requête dans les logs.
+5. **Sécurité.** Chemins de fichiers confinés, entrées validées, aucun secret ni texte de requête dans les logs. **Aucune valeur de `.env.prod`** (hôte, chemins de production) dans les fichiers modifiés : c'est un point `bloquant` (ADR-0032).
 6. **Simplicité.** Pas d'abstraction spéculative, pas de duplication évitable, des fonctions lisibles, aucune dépendance hors de `docs/07`.
 7. **Performance.** Aucune affirmation sans mesure. Pas de calcul lourd sur les threads tokio.
 8. **Décisions.** Le diff ne contredit aucun ADR `Accepté`. S'il introduit une décision qui engage le projet (dépendance absente de `docs/07`, format, seuil, valeur par défaut, compromis), un ADR existe : `Proposé` au moins, cité dans le commit. Sinon, c'est un point `bloquant`.

@@ -85,15 +85,43 @@
 - **Hors périmètre** : la lecture Parquet (P1).
 
 ### MESURER-REFERENCE-PGVECTOR
-- **Objectif** : mesurer MES-00, la référence actuelle de Legifacile (rappel et latence). **Se fait avec le propriétaire**, dans le dépôt `legifacile-sandbox`.
+- **Objectif** : mesurer MES-00, c'est-à-dire la référence de la recherche actuelle de Legifacile (pgvector), **sur le Mac mini de production**. Ces chiffres fixent les cibles de Crible.
 - **Dépend de** : —
-- **À lire** : `08-invariants-et-tests.md` (mesures, cibles) ; `docs/mesures/README.md` ; dans Legifacile : `docs/mcp/EVALUATION.md`.
+- **À lire** :
+  - `08-invariants-et-tests.md` (mesures, cibles) et `docs/mesures/README.md` ;
+  - `docs/adr/0032-acces-a-la-production.md` ;
+  - **`.env.prod`**, à la racine du dépôt. Il contient les accès à la production, n'est **pas versionné** (voir `.env.prod.example`) et se demande au propriétaire s'il manque.
+- **Où** :
+  - sur le Mac mini, par SSH (`$PROD_SSH`), dans le dépôt Legifacile (`$PROD_REPO`), avec son environnement Python (`uv run`), donc le même encodeur que la production ;
+  - la copie locale de Legifacile **n'est pas utilisée** : elle est figée à la mi-août, sans le découpage des décisions en parties.
+- **Données disponibles sur le Mac mini** :
+  - la base de production : ~9,6 M passages en 8 partitions avec index HNSW, colonne `partie` présente, pgvector 0.8.2. Accès en lecture seule via `$PROD_DB_CONTAINER` et `$PROD_PGOPTIONS` ;
+  - `docs/mcp/evaluation/questions.yaml` : 57 questions étiquetées. Répartition : juri_texte_integral 31, textes_vigueur 13, juri_sommaires 4, jorf_normatif 4, sarde 3, dole 2. Aucune ne porte sur textes_hors_vigueur ni titres_textes ;
+  - `scripts/db/eval_recherche.py` : rappel mesuré contre les étiquettes, via HNSW (ou `--via-mcp`) ;
+  - `scripts/db/froid_decomposition.py --json` : latence décomposée en encodeur, SQL et reconstruction du texte, à froid (après une inactivité) et à chaud, par périmètre ;
+  - les chiffres déjà connus, à citer sans les refaire : `docs/MDENSEON.md:404-445` (fidélité HNSW à `ef_search` 200) et `docs/mcp/EVALUATION.md` (latence, charge).
+- **À construire** dans `tools/bench/mes00/` (versionné dans Crible ; **rien n'est ajouté au dépôt Legifacile**). Les scripts sont copiés dans un dossier temporaire du Mac mini et lancés avec l'environnement de Legifacile.
+  1. **Un jeu d'environ 1 000 requêtes de latence**, généré sans données personnelles (titres d'articles et de sommaires tirés avec une graine fixe). Il est nécessaire pour un p99 : les 57 questions n'y suffisent pas.
+  2. **Un script de fidélité HNSW contre recherche exacte** (recall@10 par corpus), sur un échantillon de requêtes. La recherche exacte se fait de préférence **hors production**, sur un export ponctuel des vecteurs (`scripts/db/exporter_vecteurs.py`, de nuit). À défaut, par un scan exact SQL de nuit, sur peu de requêtes.
+- **Règles de sécurité, impératives (ADR-0032)** :
+  - **Lecture seule.** Toute session Postgres ou tout script porte `PGOPTIONS=$PROD_PGOPTIONS`. Aucune modification de schéma, d'index, de réglage ni de données.
+  - **Toujours `eval_recherche.py --sortie /tmp/…`.** Sans cette option, le script réécrit `docs/mcp/EVALUATION.md` dans le dépôt de production. Plus généralement, aucun fichier ne doit être modifié dans `$PROD_REPO` : `git status` doit y rester propre.
+  - **Ne jamais redémarrer ni arrêter** Postgres, Docker, ni les services `$PROD_SERVICES`.
+  - **Mesurer en dehors des heures d'usage**, le soir ou la nuit, et jamais pendant `$PROD_DAILY_WINDOW`. Les requêtes passent en série ; l'essai de charge reste court et borné.
+  - **Aucune valeur de `.env.prod`** (hôte, chemins) dans un fichier versionné, un rapport, un ADR ou un commit. On n'y écrit que le nom des variables.
+- **Particularité du pipeline** : `@dev` écrit les scripts. Avant la relecture, l'orchestrateur lance `@mesureur MES-00` pour exécuter la mesure et écrire le rapport, puis `@relecteur` relit les scripts et le rapport.
 - **Livrables** :
-  - `docs/mesures/MES-00-reference-pgvector.md` : jeu de requêtes utilisé (le chemin, pas le contenu sensible), rappel contre la recherche exacte, latence p50/p95/p99 par corpus et par périmètre, machine et conditions ;
-  - les cibles reportées dans `docs/suivi.md`, section « Cibles ».
+  - `docs/mesures/MES-00-reference-pgvector.md`, qui contient :
+    - l'état de la base mesurée : date, comptes par partition, commit Legifacile, version de pgvector, `shared_buffers`, charge de la machine ;
+    - la qualité : recall@10 et rang du premier bon résultat, par corpus et par périmètre ;
+    - la fidélité HNSW contre exact, par corpus ;
+    - la latence p50/p95/p99 par poste (encodeur, SQL, reconstruction), à froid et à chaud, par corpus et par périmètre ;
+  - les scripts `tools/bench/mes00/` et les données brutes en JSON, sans texte de requête réelle d'utilisateur ;
+  - les cibles proposées dans `docs/suivi.md`, section « Cibles ».
 - **Critères d'acceptation** :
-  - le protocole est reproductible (commande ou script cité) ;
-  - les chiffres bruts sont joints ;
-  - les cibles sont validées par le propriétaire.
+  - le protocole est reproductible : les commandes exactes sont écrites avec les **noms** des variables de `.env.prod`, jamais leurs valeurs ;
+  - le p99 repose sur au moins 1 000 requêtes ;
+  - la mesure n'a rien écrit en production : `git status` propre dans `$PROD_REPO`, aucune requête d'écriture, aucun service redémarré ;
+  - le propriétaire valide les cibles.
 - **Invariants / mesures** : MES-00.
-- **Hors périmètre** : modifier Legifacile.
+- **Hors périmètre** : modifier Legifacile ; utiliser ou rafraîchir la copie locale.

@@ -85,6 +85,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0029](0029-limites-de-filtre-profondeur-et-clauses.md) | Limites de filtre : comptage de la profondeur et des clauses | Accepté | 2026-10-19 |
 | [ADR-0030](0030-nom-de-champ-declare-aux-deux-niveaux.md) | Refuser un nom de champ déclaré aux deux niveaux | Accepté | 2026-10-19 |
 | [ADR-0031](0031-cle-inconnue-dans-un-patch-de-configuration.md) | Refuser une clé inconnue dans un `PATCH` de configuration | Accepté | 2026-10-19 |
+| [ADR-0032](0032-acces-a-la-production.md) | Accès des agents à la production Legifacile : SSH, lecture seule, informations hors git | Accepté | 2026-10-19 |
 
 ## Questions ouvertes
 

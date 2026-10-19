@@ -175,3 +175,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | ADR-0027 à 0031 acceptés ; documents mis à jour ; reprise de DEFINIR-CONFIG-INDEX |
 | 2026-10-19 | DEFINIR-CONFIG-INDEX terminée : config, modèle, filtres, patch ; test croisé Rust/Python de l'empreinte ; 116 tests ; revue OK |
 | 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |
+| 2026-10-19 | ADR-0032 accepté : mesures en production sur le Mac mini, en lecture seule ; accès dans `.env.prod`, non versionné ; fiche MESURER-REFERENCE-PGVECTOR réécrite |

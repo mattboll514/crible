@@ -46,6 +46,7 @@ Crible est un moteur de recherche **dense + BM25** pour données structurées, �
 11. **Confidentialité.**
     - Un id interne (`Iid`) ne sort jamais du moteur.
     - Les analytics et les logs ne contiennent jamais de texte de requête ni de valeur de filtre.
+    - **Production (ADR-0032)** : les accès sont dans `.env.prod`, **non versionné**. On ne recopie jamais une de ses valeurs (hôte, chemins) dans un fichier versionné, un rapport, un ADR ou un commit : seulement le nom de la variable. En production, tout est en **lecture seule** et aucun service n'est redémarré.
 12. **Simplicité.**
     - Un module = une responsabilité.
     - Pas d'abstraction pour une seule implémentation, pas de configuration pour une valeur fixe.
