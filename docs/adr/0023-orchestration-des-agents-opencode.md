@@ -1,6 +1,6 @@
 # ADR-0023 — Orchestration des agents dans opencode : un orchestrateur, un pipeline séquentiel, un seul agent git
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-19) — point 5 (opencode v1) remplacé par ADR-0025
+- **Statut** : Accepté (décision du propriétaire le 2026-10-19) — point 5 (opencode v1) remplacé par ADR-0025 ; points 1 et 7 (place de l'orchestrateur) remplacés par ADR-0033
 - **Date** : 2026-10-19
 - **Décideurs** : propriétaire
 - **Proposé par** : propriétaire (besoins : orchestrateur, agent git, agent de revue) ; conception détaillée par l'assistant

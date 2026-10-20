@@ -1,6 +1,29 @@
 # Guide : installer opencode et travailler sur Crible
 
-Pour le propriétaire et toute personne qui rejoint le projet. Les choix sont expliqués dans l'ADR-0023 (orchestration), l'ADR-0024 (plugins) et l'ADR-0025 (opencode v2). Les faits ont été vérifiés le 19/10/2026.
+Pour le propriétaire et toute personne qui rejoint le projet. Les choix sont expliqués dans l'ADR-0023 (orchestration), l'ADR-0024 (plugins), l'ADR-0025 (opencode v2) et l'ADR-0033 (orchestrateur dans Claude Code). Les faits ont été vérifiés les 19 et 20/10/2026.
+
+## 0. Le mode de travail actuel : Claude Code orchestre (ADR-0033)
+
+- **Qui fait quoi** :
+  - tu parles à l'orchestrateur dans **Claude Code**, sur Opus, avec ton abonnement Claude ;
+  - il fait travailler les agents **opencode** sur DeepSeek (Ollama), sans interface, par `.claude/agent.sh`.
+
+  Les sections 1 à 4 restent donc nécessaires : opencode, Ollama et ColGrep doivent être installés.
+- **Lancer une session** :
+
+  ```bash
+  cd ~/MattCorp/crible
+  claude            # le modèle (Opus) vient de .claude/settings.json
+  ```
+
+  Puis `/etat`. Les commandes sont les mêmes qu'avec opencode : `/tache`, `/jalon`, `/valider`, `/adr`, `/mesurer`, `/git`, `/relire` et `/chercher`.
+- **Sessions** : `/clear` remplace le `/new` d'opencode. La stratégie de la section 6 ne change pas : une session par phase ou par journée.
+- **Voir ce que fait un agent** :
+  - `/tasks` dans Claude Code liste les agents qui tournent en arrière-plan ;
+  - dans `opencode`, `/sessions` montre chaque passage d'agent. Ses sessions sont titrées « agent : consigne » ;
+  - le journal brut est dans `.claude/runs/`.
+- **Consommation** : `/usage` dans Claude Code pour les fenêtres de 5 heures et de 7 jours ; la page de ton compte ollama.com pour Ollama.
+- **Secours** : si le quota Claude est épuisé, lance `opencode --auto` entre deux tâches. Son orchestrateur reprend à partir des mêmes fichiers (sections 5 à 7).
 
 ## 1. Installer opencode (v2)
 
@@ -130,7 +153,7 @@ cd ~/MattCorp/crible && oc
 | L'orchestrateur ralentit, se répète ou oublie des consignes, ou plus d'une vingtaine d'échanges | `/new`, puis `/etat`. L'état se recharge depuis les fichiers en quelques secondes |
 | Une discussion en cours (un ADR à trancher…) que tu ne veux pas reprendre de zéro | `/compact` (ou `ctrl+x c`) |
 | Compaction automatique | Filet de sécurité, vers 180 k tokens (`limit.context = 200000`). Si elle se déclenche, préfère ensuite un `/new` à la première occasion |
-| Voir ce qu'a fait un sous-agent | `ctrl+x ↓` (première session enfant), `←` et `→` pour passer de l'une à l'autre, `ctrl+x ↑` pour revenir |
+| Voir ce qu'a fait un sous-agent | `↓` (choix d'une session enfant), `←` et `→` pour passer de l'une à l'autre, `↑` pour revenir |
 | Faire enchaîner plusieurs tâches | Dis à l'orchestrateur « enchaîne les tâches de la phase ». Il s'arrête de lui-même à chaque blocage, à chaque décision à prendre et à la fin de la phase |
 
 **À éviter** :
