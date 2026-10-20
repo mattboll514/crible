@@ -1,0 +1,51 @@
+# argv exécuté : /tmp/mes00/q0018.sh, lancé par bash le 2026-10-20 à 09:19 (heure locale, CEST)
+# Trois retouches par rapport au script exécuté :
+#   1. la valeur de PGOPTIONS est écrite $PROD_PGOPTIONS (la variable dont elle vient) ;
+#   2. le chemin absolu du dépôt est écrit $PROD_REPO ;
+#   3. l'en-tête « machine » plus bas est réécrit en « Mac mini de production » : il venait de
+#      `hostname -s`, qui rendait le nom de la machine de production.
+# Tout le reste, c'est-à-dire le corps de la sortie, est identique.
+# --- début de l'argv ---
+set -e
+OUT=/tmp/mes00/out/fidelity-q0018-ef1000.txt
+V=$("$PROD_REPO/.venv/bin/python" -c '
+import json
+d=json.load(open("/tmp/mes00/out/query-vectors.json"))
+q=next(x for x in d["queries"] if x["query_id"]=="q0018")
+print("["+",".join(f"{v:.8g}" for v in q["vector"])+"]")')
+{
+echo '# MES-00 - q0018 (juri_texte_integral), ef_search = 1000 contre exact, sortie brute'
+echo "# date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "# machine: $(hostname -s)"
+echo '# HNSW, ef_search = 1000, top 10 : rang, id, distance'
+docker exec -e PGOPTIONS="$PROD_PGOPTIONS" "$PROD_DB_CONTAINER" psql -X -q -A -t -U postgres -v ON_ERROR_STOP=1   -c "BEGIN READ ONLY; SET LOCAL hnsw.ef_search = 1000; SELECT row_number() OVER (ORDER BY embedding <=> '$V'::halfvec(768)) || ' ' || src_id || '#' || passage_ord || ' ' || round((embedding <=> '$V'::halfvec(768))::numeric, 6) FROM vec.passages WHERE corpus = 'juri_texte_integral' ORDER BY embedding <=> '$V'::halfvec(768) LIMIT 10; COMMIT;"
+echo '# exact (enable_indexscan off, enable_bitmapscan off), top 10 : rang, id, distance'
+docker exec -e PGOPTIONS="$PROD_PGOPTIONS" "$PROD_DB_CONTAINER" psql -X -q -A -t -U postgres -v ON_ERROR_STOP=1   -c "BEGIN READ ONLY; SET LOCAL enable_indexscan = off; SET LOCAL enable_bitmapscan = off; SELECT row_number() OVER (ORDER BY embedding <=> '$V'::halfvec(768)) || ' ' || src_id || '#' || passage_ord || ' ' || round((embedding <=> '$V'::halfvec(768))::numeric, 6) FROM vec.passages WHERE corpus = 'juri_texte_integral' ORDER BY embedding <=> '$V'::halfvec(768) LIMIT 10; COMMIT;"
+} > $OUT 2>&1
+wc -l $OUT
+# --- fin de l'argv ---
+# MES-00 - q0018 (juri_texte_integral), ef_search = 1000 contre exact, sortie brute
+# date: 2026-10-20T07:19:27Z
+# machine: Mac mini de production
+# HNSW, ef_search = 1000, top 10 : rang, id, distance
+1 CETATEXT000044272723#0 0.388099
+2 CETATEXT000044272743#0 0.389271
+3 CETATEXT000044272741#0 0.390412
+4 CETATEXT000044272748#0 0.390806
+5 CETATEXT000044272729#0 0.390920
+6 CETATEXT000044272745#0 0.392153
+7 CETATEXT000043763429#0 0.393007
+8 CETATEXT000044272751#0 0.393139
+9 CETATEXT000044272726#0 0.393200
+10 CETATEXT000044293818#0 0.393888
+# exact (enable_indexscan off, enable_bitmapscan off), top 10 : rang, id, distance
+1 CETATEXT000043851789#0 0.310845
+2 CETATEXT000043930465#0 0.310845
+3 CETATEXT000043930462#0 0.317887
+4 CETATEXT000043851785#0 0.317887
+5 CETATEXT000044249650#0 0.318344
+6 CETATEXT000043031902#0 0.318508
+7 CETATEXT000044086916#0 0.318622
+8 CETATEXT000044462233#0 0.318631
+9 CETATEXT000043930436#0 0.318633
+10 CETATEXT000043851758#0 0.318633
