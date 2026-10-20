@@ -19,6 +19,10 @@
 *.sqlite-wal
 *.sqlite-shm
 
+# Claude Code : journaux des agents (ADR-0033) et réglages personnels
+/.claude/runs/
+/.claude/settings.local.json
+
 # Divers
 .DS_Store
 .env

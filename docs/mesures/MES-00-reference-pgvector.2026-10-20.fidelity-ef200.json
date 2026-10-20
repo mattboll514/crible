@@ -1,0 +1,791 @@
+{
+  "by_corpus": {
+    "dole": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "jorf_normatif": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "juri_sommaires": {
+      "max": 1.0,
+      "mean": 0.767,
+      "min": 0.4,
+      "n": 3,
+      "p50": 0.9,
+      "p95": 0.99,
+      "p99": 0.998
+    },
+    "juri_texte_integral": {
+      "max": 1.0,
+      "mean": 0.667,
+      "min": 0.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "sarde": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "textes_hors_vigueur": {
+      "max": 1.0,
+      "mean": 0.967,
+      "min": 0.9,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "textes_vigueur": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    },
+    "titres_textes": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "n": 3,
+      "p50": 1.0,
+      "p95": 1.0,
+      "p99": 1.0
+    }
+  },
+  "details": [
+    {
+      "corpus": "juri_sommaires",
+      "exact_ids": [
+        "JURITEXT000007073115#0",
+        "JURITEXT000007073389#0",
+        "JURITEXT000007073390#0",
+        "JURITEXT000007073099#0",
+        "JURITEXT000007074506#0",
+        "JURITEXT000007072352#0",
+        "JURITEXT000007074508#0",
+        "JURITEXT000007073541#0",
+        "JURITEXT000007070323#0",
+        "JURITEXT000007075045#0"
+      ],
+      "hnsw_ids": [
+        "JURITEXT000007073115#0",
+        "JURITEXT000007073389#0",
+        "JURITEXT000007073390#0",
+        "JURITEXT000007073099#0",
+        "JURITEXT000007074506#0",
+        "JURITEXT000007072352#0",
+        "JURITEXT000007074508#0",
+        "JURITEXT000007073541#0",
+        "JURITEXT000007070323#0",
+        "JURITEXT000007075045#0"
+      ],
+      "query_id": "q0001",
+      "recall": 1.0
+    },
+    {
+      "corpus": "sarde",
+      "exact_ids": [
+        "SARDBLOC000007272188#0",
+        "SARDBLOC000007272189#0",
+        "SARDBLOC000007272183#0",
+        "SARDBLOC000007271894#0",
+        "SARDBLOC000007271896#0",
+        "SARDBLOC000007272191#0",
+        "SARDBLOC000007272185#0",
+        "SARDBLOC000007272184#0",
+        "SARDBLOC000007267960#0",
+        "SARDBLOC000007272181#0"
+      ],
+      "hnsw_ids": [
+        "SARDBLOC000007272188#0",
+        "SARDBLOC000007272189#0",
+        "SARDBLOC000007272183#0",
+        "SARDBLOC000007271894#0",
+        "SARDBLOC000007271896#0",
+        "SARDBLOC000007272191#0",
+        "SARDBLOC000007272185#0",
+        "SARDBLOC000007272184#0",
+        "SARDBLOC000007267960#0",
+        "SARDBLOC000007272181#0"
+      ],
+      "query_id": "q0002",
+      "recall": 1.0
+    },
+    {
+      "corpus": "sarde",
+      "exact_ids": [
+        "SARDBLOC000007250332#0",
+        "SARDBLOC000007250053#0",
+        "SARDBLOC000007256772#0",
+        "SARDBLOC000007251756#0",
+        "SARDBLOC000007251655#0",
+        "SARDBLOC000007251417#0",
+        "SARDBLOC000007256734#0",
+        "SARDBLOC000007256477#0",
+        "SARDBLOC000007251723#0",
+        "SARDBLOC000007251979#0"
+      ],
+      "hnsw_ids": [
+        "SARDBLOC000007250332#0",
+        "SARDBLOC000007250053#0",
+        "SARDBLOC000007256772#0",
+        "SARDBLOC000007251756#0",
+        "SARDBLOC000007251655#0",
+        "SARDBLOC000007251417#0",
+        "SARDBLOC000007256734#0",
+        "SARDBLOC000007256477#0",
+        "SARDBLOC000007251723#0",
+        "SARDBLOC000007251979#0"
+      ],
+      "query_id": "q0003",
+      "recall": 1.0
+    },
+    {
+      "corpus": "textes_hors_vigueur",
+      "exact_ids": [
+        "LEGIARTI000006666322#0",
+        "LEGIARTI000006666321#0",
+        "LEGIARTI000006666049#0",
+        "LEGIARTI000035044782#0",
+        "LEGIARTI000039183512#0",
+        "LEGIARTI000030898082#0",
+        "LEGIARTI000022963573#0",
+        "LEGIARTI000006666295#0",
+        "LEGIARTI000033614282#0",
+        "LEGIARTI000006666306#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000006666322#0",
+        "LEGIARTI000006666321#0",
+        "LEGIARTI000006666049#0",
+        "LEGIARTI000035044782#0",
+        "LEGIARTI000039183512#0",
+        "LEGIARTI000030898082#0",
+        "LEGIARTI000022963573#0",
+        "LEGIARTI000006666295#0",
+        "LEGIARTI000033614282#0",
+        "LEGIARTI000006666306#0"
+      ],
+      "query_id": "q0004",
+      "recall": 1.0
+    },
+    {
+      "corpus": "jorf_normatif",
+      "exact_ids": [
+        "JORFARTI000042738091#0",
+        "JORFARTI000042738083#0",
+        "JORFARTI000042753893#0",
+        "JORFARTI000042665462#0",
+        "JORFARTI000042738123#0",
+        "JORFARTI000042101326#0",
+        "JORFARTI000042520682#0",
+        "JORFARTI000042031999#0",
+        "JORFARTI000042738116#0",
+        "JORFARTI000042225098#0"
+      ],
+      "hnsw_ids": [
+        "JORFARTI000042738091#0",
+        "JORFARTI000042738083#0",
+        "JORFARTI000042753893#0",
+        "JORFARTI000042665462#0",
+        "JORFARTI000042738123#0",
+        "JORFARTI000042101326#0",
+        "JORFARTI000042520682#0",
+        "JORFARTI000042031999#0",
+        "JORFARTI000042738116#0",
+        "JORFARTI000042225098#0"
+      ],
+      "query_id": "q0005",
+      "recall": 1.0
+    },
+    {
+      "corpus": "juri_texte_integral",
+      "exact_ids": [
+        "CETATEXT000021924591#0",
+        "CETATEXT000022810512#0",
+        "CETATEXT000022155142#0",
+        "CETATEXT000023295808#0",
+        "CETATEXT000021924601#0",
+        "CETATEXT000023295807#0",
+        "CETATEXT000022810537#0",
+        "CETATEXT000023494413#0",
+        "CETATEXT000023295865#0",
+        "CETATEXT000022810526#0"
+      ],
+      "hnsw_ids": [
+        "CETATEXT000021924591#0",
+        "CETATEXT000022810512#0",
+        "CETATEXT000022155142#0",
+        "CETATEXT000023295808#0",
+        "CETATEXT000021924601#0",
+        "CETATEXT000023295807#0",
+        "CETATEXT000022810537#0",
+        "CETATEXT000023494413#0",
+        "CETATEXT000023295865#0",
+        "CETATEXT000022810526#0"
+      ],
+      "query_id": "q0006",
+      "recall": 1.0
+    },
+    {
+      "corpus": "textes_vigueur",
+      "exact_ids": [
+        "LEGIARTI000042339592#0",
+        "LEGIARTI000006226508#0",
+        "LEGIARTI000042339501#0",
+        "LEGIARTI000051322881#0",
+        "LEGIARTI000042339865#0",
+        "LEGIARTI000051322842#0",
+        "LEGIARTI000048489093#0",
+        "LEGIARTI000006227032#0",
+        "LEGIARTI000053489878#0",
+        "LEGIARTI000042922345#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000042339592#0",
+        "LEGIARTI000006226508#0",
+        "LEGIARTI000042339501#0",
+        "LEGIARTI000051322881#0",
+        "LEGIARTI000042339865#0",
+        "LEGIARTI000051322842#0",
+        "LEGIARTI000048489093#0",
+        "LEGIARTI000006227032#0",
+        "LEGIARTI000053489878#0",
+        "LEGIARTI000042922345#0"
+      ],
+      "query_id": "q0007",
+      "recall": 1.0
+    },
+    {
+      "corpus": "sarde",
+      "exact_ids": [
+        "SARDBLOC000007186042#0",
+        "SARDBLOC000007175274#0",
+        "SARDBLOC000007182739#0",
+        "SARDBLOC000007168394#0",
+        "SARDBLOC000007185362#0",
+        "SARDBLOC000007177214#0",
+        "SARDBLOC000007173010#0",
+        "SARDBLOC000007188970#0",
+        "SARDBLOC000007184911#0",
+        "SARDBLOC000007170669#0"
+      ],
+      "hnsw_ids": [
+        "SARDBLOC000007186042#0",
+        "SARDBLOC000007175274#0",
+        "SARDBLOC000007182739#0",
+        "SARDBLOC000007168394#0",
+        "SARDBLOC000007185362#0",
+        "SARDBLOC000007177214#0",
+        "SARDBLOC000007173010#0",
+        "SARDBLOC000007188970#0",
+        "SARDBLOC000007184911#0",
+        "SARDBLOC000007170669#0"
+      ],
+      "query_id": "q0008",
+      "recall": 1.0
+    },
+    {
+      "corpus": "textes_hors_vigueur",
+      "exact_ids": [
+        "LEGIARTI000006756319#0",
+        "LEGIARTI000006756311#0",
+        "LEGIARTI000006777332#0",
+        "LEGIARTI000006777331#0",
+        "LEGIARTI000006756313#0",
+        "LEGIARTI000006756318#0",
+        "LEGIARTI000006756435#0",
+        "LEGIARTI000006756427#0",
+        "LEGIARTI000006774365#0",
+        "LEGIARTI000006756309#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000006756319#0",
+        "LEGIARTI000006756311#0",
+        "LEGIARTI000006777332#0",
+        "LEGIARTI000006777331#0",
+        "LEGIARTI000006756313#0",
+        "LEGIARTI000006756318#0",
+        "LEGIARTI000006756435#0",
+        "LEGIARTI000006756427#0",
+        "LEGIARTI000006774365#0",
+        "LEGIARTI000006756309#0"
+      ],
+      "query_id": "q0009",
+      "recall": 1.0
+    },
+    {
+      "corpus": "juri_sommaires",
+      "exact_ids": [
+        "CETATEXT000037445862#0",
+        "CETATEXT000037315299#0",
+        "CETATEXT000036972070#0",
+        "CETATEXT000037599721#0",
+        "CETATEXT000032008100#0",
+        "CETATEXT000033619551#0",
+        "CETATEXT000033695570#0",
+        "CETATEXT000033422890#0",
+        "CETATEXT000031978103#0",
+        "CETATEXT000033261451#0"
+      ],
+      "hnsw_ids": [
+        "CETATEXT000037445862#0",
+        "CETATEXT000037315299#0",
+        "CETATEXT000036972070#0",
+        "CETATEXT000037599721#0",
+        "CETATEXT000032008100#0",
+        "CETATEXT000033619551#0",
+        "CETATEXT000033695570#0",
+        "CETATEXT000033422890#0",
+        "CETATEXT000031978103#0",
+        "CETATEXT000033157729#0"
+      ],
+      "query_id": "q0010",
+      "recall": 0.9
+    },
+    {
+      "corpus": "titres_textes",
+      "exact_ids": [
+        "JORFTEXT000042178384#0",
+        "JORFTEXT000037782823#0",
+        "JORFTEXT000043232501#0",
+        "JORFTEXT000038215891#0",
+        "JORFTEXT000047898560#0",
+        "JORFTEXT000036231703#0",
+        "JORFTEXT000046114399#0",
+        "JORFTEXT000043023997#0",
+        "JORFTEXT000047484851#0",
+        "JORFTEXT000035803538#0"
+      ],
+      "hnsw_ids": [
+        "JORFTEXT000042178384#0",
+        "JORFTEXT000043232501#0",
+        "JORFTEXT000037782823#0",
+        "JORFTEXT000047898560#0",
+        "JORFTEXT000038215891#0",
+        "JORFTEXT000036231703#0",
+        "JORFTEXT000046114399#0",
+        "JORFTEXT000043023997#0",
+        "JORFTEXT000047484851#0",
+        "JORFTEXT000035803538#0"
+      ],
+      "query_id": "q0011",
+      "recall": 1.0
+    },
+    {
+      "corpus": "juri_sommaires",
+      "exact_ids": [
+        "JURITEXT000043253075#0",
+        "JURITEXT000023742986#0",
+        "JURITEXT000024977485#0",
+        "JURITEXT000044162689#0",
+        "JURITEXT000024648676#0",
+        "JURITEXT000024366996#0",
+        "JURITEXT000024648675#0",
+        "JURITEXT000024987981#0",
+        "JURITEXT000052555577#0",
+        "JURITEXT000044105942#0"
+      ],
+      "hnsw_ids": [
+        "JURITEXT000043253075#0",
+        "JURITEXT000044162689#0",
+        "JURITEXT000052555577#0",
+        "JURITEXT000044105942#0",
+        "JURITEXT000006958729#0",
+        "JURITEXT000044162679#0",
+        "JURITEXT000044441086#0",
+        "JURITEXT000006956172#0",
+        "JURITEXT000044571181#0",
+        "JURITEXT000049774650#0"
+      ],
+      "query_id": "q0012",
+      "recall": 0.4
+    },
+    {
+      "corpus": "textes_vigueur",
+      "exact_ids": [
+        "LEGIARTI000006513469#0",
+        "LEGIARTI000006513470#0",
+        "LEGIARTI000006513476#0",
+        "LEGIARTI000006513478#0",
+        "LEGIARTI000006513473#0",
+        "LEGIARTI000006513474#0",
+        "LEGIARTI000006568642#0",
+        "LEGIARTI000006513477#0",
+        "LEGIARTI000006513472#0",
+        "LEGIARTI000006513471#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000006513469#0",
+        "LEGIARTI000006513470#0",
+        "LEGIARTI000006513476#0",
+        "LEGIARTI000006513478#0",
+        "LEGIARTI000006513473#0",
+        "LEGIARTI000006513474#0",
+        "LEGIARTI000006568642#0",
+        "LEGIARTI000006513477#0",
+        "LEGIARTI000006513472#0",
+        "LEGIARTI000006513471#0"
+      ],
+      "query_id": "q0013",
+      "recall": 1.0
+    },
+    {
+      "corpus": "juri_texte_integral",
+      "exact_ids": [
+        "JURITEXT000007311017#0",
+        "JURITEXT000007321920#0",
+        "JURITEXT000007321601#0",
+        "JURITEXT000007321205#0",
+        "JURITEXT000007329718#0",
+        "JURITEXT000007311775#0",
+        "JURITEXT000007284665#0",
+        "JURITEXT000007290622#0",
+        "JURITEXT000007317655#0",
+        "JURITEXT000007322753#0"
+      ],
+      "hnsw_ids": [
+        "JURITEXT000007311017#0",
+        "JURITEXT000007321920#0",
+        "JURITEXT000007321601#0",
+        "JURITEXT000007321205#0",
+        "JURITEXT000007329718#0",
+        "JURITEXT000007311775#0",
+        "JURITEXT000007284665#0",
+        "JURITEXT000007290622#0",
+        "JURITEXT000007317655#0",
+        "JURITEXT000007322753#0"
+      ],
+      "query_id": "q0014",
+      "recall": 1.0
+    },
+    {
+      "corpus": "titres_textes",
+      "exact_ids": [
+        "JORFTEXT000000336865#0",
+        "JORFTEXT000000702318#0",
+        "JORFTEXT000000852846#0",
+        "LEGITEXT000006062993#0",
+        "JORFTEXT000000283892#0",
+        "JORFTEXT000000452467#0",
+        "JORFTEXT000000694755#0",
+        "JORFTEXT000000506335#0",
+        "JORFTEXT000000681630#0",
+        "JORFTEXT000000670030#0"
+      ],
+      "hnsw_ids": [
+        "JORFTEXT000000336865#0",
+        "JORFTEXT000000702318#0",
+        "JORFTEXT000000852846#0",
+        "LEGITEXT000006062993#0",
+        "JORFTEXT000000283892#0",
+        "JORFTEXT000000452467#0",
+        "JORFTEXT000000694755#0",
+        "JORFTEXT000000506335#0",
+        "JORFTEXT000000681630#0",
+        "JORFTEXT000000670030#0"
+      ],
+      "query_id": "q0015",
+      "recall": 1.0
+    },
+    {
+      "corpus": "titres_textes",
+      "exact_ids": [
+        "JORFTEXT000000293281#0",
+        "JORFTEXT000000643205#0",
+        "JORFTEXT000000450081#0",
+        "JORFTEXT000000450082#0",
+        "JORFTEXT000000838644#0",
+        "JORFTEXT000000838347#0",
+        "JORFTEXT000000643964#0",
+        "JORFTEXT000000450303#0",
+        "JORFTEXT000000326693#0",
+        "JORFTEXT000000638275#0"
+      ],
+      "hnsw_ids": [
+        "JORFTEXT000000293281#0",
+        "JORFTEXT000000643205#0",
+        "JORFTEXT000000450081#0",
+        "JORFTEXT000000450082#0",
+        "JORFTEXT000000838644#0",
+        "JORFTEXT000000838347#0",
+        "JORFTEXT000000643964#0",
+        "JORFTEXT000000450303#0",
+        "JORFTEXT000000326693#0",
+        "JORFTEXT000000638275#0"
+      ],
+      "query_id": "q0016",
+      "recall": 1.0
+    },
+    {
+      "corpus": "juri_texte_integral",
+      "exact_ids": [
+        "CETATEXT000043930465#0",
+        "CETATEXT000043851789#0",
+        "CETATEXT000043851785#0",
+        "CETATEXT000043930462#0",
+        "CETATEXT000044249650#0",
+        "CETATEXT000043031902#0",
+        "CETATEXT000044086916#0",
+        "CETATEXT000044462233#0",
+        "CETATEXT000043851758#0",
+        "CETATEXT000043930436#0"
+      ],
+      "hnsw_ids": [
+        "CETATEXT000044272723#0",
+        "CETATEXT000044272743#0",
+        "CETATEXT000044272741#0",
+        "CETATEXT000044272748#0",
+        "CETATEXT000044272729#0",
+        "CETATEXT000044272745#0",
+        "CETATEXT000043763429#0",
+        "CETATEXT000044272751#0",
+        "CETATEXT000044272726#0",
+        "CETATEXT000044293818#0"
+      ],
+      "query_id": "q0018",
+      "recall": 0.0
+    },
+    {
+      "corpus": "textes_hors_vigueur",
+      "exact_ids": [
+        "LEGIARTI000006855851#0",
+        "LEGIARTI000006855840#0",
+        "LEGIARTI000006855848#0",
+        "LEGIARTI000006855842#0",
+        "LEGIARTI000006855852#0",
+        "LEGIARTI000006855853#0",
+        "LEGIARTI000006856346#0",
+        "LEGIARTI000006855841#0",
+        "LEGIARTI000006855839#0",
+        "LEGIARTI000006856349#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000006855851#0",
+        "LEGIARTI000006855840#0",
+        "LEGIARTI000006855848#0",
+        "LEGIARTI000006855842#0",
+        "LEGIARTI000006855852#0",
+        "LEGIARTI000006855853#0",
+        "LEGIARTI000006856346#0",
+        "LEGIARTI000006855841#0",
+        "LEGIARTI000006856349#0",
+        "LEGIARTI000006855838#0"
+      ],
+      "query_id": "q0019",
+      "recall": 0.9
+    },
+    {
+      "corpus": "textes_vigueur",
+      "exact_ids": [
+        "LEGIARTI000006555085#0",
+        "LEGIARTI000006555086#0",
+        "LEGIARTI000006555090#0",
+        "LEGIARTI000006555089#0",
+        "LEGIARTI000006555088#0",
+        "LEGIARTI000006555087#0",
+        "LEGIARTI000006546198#0",
+        "LEGIARTI000006555020#0",
+        "LEGIARTI000006555022#0",
+        "LEGIARTI000006553753#0"
+      ],
+      "hnsw_ids": [
+        "LEGIARTI000006555085#0",
+        "LEGIARTI000006555086#0",
+        "LEGIARTI000006555090#0",
+        "LEGIARTI000006555089#0",
+        "LEGIARTI000006555088#0",
+        "LEGIARTI000006555087#0",
+        "LEGIARTI000006546198#0",
+        "LEGIARTI000006555020#0",
+        "LEGIARTI000006555022#0",
+        "LEGIARTI000006553753#0"
+      ],
+      "query_id": "q0021",
+      "recall": 1.0
+    },
+    {
+      "corpus": "jorf_normatif",
+      "exact_ids": [
+        "JORFARTI000001285590#0",
+        "JORFARTI000001667881#0",
+        "JORFARTI000002259004#0",
+        "JORFARTI000002106129#0",
+        "JORFARTI000050145728#0",
+        "JORFARTI000002108351#0",
+        "JORFARTI000001453939#0",
+        "JORFARTI000001094520#0",
+        "JORFARTI000001525851#0",
+        "JORFARTI000001097324#0"
+      ],
+      "hnsw_ids": [
+        "JORFARTI000001285590#0",
+        "JORFARTI000001667881#0",
+        "JORFARTI000002259004#0",
+        "JORFARTI000002106129#0",
+        "JORFARTI000050145728#0",
+        "JORFARTI000002108351#0",
+        "JORFARTI000001453939#0",
+        "JORFARTI000001094520#0",
+        "JORFARTI000001525851#0",
+        "JORFARTI000001097324#0"
+      ],
+      "query_id": "q0028",
+      "recall": 1.0
+    },
+    {
+      "corpus": "dole",
+      "exact_ids": [
+        "JORFDOLE000051102694#0",
+        "JORFDOLE000031978444#0",
+        "JORFDOLE000017759359#29",
+        "JORFDOLE000024808636#0",
+        "JORFDOLE000028054214#0",
+        "JORFDOLE000053446698#0",
+        "JORFDOLE000026765866#0",
+        "JORFDOLE000051294777#0",
+        "JORFDOLE000031829941#0",
+        "JORFDOLE000038055528#0"
+      ],
+      "hnsw_ids": [
+        "JORFDOLE000051102694#0",
+        "JORFDOLE000031978444#0",
+        "JORFDOLE000017759359#29",
+        "JORFDOLE000024808636#0",
+        "JORFDOLE000028054214#0",
+        "JORFDOLE000053446698#0",
+        "JORFDOLE000026765866#0",
+        "JORFDOLE000051294777#0",
+        "JORFDOLE000031829941#0",
+        "JORFDOLE000038055528#0"
+      ],
+      "query_id": "q0030",
+      "recall": 1.0
+    },
+    {
+      "corpus": "jorf_normatif",
+      "exact_ids": [
+        "JORFARTI000001543800#0",
+        "JORFARTI000002315959#0",
+        "JORFARTI000002124038#0",
+        "JORFARTI000001736885#0",
+        "JORFARTI000002297412#0",
+        "JORFARTI000001892856#0",
+        "JORFARTI000002124037#0",
+        "JORFARTI000002210457#0",
+        "JORFARTI000001155669#0",
+        "JORFARTI000002411453#0"
+      ],
+      "hnsw_ids": [
+        "JORFARTI000001543800#0",
+        "JORFARTI000002315959#0",
+        "JORFARTI000002124038#0",
+        "JORFARTI000001736885#0",
+        "JORFARTI000002297412#0",
+        "JORFARTI000001892856#0",
+        "JORFARTI000002124037#0",
+        "JORFARTI000002210457#0",
+        "JORFARTI000001155669#0",
+        "JORFARTI000002411453#0"
+      ],
+      "query_id": "q0033",
+      "recall": 1.0
+    },
+    {
+      "corpus": "dole",
+      "exact_ids": [
+        "JORFDOLE000053776703#0",
+        "JORFDOLE000051722662#0",
+        "JORFDOLE000051722662#1",
+        "JORFDOLE000051722662#2",
+        "JORFDOLE000028220632#0",
+        "JORFDOLE000023944918#0",
+        "JORFDOLE000047315814#0",
+        "JORFDOLE000036124537#0",
+        "JORFDOLE000026204681#0",
+        "JORFDOLE000053726704#0"
+      ],
+      "hnsw_ids": [
+        "JORFDOLE000053776703#0",
+        "JORFDOLE000051722662#0",
+        "JORFDOLE000051722662#1",
+        "JORFDOLE000051722662#2",
+        "JORFDOLE000028220632#0",
+        "JORFDOLE000023944918#0",
+        "JORFDOLE000047315814#0",
+        "JORFDOLE000036124537#0",
+        "JORFDOLE000026204681#0",
+        "JORFDOLE000053726704#0"
+      ],
+      "query_id": "q0034",
+      "recall": 1.0
+    },
+    {
+      "corpus": "dole",
+      "exact_ids": [
+        "JORFDOLE000030773704#0",
+        "JORFDOLE000029920379#0",
+        "JORFDOLE000017758195#1",
+        "JORFDOLE000038357854#0",
+        "JORFDOLE000028244542#0",
+        "JORFDOLE000020909996#0",
+        "JORFDOLE000044288828#0",
+        "JORFDOLE000042956321#0",
+        "JORFDOLE000017758195#0",
+        "JORFDOLE000031472558#0"
+      ],
+      "hnsw_ids": [
+        "JORFDOLE000030773704#0",
+        "JORFDOLE000029920379#0",
+        "JORFDOLE000017758195#1",
+        "JORFDOLE000038357854#0",
+        "JORFDOLE000028244542#0",
+        "JORFDOLE000020909996#0",
+        "JORFDOLE000044288828#0",
+        "JORFDOLE000042956321#0",
+        "JORFDOLE000017758195#0",
+        "JORFDOLE000031472558#0"
+      ],
+      "query_id": "q0042",
+      "recall": 1.0
+    }
+  ],
+  "global": {
+    "max": 1.0,
+    "mean": 0.925,
+    "min": 0.0,
+    "n": 24,
+    "p50": 1.0,
+    "p95": 1.0,
+    "p99": 1.0
+  },
+  "meta": {
+    "count": 24,
+    "date": "2026-10-20T07:19:08.356835+00:00",
+    "exact_mode": "sql",
+    "k": 10,
+    "recall_definition": "|exact_top_k inter hnsw_top_k| / |exact_top_k|",
+    "schema_version": 1
+  }
+}

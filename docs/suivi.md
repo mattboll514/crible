@@ -22,13 +22,16 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 ## Cibles
 
-À remplir après MES-00 (tâche `MESURER-REFERENCE-PGVECTOR`), puis à faire valider par le propriétaire.
+Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du propriétaire, qui a posé le principe : **le rappel prime, la latence est indicative**, car les mesures de Crible se font sur une machine de développement. La règle de latence de `docs/08` ne vaut que pour une mesure sur le Mac mini en conteneur ; ailleurs, l'écart à pgvector est rapporté, sans bloquer un jalon. Les propositions du §8 du rapport MES-00 sont remplacées par ce tableau.
 
-| Cible | Valeur | Source |
-|---|---|---|
-| Rappel minimal (jeu de référence Legifacile) | _à fixer_ | MES-00 |
-| Latence p95 maximale, recherche à l'échelle de Legifacile | _à fixer_ | MES-00 |
-| Fidélité binaire contre exact (recall@10) | ≥ 0,99 (provisoire) | `08-invariants-et-tests.md` |
+| Cible | Valeur | Nature | Source |
+|---|---|---|---|
+| Rappel global (57 questions étiquetées, `k = 10`, déduplication par document) | rappel@10 moyen ≥ **0,482** sur les 56 questions satisfiables (`Q30` à part) | Contraignante | MES-00 §2 |
+| Rappel par corpus | `juri_texte_integral` ≥ **0,290** (31 questions), `textes_vigueur` ≥ **0,750** (12 questions). Les corpus de 2 à 4 questions ne sont pas contraints un par un : chaque question où Crible perd un attendu trouvé par pgvector est listée et expliquée dans le rapport de comparaison | Contraignante | MES-00 §2 |
+| Latence chaude mono-corpus `k = 10` | p95 ≤ **698 ms** (pgvector : p50 279, p95 698, p99 1 112 ms) | Contraignante seulement sur le Mac mini en conteneur (`docs/08`) ; indicative ailleurs | MES-00 §4.1 |
+| Latence froide | référence pgvector : p95 1 163 ms après 10 min d'inactivité (8 mesures, borne basse du froid réel) | Indicative, pas de cible | MES-00 §4.1 |
+| Latence de fusion | aucune référence valable (fusion du 20 biaisée à la baisse, passe `--perimeter-first` non rejouée) | Pas de cible | MES-00 §4.2 |
+| Fidélité binaire contre exact (recall@10) | ≥ 0,99 (provisoire, à confirmer après MES-01) | Contraignante | `08-invariants-et-tests.md` |
 
 ## Tâches
 
@@ -39,7 +42,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 | P0 | DEFINIR-TYPES-DE-BASE | FAIT | tache/DEFINIR-TYPES-DE-BASE | `DocId`, `PassageKey`, `Iid`, `Generation`, `Epoch`, `ErrorCode` (14 codes/statuts), `CribleError` ; INV-01 prouvé par analyse statique ; 32 tests ; relecture OK |
 | P0 | DEFINIR-CONFIG-INDEX | FAIT | tache/DEFINIR-CONFIG-INDEX | `IndexConfig`, `Schema`, `ModelConfig` avec empreinte canonique UTF-8 (ADR-0028), AST `Filter` et validation (ADR-0029/0030/0031), `apply_patch` atomique (INV-16) ; 116 tests, test croisé Python ; relecture OK |
 | P0 | DEFINIR-FORMAT-LOT | FAIT | tache/DEFINIR-FORMAT-LOT | `BatchManifest` + `check_manifest` (format, version, mode, modèle champ par champ, comptes, fichiers) ; `docs/format-lot-v1.md` ; 23 tests, 139 au total ; relecture OK |
-| P0 | MESURER-REFERENCE-PGVECTOR | A-FAIRE | | |
+| P0 | MESURER-REFERENCE-PGVECTOR | FAIT | tache/MESURER-REFERENCE-PGVECTOR | MES-00 mesurée en production en lecture seule (campagne du 2026-10-20 : 1 000 requêtes chaudes, 8 froides, fidélité HNSW, contre-mesure, 57 questions) ; harnais `tools/bench/mes00/` (73 tests pytest, job CI `tools`) ; preuve d'absence d'écriture par `find -newermt` ; cibles fixées par délégation du propriétaire ; relecture OK au 7e tour (tours 4 à 7 autorisés par le propriétaire), 2 mineurs notés en idées |
 | P1 | ECRIRE-LOTS-PYTHON | A-FAIRE | | |
 | P1 | GENERER-JEU-SYNTHETIQUE | A-FAIRE | | |
 | P1 | STOCKER-ENREGISTREMENTS-SQLITE | A-FAIRE | | |
@@ -150,6 +153,9 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | DEFINIR-TYPES-DE-BASE | Envisager `trybuild` pour un vrai test de compilation négatif d'INV-01 si cette dépendance entre dans `docs/07` |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : validation stricte de l'hexadécimal et de la longueur des checksums (contrôle 4) |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rapport MES-00, §7 : reformuler en consigne le commentaire « Aucun fichier modifié… » placé avant le `find` qu'il documente (mineur de relecture) |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rapport MES-00 : préciser que l'inventaire `ls-files` d'avant fait partie du protocole reproductible, et non des artefacts de la campagne du 20 (mineur de relecture) |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
 
 ## Journal
 
@@ -182,3 +188,12 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |
 | 2026-10-19 | ADR-0032 accepté : mesures en production sur le Mac mini, en lecture seule ; accès dans `.env.prod`, non versionné ; fiche MESURER-REFERENCE-PGVECTOR réécrite |
 | 2026-10-19 | Écart de relecture DEFINIR-FORMAT-LOT accepté par le propriétaire : `check_manifest` prend aussi `&ModelConfig` ; fiche, doc 04 et `format-lot-v1.md` alignés |
+| 2026-10-19 | Début de la tâche MESURER-REFERENCE-PGVECTOR sur `tache/MESURER-REFERENCE-PGVECTOR` |
+| 2026-10-20 | MES-00 bloquée après 3 tours de relecture : mesure conforme rejouée le 20 (1 000 chaudes, 8 froides, fidélité, contre-mesure), mais preuves d'inventaire et 8 points de documentation restent à corriger ; décision du propriétaire requise |
+| 2026-10-20 | ADR-0033 appliqué : l'orchestrateur tourne dans Claude Code, outillage commité (`b813ab9`) |
+| 2026-10-20 | MES-00 : 4e et dernier tour autorisé par le propriétaire ; 4e relecture `A-CORRIGER` (3 bloquants, 3 importants, 9 mineurs) ; preuve d'inventaire par fichier datée 08:25 UTC et argv q0018 ef=1000 ajoutés au rapport par `@mesureur`, sans remesure |
+| 2026-10-20 | MES-00 : 12 corrections locales par `@dev` (valeurs `PGOPTIONS` fictives dans les tests, harnais sans 0 ms fabriqué, README et rapport alignés) ; 5e relecture `A-CORRIGER` (1 important, 6 mineurs) ; tâche de nouveau BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | Cibles MES-00 fixées par l'orchestrateur sur délégation du propriétaire : rappel contraignant (≥ 0,482 global, par corpus pour `juri_texte_integral` et `textes_vigueur`), latence indicative hors du Mac mini en conteneur |
+| 2026-10-20 | MES-00 : 5e tour (option A du propriétaire) ; 7 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important, 3 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | MES-00 : 6e micro-tour autorisé par le propriétaire ; 4 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important de libellé du protocole, 2 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR terminée : 7e et dernier tour autorisé par le propriétaire, relecture OK (139 tests Rust, 73 tests Python, anti-fuite 0) ; cibles fixées ; toutes les tâches de P0 sont FAIT |

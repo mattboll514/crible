@@ -1,0 +1,16 @@
+[project]
+name = "crible-tools"
+version = "0.0.0"
+description = "Offline tools for Crible (benchmarks, synthetic data, ONNX export)."
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["bench/mes00/tests"]
+pythonpath = ["bench/mes00"]

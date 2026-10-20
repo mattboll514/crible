@@ -1,0 +1,565 @@
+{
+  "date": "2026-10-20T07:40:43+00:00",
+  "complet": true,
+  "arguments": {
+    "series": 1,
+    "repetitions": 2,
+    "attente_min": 10.0,
+    "perimetres": [
+      "jurisprudence",
+      "droit_applicable"
+    ],
+    "k": 10,
+    "partie_exclue": null,
+    "questions": "$PROD_REPO/docs/mcp/evaluation/questions.yaml",
+    "ecart_reference": 3886.0,
+    "seuil_impute": 0.8,
+    "seuil_renoncement": 0.5,
+    "verifier_reference": true,
+    "json": "/tmp/mes00/out/froid.json",
+    "autotest": false,
+    "partie_sql_effectif": "moyens, faits"
+  },
+  "reference": {
+    "chaud": {
+      "n": 26,
+      "moy_ms": 1574.0,
+      "ec_ms": 685.0,
+      "min_ms": 785.0,
+      "max_ms": 3899.0
+    },
+    "froid": {
+      "n": 8,
+      "moy_ms": 5460.0,
+      "ec_ms": 2526.0,
+      "min_ms": 1947.0,
+      "max_ms": 9595.0
+    }
+  },
+  "ecart_reference_ms": 3886.0,
+  "requete_reference": "with s as (\n  select horodatage, duree_ms,\n         extract(epoch from horodatage - lag(horodatage) over (order by horodatage))/60 as gap_min\n  from mcp.appels_outil where outil='recherche_semantique' and duree_ms is not null\n)\nselect case when gap_min > 30 then 'froid'\n            when gap_min is null then 'premier_exclu'\n            else 'chaud' end as regime,\n       count(*) n, avg(duree_ms) moy, stddev_samp(duree_ms) ec,\n       min(duree_ms) mn, max(duree_ms) mx\nfrom s group by 1 order by 1",
+  "requete_gaps_froids": "with s as (\n  select horodatage, duree_ms,\n         extract(epoch from horodatage - lag(horodatage) over (order by horodatage))/60 as gap_min\n  from mcp.appels_outil where outil='recherche_semantique' and duree_ms is not null\n)\nselect to_char(horodatage,'YYYY-MM-DD HH24:MI'), round(gap_min) gap_min, duree_ms\nfrom s where gap_min > 30 order by gap_min",
+  "gaps_froids_reels": [
+    {
+      "gap_min": 59,
+      "duree_ms": 4523,
+      "horodatage": "2026-08-17 02:25"
+    },
+    {
+      "gap_min": 61,
+      "duree_ms": 1947,
+      "horodatage": "2026-08-20 15:33"
+    },
+    {
+      "gap_min": 667,
+      "duree_ms": 9595,
+      "horodatage": "2026-08-17 01:26"
+    },
+    {
+      "gap_min": 990,
+      "duree_ms": 6376,
+      "horodatage": "2026-08-16 14:18"
+    },
+    {
+      "gap_min": 1410,
+      "duree_ms": 2457,
+      "horodatage": "2026-08-21 15:06"
+    },
+    {
+      "gap_min": 1459,
+      "duree_ms": 7003,
+      "horodatage": "2026-08-19 14:02"
+    },
+    {
+      "gap_min": 1470,
+      "duree_ms": 6824,
+      "horodatage": "2026-08-20 14:32"
+    },
+    {
+      "gap_min": 2114,
+      "duree_ms": 4955,
+      "horodatage": "2026-08-18 13:42"
+    }
+  ],
+  "a0_charger_ms": 4353.633624967188,
+  "audit_appels_outil": {
+    "avant_n": 1052,
+    "avant_id": 1674,
+    "apres_n": 1052,
+    "apres_id": 1674,
+    "ecart": 0
+  },
+  "reference_rejouee": {
+    "aujourdhui": {
+      "chaud": {
+        "n": 155,
+        "moy_ms": 1282.6387096774195,
+        "ec_ms": 983.998573828756,
+        "min_ms": 208.0,
+        "max_ms": 8567.0
+      },
+      "froid": {
+        "n": 39,
+        "moy_ms": 4215.666666666667,
+        "ec_ms": 2338.209563942522,
+        "min_ms": 744.0,
+        "max_ms": 9595.0
+      },
+      "premier_exclu": {
+        "n": 1,
+        "moy_ms": 1282.0,
+        "ec_ms": null,
+        "min_ms": 1282.0,
+        "max_ms": 1282.0
+      }
+    },
+    "ecarts": [
+      "chaud : constante n=26 moy=1574 ms, base n=155 moy=1283 ms",
+      "froid : constante n=8 moy=5460 ms, base n=39 moy=4216 ms"
+    ],
+    "ecart_reference_recalcule_ms": 2933.0279569892473
+  },
+  "manches": [
+    {
+      "serie": 1,
+      "perimetre": "jurisprudence",
+      "rang_dans_serie": 1,
+      "attente_min_demandee": 10.0,
+      "attente_min_reelle": 10.000169250000424,
+      "temoin_ms": 35.29074997641146,
+      "questions": [
+        "Q13",
+        "Q14",
+        "Q15"
+      ],
+      "questions_avec_fonds": [],
+      "corpus": [
+        "juri_sommaires",
+        "juri_texte_integral"
+      ],
+      "hnsw_mio": 6507,
+      "echec": null,
+      "A_encodeur": {
+        "premier": {
+          "ms": 113.81341610103846,
+          "censure": false,
+          "note": null
+        },
+        "rep_meme": [
+          {
+            "ms": 58.19525010883808,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 39.12533400580287,
+            "censure": false,
+            "note": null
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 37.227290915325284,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 45.45008414424956,
+            "censure": false,
+            "note": null
+          }
+        ]
+      },
+      "B_sql_hnsw": {
+        "premier": {
+          "ms": 1096.9926661346108,
+          "censure": false,
+          "note": null
+        },
+        "rep_meme": [
+          {
+            "ms": 24.032166926190257,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 22.458999883383512,
+            "censure": false,
+            "note": null
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 973.3168331440538,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 1061.7302081082016,
+            "censure": false,
+            "note": null
+          }
+        ]
+      },
+      "C_reconstitution": {
+        "premier": {
+          "ms": 101.5173748601228,
+          "censure": false,
+          "note": "7/10 passage(s) plafonné(s) par dichotomie"
+        },
+        "rep_meme": [
+          {
+            "ms": 70.19729097373784,
+            "censure": false,
+            "note": "7/10 passage(s) plafonné(s) par dichotomie"
+          },
+          {
+            "ms": 96.03887493722141,
+            "censure": false,
+            "note": "7/10 passage(s) plafonné(s) par dichotomie"
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 46.22950009070337,
+            "censure": false,
+            "note": "1/10 passage(s) plafonné(s) par dichotomie"
+          },
+          {
+            "ms": 408.58175000175834,
+            "censure": false,
+            "note": "10/10 passage(s) plafonné(s) par dichotomie"
+          }
+        ]
+      }
+    },
+    {
+      "serie": 1,
+      "perimetre": "droit_applicable",
+      "rang_dans_serie": 2,
+      "attente_min_demandee": 10.0,
+      "attente_min_reelle": 10.000167671532836,
+      "temoin_ms": 15.047083143144846,
+      "questions": [
+        "Q01",
+        "Q02",
+        "Q03"
+      ],
+      "questions_avec_fonds": [],
+      "corpus": [
+        "textes_vigueur",
+        "textes_hors_vigueur"
+      ],
+      "hnsw_mio": 4633,
+      "echec": null,
+      "A_encodeur": {
+        "premier": {
+          "ms": 97.70112507976592,
+          "censure": false,
+          "note": null
+        },
+        "rep_meme": [
+          {
+            "ms": 35.424750065431,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 22.75229198858142,
+            "censure": false,
+            "note": null
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 34.32912495918572,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 34.0528329834342,
+            "censure": false,
+            "note": null
+          }
+        ]
+      },
+      "B_sql_hnsw": {
+        "premier": {
+          "ms": 838.4787500835955,
+          "censure": false,
+          "note": null
+        },
+        "rep_meme": [
+          {
+            "ms": 15.075832838192582,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 27.839667163789272,
+            "censure": false,
+            "note": null
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 712.0823748409748,
+            "censure": false,
+            "note": null
+          },
+          {
+            "ms": 433.1379581708461,
+            "censure": false,
+            "note": null
+          }
+        ]
+      },
+      "C_reconstitution": {
+        "premier": {
+          "ms": 154.76029179990292,
+          "censure": false,
+          "note": "8/10 passage(s) plafonné(s) par dichotomie"
+        },
+        "rep_meme": [
+          {
+            "ms": 104.52162520959973,
+            "censure": false,
+            "note": "8/10 passage(s) plafonné(s) par dichotomie"
+          },
+          {
+            "ms": 107.32916695997119,
+            "censure": false,
+            "note": "8/10 passage(s) plafonné(s) par dichotomie"
+          }
+        ],
+        "rep_autre": [
+          {
+            "ms": 319.9259170796722,
+            "censure": false,
+            "note": "4/10 passage(s) plafonné(s) par dichotomie"
+          },
+          {
+            "ms": 73.94145894795656,
+            "censure": false,
+            "note": "6/10 passage(s) plafonné(s) par dichotomie"
+          }
+        ]
+      }
+    }
+  ],
+  "imputations": [
+    {
+      "perimetre": "jurisprudence",
+      "postes": {
+        "A_encodeur": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            72.47472857125103
+          ],
+          "deltas_meme_ms": [
+            65.15312404371798
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": 72.47472857125103,
+          "premier_median_ms": 113.81341610103846,
+          "rep_autre_median_ms": 41.33868752978742,
+          "part_mediane": 0.018650213219570517,
+          "part_min": 0.018650213219570517,
+          "part_max": 0.018650213219570517,
+          "parts_par_serie": [
+            0.018650213219570517
+          ],
+          "borne_haute_delta_median_ms": 65.15312404371798
+        },
+        "B_sql_hnsw": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            79.46914550848305
+          ],
+          "deltas_meme_ms": [
+            1073.747082729824
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": 79.46914550848305,
+          "premier_median_ms": 1096.9926661346108,
+          "rep_autre_median_ms": 1017.5235206261277,
+          "part_mediane": 0.02045011464448869,
+          "part_min": 0.02045011464448869,
+          "part_max": 0.02045011464448869,
+          "parts_par_serie": [
+            0.02045011464448869
+          ],
+          "borne_haute_delta_median_ms": 1073.747082729824
+        },
+        "C_reconstitution": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            -125.88825018610805
+          ],
+          "deltas_meme_ms": [
+            18.399291904643178
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": -125.88825018610805,
+          "premier_median_ms": 101.5173748601228,
+          "rep_autre_median_ms": 227.40562504623085,
+          "part_mediane": -0.032395329435436965,
+          "part_min": -0.032395329435436965,
+          "part_max": -0.032395329435436965,
+          "parts_par_serie": [
+            -0.032395329435436965
+          ],
+          "borne_haute_delta_median_ms": 18.399291904643178
+        }
+      },
+      "decomposition": {
+        "series_completes": [
+          1
+        ],
+        "somme_deltas_mediane_ms": 26.055623893626034,
+        "reste_median_ms": 3859.944376106374,
+        "somme_deltas_par_serie_ms": [
+          26.055623893626034
+        ],
+        "reste_par_serie_ms": [
+          3859.944376106374
+        ]
+      },
+      "verdict": "RENONCEMENT",
+      "poste_retenu": null,
+      "postes_non_mesurables": [],
+      "cases_manquantes": [],
+      "series_attendues": 1,
+      "motif": "aucun poste nommé n'atteint 50% de l'écart (meilleur : B_sql_hnsw à 2%), et les 3 postes x 1 séries ont TOUS été mesurés -- RENONCER À TOUT CORRECTIF CIBLÉ. Seule la pression globale sur la machine reste en cause, et elle ne se corrige pas poste par poste."
+    },
+    {
+      "perimetre": "droit_applicable",
+      "postes": {
+        "A_encodeur": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            63.510146108455956
+          ],
+          "deltas_meme_ms": [
+            68.6126040527597
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": 63.510146108455956,
+          "premier_median_ms": 97.70112507976592,
+          "rep_autre_median_ms": 34.19097897130996,
+          "part_mediane": 0.016343321180765816,
+          "part_min": 0.016343321180765816,
+          "part_max": 0.016343321180765816,
+          "parts_par_serie": [
+            0.016343321180765816
+          ],
+          "borne_haute_delta_median_ms": 68.6126040527597
+        },
+        "B_sql_hnsw": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            265.86858357768506
+          ],
+          "deltas_meme_ms": [
+            817.0210000826046
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": 265.86858357768506,
+          "premier_median_ms": 838.4787500835955,
+          "rep_autre_median_ms": 572.6101665059105,
+          "part_mediane": 0.06841703128607439,
+          "part_min": 0.06841703128607439,
+          "part_max": 0.06841703128607439,
+          "parts_par_serie": [
+            0.06841703128607439
+          ],
+          "borne_haute_delta_median_ms": 817.0210000826046
+        },
+        "C_reconstitution": {
+          "series_couvertes": [
+            1
+          ],
+          "series_exclues": [],
+          "n_series_couvertes": 1,
+          "n_series_attendues": 1,
+          "complet": true,
+          "deltas_autre_ms": [
+            -42.173396213911474
+          ],
+          "deltas_meme_ms": [
+            48.834895715117455
+          ],
+          "motifs_exclusion": [],
+          "delta_median_ms": -42.173396213911474,
+          "premier_median_ms": 154.76029179990292,
+          "rep_autre_median_ms": 196.9336880138144,
+          "part_mediane": -0.010852649566112062,
+          "part_min": -0.010852649566112062,
+          "part_max": -0.010852649566112062,
+          "parts_par_serie": [
+            -0.010852649566112062
+          ],
+          "borne_haute_delta_median_ms": 48.834895715117455
+        }
+      },
+      "decomposition": {
+        "series_completes": [
+          1
+        ],
+        "somme_deltas_mediane_ms": 287.20533347222954,
+        "reste_median_ms": 3598.7946665277705,
+        "somme_deltas_par_serie_ms": [
+          287.20533347222954
+        ],
+        "reste_par_serie_ms": [
+          3598.7946665277705
+        ]
+      },
+      "verdict": "RENONCEMENT",
+      "poste_retenu": null,
+      "postes_non_mesurables": [],
+      "cases_manquantes": [],
+      "series_attendues": 1,
+      "motif": "aucun poste nommé n'atteint 50% de l'écart (meilleur : B_sql_hnsw à 7%), et les 3 postes x 1 séries ont TOUS été mesurés -- RENONCER À TOUT CORRECTIF CIBLÉ. Seule la pression globale sur la machine reste en cause, et elle ne se corrige pas poste par poste."
+    }
+  ],
+  "reserve": [
+    "RÉSERVE STATISTIQUE -- à ne jamais détacher des chiffres ci-dessus",
+    "  Population froide de référence : n = 8 appels seulement (écart-type 2526 ms, erreur-type 893 ms).",
+    "  Population chaude : n = 26 (écart-type 685 ms, erreur-type 134 ms).",
+    "  Écart de référence : 3886 ms, erreur-type 903 ms, IC 95 % (Welch, 7.3 ddl, t = 2.365) = [1750 ; 6022] ms.",
+    "  L'écart lui-même n'est connu qu'à ±55 % près. AUCUN critère de recette ne peut reposer sur cette population : un seuil « 80 % de 3886 ms » recouvre, dans cet intervalle, aussi bien 100 % de la borne basse que 50 % de la borne haute.",
+    "  La population n'est pas homogène : les 9 appels froids courent du 2026-08-15 au 2026-08-21 et enjambent la migration 20260821110000_api_recherche_semantique_partie (filtre `p_partie`). 8 d'entre eux SONT ANTÉRIEURS au filtre, 1 lui est postérieur -- ils ne mesurent donc pas exactement le même SQL que ce harnais.",
+    "  Témoin qui réfute l'éviction du processus : 35/35 appels recherche_semantique précédés d'un autre outil à moins de 30 min ; les 9 appels froids précédés d'un lire/liens à 10-35 ms, 6 à 241 s plus tôt."
+  ]
+}
