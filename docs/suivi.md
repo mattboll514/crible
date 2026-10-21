@@ -135,6 +135,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | Le producteur Python doit calculer un digest blake3, absent de `docs/07` (seule la crate Rust y figure) et de `hashlib` | ADR-0034 | Accepté le 2026-10-21 |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | Sémantique d'un champ null pour `ne`, `nin`, `exists` et `$not` non définie, alors que la référence numpy (`expected.jsonl`) l'impose à EVALUER-FILTRES et à INV-07 | ADR-0035 | Accepté le 2026-10-21 |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `producer.host` (« Machine qui a produit le lot ») rend la somme de contrôle versionnée de `synth-small` propre à une machine | ADR-0036 | Accepté le 2026-10-21 |
+| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | En attente |
 
 ## Décisions en attente
 
@@ -142,6 +143,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| ADR-0038 | Délai d'attente sur les verrous SQLite (`busy_timeout`) et code d'erreur à l'expiration | MES de concurrence (TESTER-CHARGE-CONCURRENTE, P6) |
 
 ## Idées hors périmètre
 
@@ -160,9 +162,9 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-21 | Jalon J0 | CI : passer `actions/checkout` et `astral-sh/setup-uv` à des versions qui tournent sur Node.js 24 (Node.js 20 est déprécié sur les runners GitHub) ; surveiller la migration de `ubuntu-latest` vers Ubuntu 26, commencée le 2026-10-19 |
 | 2026-10-21 | AMELIORER-LOTS-ET-REFERENCE | `tools/gen_synth.py --overwrite` ne nettoie pas un `.<batch_id>.tmp-*` laissé par un crash antérieur (sans effet sur la somme ni sur la référence) ; course résiduelle sur un dossier cible vide créé entre le contrôle et le renommage, faute de `RENAME_NOREPLACE` portable en Python |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON (verdict de `@architecte`) | Pour GENERER-JEU-SYNTHETIQUE : une modification de métadonnées seules renvoie le document avec le même `doc_hash` **et tous ses passages** (`docs/04`, Règles), donc le lot `L3` inclut les passages de ses 50 documents ; un lot de suppressions seules garde des fichiers `documents…` et `passages…`, vides si besoin (`format-lot-v1.md`) |
-| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | `busy_timeout` SQLite non réglé (un `SQLITE_BUSY` transitoire ressort en `internal`) : c'est une valeur par défaut, donc un ADR, à décider avec les mesures de concurrence (INV-02, TESTER-CHARGE-CONCURRENTE) ; niveau de compression zstd non mesuré ; schéma non `STRICT`, qui laisse passer des types faux dans `generation`/`next_iid` |
-| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE (relecture) | Tests du pool : vérifier que l'écriture refusée l'est bien pour lecture seule (`attempt to write a readonly database`), et tester la libération du slot quand un lecteur panique ; un fichier non SQLite ouvert par `create` remonte en `internal` plutôt qu'en `invalid_request` |
-| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE (`@dev`) | Pour ATTACHER-LOT et GERER-GENERATIONS : la table `deletions` de `docs/04` n'est pas encore créée ; accesseurs typés de `batches` et `segments` à ajouter ; l'attache doit envelopper toutes ses écritures dans une seule transaction (INV-03, ADR-0016), `write_document`/`write_passage` étant en autocommit |
+| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Niveau de compression zstd non mesuré ; schéma non `STRICT`, qui laisse passer des types faux dans `generation`/`next_iid` |
+| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE (relecture) | Un fichier non SQLite ouvert par `create` remonte en `internal` plutôt qu'en `invalid_request` (état inattendu, défendable) |
+| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE (`@dev`) | Pour GERER-GENERATIONS et ATTACHER-LOT : accesseurs typés de `batches` et `segments` à ajouter à `crible-store::records` |
 
 ## Journal
 
@@ -221,3 +223,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | ADR-0037 accepté par le propriétaire : `@relecteur` reçoit les utilitaires de vérification et l'exécution Python (`xargs` écarté, condition non remplie) ; garde-fou `git status` inscrit dans `orchestrateur.md` ; 9 commandes testées acceptées et `xargs` refusé (`timeout` absent de macOS, motif sans effet ici) |
 | 2026-10-21 | Début de la tâche STOCKER-ENREGISTREMENTS-SQLITE sur `tache/STOCKER-ENREGISTREMENTS-SQLITE` |
 | 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE terminée : base `records.sqlite` d'une époque (schéma, zstd, JSON canonique, INV-15, pool en lecture seule) ; 28 tests `crible-store` ; revue OK au 2e tour (pool rouvert en lecture seule, version vérifiée avant le DDL) |
+| 2026-10-21 | Sur demande du propriétaire : ADR-0038 (`busy_timeout` SQLite, recommandation 1 000 ms et `overloaded`) proposé ; fiche ATTACHER-LOT précisée (une seule transaction, celle du commit de génération, et test d'échec au milieu des écritures) ; les 2 mineurs de relecture de STOCKER-ENREGISTREMENTS-SQLITE confiés à la tâche hors plan RENFORCER-TESTS-POOL ; idée « table `deletions` » retirée (`deletions` est un fichier du lot, pas une table) |
