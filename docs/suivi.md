@@ -153,8 +153,6 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | DEFINIR-TYPES-DE-BASE | Envisager `trybuild` pour un vrai test de compilation négatif d'INV-01 si cette dépendance entre dans `docs/07` |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : validation stricte de l'hexadécimal et de la longueur des checksums (contrôle 4) |
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
-| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rapport MES-00, §7 : reformuler en consigne le commentaire « Aucun fichier modifié… » placé avant le `find` qu'il documente (mineur de relecture) |
-| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rapport MES-00 : préciser que l'inventaire `ls-files` d'avant fait partie du protocole reproductible, et non des artefacts de la campagne du 20 (mineur de relecture) |
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
 
 ## Journal
@@ -198,3 +196,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-20 | MES-00 : 6e micro-tour autorisé par le propriétaire ; 4 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important de libellé du protocole, 2 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR terminée : 7e et dernier tour autorisé par le propriétaire, relecture OK (139 tests Rust, 73 tests Python, anti-fuite 0) ; cibles fixées ; toutes les tâches de P0 sont FAIT |
 | 2026-10-21 | J0 préparé par `@jalon` : 6 tâches FAIT, `make check` vert (139 tests Rust), 73 tests Python, INV-01 (3 tests) et INV-16 (18 tests) verts, MES-00 et cibles présentes, ADR 0026 à 0033 acceptés ; rapport `docs/jalons/J0-rapport.md`, statut PRET-POUR-VALIDATION ; réserve : aucun run CI distant (branche non poussée) |
+| 2026-10-21 | Rapport MES-00 : 2 mineurs de relecture appliqués par `@mesureur` (consigne du `find -newermt` reformulée, inventaire `ls-files` d'avant situé dans le protocole reproductible), sans nouvelle mesure ; idées retirées de la liste. La passe `--perimeter-first` reste en idée, à revoir en P5 |

@@ -418,7 +418,10 @@ uniq -c | sort -rn`) :
 
 La barre finale de `.env/` vient du `awk` : `.env` est un fichier. Les 41 736 lignes ne sont pas
 recopiées ; le décompte et la répartition suffisent, parce que (f) donne la preuve qui compte :
-aucun de ces fichiers n'a été touché pendant la campagne.
+aucun de ces fichiers n'a été touché pendant la campagne. L'inventaire par fichier d'avant
+(`ignored-files-initial.txt`, §7) fait partie du protocole reproductible, à exécuter lors d'une
+prochaine campagne ; il ne figure pas parmi les artefacts de la campagne du 2026-10-20 listés au
+§9. Pour cette campagne, la preuve d'absence d'écriture repose sur (f), le `find -newermt`.
 
 **(f) Fichiers modifiés depuis le début de la campagne.** Début de campagne : **07:35 CEST**
 (§1, début de la mesure de latence chaude). La borne retenue est `2026-10-20 07:30:00`, heure
@@ -565,7 +568,9 @@ git --no-optional-locks -C "$PROD_REPO" status --porcelain \
   > /tmp/mes00/out/porcelain-initial.txt
 git --no-optional-locks -C "$PROD_REPO" status --porcelain --ignored=matching -uall \
   > /tmp/mes00/out/ignored-initial.txt
-# Inventaire fichier par fichier des ignorés, avant.
+# Inventaire fichier par fichier des ignorés, avant. Cette étape relève du protocole
+#   reproductible, à exécuter lors d'une prochaine campagne : le fichier produit ne fait pas
+#   partie des artefacts de la campagne du 2026-10-20 listés au §9.
 git --no-optional-locks -C "$PROD_REPO" ls-files --others --ignored --exclude-standard \
   | sort > /tmp/mes00/out/ignored-files-initial.txt
 
@@ -658,7 +663,9 @@ diff -u /tmp/mes00/out/ignored-initial.txt /tmp/mes00/out/ignored-after.txt
 git --no-optional-locks -C "$PROD_REPO" ls-files --others --ignored --exclude-standard \
   | sort > /tmp/mes00/out/ignored-files-after.txt
 diff -u /tmp/mes00/out/ignored-files-initial.txt /tmp/mes00/out/ignored-files-after.txt
-# Aucun fichier modifié depuis le début de la campagne, sauf la production.
+# Lister les fichiers modifiés depuis le début de la campagne : la sortie ne doit contenir que
+#   des fichiers écrits par les services de production (journaux, par exemple logs/mcp_*.log),
+#   jamais un fichier écrit par la campagne.
 cd "$PROD_REPO" && find . -path ./.git -prune -o -type f \
   -newermt "$(cat /tmp/mes00/out/campaign-start.txt)" -print | sort
 ```
