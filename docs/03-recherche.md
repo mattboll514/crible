@@ -29,6 +29,7 @@ La grammaire est décrite dans `05-api.md`. Côté structures de données :
 Évaluation :
 - **Nœud ET** : on évalue d'abord les clauses en bitmap, de la plus sélective à la moins sélective. Les clauses d'intervalle se calculent ensuite en ne parcourant que le résultat intermédiaire.
 - **Nœud OU** : union des enfants. **NON** : vivants privés de l'enfant.
+- **Valeurs nulles** (ADR-0035) : les comparaisons ne sont jamais satisfaites par un null. `ne` et `nin` se calculent en `présent ∩ ¬bitmap(...)`, jamais comme le complément sur les vivants. `exists: true` vaut « présent et non null » ; `exists: false` vaut « absent ou null ». **NON** reste le complément sur les vivants, nulls compris.
 - **Résultat final** : on fait l'intersection avec les vivants, et on obtient la taille exacte du pool.
 - **Niveau des champs** : tous les champs sont matérialisés au niveau du passage ; un passage hérite des champs de son document.
 - **Coût** : une clause d'intervalle sans autre clause parcourt toute la colonne (MES-14).

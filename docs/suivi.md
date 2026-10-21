@@ -44,7 +44,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P0 | DEFINIR-FORMAT-LOT | FAIT | tache/DEFINIR-FORMAT-LOT | `BatchManifest` + `check_manifest` (format, version, mode, modèle champ par champ, comptes, fichiers) ; `docs/format-lot-v1.md` ; 23 tests, 139 au total ; relecture OK |
 | P0 | MESURER-REFERENCE-PGVECTOR | FAIT | tache/MESURER-REFERENCE-PGVECTOR | MES-00 mesurée en production en lecture seule (campagne du 2026-10-20 : 1 000 requêtes chaudes, 8 froides, fidélité HNSW, contre-mesure, 57 questions) ; harnais `tools/bench/mes00/` (73 tests pytest, job CI `tools`) ; preuve d'absence d'écriture par `find -newermt` ; cibles fixées par délégation du propriétaire ; relecture OK au 7e tour (tours 4 à 7 autorisés par le propriétaire), 2 mineurs notés en idées |
 | P1 | ECRIRE-LOTS-PYTHON | FAIT | tache/ECRIRE-LOTS-PYTHON | Paquet `crible` (`clients/python`, backend `uv_build`) : `BatchWriter`, `documents.parquet` + parties `passages-NNNN.parquet` (≤ 1 M, écrites par blocs de 64 k), checksums blake3 (ADR-0034), manifeste écrit de façon atomique, contrôles locaux miroirs de `check_manifest` ; 41 tests pytest, 139 Rust ; relecture OK au 2e tour |
-| P1 | GENERER-JEU-SYNTHETIQUE | A-FAIRE | | |
+| P1 | GENERER-JEU-SYNTHETIQUE | FAIT | tache/GENERER-JEU-SYNTHETIQUE | `tools/gen_synth.py` (`synth-small` en 3 lots, `--large`, `--overwrite` limité aux fichiers produits), `tools/reference_topk.py` (top-k exact en f32 comme le moteur, nulls selon ADR-0035) ; état de référence après L1-L3 : 1 950 documents, 9 750 passages ; somme `blake3:2d3d8265…58805` vérifiée par test (artefacts connus seulement) ; `BatchWriter` reçoit `created_at` et `host` (ADR-0036) ; 125 tests `tools`, 52 `clients`, 139 Rust ; relecture OK au 3e tour |
 | P1 | STOCKER-ENREGISTREMENTS-SQLITE | A-FAIRE | | |
 | P1 | ECRIRE-SEGMENTS-VECTEURS | A-FAIRE | | |
 | P1 | GERER-GENERATIONS | A-FAIRE | | |
@@ -133,6 +133,8 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini quand un nom de champ est déclaré aux deux niveaux du schéma | ADR-0030 | Accepté le 2026-10-19 |
 | 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini pour une clé inconnue dans un `PATCH` de configuration | ADR-0031 | Accepté le 2026-10-19 |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | Le producteur Python doit calculer un digest blake3, absent de `docs/07` (seule la crate Rust y figure) et de `hashlib` | ADR-0034 | Accepté le 2026-10-21 |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | Sémantique d'un champ null pour `ne`, `nin`, `exists` et `$not` non définie, alors que la référence numpy (`expected.jsonl`) l'impose à EVALUER-FILTRES et à INV-07 | ADR-0035 | Accepté le 2026-10-21 |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `producer.host` (« Machine qui a produit le lot ») rend la somme de contrôle versionnée de `synth-small` propre à une machine | ADR-0036 | Accepté le 2026-10-21 |
 
 ## Décisions en attente
 
@@ -159,7 +161,9 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-21 | ECRIRE-LOTS-PYTHON (verdict de `@architecte`) | Pour GENERER-JEU-SYNTHETIQUE : une modification de métadonnées seules renvoie le document avec le même `doc_hash` **et tous ses passages** (`docs/04`, Règles), donc le lot `L3` inclut les passages de ses 50 documents ; un lot de suppressions seules garde des fichiers `documents…` et `passages…`, vides si besoin (`format-lot-v1.md`) |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | LIRE-LOT-PARQUET : ajouter un vrai aller-retour Python → `check_manifest` et lecture Rust d'un lot écrit par `BatchWriter` (aujourd'hui, seuls les ensembles de clés du manifeste sont comparés) |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | Écriture atomique du dossier de lot (dossier temporaire puis renommage) : un échec dans `close()` laisse aujourd'hui un dossier partiel, sans manifeste donc jamais valide, et le `batch_id` doit être nettoyé à la main |
-| 2026-10-21 | ECRIRE-LOTS-PYTHON | Outillage : les permissions de `@relecteur` refusent `git -C` et `uv run --directory`, et acceptent `cd … &&` de façon irrégulière (une dizaine de refus au 1er tour) ; à harmoniser avec ADR-0026 |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | RECHERCHER-DENSE-EXACT : `expected.jsonl` compte 5 requêtes avec deux résultats adjacents à moins de 1e-6 et 55 à moins de 1e-5 (f32, sommation BLAS) ; la comparaison de J1 doit tolérer une permutation entre résultats à scores égaux à 1e-5 près (`tools/README.md`) |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `tools/reference_topk.py` : appliquer la table type → opérateurs de `docs/05-api.md` (aujourd'hui, `nin` sur un entier ou `lt` sur un `keyword` sont acceptés par l'oracle alors que le moteur les refusera) |
+| 2026-10-21 | ECRIRE-LOTS-PYTHON, GENERER-JEU-SYNTHETIQUE | Outillage : les permissions de `@relecteur` refusent `git -C`, `uv run --directory`, toute exécution Python hors `pytest` (`uv run python -c`, scripts temporaires), `nl` et les tubes vers `awk` ; `cd … &&` passe de façon irrégulière (une quinzaine de refus par relecture) ; à harmoniser avec ADR-0026 |
 
 ## Journal
 
@@ -209,3 +213,7 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | ECRIRE-LOTS-PYTHON bloquée : `@dev` remonte l'absence de blake3 côté Python ; `@architecte` rend NON-COUVERT (et CONFORME sur les métadonnées seules et sur le paramètre `model`) ; ADR-0034 proposé, décision du propriétaire requise |
 | 2026-10-21 | ADR-0034 accepté par le propriétaire : `blake3` ajouté aux dépendances Python de `docs/07` ; reprise de ECRIRE-LOTS-PYTHON |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON terminée : paquet Python `crible` et `BatchWriter` (Parquet, blake3, manifeste) ; 41 tests pytest ; revue OK au 2e tour (backend `hatchling` remplacé par `uv_build`) |
+| 2026-10-21 | Début de la tâche GENERER-JEU-SYNTHETIQUE sur `tache/GENERER-JEU-SYNTHETIQUE` |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE bloquée avant relecture : `@architecte` rend NON-COUVERT sur les nulls dans les filtres et ECART sur `producer.host` ; ADR-0035 et ADR-0036 proposés, décision du propriétaire requise |
+| 2026-10-21 | ADR-0035 (nulls dans les filtres, logique SQL) et ADR-0036 (`producer.host` réglable) acceptés par le propriétaire ; `docs/03`, `docs/05` et `format-lot-v1.md` mis à jour ; reprise de GENERER-JEU-SYNTHETIQUE |
+| 2026-10-21 | GENERER-JEU-SYNTHETIQUE terminée : générateur `synth-small` reproductible au bit près sur toute machine, référence exacte f32 ; 125 tests `tools` ; revue OK au 3e tour (2e tour relancé une fois après une coupure réseau) |

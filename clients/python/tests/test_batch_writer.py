@@ -100,6 +100,8 @@ def writer(tmp_path, **overrides) -> BatchWriter:
         settings.pop("model"),
         settings.pop("chunker"),
         settings.pop("template"),
+        created_at=settings.pop("created_at", None),
+        host=settings.pop("host", None),
     )
 
 
@@ -507,6 +509,63 @@ def test_non_serializable_chunker_params_raise_a_batch_error(tmp_path):
 
 def test_package_metadata_version_matches_the_module_version():
     assert importlib.metadata.version("crible") == crible.__version__
+
+
+def test_created_at_can_be_fixed_by_the_caller(tmp_path):
+    batch = writer(tmp_path, created_at="2026-01-01T00:00:00Z")
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    assert read_manifest(batch.close())["created_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_created_at_defaults_to_the_current_utc_time(tmp_path):
+    before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+    manifest = read_manifest(batch.close())
+    after = datetime.datetime.now(datetime.timezone.utc)
+
+    stamp = datetime.datetime.strptime(manifest["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+    stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    assert before <= stamp <= after
+
+
+@pytest.mark.parametrize("bad", ["", 42, b"machine"])
+def test_created_at_must_be_a_non_empty_string(tmp_path, bad):
+    with pytest.raises(BatchError, match="created_at"):
+        writer(tmp_path, created_at=bad)
+
+
+def test_host_can_be_fixed_by_the_caller(tmp_path):
+    batch = writer(tmp_path, host="gen_synth")
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    assert read_manifest(batch.close())["producer"]["host"] == "gen_synth"
+
+
+def test_host_defaults_to_the_machine_hostname(tmp_path):
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    assert read_manifest(batch.close())["producer"]["host"] == socket.gethostname()
+
+
+@pytest.mark.parametrize("bad", ["", 42, b"machine"])
+def test_host_must_be_a_non_empty_string(tmp_path, bad):
+    with pytest.raises(BatchError, match="host"):
+        writer(tmp_path, host=bad)
+
+
+def test_two_batches_with_the_same_fixed_created_at_write_the_same_manifest(tmp_path):
+    manifests = []
+    for name in ("first", "second"):
+        batch = writer(tmp_path, batch_id=name, created_at="2026-01-01T00:00:00Z")
+        batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+        manifests.append(read_manifest(batch.close()))
+    manifests[0].pop("batch_id")
+    manifests[1].pop("batch_id")
+
+    assert manifests[0] == manifests[1]
 
 
 def test_a_passage_part_is_fed_by_blocks(tmp_path, monkeypatch):

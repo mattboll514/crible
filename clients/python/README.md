@@ -48,6 +48,28 @@ Un **passage** est un mapping `{"text": str, "vector": séquence de nombres}` pl
 les champs de passage déclarés. Le writer assigne `doc_id` et `ord` : les fournir
 est refusé. Un document arrive avec **tous** ses passages et au moins un.
 
+Le mot-clé facultatif `created_at` fixe l'horodatage du manifeste, une chaîne
+RFC 3339 :
+
+```python
+writer = BatchWriter(..., created_at="2026-01-01T00:00:00Z")
+```
+
+Sans lui, le writer écrit l'heure UTC courante à `close()`. Un producteur qui
+doit produire des fichiers identiques au bit près, comme le générateur
+`tools/gen_synth.py`, passe une valeur dérivée de ses seuls paramètres.
+
+Le mot-clé facultatif `host` fixe `producer.host`, l'identifiant de la machine
+ou du producteur qui a produit le lot (ADR-0036). Il vaut par défaut
+`socket.gethostname()` et une chaîne vide est refusée :
+
+```python
+writer = BatchWriter(..., host="gen_synth")
+```
+
+`host` et `producer.name` sont deux choses différentes : `name` nomme le
+programme, `host` dit d'où le lot est sorti.
+
 ## Fichiers écrits
 
 ```
