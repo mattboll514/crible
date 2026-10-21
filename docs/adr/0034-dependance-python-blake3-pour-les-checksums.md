@@ -1,7 +1,7 @@
 # ADR-0034 — Dépendance Python `blake3` pour les checksums des lots
 
-- **Statut** : Proposé
-- **Date** : 2026-10-21
+- **Statut** : Accepté
+- **Date** : 2026-10-21 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, tâche ECRIRE-LOTS-PYTHON (phase P1), après le verdict NON-COUVERT de l'agent architecte
 - **Remplace** : —
