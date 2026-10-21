@@ -166,6 +166,8 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE (`@dev`) | Pour GERER-GENERATIONS et ATTACHER-LOT : accesseurs typés de `batches` et `segments` à ajouter à `crible-store::records` |
 | 2026-10-21 | ECRIRE-SEGMENTS-VECTEURS | Pour GERER-GENERATIONS : `SegmentReader::open` relit tout `vectors.*` pour vérifier le checksum (≈ 13 Go par ouverture à l'échelle Legifacile) ; décider d'une vérification différée ou d'un `open` sans vérification pour les instantanés et le redémarrage. Un `tmp-<id>` résiduel fait échouer `SegmentWriter::create` jusqu'à la reprise (comportement figé par un test) : le nettoyage des `tmp-*` de la reprise doit le couvrir |
 | 2026-10-21 | ECRIRE-SEGMENTS-VECTEURS (`@dev`) | Test d'un segment dont `count × dims` dépasse `u32`, impossible à produire avant les générations |
+| 2026-10-21 | REGLER-BUSY-TIMEOUT (relecture) | `tests/sqlite_busy_timeout.rs` : le test de contention courte parie sur un `sleep(100 ms)` avant le `COMMIT` du détenteur et exige une attente ≥ 50 ms (échec possible si le thread écrivain est privé d'ordonnancement plus de 100 ms, jamais observé en 40 passages) ; la borne basse du test d'expiration (`elapsed >= 1 000 ms`) n'a aucune tolérance. Élargir les marges si la CI se montre instable |
+| 2026-10-21 | REGLER-BUSY-TIMEOUT (`@dev`) | `SQLITE_BUSY` à l'ouverture d'une connexion (récupération du WAL, `-shm`) couvert par `database_error` mais pas testé en intégration, faute de scénario déterministe ; `docs/02` (« Concurrence ») ne cite pas ADR-0038, que seul `docs/05` reprend |
 
 ## Journal
 
@@ -230,3 +232,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | Début de la tâche ECRIRE-SEGMENTS-VECTEURS sur `tache/ECRIRE-SEGMENTS-VECTEURS` |
 | 2026-10-21 | ECRIRE-SEGMENTS-VECTEURS terminée : segments de vecteurs immuables (f16/f32 little-endian, `segment.json` versionné, blake3, écriture atomique, lecture mmap) ; format de `segment.json` et codes d'erreur tranchés par `@architecte` avant l'implémentation (sans ADR) ; 21 tests ; revue OK au 2e tour |
 | 2026-10-21 | ADR-0038 accepté par le propriétaire : busy_timeout fixe de 1 000 ms sur toutes les connexions SQLite, expiration en overloaded ; application dans le code à faire (petite tâche hors plan) |
+| 2026-10-21 | Début de la tâche hors plan REGLER-BUSY-TIMEOUT sur `tache/REGLER-BUSY-TIMEOUT` (application d'ADR-0038) |
+| 2026-10-21 | Tâche hors plan REGLER-BUSY-TIMEOUT terminée : `busy_timeout` fixe de 1 000 ms sur les trois chemins d'ouverture de `records.sqlite`, `SQLITE_BUSY` et ses variantes traduits en `overloaded`, le reste en `internal` ; 4 tests (attente puis expiration, contention courte surmontée, traduction) ; 193 tests Rust ; revue OK au 1er tour, 2 mineurs de robustesse des tests notés en idées |

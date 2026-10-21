@@ -12,6 +12,9 @@
 //! same WAL database observes it. Reads go through [`RecordStore`] or through a
 //! [`ReadPool`], so payload reads never wait on the writer (INV-02).
 //!
+//! Every connection waits up to 1 000 ms on a SQLite lock and reports a
+//! remaining contention as `overloaded`, not `internal` (ADR-0038).
+//!
 //! **The store commits each write on its own.** A change of the visible state
 //! must therefore be written inside one transaction opened by the caller, which
 //! belongs to the generation protocol: attach a batch, apply the tombstones,
@@ -22,6 +25,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Generation, Iid};
@@ -34,6 +38,19 @@ pub const FORMAT_VERSION: u32 = 1;
 
 /// Compression level used for `passages.text`.
 const TEXT_COMPRESSION_LEVEL: i32 = zstd::DEFAULT_COMPRESSION_LEVEL;
+
+/// Time a connection waits on a SQLite lock before it fails (ADR-0038).
+///
+/// One second because a legitimate lock never lasts that long: an attach
+/// commits a few thousand rows and a checkpoint takes milliseconds. Waiting
+/// longer means two writers compete for the database, which contradicts the
+/// "one writer per index" rule and must fail fast. The value stays below
+/// `limits.default_timeout_ms = 2000`, so a read never waits past its own
+/// deadline.
+///
+/// This is a constant of the code, not a configuration key: no instance should
+/// have to tune it (ADR-0038, rule 12 of `AGENTS.md`).
+const BUSY_TIMEOUT_MS: u64 = 1000;
 
 /// Statements building the schema of a new epoch database.
 ///
@@ -173,8 +190,9 @@ impl RecordStore {
     /// know (INV-15), and reasserts WAL mode so readers never block the writer
     /// (INV-02).
     ///
-    /// A transient `SQLITE_BUSY` is reported as `internal`: no `busy_timeout` is
-    /// set until the value is decided by an ADR.
+    /// A `SQLITE_BUSY` waits on the lock for the busy timeout of ADR-0038
+    /// (1 000 ms) and is then reported as `overloaded`, not `internal`: the
+    /// contention is transient and the caller may retry.
     pub fn open(path: &Path) -> Result<Self, CribleError> {
         let connection = open_writable(path)?;
         let format_version = check_format_version(&connection)?;
@@ -442,24 +460,41 @@ impl Drop for LeaseGuard<'_> {
 
 /// Opens a database for reading and writing, without ever creating it.
 fn open_writable(path: &Path) -> Result<Connection, CribleError> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-        .map_err(|error| database_error("open the records database", &error))
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|error| database_error("open the records database", &error))?;
+    configure_busy_timeout(&connection)?;
+    Ok(connection)
 }
 
 /// Opens a database for reading only. The pool never writes, so no caller can
 /// bypass the single writer of the index.
 fn open_read_only(path: &Path) -> Result<Connection, CribleError> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| database_error("open the records database for reading", &error))
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| database_error("open the records database for reading", &error))?;
+    configure_busy_timeout(&connection)?;
+    Ok(connection)
 }
 
 /// Opens a database for reading and writing, creating the file when missing.
 fn open_or_create(path: &Path) -> Result<Connection, CribleError> {
-    Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
     )
-    .map_err(|error| database_error("create the records database", &error))
+    .map_err(|error| database_error("create the records database", &error))?;
+    configure_busy_timeout(&connection)?;
+    Ok(connection)
+}
+
+/// Applies the lock wait of ADR-0038 to `connection`.
+///
+/// Every connection of `records.sqlite` goes through here: the writer of
+/// [`RecordStore`] and the readers of [`ReadPool`]. The setting is per
+/// connection, so it must be applied each time one is opened.
+fn configure_busy_timeout(connection: &Connection) -> Result<(), CribleError> {
+    connection
+        .busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))
+        .map_err(|error| database_error("set the SQLite busy timeout", &error))
 }
 
 /// Switches the database to WAL, so readers never block the writer (INV-02).
@@ -534,8 +569,21 @@ fn check_format_version(connection: &Connection) -> Result<u32, CribleError> {
 
 /// Wraps a SQLite failure, which is an internal error from the caller's point of
 /// view.
+///
+/// The single exception is a lock contention: `SQLITE_BUSY` and its extended
+/// codes (`SQLITE_BUSY_RECOVERY`, `SQLITE_BUSY_SNAPSHOT`, `SQLITE_BUSY_TIMEOUT`)
+/// are transient, so they become `overloaded` — the client retries — instead of
+/// a fake internal failure (ADR-0038). Every SQLite failure of this module goes
+/// through here, so the mapping also covers connection opening and the write
+/// transactions of the caller.
 fn database_error(context: &str, error: &rusqlite::Error) -> CribleError {
-    CribleError::new(ErrorCode::Internal, format!("cannot {context}: {error}"))
+    let code = match error.sqlite_error_code() {
+        // `sqlite_error_code` masks the extended result code down to its
+        // primary code, so every `SQLITE_BUSY_*` variant lands here.
+        Some(rusqlite::ErrorCode::DatabaseBusy) => ErrorCode::Overloaded,
+        _ => ErrorCode::Internal,
+    };
+    CribleError::new(code, format!("cannot {context}: {error}"))
 }
 
 /// True when `path` does not hold a database yet: missing file, or empty file
@@ -742,4 +790,49 @@ fn parse_fields(fields: &str) -> Result<Value, CribleError> {
             format!("stored fields are not valid JSON: {error}"),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds the SQLite failure carrying the result code `code`.
+    fn sqlite_failure(code: i32) -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(code), None)
+    }
+
+    #[test]
+    fn busy_errors_become_overloaded() {
+        // The plain code plus the variants SQLite raises in WAL mode: a stale
+        // snapshot and a WAL recovery, which ADR-0038 lists explicitly.
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_BUSY_SNAPSHOT,
+            rusqlite::ffi::SQLITE_BUSY_RECOVERY,
+        ] {
+            let error = database_error("write a document", &sqlite_failure(code));
+            assert_eq!(
+                error.code(),
+                ErrorCode::Overloaded,
+                "SQLite code {code} is a lock contention, so it must be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn other_sqlite_errors_stay_internal() {
+        for code in [
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_READONLY_RECOVERY,
+            rusqlite::ffi::SQLITE_CORRUPT,
+            rusqlite::ffi::SQLITE_CONSTRAINT,
+        ] {
+            let error = database_error("write a document", &sqlite_failure(code));
+            assert_eq!(
+                error.code(),
+                ErrorCode::Internal,
+                "SQLite code {code} is not a lock contention"
+            );
+        }
+    }
 }
