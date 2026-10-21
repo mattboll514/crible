@@ -21,17 +21,22 @@
 //! move `meta.generation` and `meta.next_iid` in the same transaction, and commit
 //! once (`GERER-GENERATIONS`, `ATTACHER-LOT`, ADR-0016). Without that envelope,
 //! a loop over [`RecordStore::write_passage`] would expose a partial generation
-//! and break INV-03.
+//! and break INV-03. `RecordStore::begin` opens that envelope, and the typed
+//! helpers `insert_segment`, `insert_passage`, `tombstone_passage` and
+//! `advance_meta` write inside it, so the SQL of the commit point stays in
+//! this module, the only writer of the database.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::ids::{Generation, Iid};
+use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
 use serde_json::{Map, Value};
+
+use crate::segment::SegmentMeta;
 
 /// Version of the `records.sqlite` on-disk format (INV-15).
 pub const FORMAT_VERSION: u32 = 1;
@@ -142,6 +147,21 @@ pub struct PassageRecord {
     pub dead_since_gen: Option<Generation>,
 }
 
+/// Values of the single `meta` row, the authority on the visible generation.
+///
+/// `next_iid` is the first internal identifier the next attach may hand out:
+/// an iid is never reused within an epoch (`docs/02-architecture.md`,
+/// "Identifiants").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Meta {
+    /// Generation last committed by [`RecordStore::begin`] callers.
+    pub generation: Generation,
+    /// Epoch the database belongs to, mirrored in `CURRENT_EPOCH`.
+    pub epoch: Epoch,
+    /// First internal identifier still free in this epoch.
+    pub next_iid: u32,
+}
+
 /// Owner of the reference database of an epoch, and the only writer of it.
 #[derive(Debug)]
 pub struct RecordStore {
@@ -211,24 +231,7 @@ impl RecordStore {
 
     /// Inserts or replaces one document, and commits before returning.
     pub fn write_document(&mut self, record: &DocumentRecord) -> Result<(), CribleError> {
-        let fields = canonical_json(&record.fields)?;
-        self.connection
-            .execute(
-                "INSERT INTO documents (doc_id, doc_hash, fields, updated_generation)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(doc_id) DO UPDATE SET
-                     doc_hash = excluded.doc_hash,
-                     fields = excluded.fields,
-                     updated_generation = excluded.updated_generation",
-                params![
-                    record.doc_id.as_str(),
-                    record.doc_hash.as_str(),
-                    fields,
-                    to_sql_u64(record.updated_generation.get(), "updated_generation")?,
-                ],
-            )
-            .map_err(|error| database_error("write a document", &error))?;
-        Ok(())
+        upsert_document(&self.connection, record)
     }
 
     /// Reads one document, or `None` when the `doc_id` is unknown.
@@ -332,6 +335,233 @@ impl RecordStore {
             .map(|iid| from_sql_u32(iid, "iid").map(Iid::new))
             .collect()
     }
+
+    /// Values of the `meta` row of this database.
+    pub(crate) fn meta(&self) -> Result<Meta, CribleError> {
+        read_meta(&self.connection)
+    }
+
+    /// Identifiers of the segments SQLite references, in ascending order.
+    ///
+    /// This is the authoritative set of the visible segments: a directory of
+    /// `segments/` that is absent from it is an orphan, left by an aborted
+    /// attach (ADR-0016, INV-04).
+    pub(crate) fn segment_ids(&self) -> Result<Vec<String>, CribleError> {
+        segment_ids(&self.connection)
+    }
+
+    /// Records the epoch in `meta.epoch`, at the creation of the database.
+    ///
+    /// A database without its `meta` row cannot name its epoch, so the update
+    /// must touch exactly one row.
+    pub(crate) fn set_epoch(&mut self, epoch: Epoch) -> Result<(), CribleError> {
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE meta SET epoch = ?1 WHERE id = 1",
+                params![epoch.get()],
+            )
+            .map_err(|error| database_error("record the epoch", &error))?;
+        if changed != 1 {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                "meta has no row, so the epoch cannot be recorded",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Opens the transaction that carries one whole generation change.
+    ///
+    /// The caller writes the batches, the segments, the documents, the
+    /// passages, the tombstones and `meta.generation` through the functions of
+    /// this module that take a [`Transaction`], then commits once: that commit
+    /// is the single commit point of the index (ADR-0016). Dropping the
+    /// transaction, which a returned error or a panic does, rolls it back, so a
+    /// failed change leaves the previous generation untouched (INV-03).
+    pub(crate) fn begin(&mut self) -> Result<Transaction<'_>, CribleError> {
+        self.connection
+            .transaction()
+            .map_err(|error| database_error("open the commit transaction", &error))
+    }
+}
+
+/// Reads the `meta` row, which [`RecordStore::create`] always writes.
+pub(crate) fn read_meta(connection: &Connection) -> Result<Meta, CribleError> {
+    let row = connection
+        .query_row(
+            "SELECT generation, epoch, next_iid FROM meta WHERE id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| database_error("read meta", &error))?;
+    let Some((generation, epoch, next_iid)) = row else {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            "meta is empty: the records database has no generation row",
+        ));
+    };
+    Ok(Meta {
+        generation: Generation::new(from_sql_u64(generation, "generation")?),
+        epoch: Epoch::new(from_sql_u32(epoch, "epoch")?),
+        next_iid: from_sql_u32(next_iid, "next_iid")?,
+    })
+}
+
+/// Reads the segment identifiers of the `segments` table, in ascending order.
+pub(crate) fn segment_ids(connection: &Connection) -> Result<Vec<String>, CribleError> {
+    let mut statement = connection
+        .prepare("SELECT segment_id FROM segments ORDER BY segment_id")
+        .map_err(|error| database_error("prepare the segment ids query", &error))?;
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| database_error("query the segment ids", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the segment ids", &error))
+}
+
+/// Records one segment in the transaction of the generation that makes it
+/// visible.
+pub(crate) fn insert_segment(
+    transaction: &Transaction<'_>,
+    meta: &SegmentMeta,
+) -> Result<(), CribleError> {
+    let checksums = serde_json::to_string(&meta.checksums).map_err(|error| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "cannot serialize the checksums of segment {}: {error}",
+                meta.segment_id
+            ),
+        )
+    })?;
+    transaction
+        .execute(
+            "INSERT INTO segments (segment_id, iid_start, count, generation, batch_id, checksums)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                meta.segment_id.as_str(),
+                meta.iid_start.get(),
+                meta.count,
+                to_sql_u64(meta.generation.get(), "generation")?,
+                meta.batch_id.as_str(),
+                checksums,
+            ],
+        )
+        .map_err(|error| database_error("record a segment in the commit transaction", &error))?;
+    Ok(())
+}
+
+/// Inserts or replaces one document inside the transaction of a generation.
+///
+/// A document row is mutable state, keyed by its external identifier: an attach
+/// that only changes the fields of a document rewrites the row, without a new
+/// passage (see the table of `docs/02-architecture.md`, "Suppressions, pierres
+/// tombales et compaction").
+pub(crate) fn insert_document(
+    transaction: &Transaction<'_>,
+    record: &DocumentRecord,
+) -> Result<(), CribleError> {
+    upsert_document(transaction, record)
+}
+
+/// Inserts one passage inside the transaction of a generation.
+///
+/// Unlike [`RecordStore::write_passage`], this never overwrites an existing
+/// `iid`: within one epoch an iid designates one immutable passage
+/// (`docs/02-architecture.md`, "Identifiants"), so reusing one is a bug and the
+/// `INSERT` fails on the primary key, which rolls the whole generation back
+/// (INV-03).
+pub(crate) fn insert_passage(
+    transaction: &Transaction<'_>,
+    record: &PassageRecord,
+) -> Result<(), CribleError> {
+    let text = encode_text(&record.text)?;
+    let fields = canonical_json(&record.fields)?;
+    let dead_since_gen = record
+        .dead_since_gen
+        .map(|generation| to_sql_u64(generation.get(), "dead_since_gen"))
+        .transpose()?;
+    transaction
+        .execute(
+            "INSERT INTO passages (iid, doc_id, ord, text, passage_hash, fields,
+                                   segment_id, created_generation, dead_since_gen)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                i64::from(record.iid.get()),
+                record.doc_id.as_str(),
+                i64::from(record.ord),
+                text,
+                record.passage_hash.as_str(),
+                fields,
+                record.segment_id.as_str(),
+                to_sql_u64(record.created_generation.get(), "created_generation")?,
+                dead_since_gen,
+            ],
+        )
+        .map_err(|error| database_error("record a passage in the commit transaction", &error))?;
+    Ok(())
+}
+
+/// Marks one live passage as dead at `generation`.
+///
+/// Only a live passage can be tombstoned: an iid with no live row means the
+/// caller and the reference state disagree, which is an internal error, not a
+/// silent no-op.
+pub(crate) fn tombstone_passage(
+    transaction: &Transaction<'_>,
+    iid: Iid,
+    generation: Generation,
+) -> Result<(), CribleError> {
+    let changed = transaction
+        .execute(
+            "UPDATE passages SET dead_since_gen = ?2
+             WHERE iid = ?1 AND dead_since_gen IS NULL",
+            params![
+                i64::from(iid.get()),
+                to_sql_u64(generation.get(), "dead_since_gen")?,
+            ],
+        )
+        .map_err(|error| database_error("tombstone a passage in the commit transaction", &error))?;
+    if changed != 1 {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "no live passage has iid {}, so it cannot be tombstoned at generation {}",
+                iid.get(),
+                generation.get()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Moves `meta` to the generation the change publishes.
+pub(crate) fn advance_meta(
+    transaction: &Transaction<'_>,
+    generation: Generation,
+    next_iid: u32,
+) -> Result<(), CribleError> {
+    let changed = transaction
+        .execute(
+            "UPDATE meta SET generation = ?1, next_iid = ?2 WHERE id = 1",
+            params![to_sql_u64(generation.get(), "generation")?, next_iid],
+        )
+        .map_err(|error| database_error("advance meta in the commit transaction", &error))?;
+    if changed != 1 {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            "meta has no row, so the generation cannot advance",
+        ));
+    }
+    Ok(())
 }
 
 /// Bounded pool of **read-only** connections on one `records.sqlite` file.
@@ -576,7 +806,7 @@ fn check_format_version(connection: &Connection) -> Result<u32, CribleError> {
 /// a fake internal failure (ADR-0038). Every SQLite failure of this module goes
 /// through here, so the mapping also covers connection opening and the write
 /// transactions of the caller.
-fn database_error(context: &str, error: &rusqlite::Error) -> CribleError {
+pub(crate) fn database_error(context: &str, error: &rusqlite::Error) -> CribleError {
     let code = match error.sqlite_error_code() {
         // `sqlite_error_code` masks the extended result code down to its
         // primary code, so every `SQLITE_BUSY_*` variant lands here.
@@ -699,6 +929,31 @@ fn decode_text(frame: &[u8]) -> Result<String, CribleError> {
             format!("stored passage text is not UTF-8: {error}"),
         )
     })
+}
+
+/// Inserts or replaces one `documents` row.
+///
+/// Shared by the autocommit [`RecordStore::write_document`] and the commit
+/// transaction of a generation, so both write the same bytes.
+fn upsert_document(connection: &Connection, record: &DocumentRecord) -> Result<(), CribleError> {
+    let fields = canonical_json(&record.fields)?;
+    connection
+        .execute(
+            "INSERT INTO documents (doc_id, doc_hash, fields, updated_generation)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(doc_id) DO UPDATE SET
+                 doc_hash = excluded.doc_hash,
+                 fields = excluded.fields,
+                 updated_generation = excluded.updated_generation",
+            params![
+                record.doc_id.as_str(),
+                record.doc_hash.as_str(),
+                fields,
+                to_sql_u64(record.updated_generation.get(), "updated_generation")?,
+            ],
+        )
+        .map_err(|error| database_error("write a document", &error))?;
+    Ok(())
 }
 
 /// Reads one document, the query "documents by id".

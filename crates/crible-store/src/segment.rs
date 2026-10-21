@@ -362,38 +362,16 @@ impl SegmentReader {
     /// error.
     ///
     /// **Cost of the checksum.** `open` reads the whole vector file once to
-    /// verify its blake3 checksum, as this task requires ("a corrupted checksum
-    /// is detected at open time"). At the scale of Legifacile that is about
-    /// 13 GB per open, so every snapshot rebuild and every restart pays it. This
-    /// is deliberate for now: `GERER-GENERATIONS` will decide whether the
-    /// verification is deferred (for example once per generation, or only on
-    /// recovery) instead of repeated at each open.
+    /// verify its blake3 checksum, as the segment task requires ("a corrupted
+    /// checksum is detected at open time"). At the scale of Legifacile that is
+    /// about 13 GB per open. The policy is unchanged here: the generation
+    /// snapshot reads the metadata through `read_meta` and opens no segment,
+    /// so it never pays that cost. Deferring the verification itself (once per
+    /// generation, or only on recovery) stays an open question for a later
+    /// decision.
     pub fn open(segment_dir: &Path) -> Result<Self, CribleError> {
-        let manifest_path = segment_dir.join(MANIFEST_FILE_NAME);
-        let raw = fs::read_to_string(&manifest_path)
-            .map_err(|error| io_error("read the segment manifest", &manifest_path, &error))?;
-        let manifest: Value = serde_json::from_str(&raw).map_err(|error| {
-            CribleError::new(
-                ErrorCode::Internal,
-                format!("{} is not valid JSON: {error}", manifest_path.display()),
-            )
-        })?;
-
-        let format_version = read_format_version(&manifest)?;
-        let precision = read_precision(segment_dir)?;
-        let segment_id = segment_id_of(segment_dir)?;
-        let meta = SegmentMeta {
-            format_version,
-            segment_id,
-            iid_start: Iid::new(manifest_u32(&manifest, "iid_start")?),
-            count: manifest_u32(&manifest, "count")?,
-            dims: manifest_u32(&manifest, "dims")?,
-            generation: Generation::new(manifest_u64(&manifest, "generation")?),
-            batch_id: manifest_str(&manifest, "batch_id")?.to_owned(),
-            precision,
-            checksums: read_checksums(&manifest)?,
-        };
-
+        let meta = read_meta(segment_dir)?;
+        let precision = meta.precision;
         let vectors_path = segment_dir.join(vector_file_name(precision));
         if meta.dims == 0 {
             return Err(CribleError::new(
@@ -543,6 +521,40 @@ fn validate_segment_id(segment_id: &str) -> Result<(), CribleError> {
         ));
     }
     Ok(())
+}
+
+/// Metadata of a segment directory, read from `segment.json` and from the disk
+/// layout, **without** reading the vector file.
+///
+/// The format version is checked (INV-15); `segment_id` and `precision` are
+/// derived from the directory name and from the vector file present. The
+/// checksum of `vectors.*` is deliberately **not** verified here:
+/// [`SegmentReader::open`] does that, and the snapshot of a generation only
+/// needs the metadata. Verifying the checksum costs a full read of the vector
+/// file (about 13 GB at the scale of Legifacile), which the per-generation
+/// snapshot must not pay.
+pub(crate) fn read_meta(segment_dir: &Path) -> Result<SegmentMeta, CribleError> {
+    let manifest_path = segment_dir.join(MANIFEST_FILE_NAME);
+    let raw = fs::read_to_string(&manifest_path)
+        .map_err(|error| io_error("read the segment manifest", &manifest_path, &error))?;
+    let manifest: Value = serde_json::from_str(&raw).map_err(|error| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("{} is not valid JSON: {error}", manifest_path.display()),
+        )
+    })?;
+
+    Ok(SegmentMeta {
+        format_version: read_format_version(&manifest)?,
+        segment_id: segment_id_of(segment_dir)?,
+        iid_start: Iid::new(manifest_u32(&manifest, "iid_start")?),
+        count: manifest_u32(&manifest, "count")?,
+        dims: manifest_u32(&manifest, "dims")?,
+        generation: Generation::new(manifest_u64(&manifest, "generation")?),
+        batch_id: manifest_str(&manifest, "batch_id")?.to_owned(),
+        precision: read_precision(segment_dir)?,
+        checksums: read_checksums(&manifest)?,
+    })
 }
 
 /// Reads `format_version` and refuses anything but [`FORMAT_VERSION`] (INV-15).
@@ -798,7 +810,7 @@ fn decode_component(bytes: &[u8], precision: ReferencePrecision) -> Result<f32, 
 }
 
 /// Writes a file and fsyncs it before returning.
-fn write_file_synced(path: &Path, bytes: &[u8]) -> Result<(), CribleError> {
+pub(crate) fn write_file_synced(path: &Path, bytes: &[u8]) -> Result<(), CribleError> {
     let mut file = File::create(path).map_err(|error| io_error("create the file", path, &error))?;
     file.write_all(bytes)
         .map_err(|error| io_error("write the file", path, &error))?;
@@ -807,14 +819,15 @@ fn write_file_synced(path: &Path, bytes: &[u8]) -> Result<(), CribleError> {
 }
 
 /// fsyncs a directory, so a rename or a new entry survives a crash.
-fn sync_directory(path: &Path) -> Result<(), CribleError> {
+pub(crate) fn sync_directory(path: &Path) -> Result<(), CribleError> {
     File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| io_error("fsync the directory", path, &error))
 }
 
-/// Wraps an I/O failure on a segment file, which is an internal state error.
-fn io_error(action: &str, path: &Path, error: &std::io::Error) -> CribleError {
+/// Wraps an I/O failure on a file of the store, which is an internal state
+/// error.
+pub(crate) fn io_error(action: &str, path: &Path, error: &std::io::Error) -> CribleError {
     CribleError::new(
         ErrorCode::Internal,
         format!("cannot {action} {}: {error}", path.display()),
