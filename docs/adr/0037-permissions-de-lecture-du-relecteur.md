@@ -1,7 +1,7 @@
 # ADR-0037 — Élargir les permissions de `@relecteur` aux utilitaires de vérification et à Python
 
-- **Statut** : Proposé
-- **Date** : 2026-10-21
+- **Statut** : Accepté
+- **Date** : 2026-10-21 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : propriétaire, relayé par l'orchestrateur ; rédaction par l'agent greffier
 - **Remplace** : —
@@ -34,6 +34,10 @@
 Ce qui n'est **pas** décidé ici : `edit: deny` reste en place, et le refus de `webfetch` aussi. Aucun accès réseau, aucune commande git qui modifie le dépôt, aucune installation logicielle n'est ajoutée. Le relecteur ne reçoit pas non plus un shell libre.
 
 ADR-0026 n'est **pas** modifié : il est complété par cet ADR, qui ne fait que préciser la liste de `@relecteur`.
+
+## Application
+
+La vérification du point 4 a été faite le 2026-10-21 : la condition n'est **pas** remplie. opencode vérifie une commande composée morceau par morceau, en coupant sur `|`, `;`, `&&` et `||` (ADR-0026 l. 12) ; la commande lancée par `xargs` fait partie de ses arguments, donc le motif `xargs *` l'accepterait quelle qu'elle soit. **`xargs` est donc écarté** : l'en-tête de `.opencode/agents/relecteur.md` reçoit les douze autres motifs du point 1, plus les deux du point 2.
 
 ## Conséquences
 

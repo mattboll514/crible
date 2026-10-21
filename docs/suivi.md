@@ -142,7 +142,6 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
-| [ADR-0037](adr/0037-permissions-de-lecture-du-relecteur.md) | Permissions de `@relecteur` : utilitaires de vérification et exécution Python (recommandé : B, avec garde-fou `git status` avant et après chaque relecture) | Prochaine relecture, idéalement |
 
 ## Idées hors périmètre
 
@@ -216,3 +215,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE terminée : générateur `synth-small` reproductible au bit près sur toute machine, référence exacte f32 ; 125 tests `tools` ; revue OK au 3e tour (2e tour relancé une fois après une coupure réseau) |
 | 2026-10-21 | Idées traitées sur décision du propriétaire : aller-retour Python → Rust intégré à la fiche LIRE-LOT-PARQUET, tolérance des quasi-égalités intégrée à la fiche RECHERCHER-DENSE-EXACT ; ADR-0037 (permissions de `@relecteur`) proposé ; écriture atomique du lot et table type → opérateurs lancées en tâche hors plan |
 | 2026-10-21 | Tâche hors plan AMELIORER-LOTS-ET-REFERENCE terminée : écriture atomique du dossier de lot (dossier temporaire caché, `fsync`, renommage) et validation type → opérateurs dans l'oracle ; 64 tests `clients`, 145 `tools`, 139 Rust ; somme de `synth-small` inchangée ; revue OK au 2e tour |
+| 2026-10-21 | ADR-0037 accepté par le propriétaire : `@relecteur` reçoit les utilitaires de vérification et l'exécution Python (`xargs` écarté, condition non remplie) ; garde-fou `git status` inscrit dans `orchestrateur.md` ; 9 commandes testées acceptées et `xargs` refusé (`timeout` absent de macOS, motif sans effet ici) |

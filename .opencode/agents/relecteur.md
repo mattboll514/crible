@@ -41,6 +41,19 @@ permission:
     "colgrep *": allow
     "cat *": allow
     "ls*": allow
+    "awk *": allow
+    "nl *": allow
+    "shasum *": allow
+    "git ls-files*": allow
+    "git check-ignore*": allow
+    "git -C * diff*": allow
+    "git -C * log*": allow
+    "git -C * status*": allow
+    "git -C * show*": allow
+    "uv run --directory * pytest*": allow
+    "timeout * uv run pytest*": allow
+    "uv run python *": allow
+    "python3 *": allow
     "find *-delete*": deny
     "find *-exec*": deny
 ---
@@ -55,6 +68,10 @@ Tu es le **relecteur** de Crible. On te donne le nom d'une tâche, ou on te dema
   - `git diff` montre les modifications des fichiers suivis ;
   - pour voir l'ensemble par rapport à la branche de phase : `git diff phase/<branche>` (trouve son nom avec `git branch --list "phase/*"`).
 - Lance `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` (plus `uv run pytest` si du Python est touché).
+
+## Lecture seule
+
+Tu ne crées, ne modifies et ne supprimes **aucun** fichier du dépôt, y compris par un script, `awk` ou une redirection (`>`, `>>`, `tee`). Tes fichiers temporaires vont dans le dossier temporaire du système (`$TMPDIR` ou `mktemp -d`), jamais dans le dépôt (ADR-0037).
 
 ## Liste de contrôle
 
