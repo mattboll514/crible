@@ -10,7 +10,7 @@
 //! `STOCKER-ENREGISTREMENTS-SQLITE` task of
 //! `docs/phases/P1-stockage-et-recherche-exacte.md`.
 
-use std::sync::{Barrier, mpsc};
+use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -146,6 +146,13 @@ fn read_pool_waits_when_its_only_connection_is_busy() {
                 Ok(())
             })
         });
+
+        // The holder must own the only connection before the waiter starts,
+        // otherwise the waiter can win the race and read without ever blocking.
+        held_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the first reader holds the only connection");
+
         let pool_ref = &pool;
         let waiter = scope.spawn(move || {
             done_tx
@@ -153,9 +160,6 @@ fn read_pool_waits_when_its_only_connection_is_busy() {
                 .expect("the second reader reports its result");
         });
 
-        held_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("the first reader holds the only connection");
         // A bounded pool has no second connection to give: the waiter stays on
         // the condition variable until the slot comes back.
         let early = done_rx.recv_timeout(Duration::from_millis(200));
@@ -165,8 +169,8 @@ fn read_pool_waits_when_its_only_connection_is_busy() {
             .expect("the second reader proceeds once the connection is back");
 
         assert!(
-            early.is_err(),
-            "a pool of capacity 1 must not serve two readers at once"
+            matches!(&early, Err(mpsc::RecvTimeoutError::Timeout)),
+            "a pool of capacity 1 must not serve two readers at once, got {early:?}"
         );
         assert_eq!(late.expect("the second read succeeds"), r#"{"annee":2026}"#);
 
@@ -182,24 +186,90 @@ fn read_pool_waits_when_its_only_connection_is_busy() {
 fn pooled_connections_cannot_write() {
     let dir = tempfile::tempdir().expect("temporary directory");
     let path = dir.path().join("records.sqlite");
-    RecordStore::create(&path).expect("the database is created");
+    {
+        let mut store = RecordStore::create(&path).expect("the database is created");
+        store
+            .write_document(&document("doc-a", json!({ "annee": 2026 }), 1))
+            .expect("the document is written");
+    }
 
     let pool = ReadPool::new(&path, 1).expect("the pool is created");
-    let write = pool.with_connection(|connection| {
-        connection
-            .execute("DELETE FROM documents", [])
-            .map_err(|error| {
-                CribleError::new(
-                    ErrorCode::Internal,
-                    format!("the pool attempted a write: {error}"),
-                )
-            })
-            .map(|_| ())
+    let mut refusal = None;
+    let read = pool.with_connection(|connection| {
+        // Keep the raw SQLite error: the assertion below checks that the write
+        // is refused by SQLite itself, not by any other early failure. The read
+        // runs on the very same connection, so the connection is usable.
+        if let Err(error) = connection.execute("DELETE FROM documents", []) {
+            refusal = Some(error);
+        }
+        fields_of(connection, "doc-a")
     });
 
-    assert!(
-        write.is_err(),
+    let refusal = refusal.expect("the write is refused");
+    let code = refusal
+        .sqlite_error_code()
+        .unwrap_or_else(|| panic!("the write must fail with a SQLite error, got: {refusal}"));
+    assert_eq!(
+        code,
+        rusqlite::ErrorCode::ReadOnly,
         "the pool must hand out read-only connections, never a second writer"
+    );
+    assert_eq!(
+        read.expect("the read on the same connection succeeds"),
+        r#"{"annee":2026}"#,
+        "a refused write leaves the pooled connection usable"
+    );
+}
+
+#[test]
+fn a_panicking_reader_releases_its_only_slot() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("records.sqlite");
+    {
+        let mut store = RecordStore::create(&path).expect("the database is created");
+        store
+            .write_document(&document("doc-a", json!({ "annee": 2026 }), 1))
+            .expect("the document is written");
+    }
+
+    let pool = Arc::new(ReadPool::new(&path, 1).expect("the pool is created"));
+
+    let panicking_pool = Arc::clone(&pool);
+    let (panicked_tx, panicked_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = panicking_pool.with_connection(|_| -> Result<(), CribleError> {
+                panic!("a reader panics while it holds the only connection");
+            });
+        }))
+        .is_err();
+        panicked_tx
+            .send(panicked)
+            .expect("the panicking reader reports its panic");
+    });
+
+    // The guard delays keep the CI from hanging when the slot is never released:
+    // the readers below would wait on the condition variable forever.
+    let panicked = panicked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the panicking reader finishes");
+    assert!(panicked, "the reader must panic inside its closure");
+
+    let reading_pool = Arc::clone(&pool);
+    let (read_tx, read_rx) = mpsc::channel();
+    thread::spawn(move || {
+        read_tx
+            .send(read_fields(&reading_pool, "doc-a"))
+            .expect("the later reader reports its result");
+    });
+
+    assert_eq!(
+        read_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the later read proceeds once the slot is released")
+            .expect("the later read succeeds"),
+        r#"{"annee":2026}"#,
+        "the slot of a panicking reader is released"
     );
 }
 
