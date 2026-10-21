@@ -95,7 +95,8 @@
   - `crible-store::batch_reader` (arrow-rs, parquet) : lecture du manifeste, vérification des checksums, conformité du schéma, lecture en flux par parties ;
   - les contrôles d'`ord`, de finitude et de norme.
 - **Critères d'acceptation** :
-  - les lots `synth-small` sont lus ;
+  - les trois lots `synth-small` (`l1`, `l2`, `l3`), écrits par le `BatchWriter` Python (`clients/python`) via `tools/gen_synth.py`, passent `check_manifest` et la vérification des checksums blake3, puis sont lus entièrement ; c'est l'aller-retour Python → Rust de référence, là où `tools/` et `clients/python/tests` ne comparent que les ensembles de clés du manifeste ;
+  - un lot absent fait échouer le test avec un message qui dit comment le générer ; le test n'est jamais ignoré en silence, et la CI les génère avant `cargo test` ;
   - chaque contrôle a son test d'échec, avec le bon `ErrorCode` ;
   - la mémoire reste bornée : la lecture se fait partie par partie, jamais en chargeant tout le lot.
 - **Hors périmètre** : les longueurs en tokens et la recette (P2).
@@ -153,6 +154,9 @@
   - la lecture des payloads (champs, texte) pour les k résultats.
 - **Critères d'acceptation** :
   - les 200 requêtes de `synth-small` donnent les mêmes clés que `expected.jsonl`, dans le même ordre (égalité à 1e-5 près sur les scores, et départage stable par clé) ;
+  - deux résultats **adjacents** dont les scores diffèrent de moins de 1e-5 peuvent apparaître dans l'ordre inverse de `expected.jsonl` : la référence somme en f32 via BLAS, le moteur dans un autre ordre ; `expected.jsonl` compte 55 requêtes concernées, dont 5 sous 1e-6, mesurées dans `tools/README.md` ;
+  - à la frontière du k-ième résultat, une clé peut être remplacée par une autre dont le score est égal à 1e-5 près, et le test le vérifie ;
+  - en dehors de ces quasi-égalités, l'ordre et les clés sont identiques ;
   - **INV-06**.
 - **Invariants** : INV-06.
 
