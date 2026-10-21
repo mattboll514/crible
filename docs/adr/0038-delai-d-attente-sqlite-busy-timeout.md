@@ -1,7 +1,7 @@
 # ADR-0038 — Régler un délai d'attente sur les verrous SQLite (`busy_timeout`)
 
-- **Statut** : Proposé
-- **Date** : 2026-10-21
+- **Statut** : Accepté
+- **Date** : 2026-10-21 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : propriétaire, relayé par l'orchestrateur ; rédaction par l'agent greffier, d'après la relecture de la tâche STOCKER-ENREGISTREMENTS-SQLITE (commit `9f4cecb`)
 - **Remplace** : —

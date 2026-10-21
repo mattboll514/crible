@@ -135,7 +135,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | Le producteur Python doit calculer un digest blake3, absent de `docs/07` (seule la crate Rust y figure) et de `hashlib` | ADR-0034 | Accepté le 2026-10-21 |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | Sémantique d'un champ null pour `ne`, `nin`, `exists` et `$not` non définie, alors que la référence numpy (`expected.jsonl`) l'impose à EVALUER-FILTRES et à INV-07 | ADR-0035 | Accepté le 2026-10-21 |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `producer.host` (« Machine qui a produit le lot ») rend la somme de contrôle versionnée de `synth-small` propre à une machine | ADR-0036 | Accepté le 2026-10-21 |
-| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | En attente |
+| 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | Accepté le 2026-10-21 |
 
 ## Décisions en attente
 
@@ -143,7 +143,6 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
-| ADR-0038 | Délai d'attente sur les verrous SQLite (`busy_timeout`) et code d'erreur à l'expiration | MES de concurrence (TESTER-CHARGE-CONCURRENTE, P6) |
 
 ## Idées hors périmètre
 
@@ -230,3 +229,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | Tâche hors plan RENFORCER-TESTS-POOL terminée : refus d'écriture du pool prouvé par le code `ReadOnly` puis une lecture sur la même connexion, libération du slot après la panique d'un lecteur testée ; test préexistant `read_pool_waits_when_its_only_connection_is_busy` rendu déterministe (il échouait 4 fois sur 10, trouvé par le relecteur) ; 168 tests Rust, `read_pool` vert 12 fois sur 12 ; revue OK au 2e tour |
 | 2026-10-21 | Début de la tâche ECRIRE-SEGMENTS-VECTEURS sur `tache/ECRIRE-SEGMENTS-VECTEURS` |
 | 2026-10-21 | ECRIRE-SEGMENTS-VECTEURS terminée : segments de vecteurs immuables (f16/f32 little-endian, `segment.json` versionné, blake3, écriture atomique, lecture mmap) ; format de `segment.json` et codes d'erreur tranchés par `@architecte` avant l'implémentation (sans ADR) ; 21 tests ; revue OK au 2e tour |
+| 2026-10-21 | ADR-0038 accepté par le propriétaire : busy_timeout fixe de 1 000 ms sur toutes les connexions SQLite, expiration en overloaded ; application dans le code à faire (petite tâche hors plan) |
