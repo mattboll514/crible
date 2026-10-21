@@ -9,6 +9,7 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `reference_topk.py` | Rejoue l'attache des lots et calcule le top-k exact en numpy ; écrit `expected.jsonl`. |
 | `tests/` | Tests pytest des deux outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
+| `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
 
 Les identifiants, les options et les clés JSON sont en anglais ; ce README est
 en français, comme les documents de `docs/`.
