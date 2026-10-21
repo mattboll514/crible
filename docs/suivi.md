@@ -159,9 +159,8 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
 | 2026-10-21 | Jalon J0 | CI : passer `actions/checkout` et `astral-sh/setup-uv` à des versions qui tournent sur Node.js 24 (Node.js 20 est déprécié sur les runners GitHub) ; surveiller la migration de `ubuntu-latest` vers Ubuntu 26, commencée le 2026-10-19 |
+| 2026-10-21 | AMELIORER-LOTS-ET-REFERENCE | `tools/gen_synth.py --overwrite` ne nettoie pas un `.<batch_id>.tmp-*` laissé par un crash antérieur (sans effet sur la somme ni sur la référence) ; course résiduelle sur un dossier cible vide créé entre le contrôle et le renommage, faute de `RENAME_NOREPLACE` portable en Python |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON (verdict de `@architecte`) | Pour GENERER-JEU-SYNTHETIQUE : une modification de métadonnées seules renvoie le document avec le même `doc_hash` **et tous ses passages** (`docs/04`, Règles), donc le lot `L3` inclut les passages de ses 50 documents ; un lot de suppressions seules garde des fichiers `documents…` et `passages…`, vides si besoin (`format-lot-v1.md`) |
-| 2026-10-21 | ECRIRE-LOTS-PYTHON | Écriture atomique du dossier de lot (dossier temporaire puis renommage) : un échec dans `close()` laisse aujourd'hui un dossier partiel, sans manifeste donc jamais valide, et le `batch_id` doit être nettoyé à la main |
-| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `tools/reference_topk.py` : appliquer la table type → opérateurs de `docs/05-api.md` (aujourd'hui, `nin` sur un entier ou `lt` sur un `keyword` sont acceptés par l'oracle alors que le moteur les refusera) |
 
 ## Journal
 
@@ -216,3 +215,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | ADR-0035 (nulls dans les filtres, logique SQL) et ADR-0036 (`producer.host` réglable) acceptés par le propriétaire ; `docs/03`, `docs/05` et `format-lot-v1.md` mis à jour ; reprise de GENERER-JEU-SYNTHETIQUE |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE terminée : générateur `synth-small` reproductible au bit près sur toute machine, référence exacte f32 ; 125 tests `tools` ; revue OK au 3e tour (2e tour relancé une fois après une coupure réseau) |
 | 2026-10-21 | Idées traitées sur décision du propriétaire : aller-retour Python → Rust intégré à la fiche LIRE-LOT-PARQUET, tolérance des quasi-égalités intégrée à la fiche RECHERCHER-DENSE-EXACT ; ADR-0037 (permissions de `@relecteur`) proposé ; écriture atomique du lot et table type → opérateurs lancées en tâche hors plan |
+| 2026-10-21 | Tâche hors plan AMELIORER-LOTS-ET-REFERENCE terminée : écriture atomique du dossier de lot (dossier temporaire caché, `fsync`, renommage) et validation type → opérateurs dans l'oracle ; 64 tests `clients`, 145 `tools`, 139 Rust ; somme de `synth-small` inchangée ; revue OK au 2e tour |

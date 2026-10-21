@@ -10,10 +10,13 @@ round-trip of a fp16 vector.
 from __future__ import annotations
 
 import datetime
+import errno
 import importlib.metadata
 import json
+import os
 import re
 import socket
+from pathlib import Path
 
 import blake3
 import numpy as np
@@ -234,8 +237,10 @@ def test_ord_is_assigned_by_the_writer_and_refused_in_a_passage(tmp_path):
     batch = writer(tmp_path)
     with pytest.raises(BatchError, match="unknown key 'ord'"):
         batch.add_document("doc", "hash", {}, [{"text": "t", "vector": unit_vector(), "ord": 5}])
+    # A refused document aborts the batch, so the second refusal needs a new writer.
+    fresh = writer(tmp_path)
     with pytest.raises(BatchError, match="unknown key 'doc_id'"):
-        batch.add_document(
+        fresh.add_document(
             "doc", "hash", {}, [{"text": "t", "vector": unit_vector(), "doc_id": "other"}]
         )
 
@@ -579,3 +584,172 @@ def test_a_passage_part_is_fed_by_blocks(tmp_path, monkeypatch):
     parquet = pq.ParquetFile(directory / "passages-0001.parquet")
     assert parquet.metadata.num_rows == 5
     assert parquet.metadata.num_row_groups == 3
+
+
+def entries(directory) -> set[str]:
+    return {path.name for path in Path(directory).iterdir()}
+
+
+def test_a_successful_batch_leaves_no_temporary_directory(tmp_path):
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+    directory = batch.close()
+
+    assert directory == tmp_path / "batch-1"
+    assert read_manifest(directory)["batch_id"] == "batch-1"
+    assert entries(tmp_path) == {"batch-1"}
+
+
+def test_a_refused_document_removes_the_temporary_directory(tmp_path):
+    batch = writer(tmp_path)
+    with pytest.raises(BatchError, match="has no passage"):
+        batch.add_document("doc", "hash", {}, [])
+
+    assert entries(tmp_path) == set()
+    with pytest.raises(BatchError, match="aborted"):
+        batch.add_document("doc", "hash", {}, [passage("a")])
+
+
+def test_a_failure_during_close_leaves_no_target_and_no_temporary_directory(
+    tmp_path, monkeypatch
+):
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    def explode(handle):
+        raise OSError(errno.EIO, "simulated sync failure")
+
+    monkeypatch.setattr(crible.batch.os, "fsync", explode)
+    with pytest.raises(BatchError, match="simulated sync failure"):
+        batch.close()
+    monkeypatch.undo()
+
+    assert entries(tmp_path) == set()
+
+    again = writer(tmp_path)
+    again.add_document("doc-1", "hash-1", {}, [passage("a")])
+    directory = again.close()
+
+    assert directory == tmp_path / "batch-1"
+    assert entries(tmp_path) == {"batch-1"}
+
+
+def test_an_existing_batch_directory_is_refused_and_left_intact(tmp_path):
+    target = tmp_path / "batch-1"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(BatchError, match="already exists"):
+        writer(tmp_path)
+
+    assert entries(target) == {"keep.txt"}
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_a_target_created_during_the_write_makes_close_fail_without_overwriting(
+    tmp_path,
+):
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+    target = tmp_path / "batch-1"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(BatchError, match="appeared while the batch was written"):
+        batch.close()
+
+    assert entries(target) == {"keep.txt"}
+    assert (target / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert entries(tmp_path) == {"batch-1"}
+
+
+def test_the_batch_is_written_in_a_hidden_temporary_directory(tmp_path):
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    hidden = [path for path in tmp_path.iterdir() if path.name.startswith(".")]
+    assert len(hidden) == 1
+    assert hidden[0].name.startswith(".batch-1.tmp-")
+    assert hidden[0].is_dir()
+    assert not (hidden[0] / "manifest.json").exists()
+    assert not (tmp_path / "batch-1").exists()
+
+    directory = batch.close()
+
+    assert directory == tmp_path / "batch-1"
+    assert entries(tmp_path) == {"batch-1"}
+
+
+def test_close_syncs_the_files_then_renames_then_syncs_the_parent(
+    tmp_path, monkeypatch
+):
+    original_fsync_file = crible.batch._fsync_file
+    original_rename = crible.batch._rename_directory
+    original_fsync_directory = crible.batch._fsync_directory
+    events: list[tuple[str, str]] = []
+
+    def fsync_file(path):
+        events.append(("fsync_file", Path(path).name))
+        original_fsync_file(path)
+
+    def rename(source, target):
+        events.append(("rename", Path(target).name))
+        original_rename(source, target)
+
+    def fsync_directory(path):
+        events.append(("fsync_directory", Path(path).name))
+        original_fsync_directory(path)
+
+    monkeypatch.setattr(crible.batch, "_fsync_file", fsync_file)
+    monkeypatch.setattr(crible.batch, "_rename_directory", rename)
+    monkeypatch.setattr(crible.batch, "_fsync_directory", fsync_directory)
+
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+    batch.close()
+
+    kinds = [kind for kind, _ in events]
+    assert kinds == [
+        "fsync_file",
+        "fsync_file",
+        "fsync_file",
+        "fsync_directory",
+        "rename",
+        "fsync_directory",
+    ]
+    synced = {name for kind, name in events if kind == "fsync_file"}
+    assert synced == {"documents.parquet", "passages-0001.parquet", "manifest.json"}
+    assert events[3][0] == "fsync_directory"
+    assert events[3][1].startswith(".batch-1.tmp-")
+    assert events[4] == ("rename", "batch-1")
+    assert events[5] == ("fsync_directory", tmp_path.name)
+
+
+@pytest.mark.parametrize(
+    ("code", "fails"),
+    [
+        (errno.EINVAL, False),
+        (errno.ENOTSUP, False),
+        (errno.EPERM, False),
+        (errno.EIO, True),
+        (errno.ENOSPC, True),
+    ],
+)
+def test_directory_sync_ignores_unsupported_errno_only(
+    tmp_path, monkeypatch, code, fails
+):
+    monkeypatch.setattr(crible.batch, "_fsync_file", lambda path: None)
+
+    def explode(handle):
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(crible.batch.os, "fsync", explode)
+    batch = writer(tmp_path)
+    batch.add_document("doc-1", "hash-1", {}, [passage("a")])
+
+    if fails:
+        with pytest.raises(BatchError, match="cannot sync directory"):
+            batch.close()
+        assert entries(tmp_path) == set()
+    else:
+        assert batch.close() == tmp_path / "batch-1"

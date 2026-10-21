@@ -111,6 +111,23 @@ def test_overwrite_only_replaces_what_the_generator_writes(tmp_path):
     assert (out_dir / "queries.jsonl").read_text(encoding="utf-8") != "stale\n"
 
 
+def test_a_successful_generation_leaves_no_hidden_entry(tmp_path):
+    out_dir = tmp_path / "synth-small"
+    build_small(out_dir, overwrite=True)
+    build_small(out_dir, overwrite=True)
+
+    assert [path.name for path in out_dir.iterdir() if path.name.startswith(".")] == []
+
+
+def test_a_successful_large_generation_leaves_no_hidden_entry(tmp_path):
+    batch = build_large(tmp_path / "synth-large", passages=2)
+
+    assert sorted(path.name for path in batch.parent.iterdir()) == [
+        "index.json",
+        "large-0001",
+    ]
+
+
 def test_batches_have_the_documented_counts(synth_dataset):
     l1, l2, l3 = (synth_dataset.out_dir / name for name in ("l1", "l2", "l3"))
     first, second, third = (manifest(batch) for batch in (l1, l2, l3))

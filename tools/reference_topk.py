@@ -26,6 +26,14 @@ keys of an object, ``$and``, ``$or``, ``$not``, a scalar shorthand for ``eq``,
 and the operators ``eq``, ``ne``, ``lt``, ``lte``, ``gt``, ``gte``, ``in``,
 ``nin`` and ``exists``. The generated query set only uses this subset.
 
+A filter is validated against the schema of ``index.json``, as the engine does:
+an unknown field, a field marked ``filterable: false`` and an operator that the
+field type does not accept are refused. :func:`parse_filter` takes the schema
+as an optional second argument; :func:`reference` always passes the one of the
+dataset, so a query that the engine would reject fails here instead of producing
+a wrong expectation. :data:`TYPE_OPERATORS` holds the table of
+``docs/05-api.md``.
+
 A null field value never matches a comparison, ``ne`` or ``nin``; only
 ``exists`` looks at presence, and ``$not`` complements over every live passage.
 That is the SQL three-valued rule of ADR-0035, now written in
@@ -60,6 +68,23 @@ from gen_synth import dataset_checksum
 #: Comparison operators accepted by the reference.
 OPERATORS = ("eq", "ne", "lt", "lte", "gt", "gte", "in", "nin", "exists")
 
+#: Operators each field type accepts, from the table of ``docs/05-api.md``.
+TYPE_OPERATORS = {
+    "keyword": ("eq", "ne", "in", "nin", "exists"),
+    "integer": ("eq", "ne", "lt", "lte", "gt", "gte", "in", "exists"),
+    "float": ("eq", "ne", "lt", "lte", "gt", "gte", "in", "exists"),
+    "date": ("eq", "ne", "lt", "lte", "gt", "gte", "in", "exists"),
+    "bool": ("eq", "exists"),
+}
+
+
+@dataclass(frozen=True)
+class FieldSpec:
+    """One field of the index schema, as the filter validator needs it."""
+
+    field_type: str
+    filterable: bool = True
+
 
 @dataclass(frozen=True)
 class PassageRow:
@@ -86,6 +111,36 @@ def load_index_config(dataset_dir: str | Path) -> dict[str, Any]:
     """Reads ``index.json`` of the dataset."""
     path = Path(dataset_dir) / "index.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_schema(config: Mapping[str, Any]) -> dict[str, FieldSpec]:
+    """Returns every field declared by ``index.json``, with its type.
+
+    The returned mapping keeps the ``filterable`` flag of each field, so that
+    :func:`parse_filter` can refuse a field marked ``filterable: false``.
+    Document fields and passage fields are merged: a filter names a field
+    without telling its level, exactly like the engine. ``filterable`` defaults
+    to true, as ``docs/04-donnees-et-ingestion.md`` specifies.
+    """
+    schema = config.get("schema")
+    if not isinstance(schema, Mapping):
+        raise ValueError("the index config has no 'schema' object")
+    fields: dict[str, FieldSpec] = {}
+    for level in ("document_fields", "passage_fields"):
+        block = schema.get(level, {})
+        if not isinstance(block, Mapping):
+            raise ValueError(f"schema.{level} must be an object")
+        for name, spec in block.items():
+            if not isinstance(spec, Mapping):
+                raise ValueError(f"schema.{level}.{name} must be an object")
+            field_type = spec.get("type")
+            if field_type not in TYPE_OPERATORS:
+                raise ValueError(f"unknown type '{field_type}' for field '{name}'")
+            filterable = spec.get("filterable", True)
+            if not isinstance(filterable, bool):
+                raise ValueError(f"schema.{level}.{name}.filterable must be a boolean")
+            fields[name] = FieldSpec(field_type=field_type, filterable=filterable)
+    return fields
 
 
 def _vector_dtype(config: Mapping[str, Any]) -> str:
@@ -204,12 +259,16 @@ def load_state(
     return live, len(documents), len(live)
 
 
-def parse_filter(raw: Any) -> Any:
+def parse_filter(raw: Any, schema: Mapping[str, FieldSpec] | None = None) -> Any:
     """Parses the JSON filter into a small tuple tree.
 
     The returned node is ``("all",)`` for no filter, ``("cond", field,
     operator, value)``, ``("and", nodes)``, ``("or", nodes)`` or ``("not",
     node)``.
+
+    With a ``schema``, the filter is validated as the engine does: the field
+    must exist, be filterable, and accept the operator for its type
+    (``docs/05-api.md``). Without it, only the shape of the filter is checked.
     """
     if raw is None:
         return ("all",)
@@ -221,17 +280,38 @@ def parse_filter(raw: Any) -> Any:
             if not isinstance(operand, list):
                 raise ValueError(f"{key} expects an array")
             tag = "and" if key == "$and" else "or"
-            children.append((tag, tuple(parse_filter(item) for item in operand)))
+            children.append(
+                (tag, tuple(parse_filter(item, schema) for item in operand))
+            )
         elif key == "$not":
-            children.append(("not", parse_filter(operand)))
+            children.append(("not", parse_filter(operand, schema)))
         elif key.startswith("$"):
             raise ValueError(f"unknown logical operator '{key}'")
         else:
-            children.append(_parse_field(key, operand))
+            children.append(_parse_field(key, operand, schema))
     return _combine("and", children)
 
 
-def _parse_field(field: str, operand: Any) -> Any:
+def _field_spec(
+    field: str, schema: Mapping[str, FieldSpec] | None
+) -> FieldSpec | None:
+    """Returns the schema entry of a filter field, refusing an unusable one."""
+    if schema is None:
+        return None
+    spec = schema.get(field)
+    if spec is None:
+        raise ValueError(
+            f"unknown field '{field}' in filter; the index schema has no such field"
+        )
+    if not spec.filterable:
+        raise ValueError(f"field '{field}' is not filterable")
+    return spec
+
+
+def _parse_field(
+    field: str, operand: Any, schema: Mapping[str, FieldSpec] | None
+) -> Any:
+    spec = _field_spec(field, schema)
     if isinstance(operand, list):
         raise ValueError(f"field '{field}' expects a scalar or an operator object")
     if not isinstance(operand, Mapping):
@@ -242,6 +322,12 @@ def _parse_field(field: str, operand: Any) -> Any:
     for operator, value in operand.items():
         if operator not in OPERATORS:
             raise ValueError(f"unknown operator '{operator}' for field '{field}'")
+        if spec is not None and operator not in TYPE_OPERATORS[spec.field_type]:
+            raise ValueError(
+                f"operator '{operator}' is not allowed for field '{field}' of type "
+                f"'{spec.field_type}'; expected one of: "
+                f"{', '.join(TYPE_OPERATORS[spec.field_type])}"
+            )
         if operator in ("in", "nin") and not isinstance(value, list):
             raise ValueError(
                 f"operator '{operator}' for field '{field}' expects an array"
@@ -362,6 +448,7 @@ def reference(dataset_dir: str | Path, expected: str | Path | None = None) -> Pa
     """Writes ``expected.jsonl`` for every query of the dataset."""
     directory = Path(dataset_dir)
     target = Path(expected) if expected is not None else directory / "expected.jsonl"
+    schema = load_schema(load_index_config(directory))
     passages, documents, live = load_state(directory)
 
     temporary = target.with_name(target.name + ".tmp")
@@ -372,7 +459,7 @@ def reference(dataset_dir: str | Path, expected: str | Path | None = None) -> Pa
             if not line.strip():
                 continue
             query = json.loads(line)
-            node = parse_filter(query.get("filter"))
+            node = parse_filter(query.get("filter"), schema)
             mask = select(passages, node)
             results = top_k(passages, mask, query["vector"], int(query["k"]))
             record = {

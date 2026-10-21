@@ -35,19 +35,59 @@ machine or producer that produced the batch (ADR-0036). It defaults to
 Files written
 -------------
 
+The batch is assembled in a hidden temporary directory next to its target, in
+the same parent directory, and renamed to ``<out_dir>/<batch_id>/`` when
+``close()`` succeeds. The rename is therefore atomic: a reader never sees a
+partial batch, and an interrupted producer leaves no half batch under the final
+name. See "Atomic write" below.
+
 ``documents.parquet`` always exists, even when the batch has no document.
 ``passages`` is written as parts of at most ``MAX_PASSAGES_PER_PART`` rows,
 named ``passages-NNNN.parquet`` starting at ``0001``, and fed by blocks of
 ``PASSAGE_WRITE_ROWS`` rows so that a part does not have to be held in memory
 as a whole; at least one part exists. ``deletions.parquet`` exists if and only
 if the batch deletes a document, and is forbidden in ``replace_all`` mode.
+
+Atomic write
+------------
+
+The writer never writes under the final name. It creates the hidden directory
+``<out_dir>/.<batch_id>.tmp-<suffix>``, writes the whole batch there, syncs
+every file and that directory, then renames the directory to
+``<out_dir>/<batch_id>/`` and syncs ``<out_dir>`` so the rename itself is
+durable. The target never exists half written, and a batch directory that a
+reader can see is complete and valid.
+
+A failure anywhere (``add_document``, ``delete`` or ``close``) removes that
+temporary directory, and only it: the target directory and every other entry of
+``out_dir`` are left untouched. The writer then refuses further use, and the
+same ``batch_id`` can be written again by a new writer. An existing target is
+still refused at construction time, and the rename fails with
+:class:`BatchError` if the target appears while the batch is being written;
+nothing is overwritten.
+
+``fsync`` makes the rename durable against a crash of the process or of the
+kernel, not strictly against a power loss: on macOS, only ``F_FULLFSYNC`` flushes
+to the device, and the writer uses ``fsync``. On a platform that refuses
+``fsync`` on a directory handle, the directory sync is skipped and only the
+files are synced; the rename stays atomic. Any other sync failure is reported as
+a :class:`BatchError`.
+
+One residual race remains: a concurrent process that creates an *empty*
+directory exactly under the final name between the existence check and the
+rename would see it replaced, because POSIX ``rename`` has no portable
+"do not replace" flag for directories. Any other content is never replaced.
 """
 
 from __future__ import annotations
 
 import datetime
+import errno
 import json
+import os
+import shutil
 import socket
+import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -132,9 +172,9 @@ class BatchWriter:
                 f"batch directory '{self._directory}' already exists; "
                 "choose another batch_id or remove it"
             )
-        self._directory.mkdir(parents=True)
+        self._work_directory = _create_work_directory(self._directory)
 
-        self._document_writer = _TableWriter(self._directory / "documents.parquet", self._documents_schema)
+        self._document_writer = _TableWriter(self._work_directory / "documents.parquet", self._documents_schema)
         self._document_columns: dict[str, list[Any]] = {
             name: [] for name in self._documents_schema.names
         }
@@ -154,7 +194,7 @@ class BatchWriter:
 
         self._deleted: set[str] = set()
         self._document_ids: set[str] = set()
-        self._closed = False
+        self._state = "open"
 
     def add_document(
         self,
@@ -173,8 +213,40 @@ class BatchWriter:
         A document must have at least one passage, and it must not already be
         part of the batch (added or deleted): a document present with all its
         passages replaces the stored one.
+
+        Any failure aborts the batch: its temporary directory is removed and
+        the writer refuses further use, so the same ``batch_id`` can be written
+        again by a new writer.
         """
         self._check_open()
+        try:
+            self._add_document(doc_id, doc_hash, fields, passages)
+        except BaseException:
+            self._abort()
+            raise
+
+    def delete(self, doc_id: str) -> None:
+        """Marks one document for deletion.
+
+        A document already added to the batch, or already deleted, is refused.
+        ``replace_all`` forbids deletions: the batch is the whole content.
+
+        Any failure aborts the batch, as :meth:`add_document` does.
+        """
+        self._check_open()
+        try:
+            self._delete(doc_id)
+        except BaseException:
+            self._abort()
+            raise
+
+    def _add_document(
+        self,
+        doc_id: str,
+        doc_hash: str,
+        fields: Mapping[str, Any],
+        passages: Iterable[Mapping[str, Any]],
+    ) -> None:
         doc_id = _check_doc_id(doc_id)
         if doc_id in self._document_ids:
             raise BatchError(f"document '{doc_id}' is already part of this batch")
@@ -210,13 +282,7 @@ class BatchWriter:
 
         self._buffer_passages(passage_columns, len(passages))
 
-    def delete(self, doc_id: str) -> None:
-        """Marks one document for deletion.
-
-        A document already added to the batch, or already deleted, is refused.
-        ``replace_all`` forbids deletions: the batch is the whole content.
-        """
-        self._check_open()
+    def _delete(self, doc_id: str) -> None:
         doc_id = _check_doc_id(doc_id)
         if self._mode == "replace_all":
             raise BatchError(
@@ -236,8 +302,20 @@ class BatchWriter:
         """Writes the remaining Parquet files, the checksums and the manifest.
 
         Returns the batch directory. The writer cannot be used afterwards.
+
+        The whole batch is written in a hidden temporary directory, synced, then
+        renamed to its final name. A failure removes that temporary directory
+        and leaves neither a target directory nor a temporary one.
         """
         self._check_open()
+        try:
+            self._finish()
+        except BaseException:
+            self._abort()
+            raise
+        return self._directory
+
+    def _finish(self) -> None:
         self._flush_documents()
         self._document_writer.close()
         self._close_part()
@@ -246,7 +324,10 @@ class BatchWriter:
         if self._deleted:
             self._write_deletions()
 
-        files = {name: _blake3_file(self._directory / name) for name in self._file_names()}
+        files = {
+            name: _blake3_file(self._work_directory / name)
+            for name in self._file_names()
+        }
         counts = {
             "documents": self._document_count,
             "passages": self._passage_count,
@@ -277,16 +358,38 @@ class BatchWriter:
             text = json.dumps(manifest, ensure_ascii=False, indent=2)
         except (TypeError, ValueError) as error:
             raise BatchError(f"the manifest is not JSON-serializable: {error}") from error
-        target = self._directory / "manifest.json"
-        temporary = self._directory / "manifest.json.tmp"
-        temporary.write_text(text + "\n", encoding="utf-8")
-        temporary.replace(target)
-        self._closed = True
-        return self._directory
+        _write_manifest(self._work_directory, text)
+        for name in (*self._file_names(), "manifest.json"):
+            _fsync_file(self._work_directory / name)
+        _fsync_directory(self._work_directory)
+        _rename_directory(self._work_directory, self._directory)
+        _fsync_directory(self._directory.parent)
+        self._state = "closed"
 
     def _check_open(self) -> None:
-        if self._closed:
+        if self._state == "closed":
             raise BatchError(f"batch '{self._batch_id}' is already closed")
+        if self._state == "aborted":
+            raise BatchError(
+                f"batch '{self._batch_id}' was aborted after a failure; its "
+                "temporary directory is removed, start a new writer"
+            )
+
+    def _abort(self) -> None:
+        """Removes the temporary directory of this writer and refuses further use.
+
+        Only the directory this writer created is removed: the target directory
+        and every other entry of ``out_dir`` are never touched.
+        """
+        self._state = "aborted"
+        for table in (self._document_writer, self._part_writer):
+            if table is not None:
+                try:
+                    table.close()
+                except Exception:  # the batch is discarded, whatever the writer state
+                    pass
+        self._part_writer = None
+        shutil.rmtree(self._work_directory, ignore_errors=True)
 
     def _passage_columns_for(
         self, doc_id: str, passages: list[Mapping[str, Any]]
@@ -344,7 +447,7 @@ class BatchWriter:
         if self._part_writer is None:
             self._part_name = f"passages-{self._part_number:04d}.parquet"
             self._part_writer = _TableWriter(
-                self._directory / self._part_name, self._passages_schema
+                self._work_directory / self._part_name, self._passages_schema
             )
         for name, values in columns.items():
             self._part_columns[name].extend(values)
@@ -379,14 +482,14 @@ class BatchWriter:
 
     def _write_empty_part(self) -> None:
         name = "passages-0001.parquet"
-        _TableWriter(self._directory / name, self._passages_schema).close()
+        _TableWriter(self._work_directory / name, self._passages_schema).close()
         self._passage_files.append(name)
 
     def _write_deletions(self) -> None:
         table = pa.table(
             {"doc_id": sorted(self._deleted)}, schema=IndexSchema.deletion_schema()
         )
-        pq.write_table(table, self._directory / "deletions.parquet")
+        pq.write_table(table, self._work_directory / "deletions.parquet")
 
     def _file_names(self) -> list[str]:
         names = ["documents.parquet"]
@@ -418,6 +521,104 @@ class _TableWriter:
             self._writer = None
         elif not self._path.exists():
             pq.write_table(self._schema.empty_table(), self._path)
+
+
+def _create_work_directory(target: Path) -> Path:
+    """Creates the hidden temporary directory of a batch, next to its target.
+
+    The directory lives in the parent of the target, so that the final rename
+    stays inside one file system and is atomic. Its name starts with
+    ``.<batch_id>.tmp-``, which makes it recognisable and keeps it out of a
+    plain ``ls``.
+    """
+    parent = target.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(dir=parent, prefix=f".{target.name}.tmp-"))
+    except OSError as error:
+        raise BatchError(
+            f"cannot create a temporary directory for batch '{target.name}' in "
+            f"'{parent}': {error}"
+        ) from error
+
+
+def _write_manifest(directory: Path, text: str) -> None:
+    """Writes ``manifest.json`` through a temporary file and a replace."""
+    target = directory / "manifest.json"
+    temporary = directory / "manifest.json.tmp"
+    temporary.write_text(text + "\n", encoding="utf-8")
+    temporary.replace(target)
+
+
+#: ``errno`` values that mean "this platform cannot fsync a directory".
+_DIRECTORY_FSYNC_UNSUPPORTED = frozenset(
+    {errno.EINVAL, errno.ENOTSUP, errno.EACCES, errno.EBADF, errno.EPERM, errno.ENOTDIR}
+)
+
+
+def _fsync_file(path: Path) -> None:
+    """Flushes one written file to the storage device.
+
+    An I/O failure is raised as a :class:`BatchError`: the batch cannot be
+    declared durable.
+    """
+    try:
+        handle = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(handle)
+        finally:
+            os.close(handle)
+    except OSError as error:
+        raise BatchError(f"cannot sync '{path}': {error}") from error
+
+
+def _fsync_directory(path: Path) -> None:
+    """Flushes the entries of one directory, so a rename survives a crash.
+
+    Some platforms refuse ``fsync`` on a directory handle; those errno values
+    are listed in ``_DIRECTORY_FSYNC_UNSUPPORTED`` and the call is skipped. The
+    rename itself stays atomic; only its durability against a power loss is
+    weaker. Any other failure, such as ``EIO`` or ``ENOSPC``, is a real
+    durability failure and is raised as a :class:`BatchError`.
+    """
+    try:
+        handle = os.open(path, os.O_RDONLY)
+    except OSError as error:
+        if error.errno in _DIRECTORY_FSYNC_UNSUPPORTED:
+            return
+        raise BatchError(
+            f"cannot open directory '{path}' for sync: {error}"
+        ) from error
+    try:
+        try:
+            os.fsync(handle)
+        except OSError as error:
+            if error.errno not in _DIRECTORY_FSYNC_UNSUPPORTED:
+                raise BatchError(
+                    f"cannot sync directory '{path}': {error}"
+                ) from error
+    finally:
+        os.close(handle)
+
+
+def _rename_directory(source: Path, target: Path) -> None:
+    """Renames the temporary directory to its final name, never replacing one.
+
+    An existing target, even an empty directory, makes the rename fail with a
+    :class:`BatchError`.
+    """
+    if os.path.lexists(target):
+        raise BatchError(
+            f"batch directory '{target}' appeared while the batch was written; "
+            "refusing to replace it"
+        )
+    try:
+        os.rename(source, target)
+    except OSError as error:
+        raise BatchError(
+            f"cannot rename batch directory '{source}' to '{target}': "
+            f"{error.strerror or error}"
+        ) from error
 
 
 def _check_file_list(

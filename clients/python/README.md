@@ -84,6 +84,31 @@ programme, `host` dit d'où le lot est sorti.
 `blake3:<hex>` par fichier, calculé sur les octets écrits. Un lot vide reste
 valide : `documents.parquet` et une partie `passages` vide sont écrits.
 
+## Écriture atomique
+
+Le lot n'est jamais écrit sous son nom final. Le writer crée
+`<out_dir>/.<batch_id>.tmp-<suffixe>`, y écrit tous les fichiers, synchronise
+chaque fichier puis ce dossier, renomme le dossier en `<out_dir>/<batch_id>/`,
+puis synchronise `<out_dir>` pour rendre le renommage durable. Un lecteur ne
+voit donc jamais un lot partiel : un dossier de lot visible est complet et
+valide. `fsync` ne garantit pas forcément l'écriture physique : sur macOS, seul
+`F_FULLFSYNC` va jusqu'au support, et le writer utilise `fsync`. La garantie
+vaut donc contre un arrêt du processus ou du noyau, pas strictement contre une
+coupure de courant.
+
+Une erreur dans `add_document`, `delete` ou `close` supprime ce dossier
+temporaire, et lui seul : la cible et les autres entrées d'`out_dir` restent
+intactes. Le writer refuse ensuite tout nouvel appel, et le même `batch_id` peut
+être réécrit par un nouveau writer. Un dossier cible déjà présent est toujours
+refusé à la construction ; s'il apparaît pendant l'écriture, le renommage échoue
+avec `BatchError` et rien n'est écrasé.
+
+Synchroniser un dossier n'est pas accepté par toutes les plateformes : ces errno
+de non-support (`EINVAL`, `ENOTSUP`, `EACCES`, `EBADF`, `EPERM`, `ENOTDIR`) sont
+ignorés et seuls les fichiers sont alors synchronisés. Toute autre erreur de
+synchronisation est une panne réelle : `close()` lève `BatchError` et le lot
+n'est pas installé.
+
 ## Contrôles locaux
 
 Le writer applique avant d'écrire le manifeste les contrôles que le moteur
