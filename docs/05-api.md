@@ -100,6 +100,11 @@ Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `in
 | `integer`, `float`, `date` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `exists` |
 | `bool` | `eq`, `exists` |
 
+- **Valeurs nulles** (ADR-0035) :
+  - les comparaisons (`eq`, `ne`, `in`, `nin`, `lt`, `lte`, `gt`, `gte`) ne sont **jamais** satisfaites par un null ;
+  - `exists: true` vaut « présent et non null » ; `exists: false` vaut « absent ou null » ;
+  - `$not` est le complément sur les vivants. Il inclut donc les passages dont le champ est null : `{"$not": {"f": {"eq": "a"}}}` et `{"f": {"ne": "a"}}` ne sont **pas** équivalents.
+
 - **Limites** (ADR-0029) :
   - `in` et `nin` : 1 000 valeurs au plus ;
   - profondeur : 8 au plus. On compte les **niveaux d'objets et de tableaux** ; la racine vaut 1 ; un objet d'opérateurs de champ compte pour un niveau ; un tableau `$and` ou `$or` compte pour un niveau, et chacun de ses éléments pour le niveau suivant. Neuf `$not` imbriqués sont refusés, quatre sont acceptés ;

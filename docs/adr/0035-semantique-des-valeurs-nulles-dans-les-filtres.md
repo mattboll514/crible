@@ -1,7 +1,7 @@
 # ADR-0035 — Sémantique des valeurs nulles dans les filtres
 
-- **Statut** : Proposé
-- **Date** : 2026-10-21
+- **Statut** : Accepté
+- **Date** : 2026-10-21 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, tâche GENERER-JEU-SYNTHETIQUE (phase P1), après le verdict NON-COUVERT de l'agent architecte
 - **Remplace** : —

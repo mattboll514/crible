@@ -76,7 +76,7 @@ Exemple, repris de `04-donnees-et-ingestion.md` :
 | `created_at` | chaîne | oui | Date RFC 3339 en UTC. P0 ne vérifie que sa non-vacuité, pas la syntaxe. |
 | `producer.name` | chaîne | oui | Nom du programme producteur, non vide. |
 | `producer.version` | chaîne | oui | Version du programme. |
-| `producer.host` | chaîne | oui | Machine qui a produit le lot. |
+| `producer.host` | chaîne | oui | Identifiant de la machine, ou du producteur, qui a produit le lot (ADR-0036). |
 | `model` | objet | oui | Modèle d'encodage, voir ci-dessous. |
 | `chunker` | objet | oui | Découpeur : `name`, `version`, `params` (objet JSON libre). |
 | `template` | objet | oui | Gabarit : `name`, `version`. |
