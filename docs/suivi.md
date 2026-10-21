@@ -9,7 +9,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 | Jalon | Phase | Statut | Rapport |
 |---|---|---|---|
-| J0 | P0 — Fondations | PRET-POUR-VALIDATION | [J0-rapport.md](jalons/J0-rapport.md) |
+| J0 | P0 — Fondations | VALIDE 2026-10-21 | [J0-rapport.md](jalons/J0-rapport.md) |
 | J1 | P1 — Stockage, lots et recherche exacte | EN-ATTENTE | |
 | J2 | P2 — Encodeur et recette | EN-ATTENTE | |
 | J3 | P3 — Cycle de vie | EN-ATTENTE | |
@@ -199,3 +199,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | J0 préparé par `@jalon` : 6 tâches FAIT, `make check` vert (139 tests Rust), 73 tests Python, INV-01 (3 tests) et INV-16 (18 tests) verts, MES-00 et cibles présentes, ADR 0026 à 0033 acceptés ; rapport `docs/jalons/J0-rapport.md`, statut PRET-POUR-VALIDATION ; réserve : aucun run CI distant (branche non poussée) |
 | 2026-10-21 | Rapport MES-00 : 2 mineurs de relecture appliqués par `@mesureur` (consigne du `find -newermt` reformulée, inventaire `ls-files` d'avant situé dans le protocole reproductible), sans nouvelle mesure ; idées retirées de la liste. La passe `--perimeter-first` reste en idée, à revoir en P5 |
 | 2026-10-21 | `phase/P0-fondations` poussée avec l'accord du propriétaire ; premier run CI GitHub vert (run 39574670548 : Rust 139 tests, Python, Tools 73 tests), ce qui lève la réserve CI du rapport J0 ; avertissements de dépréciation Node.js 20 notés en idée |
+| 2026-10-21 | J0 validé par le propriétaire ; phase P0 fusionnée dans `main`, tag `jalon-J0` |
