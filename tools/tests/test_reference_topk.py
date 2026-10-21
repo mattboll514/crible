@@ -19,6 +19,8 @@ import pytest
 from reference_topk import (
     PassageRow,
     evaluate,
+    load_index_config,
+    load_schema,
     load_state,
     parse_filter,
     reference,
@@ -72,8 +74,26 @@ ROWS = [
 ]
 
 
-def keys_for(raw) -> list[str]:
-    mask = select(ROWS, parse_filter(raw))
+#: Schema of the fields of :data:`ROWS`, plus a non-filterable one.
+SCHEMA = load_schema(
+    {
+        "schema": {
+            "document_fields": {
+                "k": {"type": "keyword"},
+                "n": {"type": "integer"},
+                "f": {"type": "float"},
+                "d": {"type": "date"},
+                "b": {"type": "bool"},
+                "p": {"type": "keyword"},
+                "titre": {"type": "keyword", "filterable": False},
+            }
+        }
+    }
+)
+
+
+def keys_for(raw, schema=None) -> list[str]:
+    mask = select(ROWS, parse_filter(raw, schema))
     return [item.key for item, keep in zip(ROWS, mask) if keep]
 
 
@@ -122,6 +142,42 @@ def test_filter_subset_matches_the_grammar(raw, expected):
 def test_invalid_filters_are_refused(raw):
     with pytest.raises(ValueError):
         parse_filter(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ({"k": {"nin": ["a"]}}, ["d2#0"]),
+        ({"n": {"gte": 2}}, ["d2#0"]),
+        ({"n": {"in": [1, 2]}}, ["d1#0", "d2#0"]),
+        ({"f": {"gte": 0.8}}, ["d2#0"]),
+        ({"d": {"lt": "2021-01-01"}}, ["d1#0"]),
+        ({"b": False}, ["d2#0"]),
+        ({"b": {"eq": True}}, ["d1#0"]),
+        ({"p": {"exists": True}}, ["d1#0", "d2#0"]),
+    ],
+)
+def test_an_operator_accepted_for_its_type_passes_validation(raw, expected):
+    assert keys_for(raw, SCHEMA) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ({"n": {"nin": [1, 2]}}, r"operator 'nin'.*field 'n'.*'integer'"),
+        ({"k": {"lt": "a"}}, r"operator 'lt'.*field 'k'.*'keyword'"),
+        ({"k": {"gte": "a"}}, r"operator 'gte'.*field 'k'.*'keyword'"),
+        ({"b": {"in": [True]}}, r"operator 'in'.*field 'b'.*'bool'"),
+        ({"titre": "x"}, r"field 'titre' is not filterable"),
+        ({"titre": {"nin": ["x"]}}, r"field 'titre' is not filterable"),
+        ({"inconnu": 1}, r"unknown field 'inconnu'"),
+        ({"$not": {"n": {"nin": [1]}}}, r"operator 'nin'.*field 'n'"),
+        ({"$or": [{"k": "a"}, {"b": {"gte": True}}]}, r"operator 'gte'.*field 'b'"),
+    ],
+)
+def test_a_filter_refused_by_the_type_names_the_field_and_the_operator(raw, message):
+    with pytest.raises(ValueError, match=message):
+        parse_filter(raw, SCHEMA)
 
 
 def test_null_never_matches_a_comparison_but_not_is_complemented():
@@ -184,6 +240,21 @@ def brute_force(passages, mask, query, k):
     ]
     scored.sort(key=lambda item: (-item[0], item[1]))
     return scored[:k]
+
+
+def test_every_generated_query_is_valid_against_the_index_schema(synth_dataset):
+    schema = load_schema(load_index_config(synth_dataset.out_dir))
+    queries = [
+        json.loads(line)
+        for line in (synth_dataset.out_dir / "queries.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+    assert len(queries) == 200
+    for query in queries:
+        parse_filter(query["filter"], schema)
 
 
 def test_reference_covers_every_query_and_the_final_state(synth_dataset):

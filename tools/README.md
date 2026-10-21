@@ -186,6 +186,15 @@ le raccourci scalaire pour `eq`, et les opérateurs `eq`, `ne`, `lt`, `lte`,
 `gt`, `gte`, `in`, `nin`, `exists`. Le jeu de requêtes n'utilise que ce
 sous-ensemble.
 
+Il valide aussi chaque filtre contre le schéma de `index.json`, comme le
+moteur : un champ inconnu, un champ marqué `filterable: false` et un opérateur
+que le type du champ n'accepte pas sont refusés, avec un message qui nomme le
+champ et l'opérateur. La table type → opérateurs est celle de
+`docs/05-api.md` : `keyword` accepte `eq`, `ne`, `in`, `nin`, `exists` ;
+`integer`, `float` et `date` acceptent en plus `lt`, `lte`, `gt` et `gte` ;
+`bool` n'accepte que `eq` et `exists`. Les 200 requêtes générées passent cette
+validation, et un test le vérifie.
+
 Une valeur nulle ne satisfait jamais une comparaison, `ne` ou `nin` : seul
 `exists` regarde la présence (`exists: true` = présent et non null,
 `exists: false` = absent ou null). `$not` complète sur **tous les passages
