@@ -83,7 +83,8 @@ pub struct Producer {
     pub name: String,
     /// Version of the producer.
     pub version: String,
-    /// Machine that ran the producer.
+    /// Identifier of the machine, or of the producer, that produced the batch
+    /// (ADR-0036).
     pub host: String,
 }
 

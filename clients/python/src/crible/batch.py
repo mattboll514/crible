@@ -23,6 +23,15 @@ takes ``vector_dtype`` from ``index_config.reference_precision`` and leaves
 ``chunker`` and ``template`` are the manifest blocks of the producer. ``mode``
 is ``"upsert"`` or ``"replace_all"``.
 
+The optional keyword ``created_at`` fixes the ``created_at`` member of the
+manifest, a RFC 3339 string. Without it the writer uses the current UTC time
+when ``close()`` runs. A producer that needs byte-identical files, such as the
+synthetic data generator, passes a value derived only from its own parameters.
+
+The optional keyword ``host`` fixes ``producer.host``, the identifier of the
+machine or producer that produced the batch (ADR-0036). It defaults to
+``socket.gethostname()``.
+
 Files written
 -------------
 
@@ -99,6 +108,9 @@ class BatchWriter:
         model: Mapping[str, Any],
         chunker: Mapping[str, Any],
         template: Mapping[str, Any],
+        *,
+        created_at: str | None = None,
+        host: str | None = None,
     ) -> None:
         self._schema = IndexSchema.from_index_config(index_config)
         self._batch_id = _check_batch_id(batch_id)
@@ -106,6 +118,8 @@ class BatchWriter:
         self._manifest_model = _manifest_model(model, self._schema.vector_dtype)
         self._chunker = _chunker(chunker)
         self._template = _template(template)
+        self._created_at = _check_created_at(created_at)
+        self._host = _check_host(host)
         self._dims = self._manifest_model["dims"]
         self._normalize = self._manifest_model["normalize"]
         self._documents_schema = self._schema.document_schema()
@@ -245,11 +259,13 @@ class BatchWriter:
             "batch_id": self._batch_id,
             "index": self._schema.name,
             "mode": self._mode,
-            "created_at": _utc_now(),
+            "created_at": (
+                self._created_at if self._created_at is not None else _utc_now()
+            ),
             "producer": {
                 "name": PRODUCER_NAME,
                 "version": __version__,
-                "host": socket.gethostname(),
+                "host": self._host,
             },
             "model": self._manifest_model,
             "chunker": self._chunker,
@@ -544,6 +560,40 @@ def _blake3_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             hasher.update(chunk)
     return f"blake3:{hasher.hexdigest()}"
+
+
+def _check_created_at(created_at: Any) -> str | None:
+    """Validates the optional manifest timestamp.
+
+    ``None`` keeps the default: the current UTC time at ``close()``. A caller
+    that needs reproducible files, such as a synthetic data generator, passes
+    a fixed RFC 3339 string.
+    """
+    if created_at is None:
+        return None
+    if not isinstance(created_at, str):
+        raise BatchError(
+            f"created_at must be a string, got {type(created_at).__name__}"
+        )
+    if not created_at:
+        raise BatchError("created_at must not be empty")
+    return created_at
+
+
+def _check_host(host: Any) -> str:
+    """Validates the optional ``producer.host`` and applies its default.
+
+    ``None`` keeps the historical value, the machine hostname. A producer that
+    needs a reproducible dataset passes a stable identifier instead, as allowed
+    by ADR-0036.
+    """
+    if host is None:
+        return socket.gethostname()
+    if not isinstance(host, str):
+        raise BatchError(f"host must be a string, got {type(host).__name__}")
+    if not host:
+        raise BatchError("host must not be empty")
+    return host
 
 
 def _utc_now() -> str:
