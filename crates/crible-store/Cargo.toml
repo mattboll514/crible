@@ -25,5 +25,12 @@ failpoints = []
 [dev-dependencies]
 tempfile.workspace = true
 
+# MES-15: the commit-cost bench drives `GenerationStore::commit` itself; the
+# harness is `harness = false` because the measure is a scenario matrix (N, S),
+# not a criterion function. No criterion dependency is added for it.
+[[bench]]
+name = "commit_cost"
+harness = false
+
 [lints]
 workspace = true
