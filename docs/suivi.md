@@ -142,6 +142,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| [ADR-0037](adr/0037-permissions-de-lecture-du-relecteur.md) | Permissions de `@relecteur` : utilitaires de vérification et exécution Python (recommandé : B, avec garde-fou `git status` avant et après chaque relecture) | Prochaine relecture, idéalement |
 
 ## Idées hors périmètre
 
@@ -159,11 +160,8 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
 | 2026-10-21 | Jalon J0 | CI : passer `actions/checkout` et `astral-sh/setup-uv` à des versions qui tournent sur Node.js 24 (Node.js 20 est déprécié sur les runners GitHub) ; surveiller la migration de `ubuntu-latest` vers Ubuntu 26, commencée le 2026-10-19 |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON (verdict de `@architecte`) | Pour GENERER-JEU-SYNTHETIQUE : une modification de métadonnées seules renvoie le document avec le même `doc_hash` **et tous ses passages** (`docs/04`, Règles), donc le lot `L3` inclut les passages de ses 50 documents ; un lot de suppressions seules garde des fichiers `documents…` et `passages…`, vides si besoin (`format-lot-v1.md`) |
-| 2026-10-21 | ECRIRE-LOTS-PYTHON | LIRE-LOT-PARQUET : ajouter un vrai aller-retour Python → `check_manifest` et lecture Rust d'un lot écrit par `BatchWriter` (aujourd'hui, seuls les ensembles de clés du manifeste sont comparés) |
 | 2026-10-21 | ECRIRE-LOTS-PYTHON | Écriture atomique du dossier de lot (dossier temporaire puis renommage) : un échec dans `close()` laisse aujourd'hui un dossier partiel, sans manifeste donc jamais valide, et le `batch_id` doit être nettoyé à la main |
-| 2026-10-21 | GENERER-JEU-SYNTHETIQUE | RECHERCHER-DENSE-EXACT : `expected.jsonl` compte 5 requêtes avec deux résultats adjacents à moins de 1e-6 et 55 à moins de 1e-5 (f32, sommation BLAS) ; la comparaison de J1 doit tolérer une permutation entre résultats à scores égaux à 1e-5 près (`tools/README.md`) |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `tools/reference_topk.py` : appliquer la table type → opérateurs de `docs/05-api.md` (aujourd'hui, `nin` sur un entier ou `lt` sur un `keyword` sont acceptés par l'oracle alors que le moteur les refusera) |
-| 2026-10-21 | ECRIRE-LOTS-PYTHON, GENERER-JEU-SYNTHETIQUE | Outillage : les permissions de `@relecteur` refusent `git -C`, `uv run --directory`, toute exécution Python hors `pytest` (`uv run python -c`, scripts temporaires), `nl` et les tubes vers `awk` ; `cd … &&` passe de façon irrégulière (une quinzaine de refus par relecture) ; à harmoniser avec ADR-0026 |
 
 ## Journal
 
@@ -217,3 +215,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE bloquée avant relecture : `@architecte` rend NON-COUVERT sur les nulls dans les filtres et ECART sur `producer.host` ; ADR-0035 et ADR-0036 proposés, décision du propriétaire requise |
 | 2026-10-21 | ADR-0035 (nulls dans les filtres, logique SQL) et ADR-0036 (`producer.host` réglable) acceptés par le propriétaire ; `docs/03`, `docs/05` et `format-lot-v1.md` mis à jour ; reprise de GENERER-JEU-SYNTHETIQUE |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE terminée : générateur `synth-small` reproductible au bit près sur toute machine, référence exacte f32 ; 125 tests `tools` ; revue OK au 3e tour (2e tour relancé une fois après une coupure réseau) |
+| 2026-10-21 | Idées traitées sur décision du propriétaire : aller-retour Python → Rust intégré à la fiche LIRE-LOT-PARQUET, tolérance des quasi-égalités intégrée à la fiche RECHERCHER-DENSE-EXACT ; ADR-0037 (permissions de `@relecteur`) proposé ; écriture atomique du lot et table type → opérateurs lancées en tâche hors plan |

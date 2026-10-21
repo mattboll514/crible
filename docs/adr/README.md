@@ -90,6 +90,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0034](0034-dependance-python-blake3-pour-les-checksums.md) | Dépendance Python `blake3` pour les checksums des lots | Accepté | 2026-10-21 |
 | [ADR-0035](0035-semantique-des-valeurs-nulles-dans-les-filtres.md) | Sémantique des valeurs nulles dans les filtres | Accepté | 2026-10-21 |
 | [ADR-0036](0036-producer-host-reglable-par-le-producteur.md) | `producer.host` réglable par le producteur | Accepté | 2026-10-21 |
+| [ADR-0037](0037-permissions-de-lecture-du-relecteur.md) | Élargir les permissions de `@relecteur` aux utilitaires de vérification et à Python | Proposé | 2026-10-21 |
 
 ## Questions ouvertes
 
