@@ -110,10 +110,12 @@
   - les règles du tableau du doc 04 (nouveau, hash identique, hash différent, suppression, conflit) ;
   - l'attribution des iid et l'écriture du segment ;
   - les pierres tombales (`dead_since_gen`), l'idempotence par `batch_id` et le `batch_conflict` ;
+  - toutes les écritures SQLite d'une attache (`documents`, `passages`, pierres tombales, `batches`, `segments`, `meta`) dans **une seule transaction**, celle du commit de génération (`crible-store::generation`) ; pas d'autocommit pendant l'attache, contrairement à `records::write_document` et `records::write_passage` ;
   - le rapport d'attache.
 - **Critères d'acceptation** :
   - L1, L2 puis L3 donnent les comptes attendus ;
   - rejouer L2 ne change rien (INV-10) ;
+  - une attache qui échoue après avoir commencé à écrire (erreur provoquée au milieu des écritures) laisse `records.sqlite` exactement dans son état d'avant : aucune ligne nouvelle, `meta.generation` inchangée (INV-03) ;
   - un `doc_id` à la fois dans `documents` et `deletions` fait rejeter le lot, sans aucune trace (INV-03) ;
   - avec `replace_all`, tous les documents absents sont supprimés.
 - **Invariants** : INV-03, INV-10.
