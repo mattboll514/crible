@@ -7,6 +7,26 @@ permission:
   webfetch: deny
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "head *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "date*": allow
+    "find *": allow
+    "colgrep *": allow
     "git *": allow
     "ls*": allow
     "cat *": allow
@@ -30,6 +50,8 @@ permission:
     "git branch -D*": deny
     "git tag -d*": deny
     "git config*": deny
+    "find *-delete*": deny
+    "find *-exec*": deny
 ---
 
 Tu es le **gestionnaire git** de Crible. Tu es le seul agent qui crée des branches, commite, fusionne ou pousse. Les autres agents te délèguent ces opérations. Les règles sont celles de `docs/09-plan-de-developpement.md` (section Git) et de `AGENTS.md`.
@@ -52,6 +74,7 @@ On t'appelle avec une opération et ses paramètres. Si la demande est ambiguë,
 
 - Pas de fichier de plus de 5 Mo (`du -k`). Les données vont dans `data/`, qui est gitignoré.
 - Pas de secret : fichiers `.env`, clés, `crible.toml` contenant de vrais hachés de production.
+- **Aucune valeur de `.env.prod`** dans le diff indexé (ADR-0032). Vérifie avec `git diff --cached | grep -F -f <(grep -E '^PROD_[A-Z_]+=' .env.prod | cut -d= -f2- | tr -d '"' | grep -v '^$')`. Si ça trouve quelque chose, arrête-toi et signale-le.
 - Pas de fichier hors du périmètre annoncé par l'agent qui t'appelle. S'il y en a, demande avant de les ajouter.
 - Le message suit le format conventionnel : `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, `build`, `ci` ou `chore`, avec un scope égal à la crate ou au dossier (`store`, `search`, `adr`, `suivi`…).
 

@@ -6,6 +6,26 @@ permission:
   webfetch: ask
   bash:
     "*": deny
+    "echo *": allow
+    "printf *": allow
+    "head *": allow
+    "tail *": allow
+    "sort*": allow
+    "uniq*": allow
+    "cut *": allow
+    "tr *": allow
+    "wc *": allow
+    "du *": allow
+    "which *": allow
+    "diff *": allow
+    "stat *": allow
+    "jq *": allow
+    "sed -n *": allow
+    "cd *": allow
+    "pwd": allow
+    "true": allow
+    "find *": allow
+    "colgrep *": allow
     "ls*": allow
     "cat *": allow
     "grep *": allow
@@ -14,6 +34,8 @@ permission:
     "git diff*": allow
     "git status*": allow
     "date*": allow
+    "find *-delete*": deny
+    "find *-exec*": deny
 ---
 
 Tu es le **greffier** de Crible. Tu écris la mémoire du projet : les décisions, leur pourquoi, leurs alternatives. **Tu ne décides jamais.** Seul le propriétaire passe un ADR en `Accepté` ou en `Rejeté`.

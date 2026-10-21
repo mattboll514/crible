@@ -9,7 +9,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 | Jalon | Phase | Statut | Rapport |
 |---|---|---|---|
-| J0 | P0 — Fondations | EN-ATTENTE | |
+| J0 | P0 — Fondations | VALIDE 2026-10-21 | [J0-rapport.md](jalons/J0-rapport.md) |
 | J1 | P1 — Stockage, lots et recherche exacte | EN-ATTENTE | |
 | J2 | P2 — Encodeur et recette | EN-ATTENTE | |
 | J3 | P3 — Cycle de vie | EN-ATTENTE | |
@@ -22,24 +22,27 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 ## Cibles
 
-À remplir après MES-00 (tâche `MESURER-REFERENCE-PGVECTOR`), puis à faire valider par le propriétaire.
+Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du propriétaire, qui a posé le principe : **le rappel prime, la latence est indicative**, car les mesures de Crible se font sur une machine de développement. La règle de latence de `docs/08` ne vaut que pour une mesure sur le Mac mini en conteneur ; ailleurs, l'écart à pgvector est rapporté, sans bloquer un jalon. Les propositions du §8 du rapport MES-00 sont remplacées par ce tableau.
 
-| Cible | Valeur | Source |
-|---|---|---|
-| Rappel minimal (jeu de référence Legifacile) | _à fixer_ | MES-00 |
-| Latence p95 maximale, recherche à l'échelle de Legifacile | _à fixer_ | MES-00 |
-| Fidélité binaire contre exact (recall@10) | ≥ 0,99 (provisoire) | `08-invariants-et-tests.md` |
+| Cible | Valeur | Nature | Source |
+|---|---|---|---|
+| Rappel global (57 questions étiquetées, `k = 10`, déduplication par document) | rappel@10 moyen ≥ **0,482** sur les 56 questions satisfiables (`Q30` à part) | Contraignante | MES-00 §2 |
+| Rappel par corpus | `juri_texte_integral` ≥ **0,290** (31 questions), `textes_vigueur` ≥ **0,750** (12 questions). Les corpus de 2 à 4 questions ne sont pas contraints un par un : chaque question où Crible perd un attendu trouvé par pgvector est listée et expliquée dans le rapport de comparaison | Contraignante | MES-00 §2 |
+| Latence chaude mono-corpus `k = 10` | p95 ≤ **698 ms** (pgvector : p50 279, p95 698, p99 1 112 ms) | Contraignante seulement sur le Mac mini en conteneur (`docs/08`) ; indicative ailleurs | MES-00 §4.1 |
+| Latence froide | référence pgvector : p95 1 163 ms après 10 min d'inactivité (8 mesures, borne basse du froid réel) | Indicative, pas de cible | MES-00 §4.1 |
+| Latence de fusion | aucune référence valable (fusion du 20 biaisée à la baisse, passe `--perimeter-first` non rejouée) | Pas de cible | MES-00 §4.2 |
+| Fidélité binaire contre exact (recall@10) | ≥ 0,99 (provisoire, à confirmer après MES-01) | Contraignante | `08-invariants-et-tests.md` |
 
 ## Tâches
 
 | Phase | Tâche | Statut | Branche / commit | Notes |
 |---|---|---|---|---|
-| P0 | INITIALISER-WORKSPACE-RUST | A-FAIRE | | |
-| P0 | CONFIGURER-QUALITE-ET-CI | A-FAIRE | | |
-| P0 | DEFINIR-TYPES-DE-BASE | A-FAIRE | | |
-| P0 | DEFINIR-CONFIG-INDEX | A-FAIRE | | |
-| P0 | DEFINIR-FORMAT-LOT | A-FAIRE | | |
-| P0 | MESURER-REFERENCE-PGVECTOR | A-FAIRE | | |
+| P0 | INITIALISER-WORKSPACE-RUST | FAIT | tache/INITIALISER-WORKSPACE-RUST | Workspace resolver 3, édition 2024, toolchain 1.99.1 ; 6 crates ; dépendances `docs/07` épinglées ; `--version` testé ; fmt/clippy/test/build OK, relecture OK |
+| P0 | CONFIGURER-QUALITE-ET-CI | FAIT | tache/CONFIGURER-QUALITE-ET-CI | Workflow CI (fmt/clippy/test + Python conditionnel), `rustfmt.toml`, `clippy.toml`, lints workspace `unwrap_used`/`expect_used`, `Makefile` (`check`/`fmt`/`lint`/`test`) ; `make check` OK ; relecture OK |
+| P0 | DEFINIR-TYPES-DE-BASE | FAIT | tache/DEFINIR-TYPES-DE-BASE | `DocId`, `PassageKey`, `Iid`, `Generation`, `Epoch`, `ErrorCode` (14 codes/statuts), `CribleError` ; INV-01 prouvé par analyse statique ; 32 tests ; relecture OK |
+| P0 | DEFINIR-CONFIG-INDEX | FAIT | tache/DEFINIR-CONFIG-INDEX | `IndexConfig`, `Schema`, `ModelConfig` avec empreinte canonique UTF-8 (ADR-0028), AST `Filter` et validation (ADR-0029/0030/0031), `apply_patch` atomique (INV-16) ; 116 tests, test croisé Python ; relecture OK |
+| P0 | DEFINIR-FORMAT-LOT | FAIT | tache/DEFINIR-FORMAT-LOT | `BatchManifest` + `check_manifest` (format, version, mode, modèle champ par champ, comptes, fichiers) ; `docs/format-lot-v1.md` ; 23 tests, 139 au total ; relecture OK |
+| P0 | MESURER-REFERENCE-PGVECTOR | FAIT | tache/MESURER-REFERENCE-PGVECTOR | MES-00 mesurée en production en lecture seule (campagne du 2026-10-20 : 1 000 requêtes chaudes, 8 froides, fidélité HNSW, contre-mesure, 57 questions) ; harnais `tools/bench/mes00/` (73 tests pytest, job CI `tools`) ; preuve d'absence d'écriture par `find -newermt` ; cibles fixées par délégation du propriétaire ; relecture OK au 7e tour (tours 4 à 7 autorisés par le propriétaire), 2 mineurs notés en idées |
 | P1 | ECRIRE-LOTS-PYTHON | A-FAIRE | | |
 | P1 | GENERER-JEU-SYNTHETIQUE | A-FAIRE | | |
 | P1 | STOCKER-ENREGISTREMENTS-SQLITE | A-FAIRE | | |
@@ -124,6 +127,11 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 
 | Date | Tâche | Écart constaté | ADR proposé | Décision du propriétaire |
 |---|---|---|---|---|
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | `serde_json` est requis pour l'analyse JSON mais absent de `docs/07`, qui ne liste que `serde` et `toml` | ADR-0027 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Forme canonique de l'empreinte du modèle non spécifiée (clés, compacité, champs imbriqués, encodage des hash) | ADR-0028 | Accepté le 2026-10-19, avec UTF-8 sans échappement non ASCII |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comptage de la profondeur et des clauses d'un filtre non défini | ADR-0029 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini quand un nom de champ est déclaré aux deux niveaux du schéma | ADR-0030 | Accepté le 2026-10-19 |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini pour une clé inconnue dans un `PATCH` de configuration | ADR-0031 | Accepté le 2026-10-19 |
 
 ## Décisions en attente
 
@@ -138,6 +146,15 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 
 | Date | Origine (tâche) | Idée |
 |---|---|---|
+| 2026-10-19 | INITIALISER-WORKSPACE-RUST | Revérifier la cohabitation `tower-http =0.7.1` / `axum 0.8` (`^0.6.8`) quand `crible-server` utilisera les deux |
+| 2026-10-19 | CONFIGURER-QUALITE-ET-CI | Ajouter `clippy::panic` aux lints workspace pour couvrir la règle 10 d'`AGENTS.md` |
+| 2026-10-19 | CONFIGURER-QUALITE-ET-CI | CI : ajouter `--locked` aux commandes Cargo, épingler `dtolnay/rust-toolchain`, cache Cargo si la CI ralentit |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE | Consigner dans `docs/02` la règle `PassageKey` (découpage sur le dernier `#`, `DocId` pouvant contenir `#`) |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE | Envisager `trybuild` pour un vrai test de compilation négatif d'INV-01 si cette dépendance entre dans `docs/07` |
+| 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : validation stricte de l'hexadécimal et de la longueur des checksums (contrôle 4) |
+| 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
+| 2026-10-21 | Jalon J0 | CI : passer `actions/checkout` et `astral-sh/setup-uv` à des versions qui tournent sur Node.js 24 (Node.js 20 est déprécié sur les runners GitHub) ; surveiller la migration de `ubuntu-latest` vers Ubuntu 26, commencée le 2026-10-19 |
 
 ## Journal
 
@@ -152,3 +169,34 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-19 | ADR-0023 et ADR-0024 acceptés par le propriétaire |
 | 2026-10-19 | ADR-0025 accepté : opencode v2, configuration conservée au format v1 |
 | 2026-10-19 | Environnement installé et vérifié : opencode 2.0.32 relié à Ollama (DeepSeek V4.1 Flash), plugins caveman et notifier chargés, permissions des agents vérifiées par simulation |
+| 2026-10-19 | Commit initial `4bbfb9d` (conception, ADR, agents, configuration opencode) poussé sur `origin/main` |
+| 2026-10-19 | Début de la tâche INITIALISER-WORKSPACE-RUST sur `tache/INITIALISER-WORKSPACE-RUST` |
+| 2026-10-19 | INITIALISER-WORKSPACE-RUST terminée : workspace Cargo et 6 crates, `--version` testé ; revue OK ; Rust 1.99.1 installé hors dépôt (prérequis) |
+| 2026-10-19 | ADR-0026 accepté (permissions des agents, mode `--auto`) ; configuration commitée sur `phase/P0-fondations` |
+| 2026-10-19 | Début de la tâche CONFIGURER-QUALITE-ET-CI sur `tache/CONFIGURER-QUALITE-ET-CI` |
+| 2026-10-19 | CONFIGURER-QUALITE-ET-CI terminée : CI, lints workspace, `Makefile` ; `make check` OK ; revue OK ; actionlint indisponible en local |
+| 2026-10-19 | Début de la tâche DEFINIR-TYPES-DE-BASE sur `tache/DEFINIR-TYPES-DE-BASE` |
+| 2026-10-19 | DEFINIR-TYPES-DE-BASE terminée : identifiants et erreurs typées, INV-01 couvert, 32 tests ; revue OK |
+| 2026-10-19 | Début de la tâche DEFINIR-CONFIG-INDEX sur `tache/DEFINIR-CONFIG-INDEX` |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX bloquée : l'architecte relève 5 points non couverts ; ADR-0027 à 0031 proposés, en attente de décision |
+| 2026-10-19 | ADR-0027 à 0031 acceptés ; documents mis à jour ; reprise de DEFINIR-CONFIG-INDEX |
+| 2026-10-19 | DEFINIR-CONFIG-INDEX terminée : config, modèle, filtres, patch ; test croisé Rust/Python de l'empreinte ; 116 tests ; revue OK |
+| 2026-10-19 | ADR-0032 accepté (accès production) ; fiche MES-00 réécrite ; contrôle anti-fuite `.env.prod` OK |
+| 2026-10-19 | Début de la tâche DEFINIR-FORMAT-LOT sur `tache/DEFINIR-FORMAT-LOT` |
+| 2026-10-19 | DEFINIR-FORMAT-LOT terminée : manifeste et validation, spécification `format-lot-v1.md` ; 23 tests ; revue OK |
+| 2026-10-19 | ADR-0026 accepté : utilitaires autorisés à tous les agents (fin des rejets silencieux sur les commandes composées), git réservé à `@git` même en `--auto`, interdictions renforcées |
+| 2026-10-19 | ADR-0032 accepté : mesures en production sur le Mac mini, en lecture seule ; accès dans `.env.prod`, non versionné ; fiche MESURER-REFERENCE-PGVECTOR réécrite |
+| 2026-10-19 | Écart de relecture DEFINIR-FORMAT-LOT accepté par le propriétaire : `check_manifest` prend aussi `&ModelConfig` ; fiche, doc 04 et `format-lot-v1.md` alignés |
+| 2026-10-19 | Début de la tâche MESURER-REFERENCE-PGVECTOR sur `tache/MESURER-REFERENCE-PGVECTOR` |
+| 2026-10-20 | MES-00 bloquée après 3 tours de relecture : mesure conforme rejouée le 20 (1 000 chaudes, 8 froides, fidélité, contre-mesure), mais preuves d'inventaire et 8 points de documentation restent à corriger ; décision du propriétaire requise |
+| 2026-10-20 | ADR-0033 appliqué : l'orchestrateur tourne dans Claude Code, outillage commité (`b813ab9`) |
+| 2026-10-20 | MES-00 : 4e et dernier tour autorisé par le propriétaire ; 4e relecture `A-CORRIGER` (3 bloquants, 3 importants, 9 mineurs) ; preuve d'inventaire par fichier datée 08:25 UTC et argv q0018 ef=1000 ajoutés au rapport par `@mesureur`, sans remesure |
+| 2026-10-20 | MES-00 : 12 corrections locales par `@dev` (valeurs `PGOPTIONS` fictives dans les tests, harnais sans 0 ms fabriqué, README et rapport alignés) ; 5e relecture `A-CORRIGER` (1 important, 6 mineurs) ; tâche de nouveau BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | Cibles MES-00 fixées par l'orchestrateur sur délégation du propriétaire : rappel contraignant (≥ 0,482 global, par corpus pour `juri_texte_integral` et `textes_vigueur`), latence indicative hors du Mac mini en conteneur |
+| 2026-10-20 | MES-00 : 5e tour (option A du propriétaire) ; 7 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important, 3 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | MES-00 : 6e micro-tour autorisé par le propriétaire ; 4 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important de libellé du protocole, 2 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
+| 2026-10-20 | MESURER-REFERENCE-PGVECTOR terminée : 7e et dernier tour autorisé par le propriétaire, relecture OK (139 tests Rust, 73 tests Python, anti-fuite 0) ; cibles fixées ; toutes les tâches de P0 sont FAIT |
+| 2026-10-21 | J0 préparé par `@jalon` : 6 tâches FAIT, `make check` vert (139 tests Rust), 73 tests Python, INV-01 (3 tests) et INV-16 (18 tests) verts, MES-00 et cibles présentes, ADR 0026 à 0033 acceptés ; rapport `docs/jalons/J0-rapport.md`, statut PRET-POUR-VALIDATION ; réserve : aucun run CI distant (branche non poussée) |
+| 2026-10-21 | Rapport MES-00 : 2 mineurs de relecture appliqués par `@mesureur` (consigne du `find -newermt` reformulée, inventaire `ls-files` d'avant situé dans le protocole reproductible), sans nouvelle mesure ; idées retirées de la liste. La passe `--perimeter-first` reste en idée, à revoir en P5 |
+| 2026-10-21 | `phase/P0-fondations` poussée avec l'accord du propriétaire ; premier run CI GitHub vert (run 39574670548 : Rust 139 tests, Python, Tools 73 tests), ce qui lève la réserve CI du rapport J0 ; avertissements de dépréciation Node.js 20 notés en idée |
+| 2026-10-21 | J0 validé par le propriétaire ; phase P0 fusionnée dans `main`, tag `jalon-J0` |

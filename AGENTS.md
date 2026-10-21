@@ -1,6 +1,6 @@
 # Crible — règles pour les agents
 
-Crible est un moteur de recherche **dense + BM25** pour données structurées, écrit en **Rust** (serveur) avec des producteurs et un client en **Python**. Une instance par projet, CPU seulement, exact par défaut sur les pools filtrés, débuggable par construction. Le premier projet servi est Legifacile (8,58 M passages). La conception est **terminée** et figée dans `docs/`, et chaque décision est tracée dans un ADR (`docs/adr/`). Le développement suit un plan de 10 phases (P0 → P9) et 83 tâches, piloté par l'agent **orchestrateur** (ADR-0023).
+Crible est un moteur de recherche **dense + BM25** pour données structurées, écrit en **Rust** (serveur) avec des producteurs et un client en **Python**. Une instance par projet, CPU seulement, exact par défaut sur les pools filtrés, débuggable par construction. Le premier projet servi est Legifacile (8,58 M passages). La conception est **terminée** et figée dans `docs/`, et chaque décision est tracée dans un ADR (`docs/adr/`). Le développement suit un plan de 10 phases (P0 → P9) et 83 tâches, piloté par l'**orchestrateur** (ADR-0023), qui tourne dans Claude Code (ADR-0033).
 
 ## Où trouver quoi
 
@@ -46,6 +46,7 @@ Crible est un moteur de recherche **dense + BM25** pour données structurées, �
 11. **Confidentialité.**
     - Un id interne (`Iid`) ne sort jamais du moteur.
     - Les analytics et les logs ne contiennent jamais de texte de requête ni de valeur de filtre.
+    - **Production (ADR-0032)** : les accès sont dans `.env.prod`, **non versionné**. On ne recopie jamais une de ses valeurs (hôte, chemins) dans un fichier versionné, un rapport, un ADR ou un commit : seulement le nom de la variable. En production, tout est en **lecture seule** et aucun service n'est redémarré.
 12. **Simplicité.**
     - Un module = une responsabilité.
     - Pas d'abstraction pour une seule implémentation, pas de configuration pour une valeur fixe.
@@ -87,11 +88,13 @@ cargo build --release                         # obligatoire pour toute mesure
 cd clients/python && uv sync && uv run pytest # Python
 ```
 
-## Agents et commandes opencode
+## Agents et commandes
+
+**L'orchestrateur tourne dans Claude Code, sur Opus (ADR-0033).** Il lance chaque agent avec `.claude/agent.sh`, c'est-à-dire `opencode run`. Conséquence pour les agents : un agent ne voit que la consigne qu'il reçoit, jamais la conversation de l'orchestrateur. L'agent `orchestrateur` d'opencode reste disponible en secours, par exemple quand l'abonnement Claude est épuisé.
 
 | Agent | Rôle |
 |---|---|
-| `orchestrateur` (principal, par défaut) | Discute avec le propriétaire, tient le suivi, fait exécuter le pipeline de chaque tâche. Ne code pas |
+| `orchestrateur` (Claude Code ; en secours, l'agent principal d'opencode) | Discute avec le propriétaire, tient le suivi, fait exécuter le pipeline de chaque tâche. Ne code pas |
 | `@git` | Seul agent qui modifie le dépôt git |
 | `@dev` | Implémente une tâche : tests, code, vérifications. Rend un compte rendu avec un message de commit proposé |
 | `@testeur` | Écrit les tests (les invariants d'abord). Ne touche pas au code de production |

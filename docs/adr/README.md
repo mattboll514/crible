@@ -76,9 +76,17 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0020](0020-texte-bm25-egal-entree-encodeur.md) | Le texte indexé en BM25 est l'entrée encodeur | Accepté | 2026-10-18 |
 | [ADR-0021](0021-tracer-les-decisions-par-des-adr.md) | Tracer les décisions par des ADR | Accepté | 2026-10-19 |
 | [ADR-0022](0022-colgrep-pour-la-recherche-de-code.md) | ColGrep et ColGrep-Agent pour la recherche de code par les agents | Accepté | 2026-10-19 |
-| [ADR-0023](0023-orchestration-des-agents-opencode.md) | Orchestration des agents dans opencode : orchestrateur, pipeline séquentiel, agent git unique | Accepté (point 5 remplacé par ADR-0025) | 2026-10-19 |
+| [ADR-0023](0023-orchestration-des-agents-opencode.md) | Orchestration des agents dans opencode : orchestrateur, pipeline séquentiel, agent git unique | Accepté (point 5 remplacé par ADR-0025 ; points 1 et 7 par ADR-0033) | 2026-10-19 |
 | [ADR-0024](0024-plugins-opencode.md) | Plugins opencode : caveman (avec garde-fous) et notifications | Accepté | 2026-10-19 |
 | [ADR-0025](0025-opencode-v2.md) | Utiliser opencode v2, avec une configuration au format v1 | Accepté | 2026-10-19 |
+| [ADR-0026](0026-permissions-et-mode-auto.md) | Permissions des agents : utilitaires autorisés, interdictions renforcées, mode --auto | Accepté | 2026-10-19 |
+| [ADR-0027](0027-serde-json-comme-dependance.md) | Ajouter `serde_json` comme dépendance | Accepté | 2026-10-19 |
+| [ADR-0028](0028-forme-canonique-de-l-empreinte-du-modele.md) | Forme canonique de l'empreinte du modèle | Accepté | 2026-10-19 |
+| [ADR-0029](0029-limites-de-filtre-profondeur-et-clauses.md) | Limites de filtre : comptage de la profondeur et des clauses | Accepté | 2026-10-19 |
+| [ADR-0030](0030-nom-de-champ-declare-aux-deux-niveaux.md) | Refuser un nom de champ déclaré aux deux niveaux | Accepté | 2026-10-19 |
+| [ADR-0031](0031-cle-inconnue-dans-un-patch-de-configuration.md) | Refuser une clé inconnue dans un `PATCH` de configuration | Accepté | 2026-10-19 |
+| [ADR-0032](0032-acces-a-la-production.md) | Accès des agents à la production Legifacile : SSH, lecture seule, informations hors git | Accepté | 2026-10-19 |
+| [ADR-0033](0033-orchestrateur-dans-claude-code.md) | L'orchestrateur tourne dans Claude Code (Opus), les agents restent dans opencode (DeepSeek via Ollama) | Accepté | 2026-10-20 |
 
 ## Questions ouvertes
 
