@@ -48,7 +48,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P1 | STOCKER-ENREGISTREMENTS-SQLITE | FAIT | tache/STOCKER-ENREGISTREMENTS-SQLITE | `crible-store::records` : schéma des 5 tables et 2 index, WAL réaffirmé à l'ouverture, texte en zstd, champs en JSON canonique (ADR-0019), `format_version` vérifié avant toute modification (INV-15, 5 tests `inv_15_*`), pool borné de connexions en lecture seule (bibliothèque standard) ; 28 tests `crible-store`, 167 Rust ; relecture OK au 2e tour, 2 mineurs notés en idées |
 | P1 | ECRIRE-SEGMENTS-VECTEURS | FAIT | tache/ECRIRE-SEGMENTS-VECTEURS | `crible-store::segment` : `vectors.f16`/`vectors.f32` en little-endian explicite, `segment.json` versionné et canonique (champs de `docs/02` + `format_version`, `precision` et `segment_id` dérivés à l'ouverture sur verdict de `@architecte`), checksums blake3 vérifiés à l'ouverture, écriture atomique `tmp-<id>` → fsync → rename, lecteur mmap (`// SAFETY:` testé) ; erreurs : entrée client → `invalid_request`, état disque ou iid hors plage → `internal` (INV-01) ; 21 tests (8 `inv_15_*`), 189 Rust ; relecture OK au 2e tour |
 | P1 | GERER-GENERATIONS | FAIT | tache/GERER-GENERATIONS | `crible-store::generation` : `GenerationStore` (`CURRENT_EPOCH` décimal, une transaction SQLite comme unique point de commit, ADR-0016, refus des lignes d'une autre génération, manifeste `manifests/<G>.json` dérivé en JSON canonique versionné, `Snapshot` publié par `ArcSwap`), reprise (nettoyage des `tmp-*` et des segments orphelins, réécriture du manifeste manquant), 4 failpoints derrière la feature `failpoints` ; le `Snapshot` ne porte que des métadonnées (politique de `SegmentReader::open` inchangée) ; 12 tests `inv_03_*`/`inv_04_*` ; 203 tests Rust (207 avec `failpoints`) ; relecture OK au 2e tour, 2 mineurs notés en idées |
-| P1 | LIRE-LOT-PARQUET | A-FAIRE | | |
+| P1 | LIRE-LOT-PARQUET | BLOQUE | tache/LIRE-LOT-PARQUET | En attente d'ADR-0039 (ordre des lignes dans un lot v1) : le lecteur exige l'ordre croissant des `ord` par document, plus strict que `format-lot-v1.md`, point bloquant du 2e tour de relecture. Travail complet NON COMMITÉ dans l'arbre de `tache/LIRE-LOT-PARQUET` (`batch_reader`, 20 tests d'intégration, CI qui génère `synth-small`, 227 tests Rust verts). Après la décision : appliquer l'ADR, puis 3e et dernier tour de relecture |
 | P1 | ATTACHER-LOT | A-FAIRE | | |
 | P1 | CONSTRUIRE-BITMAPS | A-FAIRE | | |
 | P1 | EVALUER-FILTRES | A-FAIRE | | |
@@ -136,6 +136,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | Sémantique d'un champ null pour `ne`, `nin`, `exists` et `$not` non définie, alors que la référence numpy (`expected.jsonl`) l'impose à EVALUER-FILTRES et à INV-07 | ADR-0035 | Accepté le 2026-10-21 |
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `producer.host` (« Machine qui a produit le lot ») rend la somme de contrôle versionnée de `synth-small` propre à une machine | ADR-0036 | Accepté le 2026-10-21 |
 | 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | Accepté le 2026-10-21 |
+| 2026-10-21 | LIRE-LOT-PARQUET | Le lecteur en flux exige que les lignes d'un document arrivent dans l'ordre croissant des `ord` (séquence continue d'une partie à l'autre, parties par suffixe croissant) pour garder une mémoire bornée ; `format-lot-v1.md` et `docs/04` n'imposent que des `ord` contigus. Verdict de `@architecte` : NON-COUVERT, option A recommandée (figer l'ordre dans le format v1, `format_version` inchangée) | ADR-0039 | En attente |
 
 ## Décisions en attente
 
@@ -143,6 +144,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| ADR-0039 | Ordre des lignes dans un lot v1 (option A recommandée : ordre croissant des `ord` par document, parties par suffixe croissant, `format_version` inchangée) | Reprise de LIRE-LOT-PARQUET |
 
 ## Idées hors périmètre
 
@@ -170,6 +172,8 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-21 | REGLER-BUSY-TIMEOUT (`@dev`) | `SQLITE_BUSY` à l'ouverture d'une connexion (récupération du WAL, `-shm`) couvert par `database_error` mais pas testé en intégration, faute de scénario déterministe ; `docs/02` (« Concurrence ») ne cite pas ADR-0038, que seul `docs/05` reprend |
 | 2026-10-21 | GERER-GENERATIONS, mesuré par MES-15 | Commit en O(passages vivants) : à 8,58 M passages, p50 598 ms (S = 10) à 641 ms (S = 1 000), dont 86,5 % pour matérialiser les iid vivants ; transaction SQLite constante (78-100 ms), dominée par `zstd::encode_all` par ligne (≈ 6 ms avec un compresseur réutilisé) ; ≈ 13-15 µs par `segment.json` relu. Propositions de `@mesureur`, à valider par le propriétaire : dérivation incrémentale de la bitmap des vivants comme critère de CONSTRUIRE-BITMAPS ; cache des `SegmentMeta` seulement si S dépasse quelques centaines ; compresseur zstd réutilisé, à évaluer avec MES-08 |
 | 2026-10-21 | GERER-GENERATIONS (`@dev`) | Pour CLI-PREMIERES-COMMANDES : `GenerationStore::create` sur un index existant réécrit `CURRENT_EPOCH` et `meta.epoch`, à refuser. Pour ATTACHER-LOT : la table `batches` n'est pas couverte par `GenerationChange` |
+| 2026-10-21 | LIRE-LOT-PARQUET (relecture) | Un `doc_id` dupliqué dans `documents` est fusionné en silence par le lecteur (deux `doc_hash` possibles) : décider s'il est refusé par le lecteur ou par ATTACHER-LOT (ligne à ajouter à sa fiche) |
+| 2026-10-21 | LIRE-LOT-PARQUET (relecture) | arrow-rs aplatit une erreur Parquet en `ArrowError::ParquetError(String)` et perd la cause : une vraie E/S pendant le décodage d'un groupe de lignes ressort en `invalid_request` au lieu de `internal` (documenté dans `arrow_failure`) |
 
 ## Journal
 
@@ -242,3 +246,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | Tâche hors plan COMPLETER-GENERATIONS terminée : garde de génération étendu aux documents, branches « passage » et « document » testées, `SerialGuard` sur tous les tests `inv_03` ; formats de `CURRENT_EPOCH` et de `manifests/<G>.json` décrits dans `docs/02` ; MES-15 (coût d'un commit) ajoutée à `docs/08` ; 205 tests Rust (70 `crible-store` avec `failpoints`) ; revue OK, puis 6 mineurs de précision corrigés et revue OK sans point ; 2 idées retirées de la liste |
 | 2026-10-21 | Début de la tâche hors plan MESURER-COUT-COMMIT sur `tache/MESURER-COUT-COMMIT` (MES-15, coût d'un commit de génération, à la demande du propriétaire) |
 | 2026-10-21 | Tâche hors plan MESURER-COUT-COMMIT terminée : MES-15 mesurée (banc `crible-store/benches/commit_cost.rs`, pilote `tools/bench/mes15/`), commit de 2 000 passages en O(N), p50 598 ms à 8,58 M passages ; campagne sur machine chargée (Ollama actif), chiffres plutôt pessimistes ; jeux dans `data/mes15/` (6,3 Go, gitignoré) ; revue OK au 2e tour (scripts en anglais, garde `--overwrite`, attribution de la charge, commandes exactes), 3 mineurs corrigés ensuite |
+| 2026-10-21 | Début de la tâche LIRE-LOT-PARQUET sur `tache/LIRE-LOT-PARQUET` |
+| 2026-10-21 | LIRE-LOT-PARQUET bloquée au 2e tour de relecture : le lecteur impose l'ordre des lignes d'un lot, ce que le format public ne dit pas ; `@architecte` rend NON-COUVERT ; ADR-0039 proposé, décision du propriétaire requise. 1er tour OK avec 8 mineurs (6 corrigés : erreurs d'E/S en `internal`, taille de lecture fixe, tests `normalize: false`, borne de norme, lot en deux parties) ; 2e tour : 3 mineurs corrigés ; travail non commité dans l'arbre |
