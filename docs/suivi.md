@@ -9,7 +9,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 
 | Jalon | Phase | Statut | Rapport |
 |---|---|---|---|
-| J0 | P0 — Fondations | EN-ATTENTE | |
+| J0 | P0 — Fondations | PRET-POUR-VALIDATION | [J0-rapport.md](jalons/J0-rapport.md) |
 | J1 | P1 — Stockage, lots et recherche exacte | EN-ATTENTE | |
 | J2 | P2 — Encodeur et recette | EN-ATTENTE | |
 | J3 | P3 — Cycle de vie | EN-ATTENTE | |
@@ -197,3 +197,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-20 | MES-00 : 5e tour (option A du propriétaire) ; 7 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important, 3 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
 | 2026-10-20 | MES-00 : 6e micro-tour autorisé par le propriétaire ; 4 points corrigés par `@dev` ; relecture `A-CORRIGER` (1 important de libellé du protocole, 2 mineurs) ; tâche BLOQUE, décision du propriétaire requise |
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR terminée : 7e et dernier tour autorisé par le propriétaire, relecture OK (139 tests Rust, 73 tests Python, anti-fuite 0) ; cibles fixées ; toutes les tâches de P0 sont FAIT |
+| 2026-10-21 | J0 préparé par `@jalon` : 6 tâches FAIT, `make check` vert (139 tests Rust), 73 tests Python, INV-01 (3 tests) et INV-16 (18 tests) verts, MES-00 et cibles présentes, ADR 0026 à 0033 acceptés ; rapport `docs/jalons/J0-rapport.md`, statut PRET-POUR-VALIDATION ; réserve : aucun run CI distant (branche non poussée) |
