@@ -43,7 +43,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P0 | DEFINIR-CONFIG-INDEX | FAIT | tache/DEFINIR-CONFIG-INDEX | `IndexConfig`, `Schema`, `ModelConfig` avec empreinte canonique UTF-8 (ADR-0028), AST `Filter` et validation (ADR-0029/0030/0031), `apply_patch` atomique (INV-16) ; 116 tests, test croisé Python ; relecture OK |
 | P0 | DEFINIR-FORMAT-LOT | FAIT | tache/DEFINIR-FORMAT-LOT | `BatchManifest` + `check_manifest` (format, version, mode, modèle champ par champ, comptes, fichiers) ; `docs/format-lot-v1.md` ; 23 tests, 139 au total ; relecture OK |
 | P0 | MESURER-REFERENCE-PGVECTOR | FAIT | tache/MESURER-REFERENCE-PGVECTOR | MES-00 mesurée en production en lecture seule (campagne du 2026-10-20 : 1 000 requêtes chaudes, 8 froides, fidélité HNSW, contre-mesure, 57 questions) ; harnais `tools/bench/mes00/` (73 tests pytest, job CI `tools`) ; preuve d'absence d'écriture par `find -newermt` ; cibles fixées par délégation du propriétaire ; relecture OK au 7e tour (tours 4 à 7 autorisés par le propriétaire), 2 mineurs notés en idées |
-| P1 | ECRIRE-LOTS-PYTHON | A-FAIRE | | |
+| P1 | ECRIRE-LOTS-PYTHON | BLOQUE | tache/ECRIRE-LOTS-PYTHON | Bloquée par ADR-0034 (`Proposé`) : le producteur doit calculer des digests blake3, et aucune dépendance Python autorisée par `docs/07` ne le permet. Aucun code écrit |
 | P1 | GENERER-JEU-SYNTHETIQUE | A-FAIRE | | |
 | P1 | STOCKER-ENREGISTREMENTS-SQLITE | A-FAIRE | | |
 | P1 | ECRIRE-SEGMENTS-VECTEURS | A-FAIRE | | |
@@ -132,6 +132,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-19 | DEFINIR-CONFIG-INDEX | Comptage de la profondeur et des clauses d'un filtre non défini | ADR-0029 | Accepté le 2026-10-19 |
 | 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini quand un nom de champ est déclaré aux deux niveaux du schéma | ADR-0030 | Accepté le 2026-10-19 |
 | 2026-10-19 | DEFINIR-CONFIG-INDEX | Comportement non défini pour une clé inconnue dans un `PATCH` de configuration | ADR-0031 | Accepté le 2026-10-19 |
+| 2026-10-21 | ECRIRE-LOTS-PYTHON | Le producteur Python doit calculer un digest blake3, absent de `docs/07` (seule la crate Rust y figure) et de `hashlib` | ADR-0034 | En attente |
 
 ## Décisions en attente
 
@@ -139,6 +140,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| [ADR-0034](adr/0034-dependance-python-blake3-pour-les-checksums.md) | Dépendance Python `blake3` (paquet PyPI) pour les checksums des lots | Reprise de ECRIRE-LOTS-PYTHON |
 
 ## Idées hors périmètre
 
@@ -155,6 +157,7 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-19 | DEFINIR-FORMAT-LOT | P1 : décider si le mélange `documents.parquet` / `documents-0001.parquet` doit être refusé (non refusé en P0, documenté) |
 | 2026-10-20 | MESURER-REFERENCE-PGVECTOR | Rejouer la passe `--perimeter-first` hors des heures d'usage pour obtenir une référence de latence de fusion non biaisée, si une cible de fusion devient utile |
 | 2026-10-21 | Jalon J0 | CI : passer `actions/checkout` et `astral-sh/setup-uv` à des versions qui tournent sur Node.js 24 (Node.js 20 est déprécié sur les runners GitHub) ; surveiller la migration de `ubuntu-latest` vers Ubuntu 26, commencée le 2026-10-19 |
+| 2026-10-21 | ECRIRE-LOTS-PYTHON (verdict de `@architecte`) | Pour GENERER-JEU-SYNTHETIQUE : une modification de métadonnées seules renvoie le document avec le même `doc_hash` **et tous ses passages** (`docs/04`, Règles), donc le lot `L3` inclut les passages de ses 50 documents ; un lot de suppressions seules garde des fichiers `documents…` et `passages…`, vides si besoin (`format-lot-v1.md`) |
 
 ## Journal
 
@@ -200,3 +203,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | Rapport MES-00 : 2 mineurs de relecture appliqués par `@mesureur` (consigne du `find -newermt` reformulée, inventaire `ls-files` d'avant situé dans le protocole reproductible), sans nouvelle mesure ; idées retirées de la liste. La passe `--perimeter-first` reste en idée, à revoir en P5 |
 | 2026-10-21 | `phase/P0-fondations` poussée avec l'accord du propriétaire ; premier run CI GitHub vert (run 39574670548 : Rust 139 tests, Python, Tools 73 tests), ce qui lève la réserve CI du rapport J0 ; avertissements de dépréciation Node.js 20 notés en idée |
 | 2026-10-21 | J0 validé par le propriétaire ; phase P0 fusionnée dans `main`, tag `jalon-J0` |
+| 2026-10-21 | Phase P1 ouverte (`phase/P1-stockage-et-recherche-exacte`) ; début de la tâche ECRIRE-LOTS-PYTHON sur `tache/ECRIRE-LOTS-PYTHON` |
+| 2026-10-21 | ECRIRE-LOTS-PYTHON bloquée : `@dev` remonte l'absence de blake3 côté Python ; `@architecte` rend NON-COUVERT (et CONFORME sur les métadonnées seules et sur le paramètre `model`) ; ADR-0034 proposé, décision du propriétaire requise |
