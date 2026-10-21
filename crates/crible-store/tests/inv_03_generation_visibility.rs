@@ -130,6 +130,7 @@ fn commit_second_generation(
 /// full, after the commit published the next one.
 #[test]
 fn inv_03_held_snapshot_keeps_previous_generation_after_commit() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = common::temp_index();
     let mut store = common::create_store(&index);
     assert_eq!(store.epoch().get(), common::EPOCH);
@@ -161,6 +162,7 @@ fn inv_03_held_snapshot_keeps_previous_generation_after_commit() {
 fn inv_03_reader_holding_snapshot_does_not_see_concurrent_commit() {
     use std::sync::mpsc;
 
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = common::temp_index();
     let mut store = common::create_store(&index);
     commit_first_generation(&mut store, &index);
@@ -198,6 +200,7 @@ fn inv_03_reader_holding_snapshot_does_not_see_concurrent_commit() {
 /// and leaves no trace after a restart.
 #[test]
 fn inv_03_failed_commit_leaves_generation_and_snapshot_unchanged() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = common::temp_index();
     let mut store = common::create_store(&index);
     commit_first_generation(&mut store, &index);
@@ -235,6 +238,7 @@ fn inv_03_failed_commit_leaves_generation_and_snapshot_unchanged() {
 /// segments of one generation come from the same committed state.
 #[test]
 fn inv_03_snapshot_matches_committed_rows() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = common::temp_index();
     let mut store = common::create_store(&index);
     commit_first_generation(&mut store, &index);
@@ -295,6 +299,7 @@ fn inv_03_snapshot_matches_committed_rows() {
 /// that no commit produced.
 #[test]
 fn inv_03_commit_refuses_rows_of_another_generation() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = common::temp_index();
     let mut store = common::create_store(&index);
     commit_first_generation(&mut store, &index);
@@ -326,4 +331,108 @@ fn inv_03_commit_refuses_rows_of_another_generation() {
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
     common::assert_segment_directories(&index, &["seg-a"]);
+}
+
+/// The passage branch of the guard: the segment declares the right generation,
+/// so the commit reaches the passages and refuses the one created at another
+/// generation, publishing nothing.
+#[test]
+fn inv_03_commit_refuses_a_passage_of_another_generation() {
+    let _serial = common::SerialGuard::acquire();
+    let (_temp, index) = common::temp_index();
+    let mut store = common::create_store(&index);
+    commit_first_generation(&mut store, &index);
+    let before = store.snapshot();
+
+    // The segment is written at the generation the store is about to publish,
+    // so only the passage can reveal the inconsistency.
+    let segment = common::write_segment(&index, "seg-late", 2, 2, &[&[0.0, 0.0, 1.0, 0.0]]);
+    let outcome = store.commit(common::change(
+        vec![segment],
+        vec![common::document("doc-c", 2)],
+        vec![common::passage(2, "doc-c", 0, "seg-late", 7)],
+        Vec::new(),
+    ));
+    let error = outcome.expect_err("a passage of another generation must be refused");
+    assert_eq!(
+        error.code(),
+        ErrorCode::Internal,
+        "a passage of another generation is an internal inconsistency: {}",
+        error.message()
+    );
+    assert!(
+        Arc::ptr_eq(&before, &store.snapshot()),
+        "a refused commit must not publish a new snapshot"
+    );
+    assert_eq!(
+        store.generation().get(),
+        1,
+        "a refused commit must leave the generation unchanged"
+    );
+    common::assert_view(&store.snapshot(), 1, &["seg-a"], &[0, 1]);
+
+    drop(store);
+    let reopened = common::open_store(&index);
+    common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
+    common::assert_segment_directories(&index, &["seg-a"]);
+}
+
+/// The document branch of the guard: a `DocumentRecord` that names another
+/// generation as the one that last wrote it would silently store a generation
+/// number no commit produced, so it is refused like the other rows.
+#[test]
+fn inv_03_commit_refuses_a_document_of_another_generation() {
+    let _serial = common::SerialGuard::acquire();
+    let (_temp, index) = common::temp_index();
+    let mut store = common::create_store(&index);
+    commit_first_generation(&mut store, &index);
+    let before = store.snapshot();
+
+    // Segment and passage are consistent, only the document is stale.
+    let segment = common::write_segment(&index, "seg-late", 2, 2, &[&[0.0, 0.0, 1.0, 0.0]]);
+    let outcome = store.commit(common::change(
+        vec![segment],
+        vec![common::document("doc-c", 7)],
+        vec![common::passage(2, "doc-c", 0, "seg-late", 2)],
+        Vec::new(),
+    ));
+    let error = outcome.expect_err("a document of another generation must be refused");
+    assert_eq!(
+        error.code(),
+        ErrorCode::Internal,
+        "a document of another generation is an internal inconsistency: {}",
+        error.message()
+    );
+    assert!(
+        Arc::ptr_eq(&before, &store.snapshot()),
+        "a refused commit must not publish a new snapshot"
+    );
+    assert_eq!(
+        store.generation().get(),
+        1,
+        "a refused commit must leave the generation unchanged"
+    );
+    common::assert_view(&store.snapshot(), 1, &["seg-a"], &[0, 1]);
+
+    drop(store);
+    let reopened = common::open_store(&index);
+    common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
+    common::assert_segment_directories(&index, &["seg-a"]);
+
+    // The row was rolled back: the document is not committed either.
+    let connection =
+        rusqlite::Connection::open(common::records_path(&index)).unwrap_or_else(|error| {
+            panic!("the reference database of the epoch must be readable: {error}")
+        });
+    let count: u32 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM documents WHERE doc_id = ?1",
+            ["doc-c"],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|error| panic!("the documents must be queryable: {error}"));
+    assert_eq!(
+        count, 0,
+        "a refused commit must not write the document it refused"
+    );
 }

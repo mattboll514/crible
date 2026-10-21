@@ -77,6 +77,11 @@ exchange/                               # dossier monté : inbox/ (lots), outbox
 
 Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`.
 
+Deux fichiers méritent une description de format propre :
+
+- **`CURRENT_EPOCH`** : un nombre décimal ASCII suivi d'un saut de ligne, sans version propre. La version des formats est portée par `meta.format_version` de `records.sqlite` et par les `format_version` des fichiers de l'époque. Le fichier est écrit dans `tmp-CURRENT_EPOCH`, puis fsync, renommage et fsync du dossier de l'index ; `meta.epoch` en garde une copie, vérifiée à l'ouverture : un désaccord est une erreur interne. `create` fsynce les dossiers de l'époque de bas en haut (`segments/`, puis le dossier de l'époque, puis `epochs/`) avant d'écrire `CURRENT_EPOCH`.
+- **`manifests/<generation>.json`** : un JSON canonique — clés triées, compact (ADR-0027) ; versionné (INV-15) — dérivé de SQLite, jamais source de vérité (ADR-0016). Il porte `epoch`, `format_version` (1), `generation` et `segments`, la liste des segments de la génération, triée par `iid_start` puis par `segment_id`. Chaque segment y reprend les champs de son `segment.json` (`iid_start`, `count`, `dims`, `format_version`, `generation`, `batch_id`, `checksums`) et son `segment_id`, tiré du nom du dossier. Il est écrit de façon atomique — fichier `tmp-`, fsync, renommage, fsync du dossier — et la reprise le reconstruit depuis SQLite et les `segment.json` s'il manque.
+
 ## Tables SQLite (`records.sqlite`, une base par époque)
 
 | Table | Colonnes principales |
@@ -110,6 +115,7 @@ Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3,
 
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
+- Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`.
 - Comparer la charge utile du dernier commit tantivy (Gt) à G :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.

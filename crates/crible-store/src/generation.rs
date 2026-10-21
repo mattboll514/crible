@@ -308,6 +308,7 @@ impl GenerationStore {
     /// publication, in that order.
     ///
     /// Every segment of the change must declare the new generation G+1, and
+    /// every document must name G+1 as the generation that last wrote it, and
     /// every passage must have been created at G+1: rows that name another
     /// generation are refused with [`ErrorCode::Internal`], because they would
     /// write a visible state no commit produced (INV-03).
@@ -349,6 +350,12 @@ impl GenerationStore {
             records::insert_segment(&transaction, segment)?;
         }
         for document in &documents {
+            check_generation_matches(
+                "document",
+                &document.doc_id,
+                document.updated_generation,
+                generation,
+            )?;
             records::insert_document(&transaction, document)?;
         }
         for passage in &passages {
@@ -571,12 +578,13 @@ fn remove_entry(path: &Path) -> Result<(), CribleError> {
 
 /// Rejects a row whose generation contradicts the one being committed.
 ///
-/// A segment becomes visible with the generation it declares, and a passage is
-/// created by the generation it declares: both must be the generation this
-/// commit publishes (G+1), otherwise the visible state would hold a generation
-/// number that no commit ever produced, and a snapshot would mix two of them
-/// (INV-03). A caller that prepares a change for another generation is out of
-/// step with the store, which is an internal error, not a bad request.
+/// A segment becomes visible with the generation it declares, a document names
+/// the generation that last wrote it, and a passage is created by the
+/// generation it declares: all three must be the generation this commit
+/// publishes (G+1), otherwise the visible state would hold a generation number
+/// that no commit ever produced, and a snapshot would mix two of them (INV-03).
+/// A caller that prepares a change for another generation is out of step with
+/// the store, which is an internal error, not a bad request.
 fn check_generation_matches(
     kind: &str,
     identifier: &str,
