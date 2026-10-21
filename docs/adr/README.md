@@ -88,6 +88,8 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0032](0032-acces-a-la-production.md) | Accès des agents à la production Legifacile : SSH, lecture seule, informations hors git | Accepté | 2026-10-19 |
 | [ADR-0033](0033-orchestrateur-dans-claude-code.md) | L'orchestrateur tourne dans Claude Code (Opus), les agents restent dans opencode (DeepSeek via Ollama) | Accepté | 2026-10-20 |
 | [ADR-0034](0034-dependance-python-blake3-pour-les-checksums.md) | Dépendance Python `blake3` pour les checksums des lots | Accepté | 2026-10-21 |
+| [ADR-0035](0035-semantique-des-valeurs-nulles-dans-les-filtres.md) | Sémantique des valeurs nulles dans les filtres | Proposé | 2026-10-21 |
+| [ADR-0036](0036-producer-host-reglable-par-le-producteur.md) | `producer.host` réglable par le producteur | Proposé | 2026-10-21 |
 
 ## Questions ouvertes
 
