@@ -87,6 +87,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0031](0031-cle-inconnue-dans-un-patch-de-configuration.md) | Refuser une clé inconnue dans un `PATCH` de configuration | Accepté | 2026-10-19 |
 | [ADR-0032](0032-acces-a-la-production.md) | Accès des agents à la production Legifacile : SSH, lecture seule, informations hors git | Accepté | 2026-10-19 |
 | [ADR-0033](0033-orchestrateur-dans-claude-code.md) | L'orchestrateur tourne dans Claude Code (Opus), les agents restent dans opencode (DeepSeek via Ollama) | Accepté | 2026-10-20 |
+| [ADR-0034](0034-dependance-python-blake3-pour-les-checksums.md) | Dépendance Python `blake3` pour les checksums des lots | Accepté | 2026-10-21 |
 
 ## Questions ouvertes
 
