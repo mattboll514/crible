@@ -1,8 +1,9 @@
 # ADR-0039 — Ordre des lignes dans un lot v1
 
-- **Statut** : Proposé
-- **Date** : 2026-10-21
+- **Statut** : Accepté
+- **Date** : 2026-10-21 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-21 par le propriétaire, option A comprise ; le point `format_version` est tranché : elle reste à 1.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite de la tâche LIRE-LOT-PARQUET (phase P1), après un point bloquant du relecteur et un verdict NON-COUVERT de l'architecte
 - **Remplace** : —
 
@@ -29,7 +30,7 @@ Dans un lot v1, **les lignes des passages d'un même document apparaissent dans 
 
 Cette règle complète la contiguïté des valeurs par l'ordre des lignes. Elle ne dit rien du placement des documents entre eux : l'ordre relatif de deux documents distincts reste libre.
 
-**`format_version` reste à 1.** La règle est une **restriction** de ce qu'un lot peut contenir, pas un changement de forme : le schéma, les colonnes, les types et le manifeste sont inchangés, et tout lot déjà accepté reste lisible. Aucun producteur conforme au `BatchWriter` actuel ne change. Le propriétaire tranche explicitement ce point en acceptant cet ADR : si la restriction était jugée incompatible, elle prendrait le numéro de version suivant.
+**`format_version` reste à 1.** La règle est une **restriction** de ce qu'un lot peut contenir, pas un changement de forme : le schéma, les colonnes, les types et le manifeste sont inchangés, et tout lot déjà accepté reste lisible. Aucun producteur conforme au `BatchWriter` actuel ne change. Le propriétaire tranche explicitement ce point en acceptant cet ADR : si la restriction était jugée incompatible, elle prendrait le numéro de version suivant. Point tranché à l'acceptation du 2026-10-21 : `format_version` reste à 1 (option A).
 
 Sont hors du périmètre de cet ADR :
 

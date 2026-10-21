@@ -93,7 +93,7 @@ Fichier `models/<name>/model.json` :
 - **`passage_hash`** : blake3 de `text`, calculé par Crible. Il sert à `dedup: content`.
 - **Règles** :
   - un document présent dans un lot arrive avec **tous** ses passages ;
-  - les `ord` sont contigus et commencent à 0 ;
+  - les `ord` sont contigus et commencent à 0 ; les lignes d'un même document arrivent dans l'ordre croissant des `ord`, et cet ordre se poursuit d'une partie à l'autre (ADR-0039) ;
   - un document a au moins un passage ; pour le retirer, on passe par `deletions`.
 
 ## Format de lot v1
@@ -168,7 +168,7 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 3. Le modèle du lot est compatible avec celui de l'index : chaque champ (`hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompt_document`) est comparé à la configuration résolue du modèle (`ModelConfig`). Sinon : `422 incompatible_model`.
 4. Les checksums des fichiers correspondent au manifeste.
 5. Le schéma Parquet est conforme à celui de l'index : colonnes présentes et types corrects.
-6. Les comptes correspondent au manifeste ; les `ord` sont contigus ; chaque document a au moins un passage.
+6. Les comptes correspondent au manifeste ; les `ord` sont contigus ; les lignes d'un même document arrivent dans l'ordre croissant des `ord`, d'une partie à l'autre comprise (ADR-0039) ; chaque document a au moins un passage.
 7. Les vecteurs sont finis, et leur norme est proche de 1 (|‖v‖ − 1| ≤ 1e-2) si `normalize` est vrai.
 8. **Longueur** : le nombre de tokens, prompt compris, ne dépasse pas `max_tokens`. Sinon, le lot est rejeté (**INV-11**, aucune troncature silencieuse).
 9. **Recette** :
