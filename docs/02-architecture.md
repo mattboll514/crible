@@ -134,7 +134,7 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 - **Chaque requête prend un `Arc<Snapshot>` au départ.** L'instantané contient les segments (fp16 en mmap, codes en RAM), les bitmaps, les colonnes de valeurs, le `Searcher` tantivy et la génération.
 - **Libération.** Un instantané est libéré quand son dernier lecteur se termine. Les fichiers d'une époque supprimée ne sont effacés qu'après.
 - **Payloads.** Les textes et champs des résultats viennent d'un pool de connexions SQLite en lecture (WAL).
-  - Limite connue : les champs d'un document peuvent refléter une génération plus récente que celle utilisée pour filtrer. Seule une modification de métadonnées peut produire cet écart, ce qui est accepté.
+  - Limite connue : les champs d'un document peuvent refléter une génération plus récente que celle utilisée pour filtrer. Deux causes produisent cet écart, toutes deux acceptées : une modification de métadonnées, et la suppression du document, dont la ligne `documents` a alors disparu (ADR-0041). Dans ce second cas, le résultat est rendu avec son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043).
   - Textes et vecteurs sont immuables pour un iid donné.
 - **Calcul.** Les scans tournent sur un pool rayon dédié, jamais sur les threads tokio.
 

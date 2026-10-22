@@ -11,7 +11,7 @@
 | 5 | Branche lexicale | BM25 tantivy limité au pool, en parallèle de l'étape 4 | `lexical` |
 | 6 | Fusion | RRF ou `relative_score` (mode `hybrid`) | `fusion` |
 | 7 | Regroupement | `group_by` et `dedup` | `group` |
-| 8 | Payload | Lit les champs et le texte des k résultats dans SQLite | `fetch` |
+| 8 | Payload | Lit les champs et le texte des k résultats dans SQLite ; si la ligne `documents` est absente (document supprimé depuis le snapshot), rend le texte et les champs de passage seuls, sans erreur (ADR-0043) | `fetch` |
 | — | Total | — | `total` |
 
 Les étapes ne s'exécutent que si le mode les demande : `dense`, `lexical` ou `hybrid`. Le cache d'encodage reste en RAM et n'est jamais persisté.

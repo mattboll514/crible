@@ -1,8 +1,9 @@
 # ADR-0043 — Payload d'un résultat dont le document a été supprimé après la génération du snapshot
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-22 par le propriétaire : option A du point 1, **sans marqueur** dans la réponse. Les cinq autres points sont tranchés en conséquence, dans la section « Décision ».
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, au 2e tour de relecture de la tâche RECHERCHER-DENSE-EXACT (phase P1), point 1 de `@relecteur`, après le verdict **ECART + NON-COUVERT** de `@architecte`
 - **Remplace** : —
 
@@ -28,9 +29,28 @@ Le volume n'est pas négligeable : environ **220 suppressions par nuit** pour Le
 - « Une pierre tombale fixe `dead_since_gen`. Le passage sort de la bitmap des vivants, donc du pool : **aucun résultat ne manque** à cause d'une suppression » (`docs/02-architecture.md:151`). Un résultat retenu sur G reste donc légitime même si son document a été retiré depuis.
 - INV-03 dit qu'« une génération est visible entièrement ou pas du tout » (`docs/08-invariants-et-tests.md:11`). Il ne dit pas si la réponse entière, payloads compris, doit être cohérente avec la génération annoncée.
 
-## Décision proposée
+## Décision
 
-Cet ADR porte **six points à trancher**, dont le premier commande les autres. Chaque option est décrite à parité ; la recommandation de `@architecte` est indiquée, le propriétaire tranche.
+**Option A du point 1, sans marqueur.** Quand la ligne `documents` d'un passage retenu est absente de l'état SQLite courant, l'étape payload rend le résultat avec son texte (immuable) et ses seuls champs de niveau passage. Les champs de document sont simplement absents du résultat : aucun champ de remplacement, aucun marqueur, aucune erreur. `internal` reste réservé aux vraies incohérences.
+
+Les six points sont tranchés ainsi :
+
+| Point | Décision retenue |
+|---|---|
+| 1. Comportement de l'étape payload | **Option A, sans marqueur.** Champs de document absents, texte et champs de passage rendus, aucune erreur. Les options B, C et D sont écartées (voir « Alternatives écartées »). |
+| 2. Périmètre d'INV-03 | **Statu quo.** INV-03 porte sur le pool, les scores et le classement, **pas sur les payloads**. `docs/08-invariants-et-tests.md` le dit désormais explicitement. |
+| 3. Reproductibilité à génération fixée | **Partielle, et documentée comme telle.** À génération fixée, les scores, le classement et le texte sont stables ; les champs de document ne le sont pas garantis : ils peuvent manquer (suppression) ou refléter une génération plus récente (métadonnées). |
+| 4. Contraintes de rétention en P3 | **Les deux règles sont retenues** : une époque n'est jamais supprimée tant qu'un instantané la tient, et l'étape payload lit toujours le `records.sqlite` de l'époque du snapshot, jamais un chemin relu à chaque requête. La fiche de P3 les cite. |
+| 5. Forme de la réponse | **Inchangée : aucun champ ajouté.** Le sous-choix « marqueur explicite par résultat » est écarté. `docs/05-api.md` précise seulement que `return.fields: "all"` vaut « tous les champs disponibles pour ce résultat ». |
+| 6. Application | Les documents listés au point 6 sont mis à jour dans le commit d'application, qui cite `ADR-0043`. |
+
+Précisions :
+
+- l'absence des champs de document est un état normal, pas une anomalie : elle ne change ni le statut de la réponse (succès), ni les analytics (statut `ok`), ni le journal de debug ;
+- `internal` reste levé pour un segment absent, un JSON de champs qui n'est pas un objet, ou une ligne `passages` absente ;
+- un client qui exige tous les champs de document doit traiter un champ absent comme une valeur absente, pas comme une erreur. Un tel client, ou un besoin de distinguer explicitement le cas dans la réponse, rouvrirait le point 5 par un nouvel ADR.
+
+Les six points, dont le premier commande les autres, sont décrits ci-dessous avec leurs options à parité, telles qu'elles ont été soumises au propriétaire ; la recommandation de `@architecte` est indiquée. La décision retenue est celle du tableau ci-dessus.
 
 ### Point 1 — comportement de l'étape payload quand la ligne `documents` manque
 
@@ -78,14 +98,15 @@ Si le sous-choix « marqueur explicite » du point 1 est retenu, `docs/05-api.md
 Après acceptation seulement, et dans un commit qui cite `ADR-0043` :
 
 - `docs/02-architecture.md:137` : deux causes d'écart, la modification de métadonnées et la suppression du document, avec le comportement retenu au point 1 ;
-- `docs/05-api.md` : selon le point 5, marqueur ou définition de `fields: "all"` ; `:44` reste inchangé (`internal` = erreur inattendue) ;
+- `docs/05-api.md` : définition de `fields: "all"` au sens du point 5 (sans marqueur) ; `:44` reste inchangé (`internal` = erreur inattendue) ;
 - `docs/08-invariants-et-tests.md:11` : périmètre d'INV-03 selon le point 2 ;
 - `docs/03-recherche.md:14` (étape 8) : une phrase sur le cas « ligne `documents` absente » ;
 - `docs/phases/P1-stockage-et-recherche-exacte.md` (tâche RECHERCHER-DENSE-EXACT) : le critère d'acceptation du cas, et un test nommé qui le couvre ;
+- `docs/phases/P3-cycle-de-vie.md` (tâche COMPACTER-INDEX) : la rétention de l'époque tenue par une recherche, selon le point 4 ;
 - `docs/suivi.md`, section « Écarts à la conception » : ligne citant `ADR-0043`, à ajouter par l'orchestrateur ;
 - code, dans la tâche : remplacer l'erreur `internal` par le comportement retenu, et adapter les tests.
 
-**RECHERCHER-DENSE-EXACT reste bloquée jusqu'à la décision.**
+La tâche RECHERCHER-DENSE-EXACT était bloquée jusqu'à cette décision ; elle reprend avec le comportement retenu.
 
 ## Conséquences
 
@@ -116,7 +137,7 @@ Les options B, C et D du point 1 sont décrites ci-dessus avec leur coût. Les r
 | **C.** Transaction de lecture cohérente avec G. | Donne une réponse entièrement cohérente, au prix d'une transaction et d'une connexion tenues pendant tout le scan dense, d'un checkpoint WAL retardé et d'un couplage nouveau avec ADR-0038. Change une phrase de conception acceptée. Le gain ne couvre qu'un cas rare (suppression entre la prise du snapshot et l'étape payload), et A le couvre sans mécanisme nouveau. |
 | **D.** Garder `internal`. | 500 sur un cas normal, statut `error` dans les analytics et bruit dans le journal. `internal` est réservé à une erreur inattendue (`docs/05-api.md:44`). |
 
-Les sous-choix du point 5 (marqueur explicite ou absence simple) restent ouverts : l'ADR ne tranche pas la forme de l'API sans décision du propriétaire.
+Le sous-choix du point 5 est tranché : **absence simple**, sans marqueur, et la forme de la réponse ne change pas. L'option « marqueur explicite par résultat » est écartée : elle ajouterait un champ d'API pour un cas rare (environ 220 suppressions par nuit), alors que l'absence de champ est déjà lisible par le client.
 
 ## Références
 

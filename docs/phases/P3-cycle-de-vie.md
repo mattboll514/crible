@@ -28,7 +28,7 @@
 ### COMPACTER-INDEX
 - **Objectif** : construire une nouvelle époque sans les passages morts.
 - **Dépend de** : ATTACHER-LOT, PATCHER-METADONNEES
-- **À lire** : `02-architecture.md` (compaction, 6 étapes) ; `docs/adr/` (ADR-0006, ADR-0017).
+- **À lire** : `02-architecture.md` (compaction, 6 étapes) ; `docs/adr/` (ADR-0006, ADR-0017, ADR-0043 pour la rétention de l'époque tenue par une recherche).
 - **Livrables** :
   - `crible-store::compact` :
     - suspend l'écrivain ;

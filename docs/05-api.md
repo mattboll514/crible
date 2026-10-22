@@ -142,7 +142,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `group_by` | `"document"` ou null | null | Regroupement par document |
 | `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
-| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé |
+| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
 | `debug` | bool | false | Ajoute plan, temps et rangs ; journalise si le journal est activé |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
@@ -165,6 +165,8 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
   "request_id": "…"
 }
 ```
+
+Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ».
 
 Avec `debug: true`, la réponse ajoute :
 
