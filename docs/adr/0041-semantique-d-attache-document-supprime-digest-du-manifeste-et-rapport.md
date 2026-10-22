@@ -1,8 +1,9 @@
 # ADR-0041 — Sémantique d'attache : document supprimé, digest du manifeste et rapport
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-22 par le propriétaire, tel que proposé : option A pour la décision 1, option A pour la décision 2, et six comptes par document pour la décision 3, sans modification.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite de la préparation de la tâche ATTACHER-LOT (phase P1) ; trois points relevés par `@testeur` et instruits par `@architecte`
 - **Remplace** : —
 
