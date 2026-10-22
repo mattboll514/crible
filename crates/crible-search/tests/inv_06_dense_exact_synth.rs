@@ -500,8 +500,14 @@ fn inv_06_synth_small_200_queries_match_the_numpy_reference() {
 }
 
 /// The tolerance of the sheet is written for a measured state of the dataset:
-/// 5 queries hold an adjacent pair under 1e-6, 55 under 1e-5
+/// 4 queries hold an adjacent pair under 1e-6, 55 under 1e-5
 /// (`tools/README.md`, "Quasi-égalités de scores").
+///
+/// Those counts describe the dataset, not the platform. The reference rounds
+/// each dot product once, from an exactly summed f64 accumulator, so the same
+/// `expected.jsonl` comes out on every machine and with every BLAS library
+/// (ADR-0045); a platform-dependent order of summation no longer moves a score
+/// across a rounding boundary.
 ///
 /// The test pins that premise: if the generator changes the state, the
 /// tolerance is no longer the measured one and this test, not a silent pass,
@@ -511,8 +517,8 @@ fn expected_jsonl_holds_the_quasi_equalities_the_tolerance_allows() {
     let dataset = Dataset::load();
     assert_eq!(
         queries_with_adjacent_gap(&dataset.expected, 1e-6),
-        5,
-        "the reference must hold 5 queries with an adjacent pair closer than 1e-6, as \
+        4,
+        "the reference must hold 4 queries with an adjacent pair closer than 1e-6, as \
          tools/README.md measures"
     );
     assert_eq!(
