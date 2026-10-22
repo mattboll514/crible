@@ -7,7 +7,8 @@ des jeux synthétiques et la référence exacte de la phase P1.
 |---|---|
 | `gen_synth.py` | Génère `synth-small` en trois lots et son jeu de requêtes ; option `--large` pour le jeu de latence. |
 | `reference_topk.py` | Rejoue l'attache des lots et calcule le top-k exact en numpy ; écrit `expected.jsonl`. |
-| `tests/` | Tests pytest des deux outils. |
+| `export_onnx.py` | Exporte l'encodeur mDenseOn en ONNX (fp32 et INT8), copie `tokenizer.json` et écrit `model.json`. |
+| `tests/` | Tests pytest des trois outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
 | `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
 
@@ -19,6 +20,26 @@ en français, comme les documents de `docs/`.
 `tools/` est un projet uv. Il dépend du paquet `crible` de `clients/python` par
 un chemin relatif, ce qui apporte `pyarrow`, et il déclare `blake3` pour la
 somme de contrôle (ADR-0034).
+
+L'export ONNX a ses propres dépendances, réunies dans le groupe de dépendances
+`export` : `optimum[onnxruntime]` et `onnxruntime`, les deux outils prévus par
+`docs/07-stack-et-deploiement.md`, plus les paquets qu'`optimum` utilise
+directement et que le script importe (`torch`, `transformers`, `tokenizers`,
+`huggingface-hub`). Un `uv sync` ordinaire **n'installe pas** ce groupe : la CI
+et les tests lancent `uv sync` puis `uv run pytest` sans PyTorch, et c'est
+volontaire, car les tests de `tools/` ne chargent aucun modèle.
+
+```sh
+cd tools
+uv sync                     # outils courants : jeux synthétiques, référence
+uv sync --group export      # ajoute PyTorch, optimum et ONNX Runtime
+```
+
+Les roues de `torch` viennent de l'index CPU-only de PyTorch
+(`https://download.pytorch.org/whl/cpu`, déclaré en `[[tool.uv.index]]` dans
+`pyproject.toml`) : Crible ne fait que du CPU, et la roue PyPI de Linux
+embarque la grappe CUDA, soit plusieurs Go inutiles. `optimum-onnx` 0.1.0
+épingle `transformers < 4.58`, ce que le groupe reprend.
 
 ```sh
 cd tools
@@ -231,13 +252,129 @@ latence : il n'a ni requêtes ni résultats attendus. `--large-passages N` perme
 une taille réduite, utilisée par les tests pour vérifier le découpage en parties
 sans écrire le jeu complet.
 
+## Exporter mDenseOn en ONNX
+
+Depuis `tools/` :
+
+```sh
+uv run python export_onnx.py --out ../data/models/mdenseon
+```
+
+Le script télécharge l'instantané épinglé de `lightonai/mDenseOn` dans le cache
+Hugging Face, exporte le transformateur avec `optimum`, quantifie les poids en
+INT8, puis écrit quatre fichiers dans le dossier de sortie :
+
+| Fichier | Contenu |
+|---|---|
+| `model.onnx` | export fp32, axes `batch` et `sequence_length` dynamiques ; entrées `input_ids` et `attention_mask`, sortie `last_hidden_state` |
+| `model.int8.onnx` | même graphe, poids quantifiés en INT8 par quantification dynamique d'ONNX Runtime ; sert aux requêtes |
+| `tokenizer.json` | tokenizer rapide de la révision épinglée, copié tel quel |
+| `model.json` | hash blake3 des trois fichiers, révision, dimensions, pooling, normalisation, prompts, `max_tokens` |
+
+Le script écrit un cinquième fichier, `parity.json`, qui n'est pas un fichier de
+modèle : c'est le compte rendu de la comparaison PyTorch contre ONNX de cette
+exécution (date, révision, cosinus minimum et moyen, longueurs de tokens). Le
+moteur ne lit que les quatre fichiers décrits par
+`docs/04-donnees-et-ingestion.md` et **ignore tout autre fichier** du dossier du
+modèle, `CHARGER-MODELE` compris.
+
+Le graphe **n'applique aucun prompt et ne regroupe pas** : il rend le dernier
+état caché, et Crible fait lui-même le pooling CLS puis la normalisation L2
+(`docs/04-donnees-et-ingestion.md`). Les deux prompts `query: ` et
+`document: ` sont donc ajoutés par le producteur et par le moteur, jamais par
+ONNX.
+
+`--overwrite` autorise l'écriture dans un dossier non vide. Le `model.json` et
+le `parity.json` de l'export précédent sont remplacés une fois les nouveaux
+fichiers lourds en place : ces deux fichiers décrivent une seule exécution, et
+un ancien `parity.json` à côté d'un modèle neuf donnerait des chiffres faux. Un
+export qui échoue avant ce point (téléchargement, export, quantification) laisse
+donc l'export précédent **intact**, manifeste compris. `--skip-parity` saute la
+comparaison PyTorch contre ONNX (utile pour réexporter rapidement) et laisse le
+dossier sans `parity.json`.
+
+`model.json` est écrit avec les clés triées, donc octet pour octet stable, et
+**en dernier**, par un fichier temporaire renommé : il n'existe que si tous les
+autres fichiers sont écrits. La configuration du modèle est vérifiée avant
+l'export (dimensions, `max_position_embeddings`, prompts de
+`config_sentence_transformers.json`, troncature du tokenizer) : un désaccord
+arrête l'export au lieu de produire un `model.json` faux. Avec la parité, la
+limite de 8 192 tokens et le cosinus sont en outre prouvés avant l'écriture ;
+avec `--skip-parity`, `max_tokens` reste la valeur déclarée par le modèle, sans
+exécution à cette longueur ni `parity.json` pour l'attester. Les erreurs réseau,
+Hugging Face et ONNX Runtime donnent une ligne `error:` et un code de sortie non
+nul, sans trace brute.
+
+### Révision et hash mesurés
+
+Révision épinglée : `a5fdb000f7a21da96c3bddde3a782ef777316df3`
+(`lightonai/mDenseOn`, dernier commit du dépôt au 2026-07-30). Export mesuré le
+**2026-10-22**, sur un Mac arm64 (8 cœurs, 24 Go), avec Python 3.13,
+`torch` 2.14.1, `transformers` 4.57.6, `optimum` 2.1.0, `optimum-onnx` 0.1.0 et
+`onnxruntime` 1.31.0 :
+
+```
+model.onnx         blake3:76dc1c0754fdb0fe4f3a7a9804ea4ebf096fa146b280aa62d73de3abcb118087
+model.int8.onnx    blake3:197385eff597dd47325910a9a5e59b96dd4d425d0e4ad2a792e63e88fa6ec086
+tokenizer.json     blake3:8a801317cfb1eb744734392dc0aeef36d6d39660a0a884f06a0338e9bb5357db
+```
+
+Quatre exécutions du script, dont deux dans un autre dossier, ont rendu **les
+mêmes trois hash** : à révision, versions de bibliothèques et machine égales, le
+script est reproductible. La longueur d'échantillonnage du tracé est fixée à 32
+tokens (`TRACE_SEQUENCE_LENGTH`), car elle change les octets du graphe sans
+changer ses axes.
+
+### `max_tokens`
+
+`max_tokens` vaut **8192**, la valeur de `max_position_embeddings` du modèle et
+de la troncature de `tokenizer.json`. Le script la vérifie en exécutant le
+graphe exporté sur exactement 8192 tokens : l'exécution rend la forme attendue
+`[1, 8192, 768]`, en 32 s sur le Mac de mesure. Aucune troncature silencieuse
+n'est donc possible en dessous de cette limite.
+
+### Parité PyTorch contre ONNX fp32
+
+Critère de la fiche : sur 100 textes, le cosinus entre les vecteurs PyTorch et
+ONNX fp32 vaut au moins 0,9999. Le corpus est français, déterministe et versionné
+avec le script (`comparison_texts`) : il ne contient aucune requête de
+production. Il va de textes d'une vingtaine de tokens à un texte de **8 088
+tokens**, donc proche de la limite, qui vérifie aussi la troncature.
+
+| Précision | Textes | Cosinus minimum | Cosinus moyen |
+|---|---:|---:|---:|
+| fp32 | 100 | 0,9999999999259354 | 0,9999999999975883 |
+
+L'écart au cosinus parfait vaut 7,4·10⁻¹¹ au pire : très au-dessus de la barre
+de 0,9999. Le fichier INT8 ne sert qu'aux requêtes et n'entre pas dans
+l'empreinte du modèle ; il n'est pas comparé ici, ce que fera MES-04 sur les
+requêtes réelles. Les nombres ci-dessus sont écrits par le script dans
+`parity.json`, à côté du modèle, avec la révision et la date.
+
+La comparaison porte sur le **vecteur regroupé et normalisé**, le seul que
+Crible consomme. Sur l'état caché brut, la vérification interne d'`optimum`
+signale un écart maximal d'environ 2·10⁻⁴ à 6·10⁻⁴ (`max diff` de
+`last_hidden_state`), au-delà de sa tolérance de 1·10⁻⁵ : c'est l'arithmétique
+flottante du graphe exporté qui diffère, pas l'usage qui en est fait. Après
+pooling CLS et normalisation, l'écart de cosinus tombe sous 10⁻¹⁰, donc le
+critère de la fiche est tenu.
+
+### Note sur le tokenizer
+
+`tokenizer_config.json` de la révision épinglée nomme la classe
+`TokenizersBackend`, qui n'existe que dans `transformers` 5.x. Le script lit
+donc `tokenizer.json` avec la bibliothèque `tokenizers`, qui est aussi celle que
+Crible utilise côté Rust : les identifiants sont exactement ceux du fichier
+exporté.
+
 ## Tests
 
 ```sh
 cd tools && uv run pytest
 ```
 
-Les tests couvrent les deux critères d'acceptation de la tâche :
+Les tests de `gen_synth.py` couvrent les deux critères d'acceptation de la
+tâche P1 :
 
 - deux générations avec la même graine donnent des fichiers identiques au bit
   près ;
@@ -252,3 +389,16 @@ une boucle naïve sur un échantillon stratifié (une requête par famille de
 filtre), le découpage en parties du jeu `--large`, le refus d'un dossier non
 vide et le périmètre de `--overwrite`, et l'égalité entre la somme régénérée et
 celle consignée plus haut.
+
+Les tests de `export_onnx.py` tournent **hors ligne, sans modèle et sans
+PyTorch** : ils vérifient la forme de `model.json` attendue par
+`CHARGER-MODELE`, les digestes blake3 (contre des valeurs de référence), la
+stabilité octet pour octet et l'écriture atomique du fichier, le corpus de
+parité (100 textes déterministes, dont un proche de la limite), le pooling CLS,
+la normalisation, le cosinus, l'application du prompt et la limite de troncature,
+le contrôle des prompts du `config_sentence_transformers.json` de l'instantané,
+le refus d'un dossier non vide, le nettoyage du manifeste et du rapport une fois
+les fichiers lourds réécrits, la sortie en
+erreur sans trace brute, et l'absence d'import lourd à l'import du module.
+L'export lui-même se lance à la main, et ses nombres mesurés sont consignés plus
+haut.

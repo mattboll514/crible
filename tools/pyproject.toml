@@ -7,12 +7,32 @@ dependencies = ["blake3>=1.0", "crible", "numpy>=1.26"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# ONNX export is the only part of `tools/` that needs a model runtime. It stays
+# out of the default environment, which CI and the tests use without PyTorch
+# (`docs/07-stack-et-deploiement.md`): install it with `uv sync --group export`.
+export = [
+    "huggingface-hub>=0.36.2",
+    "onnxruntime>=1.18",
+    "optimum[onnxruntime]>=2.1",
+    "tokenizers>=0.22.2",
+    "torch>=2.14.1",
+    # `optimum-onnx` 0.1.0 caps `transformers` below 4.58.
+    "transformers>=4.57.6,<4.58",
+]
 
 [tool.uv]
 package = false
 
+[[tool.uv.index]]
+# CPU-only wheels: the project never uses a GPU, and the default PyPI wheel of
+# `torch` pulls the CUDA stack on Linux (several GB).
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 crible = { path = "../clients/python", editable = true }
+torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "bench/mes00/tests"]
