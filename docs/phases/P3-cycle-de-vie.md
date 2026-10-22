@@ -104,8 +104,11 @@
 - **Livrables** : les rapports de mesure sur l'échantillon Legifacile et sur `synth-large`, avec une extrapolation à l'échelle de Legifacile :
   - compaction ;
   - attache d'un lot quotidien type de 1 000 à 3 000 passages ;
-  - temps de démarrage, en reconstruisant les bitmaps puis en chargeant le cache.
+  - temps de démarrage, en reconstruisant les bitmaps puis en chargeant le cache, avec la part du décodage JSON dans ce temps et le nombre moyen de passages par document de l'échantillon Legifacile (ADR-0047) ;
+  - l'ordre des remèdes à appliquer si le démarrage dépasse 60 s : d'abord `DECODER-DOCUMENTS-UNE-FOIS`, puis `AJOUTER-CACHE-BITMAPS` seulement si le seuil est encore dépassé (ADR-0047).
 - **Critères d'acceptation** :
   - les protocoles sont reproductibles ;
-  - si le démarrage dépasse 60 s à l'échelle de Legifacile, un cache des bitmaps est proposé, sous forme de tâche `AJOUTER-CACHE-BITMAPS` à valider par le propriétaire.
+  - le rapport donne la part du décodage JSON dans le démarrage et le nombre moyen de passages par document de l'échantillon Legifacile ;
+  - si le démarrage dépasse 60 s à l'échelle de Legifacile, la mesure propose **d'abord** une tâche `DECODER-DOCUMENTS-UNE-FOIS` : décoder le JSON de chaque document une seule fois pendant la reconstruction des structures de filtrage, sans changement de format ni invalidation, avec un test d'égalité des structures et un rejeu de MES-13 ; la tâche est à valider par le propriétaire ;
+  - la tâche `AJOUTER-CACHE-BITMAPS`, qui ajoute un format sur disque versionné et une invalidation, n'est proposée que si le démarrage dépasse encore 60 s après `DECODER-DOCUMENTS-UNE-FOIS`, et reste à valider par le propriétaire (ADR-0047).
 - **Invariants / mesures** : MES-07, MES-08, MES-13.

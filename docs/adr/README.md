@@ -100,7 +100,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0044](0044-regles-du-relecteur-verifications-executees.md) | Règles de `@relecteur` : faire passer les vérifications et ne rapporter que ce qui a été exécuté | Accepté | 2026-10-22 |
 | [ADR-0045](0045-reference-de-synth-small-calculee-exactement-independante-de-la-blas.md) | Référence de `synth-small` calculée exactement, indépendante de la bibliothèque BLAS | Accepté | 2026-10-22 |
 | [ADR-0046](0046-budget-des-filtres-d-intervalle-a-l-echelle-de-legifacile.md) | Budget des filtres d'intervalle à l'échelle de Legifacile | Accepté | 2026-10-22 |
-| [ADR-0047](0047-phase-de-mes-13-et-ordre-des-remedes-au-temps-de-demarrage.md) | Phase de MES-13 et ordre des remèdes au temps de démarrage | Proposé | 2026-10-22 |
+| [ADR-0047](0047-phase-de-mes-13-et-ordre-des-remedes-au-temps-de-demarrage.md) | Phase de MES-13 et ordre des remèdes au temps de démarrage | Accepté | 2026-10-22 |
 
 ## Questions ouvertes
 

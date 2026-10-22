@@ -1,7 +1,7 @@
 # ADR-0047 — Phase de MES-13 et ordre des remèdes au temps de démarrage
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté (décision du propriétaire le 2026-10-22)
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire. Décision « D2 » de `docs/suivi.md`, section « Décisions en attente », issue de MES-13 (tâche `CONSTRUIRE-BITMAPS`, P1)
 - **Remplace** : —

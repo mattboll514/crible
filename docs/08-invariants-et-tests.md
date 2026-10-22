@@ -66,7 +66,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut | P5 |
 | MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`) | P5 |
 | MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
-| MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P3 |
+| MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
 | MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1 |
 
