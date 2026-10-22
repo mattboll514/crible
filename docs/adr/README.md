@@ -93,6 +93,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0037](0037-permissions-de-lecture-du-relecteur.md) | Élargir les permissions de `@relecteur` aux utilitaires de vérification et à Python | Accepté | 2026-10-21 |
 | [ADR-0038](0038-delai-d-attente-sqlite-busy-timeout.md) | Régler un délai d'attente sur les verrous SQLite (`busy_timeout`) | Accepté | 2026-10-21 |
 | [ADR-0039](0039-ordre-des-lignes-dans-un-lot-v1.md) | Ordre des lignes dans un lot v1 | Accepté | 2026-10-21 |
+| [ADR-0040](0040-unicite-des-documents-et-des-parties-dans-un-lot-v1.md) | Unicité des documents et des parties dans un lot v1 | Proposé | 2026-10-22 |
 
 ## Questions ouvertes
 

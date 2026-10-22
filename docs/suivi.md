@@ -144,6 +144,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| ADR-0040 | Unicité des documents et des parties dans un lot v1 (`doc_id` unique dans `documents` et dans `deletions`, parties triées par valeur numérique du suffixe) | ATTACHER-LOT |
 
 ## Idées hors périmètre
 
@@ -252,3 +253,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | LIRE-LOT-PARQUET bloquée au 2e tour de relecture : le lecteur impose l'ordre des lignes d'un lot, ce que le format public ne dit pas ; `@architecte` rend NON-COUVERT ; ADR-0039 proposé, décision du propriétaire requise. 1er tour OK avec 8 mineurs (6 corrigés : erreurs d'E/S en `internal`, taille de lecture fixe, tests `normalize: false`, borne de norme, lot en deux parties) ; 2e tour : 3 mineurs corrigés ; travail non commité dans l'arbre |
 | 2026-10-21 | ADR-0039 accepté par le propriétaire (option A, `format_version` reste à 1) ; `format-lot-v1.md` et `docs/04` mis à jour ; LIRE-LOT-PARQUET repasse EN-COURS, reprise au 3e tour de relecture |
 | 2026-10-22 | LIRE-LOT-PARQUET terminée : commentaires de `batch_reader.rs` et de deux tests réalignés sur ADR-0039 accepté ; revue OK au 3e tour, garde-fou ADR-0037 sans écart ; 227 tests Rust ; 2 mineurs notés en idées (ordre des parties par nom plutôt que par suffixe, en-tête de test en français) |
+| 2026-10-22 | ADR-0040 proposé (unicité des `doc_id` et des parties dans un lot v1), à la demande du propriétaire, avant ATTACHER-LOT ; une petite tâche hors plan corrigera le lecteur après acceptation |
