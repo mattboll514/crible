@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
-use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
+use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 use serde_json::{Value, json};
@@ -102,13 +102,30 @@ pub fn create_store(index: &Path) -> GenerationStore {
 }
 
 /// Creates a generation store whose filter structures follow `schema`.
+///
+/// `GenerationStore::create` refuses an index without `index.json`, so the
+/// fixture writes the configuration the way `crible index create` does.
 pub fn create_store_with(index: &Path, schema: &Schema) -> GenerationStore {
+    write_index_config(index, &test_config("test", schema)).unwrap_or_else(|error| {
+        panic!(
+            "the index configuration must be written under {}: {error}",
+            index.display()
+        )
+    });
     GenerationStore::create(index, Epoch::new(EPOCH), schema).unwrap_or_else(|error| {
         panic!(
             "the generation store must be created under {}: {error}",
             index.display()
         )
     })
+}
+
+/// Index configuration declaring `schema`, with the settings the store ignores.
+pub fn test_config(name: &str, schema: &Schema) -> String {
+    format!(
+        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        schema.to_json_string()
+    )
 }
 
 /// Opens an existing index, which runs recovery, the way a restart does.

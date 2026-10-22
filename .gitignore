@@ -10,6 +10,7 @@
 
 # Données, modèles et échanges (jamais dans git)
 /data/
+/models/
 /exchange/
 *.onnx
 *.parquet

@@ -82,7 +82,7 @@ use std::time::{Duration, Instant};
 
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
-use crible_store::generation::{GenerationChange, GenerationStore};
+use crible_store::generation::{GenerationChange, GenerationStore, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentSpec, SegmentWriter};
 use rusqlite::{Connection, OpenFlags, params};
@@ -262,11 +262,9 @@ fn prepare(args: &Args) -> Result<(), Box<dyn Error>> {
         fs::remove_dir_all(&index)?;
     }
     let started = Instant::now();
-    drop(GenerationStore::create(
-        &index,
-        Epoch::new(1),
-        &bench_schema()?,
-    )?);
+    let schema = bench_schema()?;
+    write_index_config(&index, &bench_config("commit-cost", &schema))?;
+    drop(GenerationStore::create(&index, Epoch::new(1), &schema)?);
 
     let epoch_dir = epoch_dir_of(&index);
     let segments_dir = epoch_dir.join("segments");
@@ -504,6 +502,14 @@ fn bench_schema() -> Result<Schema, Box<dyn Error>> {
             }
         }"#,
     )?)
+}
+
+/// Index configuration the benchmark creates, declaring `schema`.
+fn bench_config(name: &str, schema: &Schema) -> String {
+    format!(
+        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        schema.to_json_string()
+    )
 }
 
 /// Fields of a passage row, as canonical JSON.

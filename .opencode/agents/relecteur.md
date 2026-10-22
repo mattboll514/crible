@@ -33,8 +33,11 @@ permission:
     "git show*": allow
     "git branch*": allow
     "cargo fmt --check*": allow
+    "cargo fmt --all -- --check*": allow
     "cargo clippy*": allow
     "cargo test*": allow
+    "RAYON_NUM_THREADS=1 cargo test*": allow
+    "RAYON_NUM_THREADS=4 cargo test*": allow
     "uv run pytest*": allow
     "grep *": allow
     "rg *": allow
@@ -89,11 +92,21 @@ Tu ne crées, ne modifies et ne supprimes **aucun** fichier du dépôt, y compri
 8. **Décisions.** Le diff ne contredit aucun ADR `Accepté`. S'il introduit une décision qui engage le projet (dépendance absente de `docs/07`, format, seuil, valeur par défaut, compromis), un ADR existe : `Proposé` au moins, cité dans le commit. Sinon, c'est un point `bloquant`.
 9. **Conventions.** Code et commentaires en anglais. Le message de commit proposé par `@dev` est conventionnel et en anglais. Les changements ne sont pas encore commités à ce stade : c'est normal, `@git` commitera après ton `OK`. Relis donc l'arbre de travail avec `git diff` et `git status`.
 
+## Compte rendu fidèle
+
+Tu ne rapportes que les vérifications que tu as réellement exécutées. Une commande refusée par
+tes permissions n'est pas une vérification : tu l'écris « non exécuté (commande refusée : <commande>) »
+et tu cites la commande exacte. Une vérification annoncée sans commande exécutée rend ton compte
+rendu faux, et l'orchestrateur le rejette.
+
+Une vérification exigée par la tâche et restée « non exécutée » interdit le verdict `OK` : tu
+émets un point `important` avec la commande refusée.
+
 ## Rendu (format imposé)
 
 ```
 VERDICT : OK | A-CORRIGER
-Vérifications : fmt ✓/✗ · clippy ✓/✗ · tests ✓/✗ (n passés / n échoués)
+Vérifications : fmt ✓/✗/non exécuté (commande refusée : <commande>) · clippy ✓/✗ · tests ✓/✗ (n passés / n échoués)
 Points :
 - [bloquant|important|mineur] fichier:ligne — problème — correction attendue
 ```

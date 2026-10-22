@@ -129,6 +129,16 @@ impl FieldSpec {
             returned,
         })
     }
+
+    /// Writes the field in the JSON form of `docs/04`, with both options
+    /// explicit.
+    fn to_value(&self) -> Value {
+        serde_json::json!({
+            "type": self.field_type.as_str(),
+            "filterable": self.filterable,
+            "returned": self.returned,
+        })
+    }
 }
 
 /// Schema of an index: fields declared at document level and at passage level.
@@ -222,6 +232,29 @@ impl Schema {
             .keys()
             .chain(self.passage_fields.keys())
             .map(String::as_str)
+    }
+
+    /// Serializes the schema in the JSON form of `docs/04`.
+    ///
+    /// The two options are written explicitly, so the text round-trips through
+    /// [`Schema::from_json_str`] even when a caller relied on the defaults. The
+    /// keys are sorted by name, as [`Schema::fields`] yields them.
+    #[must_use]
+    pub fn to_json_string(&self) -> String {
+        let mut document_fields = Map::new();
+        let mut passage_fields = Map::new();
+        for (name, level, spec) in self.fields() {
+            let target = match level {
+                FieldLevel::Document => &mut document_fields,
+                FieldLevel::Passage => &mut passage_fields,
+            };
+            target.insert(name.to_owned(), spec.to_value());
+        }
+        Value::Object(Map::from_iter([
+            ("document_fields".to_owned(), Value::Object(document_fields)),
+            ("passage_fields".to_owned(), Value::Object(passage_fields)),
+        ]))
+        .to_string()
     }
 
     /// Refuses a name declared at both levels (ADR-0030).
@@ -985,4 +1018,53 @@ fn immutable(setting: &str, path: &str) -> CribleError {
         ErrorCode::ImmutableSetting,
         format!("setting '{setting}' is immutable at {path}; recreate the index to change it"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Schema;
+
+    /// `to_json_string` round-trips through `from_json_str`, writes both
+    /// options explicitly even when they took their default, and sorts the
+    /// field names.
+    #[test]
+    fn schema_json_round_trips_with_explicit_options_and_sorted_keys() {
+        let schema = Schema::from_json_str(
+            r#"{
+                "document_fields": {
+                    "b": { "type": "keyword", "filterable": false },
+                    "a": { "type": "integer" }
+                },
+                "passage_fields": {
+                    "c": { "type": "bool", "returned": false }
+                }
+            }"#,
+        )
+        .expect("the test schema is valid");
+
+        let text = schema.to_json_string();
+        let reparsed = Schema::from_json_str(&text).expect("the serialized schema is valid");
+        assert_eq!(schema, reparsed, "the schema must round-trip");
+
+        let value: serde_json::Value = serde_json::from_str(&text).expect("the text is JSON");
+        let document = value["document_fields"]
+            .as_object()
+            .expect("document_fields is an object");
+        let a = document["a"].as_object().expect("a is an object");
+        assert_eq!(a["filterable"], true, "the default is written explicitly");
+        assert_eq!(a["returned"], true, "the default is written explicitly");
+        let b = document["b"].as_object().expect("b is an object");
+        assert_eq!(b["filterable"], false);
+        assert_eq!(b["returned"], true);
+        let passage = value["passage_fields"]
+            .as_object()
+            .expect("passage_fields is an object");
+        assert_eq!(passage["c"]["returned"], false);
+
+        assert!(
+            text.find("\"a\"").expect("a is serialized")
+                < text.find("\"b\"").expect("b is serialized"),
+            "the document fields must be sorted: {text}"
+        );
+    }
 }
