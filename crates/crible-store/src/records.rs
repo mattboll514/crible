@@ -31,7 +31,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::ids::{Epoch, Generation, Iid};
+use crible_core::ids::{DocId, Epoch, Generation, Iid, PassageKey};
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
 use serde_json::{Map, Value};
@@ -296,18 +296,7 @@ impl RecordStore {
     /// Dead passages are returned too: this is the row-level view used for
     /// inspection and export.
     pub fn read_passage(&self, iid: Iid) -> Result<Option<PassageRecord>, CribleError> {
-        let row = self
-            .connection
-            .query_row(
-                "SELECT iid, doc_id, ord, text, passage_hash, fields, segment_id,
-                        created_generation, dead_since_gen
-                 FROM passages WHERE iid = ?1",
-                params![i64::from(iid.get())],
-                passage_row,
-            )
-            .optional()
-            .map_err(|error| database_error("read a passage", &error))?;
-        row.map(passage_from_row).transpose()
+        passage_by_iid(&self.connection, iid)
     }
 
     /// Passages of one document, in reading order.
@@ -768,6 +757,48 @@ impl ReadPool {
         outcome
     }
 
+    /// Reads one passage by internal identifier, or `None` when it is unknown.
+    ///
+    /// This is the payload read of a search result: the text comes back
+    /// decompressed and the fields parsed, exactly as [`RecordStore`] returns
+    /// them, on a read-only connection so the search path can never write
+    /// (INV-02). Dead passages are returned too, because the caller decides
+    /// which ones its snapshot holds.
+    pub fn read_passage(&self, iid: Iid) -> Result<Option<PassageRecord>, CribleError> {
+        self.with_connection(|connection| passage_by_iid(connection, iid))
+    }
+
+    /// Reads one document by external identifier, or `None` when it is unknown.
+    pub fn read_document(&self, doc_id: &str) -> Result<Option<DocumentRecord>, CribleError> {
+        self.with_connection(|connection| document_by_id(connection, doc_id))
+    }
+
+    /// Reads the key of one passage by internal identifier, or `None` when it
+    /// is unknown.
+    ///
+    /// Only `doc_id` and `ord` are read: the ranking of a search needs the key
+    /// of a candidate before it knows whether the candidate survives, while the
+    /// text and the fields stay unread until the payload step
+    /// (`docs/03-recherche.md`, step 8).
+    pub fn read_passage_key(&self, iid: Iid) -> Result<Option<PassageKey>, CribleError> {
+        self.with_connection(|connection| passage_key_by_iid(connection, iid))
+    }
+
+    /// Runs a trivial query on one pooled connection.
+    ///
+    /// [`ReadPool::new`] opens nothing, and SQLite does not validate the file
+    /// header when a connection opens: a missing database, or a file that is
+    /// not a SQLite database at all, would only fail at the first real read.
+    /// A caller that wants the fault at its own start-up point calls this once.
+    pub fn verify(&self) -> Result<(), CribleError> {
+        self.with_connection(|connection| {
+            connection
+                .query_row("SELECT 1 FROM meta LIMIT 1", [], |row| row.get::<_, i64>(0))
+                .map(|_| ())
+                .map_err(|error| database_error("verify the records database", &error))
+        })
+    }
+
     /// Waits for a free connection, opening one when the pool is below its
     /// capacity.
     fn checkout(&self) -> Result<Connection, CribleError> {
@@ -1094,6 +1125,56 @@ fn upsert_document(connection: &Connection, record: &DocumentRecord) -> Result<(
         )
         .map_err(|error| database_error("write a document", &error))?;
     Ok(())
+}
+
+/// Reads one passage by internal identifier, the query "passages by iid".
+///
+/// Shared by the autocommit [`RecordStore::read_passage`] and the read-only
+/// [`ReadPool::read_passage`], so both return the same record.
+pub(crate) fn passage_by_iid(
+    connection: &Connection,
+    iid: Iid,
+) -> Result<Option<PassageRecord>, CribleError> {
+    let row = connection
+        .query_row(
+            "SELECT iid, doc_id, ord, text, passage_hash, fields, segment_id,
+                    created_generation, dead_since_gen
+             FROM passages WHERE iid = ?1",
+            params![i64::from(iid.get())],
+            passage_row,
+        )
+        .optional()
+        .map_err(|error| database_error("read a passage", &error))?;
+    row.map(passage_from_row).transpose()
+}
+
+/// Reads the key of one passage, the query "passage key by iid".
+///
+/// The two identity columns only: `read_passage` would also decompress the
+/// text and parse the fields, which the ranking does not need.
+pub(crate) fn passage_key_by_iid(
+    connection: &Connection,
+    iid: Iid,
+) -> Result<Option<PassageKey>, CribleError> {
+    let row = connection
+        .query_row(
+            "SELECT doc_id, ord FROM passages WHERE iid = ?1",
+            params![i64::from(iid.get())],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(|error| database_error("read a passage key", &error))?;
+    let Some((doc_id, ord)) = row else {
+        return Ok(None);
+    };
+    let ord = from_sql_u32(ord, "ord")?;
+    let doc_id = DocId::new(doc_id).map_err(|_| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "a stored doc_id is not a valid external identifier",
+        )
+    })?;
+    Ok(Some(PassageKey::new(doc_id, ord)))
 }
 
 /// Reads one document, the query "documents by id".
