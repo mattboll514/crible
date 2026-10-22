@@ -1,7 +1,7 @@
 # ADR-0044 — Règles de `@relecteur` : faire passer les vérifications et ne rapporter que ce qui a été exécuté
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : orchestrateur, sur la commande `/adr` ; constats des relectures de LIRE-LOT-PARQUET, RECHERCHER-DENSE-EXACT et EVALUER-FILTRES (2026-10-22)
 - **Remplace** : —
