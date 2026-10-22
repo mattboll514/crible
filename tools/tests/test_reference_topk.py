@@ -220,6 +220,47 @@ def test_top_k_is_exact_and_breaks_ties_by_key():
     assert len(top_k(rows, mask, [1.0, 0.0], 10)) == 3
 
 
+def sequential_f32(products) -> float:
+    """Accumulates float32 products one at a time, in the given order.
+
+    It is the naive order-dependent sum the exact reference must not be: a
+    rounding happens after each addition, so a small term added to a large
+    partial sum is lost, and the result changes with the order.
+    """
+    accumulator = np.float32(0.0)
+    for product in products:
+        accumulator = np.float32(accumulator + np.float32(product))
+    return float(accumulator)
+
+
+def test_top_k_score_is_the_exact_sum_whatever_the_summation_order():
+    # The query has norm 2, so each product is half its component:
+    # 5e7, 0.5, 0.5, -5e7. The exact sum is 1.0. A sequential float32 loop
+    # adds 0.5 to 5e7, rounds it away, and ends at 0.0; the same products in
+    # another order end at 0.5. Only the exact sum is 1.0 for both orders
+    # (ADR-0045), and the old `matrix @ vector` gives 0.0 here as well under
+    # any f32 BLAS, so the test fails with it; a BLAS accumulating in f64
+    # would be exact on these four terms and pass, which no usual library
+    # does.
+    components = [1e8, 1.0, 1.0, -1e8]
+    query = [1.0, 1.0, 1.0, 1.0]
+    permutation = [0, 2, 3, 1]
+    mask = np.ones(1, dtype=bool)
+
+    direct = top_k([row("a#0", components)], mask, query, 1)[0].score
+    permuted = top_k(
+        [row("a#0", [components[index] for index in permutation])],
+        mask,
+        [query[index] for index in permutation],
+        1,
+    )[0].score
+
+    assert sequential_f32([0.5 * component for component in components]) == 0.0
+    assert sequential_f32([0.5 * components[i] for i in permutation]) == 0.5
+    assert direct == 1.0
+    assert permuted == direct
+
+
 @pytest.mark.parametrize(("query", "k"), [([0.0, 0.0], 10), ([1.0, 0.0], 0)])
 def test_top_k_refuses_a_zero_query_or_a_zero_k(query, k):
     with pytest.raises(ValueError):
@@ -231,10 +272,18 @@ def test_empty_pool_returns_no_result():
 
 
 def brute_force(passages, mask, query, k):
-    vector = np.asarray(query, dtype=np.float32)
+    """Independent oracle for the top-k, normalized and scored in float64.
+
+    The oracle must not share the reference's algorithm, else a mistake in one
+    would hide in the other: it does not sum exactly, it accumulates in
+    float64. The error of a float64 sum is of the order of 1e-16 on a score,
+    while the smallest adjacent gap of the dataset is 2.98e-7 (query 180 of
+    `synth-small`), so the keys cannot swap from one machine to the other.
+    """
+    vector = np.asarray(query, dtype=np.float64)
     vector /= np.linalg.norm(vector)
     scored = [
-        (float(np.dot(passage.vector.astype(np.float32), vector)), passage.key)
+        (float(np.dot(passage.vector.astype(np.float64), vector)), passage.key)
         for passage, keep in zip(passages, mask)
         if keep
     ]

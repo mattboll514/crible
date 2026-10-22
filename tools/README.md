@@ -117,6 +117,13 @@ La somme de contrôle ci-dessous ne dépend donc ni de la machine, ni de la date
 de génération : elle est la même en CI et chez un autre développeur. Un test la
 régénère et la compare à la valeur consignée ici.
 
+Cette égalité entre machines vaut aussi pour `expected.jsonl`, que la somme
+couvre. Elle n'a pas toujours été vraie : tant que `reference_topk.py` calculait
+ses scores par un produit matriciel confié à BLAS, l'ordre de sommation variait
+d'une bibliothèque à l'autre et la somme avec lui (ADR-0045). La référence
+calcule désormais ses scores exactement, sans BLAS, donc ses octets sont les
+mêmes partout.
+
 ### Somme de contrôle
 
 Somme blake3 des artefacts connus de `data/synth-small` (les fichiers écrits par
@@ -126,7 +133,7 @@ relatif, chaque chemin et son contenu entrant dans le calcul (voir
 change pas la somme.
 
 ```
-synth-small : blake3:2d3d8265a8df350d816bccb5732fe338921d275cae5d091a96d0497646e58805
+synth-small : blake3:a9854f1e3f14b8c6e9afb5bd484a85d0cdc453d6812670d7f092e31760112b1f
 ```
 
 Elle couvre `index.json`, les trois lots, `queries.jsonl` et `expected.jsonl`.
@@ -157,9 +164,14 @@ Elle couvre `index.json`, les trois lots, `queries.jsonl` et `expected.jsonl`.
               "score": 0.6926815509796143}]}
 ```
 
-Le score est le cosinus exact, calculé **en f32 comme le moteur** : les vecteurs
-du lot sont décodés de fp16 vers f32, la requête est normalisée en f32, puis le
-produit scalaire est fait en f32. Les résultats sont triés par score
+Le score est le cosinus exact. Les vecteurs du lot sont décodés de fp16 vers
+f32, la requête est normalisée en f32, puis le produit scalaire est calculé
+**exactement, sans BLAS** (ADR-0045) : chaque produit de deux composantes f32
+est formé en f64, où il est exact, la ligne est sommée par `math.fsum`, et le
+résultat reçoit un seul arrondi final en f32. La norme de la requête suit la
+même règle. L'ordre de sommation n'a donc plus d'effet : le fichier est le même
+sur toute machine, quelle que soit la bibliothèque BLAS. Le moteur, lui, somme
+en f32 scalaire dans l'ordre des composantes. Les résultats sont triés par score
 décroissant, avec un **départage stable par clé** `doc_id#ord`, comme l'exige
 J1. J1 compare les clés et leur ordre, avec une égalité des scores à `1e-5`
 près.
@@ -172,13 +184,15 @@ se recalcule directement depuis `expected.jsonl`.
 
 | Calcul | < 1e-6 | < 1e-5 |
 |---|---:|---:|
-| f32, référence actuelle | 5 | 55 |
+| exact, arrondi une fois en f32 | 4 | 55 |
 
 L'arrondi f32 rend certains écarts exactement nuls : l'ordre est déterministe
-pour la référence grâce au départage par clé. Le produit scalaire passe par
-BLAS, dont l'ordre de sommation peut différer de la boucle scalaire du moteur ;
-sur une quasi-égalité, une égalité exacte de la référence peut donc ne pas
-l'être côté moteur. J1 compare les clés, puis les scores à `1e-5` près.
+pour la référence grâce au départage par clé. Ces deux décomptes décrivent le
+jeu de données, pas la plateforme : la référence étant calculée exactement, ils
+sont les mêmes sur toute machine (ADR-0045). Le moteur, lui, somme en f32 dans
+l'ordre des composantes ; sur une quasi-égalité, une égalité exacte de la
+référence peut donc ne pas l'être côté moteur. J1 compare les clés, puis les
+scores à `1e-5` près.
 
 ### Sous-ensemble de la grammaire
 

@@ -47,6 +47,23 @@ Ranking
 Scores are dot products. Document vectors are normalized, and the query vector
 is normalized here, so the score is the cosine. The order is descending score,
 with a stable tie-break on the key ``doc_id#ord``, as J1 requires.
+
+Exact score
+-----------
+
+The dot product is computed without BLAS. The product of two f32 components is
+exact in f64 (two 24-bit significands give a 48-bit product), so the products
+are formed in f64, each row is summed exactly with :func:`math.fsum`, and the
+row is rounded to f32 once, at the end. That is the only rounding of the score.
+The norm of the query follows the same rule: exact sum of the squared
+components in f64, square root in f64, one rounding to f32.
+
+The result therefore does not depend on the order of summation, hence neither
+on the BLAS library nor on the machine: the same ``expected.jsonl`` comes out
+everywhere, and a change of its checksum signals a real change of the dataset
+(ADR-0045). The engine keeps its own summation, in f32 in the order of the
+components (``crates/crible-search/src/dense/exact.rs``, ``dot``), which is
+reproducible on its side; INV-06 compares the two under a tolerance.
 """
 
 from __future__ import annotations
@@ -54,6 +71,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import math
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -400,6 +418,34 @@ def select(passages: Sequence[PassageRow], node: Any) -> np.ndarray:
     )
 
 
+def exact_norm(vector: np.ndarray) -> float:
+    """Returns the f32 norm of an f32 vector, rounded once.
+
+    Each squared component is formed in f64, where it is exact, the squares
+    are summed exactly by :func:`math.fsum`, the square root is taken in f64,
+    and the result is rounded to f32 once. As for the scores, the norm then
+    does not depend on the order of summation, hence not on BLAS or on the
+    machine (ADR-0045).
+    """
+    squares = [float(value) * float(value) for value in vector.tolist()]
+    return float(np.float32(math.sqrt(math.fsum(squares))))
+
+
+def exact_scores(matrix: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """Returns the f32 dot product of every row of ``matrix`` with ``vector``.
+
+    Both arguments hold f32 values. Each product is formed in f64, where it is
+    exact, the row is summed exactly by :func:`math.fsum`, and the sum is
+    rounded to f32 once. The score does not depend on the order in which the
+    components are summed, so it does not depend on BLAS or on the machine
+    (ADR-0045).
+    """
+    products = matrix.astype(np.float64) * vector.astype(np.float64)
+    return np.array(
+        [np.float32(math.fsum(row.tolist())) for row in products], dtype=np.float32
+    )
+
+
 def top_k(
     passages: Sequence[PassageRow],
     mask: np.ndarray,
@@ -408,10 +454,11 @@ def top_k(
 ) -> list[Result]:
     """Returns the exact top-k of the cosine over the masked passages.
 
-    The stored vectors are fp16 promoted to f32, the query is normalized and
-    scored in f32, as the engine does (fiche P1, ``RECHERCHER-DENSE-EXACT``).
-    The stored vectors are already normalized, so the dot product is the
-    cosine. Ties are broken by key.
+    The stored vectors are fp16 promoted to f32 and the query is normalized in
+    f32, as the engine does (fiche P1, ``RECHERCHER-DENSE-EXACT``). The norm
+    and the scores are computed exactly by :func:`exact_norm` and
+    :func:`exact_scores`; the stored vectors are already normalized, so the
+    dot product is the cosine. Ties are broken by key.
     """
     if k <= 0:
         raise ValueError("k must be strictly positive")
@@ -419,14 +466,14 @@ def top_k(
     if indices.size == 0:
         return []
     vector = np.asarray(query, dtype=np.float32)
-    norm = np.linalg.norm(vector)
+    norm = exact_norm(vector)
     if norm == 0.0:
         raise ValueError("the query vector has a zero norm")
     vector /= norm
     matrix = np.stack([passages[int(index)].vector for index in indices]).astype(
         np.float32
     )
-    scores = matrix @ vector
+    scores = exact_scores(matrix, vector)
     order = sorted(
         range(indices.size), key=lambda pos: (-scores[pos], passages[int(indices[pos])].key)
     )
