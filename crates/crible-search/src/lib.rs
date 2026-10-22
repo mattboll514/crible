@@ -4,3 +4,4 @@
 
 pub mod dense;
 pub mod pool;
+pub mod scan_pool;

@@ -52,7 +52,7 @@ use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_search::dense::exact::{ExactSearcher, Hit};
 use crible_search::pool::Pool;
-use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
+use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentSpec, SegmentWriter};
 use serde_json::{Map, Value, json};
@@ -156,7 +156,10 @@ impl DenseFixture {
             panic!("a temporary directory for the index must be creatable: {error}")
         });
         let index = temp.path().join("indexes").join("dense-exact");
-        let store = GenerationStore::create(&index, Epoch::new(EPOCH), &fixture_schema())
+        let schema = fixture_schema();
+        write_index_config(&index, &super::test_config("dense-exact", &schema))
+            .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
+        let store = GenerationStore::create(&index, Epoch::new(EPOCH), &schema)
             .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"));
         Self {
             _temp: temp,

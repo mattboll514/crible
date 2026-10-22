@@ -68,7 +68,7 @@ use std::sync::Arc;
 use crible_core::config::{FieldLevel, Schema};
 use crible_core::filter::{Condition, Filter, Operator};
 use crible_core::ids::{Epoch, Generation, Iid};
-use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
+use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
@@ -100,6 +100,14 @@ pub fn fixture_schema() -> Schema {
         .unwrap_or_else(|error| panic!("the fixture schema must be valid: {error}"))
 }
 
+/// Index configuration declaring `schema`, as `crible index create` writes it.
+pub fn test_config(name: &str, schema: &Schema) -> String {
+    format!(
+        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        schema.to_json_string()
+    )
+}
+
 /// One index in a temporary directory, its writer, and the rows it holds.
 pub struct Fixture {
     // The directory must outlive the index: dropping it removes the files.
@@ -116,6 +124,8 @@ impl Fixture {
             panic!("a temporary directory for the index must be creatable: {error}")
         });
         let index = temp.path().join("indexes").join("inv-07");
+        write_index_config(&index, &test_config("inv-07", &schema))
+            .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
         let store = GenerationStore::create(&index, Epoch::new(EPOCH), &schema)
             .unwrap_or_else(|error| panic!("the index must be created: {error}"));
         Self {

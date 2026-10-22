@@ -78,7 +78,7 @@ use crible_core::model::ModelConfig;
 use crible_search::dense::exact::ExactSearcher;
 use crible_search::pool::Pool;
 use crible_store::attach::attach;
-use crible_store::generation::GenerationStore;
+use crible_store::generation::{GenerationStore, write_index_config};
 use crible_store::records::RecordStore;
 use serde_json::Value;
 
@@ -360,10 +360,12 @@ fn inv_06_synth_small_200_queries_match_the_numpy_reference() {
         panic!("a temporary directory for the index must be creatable: {error}")
     });
     let index_dir = temp.path().join("indexes").join("inv-06");
+    let root = dataset_root();
+    write_index_config(&index_dir, &read_file(&root.join("index.json")))
+        .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
     let mut store = GenerationStore::create(&index_dir, Epoch::new(EPOCH), &dataset.index.schema)
         .unwrap_or_else(|error| panic!("the index must be created: {error}"));
 
-    let root = dataset_root();
     for (name, generation) in [("l1", 1), ("l2", 2), ("l3", 3)] {
         let batch = root.join(name);
         assert!(

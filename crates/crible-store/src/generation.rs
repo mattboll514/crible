@@ -10,6 +10,7 @@
 //! # Layout
 //!
 //! ```text
+//! <index>/index.json                                configuration of the index (schema, frozen)
 //! <index>/CURRENT_EPOCH                             current epoch, written tmp then renamed
 //! <index>/epochs/<epoch>/records.sqlite             reference state (WAL)
 //! <index>/epochs/<epoch>/segments/<segment_id>/     immutable vectors, see `segment`
@@ -74,7 +75,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
-use crible_core::config::Schema;
+use crible_core::config::{IndexConfig, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::{Connection, Transaction};
@@ -89,6 +90,77 @@ pub const MANIFEST_FORMAT_VERSION: u32 = 1;
 
 /// Name of the file holding the current epoch of an index.
 pub const CURRENT_EPOCH_FILE_NAME: &str = "CURRENT_EPOCH";
+
+/// Name of the index configuration inside an index directory.
+///
+/// `docs/02-architecture.md` ("Organisation sur disque") places `index.json`
+/// next to `CURRENT_EPOCH`. The store reads its schema from it, so the filter
+/// structures can never be built from a schema the index does not declare.
+pub const INDEX_CONFIG_FILE_NAME: &str = "index.json";
+
+/// Writes the index configuration `index.json` atomically in `index_dir`.
+///
+/// The directory is created when it does not exist. The caller writes the
+/// configuration before [`GenerationStore::create`], which refuses an index
+/// without one. The write is a temporary file, fsync, rename and fsync of the
+/// directory (the protocol of `docs/02-architecture.md` for `CURRENT_EPOCH`),
+/// so a crash leaves either no configuration or the whole one, never a
+/// truncated `index.json` that a retry would refuse.
+///
+/// A directory holding any part of an index — `CURRENT_EPOCH`, an `epochs/`
+/// directory or a `records.sqlite` — is refused with
+/// [`ErrorCode::InvalidRequest`], naming what is present. Writing a different
+/// schema over an epoch that already holds rows would change the filter
+/// structures of a populated `records.sqlite`, which `RecordStore::create`
+/// reopens without emptying. A residual `index.json` alone is not such a state:
+/// a creation that stopped before its first epoch left one, and nothing else
+/// exists, so replacing it loses nothing.
+pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), CribleError> {
+    if let Some(present) = occupied_index_state(index_dir) {
+        return Err(existing_index_error(index_dir, &present));
+    }
+    fs::create_dir_all(index_dir)
+        .map_err(|error| io_error("create the index directory", index_dir, &error))?;
+    write_atomically(
+        &index_dir.join(INDEX_CONFIG_FILE_NAME),
+        config_json.as_bytes(),
+    )
+}
+
+/// What already occupies `index_dir`, if it holds any part of an index.
+///
+/// The three states are checked in the order a creation writes them:
+/// `CURRENT_EPOCH` (a complete index), `epochs/` (an epoch exists, even without
+/// its pointer) and a `records.sqlite` at the index root (an interrupted tree
+/// with no epoch directory). A residual `index.json` is deliberately absent
+/// from this list: it is the only file a creation may replace.
+fn occupied_index_state(index_dir: &Path) -> Option<String> {
+    let pointer = index_dir.join(CURRENT_EPOCH_FILE_NAME);
+    if pointer.exists() {
+        return Some(pointer.display().to_string());
+    }
+    let epochs = index_dir.join(EPOCHS_DIR_NAME);
+    if epochs.exists() {
+        return Some(epochs.display().to_string());
+    }
+    let records = index_dir.join(RECORDS_FILE_NAME);
+    if records.exists() {
+        return Some(records.display().to_string());
+    }
+    None
+}
+
+/// Error returned when a creation targets an index that already exists.
+fn existing_index_error(index_dir: &Path, present: &str) -> CribleError {
+    CribleError::new(
+        ErrorCode::InvalidRequest,
+        format!(
+            "an index already exists at {}: {present} is present, and creating an index \
+             never overwrites one; remove it to create a new index",
+            index_dir.display()
+        ),
+    )
+}
 
 /// Name of the directory holding the epochs of an index.
 const EPOCHS_DIR_NAME: &str = "epochs";
@@ -291,7 +363,21 @@ impl GenerationStore {
     /// `schema` is the schema of the index configuration (`index.json`,
     /// `docs/02-architecture.md`), which says which fields the filter
     /// structures index and how. A fresh index has no row, so its structures
-    /// are the empty ones of that schema.
+    /// are the empty ones of that schema. `index.json` must already be present
+    /// in `index_dir` — written by [`write_index_config`] — and its schema is
+    /// the authority: a different `schema` is refused with
+    /// [`ErrorCode::ImmutableSetting`], because the schema is frozen and a
+    /// mismatch would build structures of another index. An index without a
+    /// declared schema is refused with [`ErrorCode::InvalidRequest`], so no
+    /// index exists whose filter structures no configuration describes.
+    ///
+    /// **An existing index is never overwritten.** When `CURRENT_EPOCH` is
+    /// already present, creation stops with [`ErrorCode::InvalidRequest`]
+    /// before writing anything: rewriting the pointer and `meta.epoch` would
+    /// make a different epoch current while its rows stay in place, which no
+    /// commit produced and no recovery expects. `invalid_request` is the code
+    /// of `docs/05-api.md` for a request the store cannot carry out; the code
+    /// `immutable_setting` is reserved for a frozen setting, which this is not.
     ///
     /// `CURRENT_EPOCH` is written last and atomically, and every directory it
     /// makes reachable is fsynced before it: `segments/`, the epoch directory
@@ -302,6 +388,11 @@ impl GenerationStore {
     /// with [`ErrorCode::InvalidRequest`] instead of reading a half-created
     /// epoch.
     pub fn create(index_dir: &Path, epoch: Epoch, schema: &Schema) -> Result<Self, CribleError> {
+        if let Some(present) = occupied_index_state(index_dir) {
+            return Err(existing_index_error(index_dir, &present));
+        }
+        check_declared_schema(index_dir, schema)?;
+
         let epoch_dir = epoch_directory(index_dir, epoch);
         let segments = segments_directory(&epoch_dir);
         let manifests = manifests_directory(&epoch_dir);
@@ -349,13 +440,18 @@ impl GenerationStore {
     /// `schema` is the schema of the index configuration, as for
     /// [`GenerationStore::create`]: the filter structures of the committed
     /// generation are rebuilt from `records.sqlite`, and the schema is what
-    /// tells them which field to index and how.
+    /// tells them which field to index and how. It is cross-checked against the
+    /// schema `index.json` declares, so opening an index with another schema is
+    /// refused with [`ErrorCode::ImmutableSetting`] instead of silently
+    /// building different filter structures. An index directory without
+    /// `index.json` is refused with [`ErrorCode::InvalidRequest`].
     ///
     /// A directory that holds no `CURRENT_EPOCH` is not an index of this build
     /// and is refused with [`ErrorCode::InvalidRequest`], before anything is
     /// removed from it.
     pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
+        check_declared_schema(index_dir, schema)?;
         let epoch_dir = epoch_directory(index_dir, epoch);
         let records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
 
@@ -517,10 +613,141 @@ impl GenerationStore {
         self.records.batch(batch_id)
     }
 
-    /// Directory of the segments of the current epoch.
-    pub(crate) fn segments_directory(&self) -> PathBuf {
-        segments_directory(&epoch_directory(&self.index_dir, self.epoch))
+    /// Directory of the current epoch: `<index>/epochs/<epoch>`.
+    #[must_use]
+    pub fn epoch_directory(&self) -> PathBuf {
+        epoch_directory(&self.index_dir, self.epoch)
     }
+
+    /// Path of the reference database of the current epoch.
+    ///
+    /// The search opens its read-only payload connections on this file, at one
+    /// fixed path (ADR-0043), so it never recomputes an epoch directory per
+    /// query.
+    #[must_use]
+    pub fn records_path(&self) -> PathBuf {
+        self.epoch_directory().join(RECORDS_FILE_NAME)
+    }
+
+    /// Directory of the segments of the current epoch.
+    #[must_use]
+    pub fn segments_directory(&self) -> PathBuf {
+        segments_directory(&self.epoch_directory())
+    }
+
+    /// State of the published generation, as `crible inspect` and the index
+    /// state of the API (`docs/05-api.md`) report it.
+    ///
+    /// The counts come from `records.sqlite`, the reference state, while the
+    /// filter memory comes from the published snapshot. The store is the only
+    /// writer of its index, so the two describe the same generation.
+    pub fn state(&self) -> Result<IndexState, CribleError> {
+        let snapshot = self.snapshot();
+        let counts = self.records.counts()?;
+        let live_passages = snapshot.filters().live().len();
+        let dead_passages = counts.passages.checked_sub(live_passages).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the live bitmap holds more passages than the reference state",
+            )
+        })?;
+        Ok(IndexState {
+            epoch: self.epoch,
+            generation: snapshot.generation(),
+            documents: counts.documents,
+            live_passages,
+            dead_passages,
+            segments: snapshot.segments().to_vec(),
+            filter_memory: snapshot.filter_memory(),
+        })
+    }
+}
+
+/// State of one published generation, for inspection.
+///
+/// Every count is taken from the reference state; the segments and the filter
+/// memory describe the snapshot the store published. The dead ratio is a simple
+/// `dead / (live + dead)` and is not stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexState {
+    /// Epoch directory holding the reference state.
+    pub epoch: Epoch,
+    /// Published generation.
+    pub generation: Generation,
+    /// Documents the reference state holds.
+    pub documents: u64,
+    /// Passages alive at this generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at this generation or an earlier one.
+    pub dead_passages: u64,
+    /// Segments the generation references, in `iid_start` order.
+    pub segments: Vec<SegmentMeta>,
+    /// Estimated heap size of the filter structures.
+    pub filter_memory: FilterMemory,
+}
+
+impl IndexState {
+    /// Ratio of dead passages among all the passages of the epoch, or 0 when
+    /// the epoch holds none.
+    #[must_use]
+    pub fn dead_ratio(&self) -> f64 {
+        let total = self.live_passages.saturating_add(self.dead_passages);
+        if total == 0 {
+            return 0.0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = self.dead_passages as f64 / total as f64;
+        ratio
+    }
+}
+
+/// Reads the schema `index.json` declares.
+///
+/// An index always carries `index.json`: [`GenerationStore::create`] refuses an
+/// index directory without it, and [`write_index_config`] is the only way the
+/// store writes one. A directory without it is therefore not a complete index,
+/// and its caller's schema must not become the only authority, or the filter
+/// structures could be built from a schema no index declares.
+fn declared_schema(index_dir: &Path) -> Result<Schema, CribleError> {
+    let path = index_dir.join(INDEX_CONFIG_FILE_NAME);
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        CribleError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "cannot read the index configuration {}: {error}; a Crible index always \
+                 declares its schema in {INDEX_CONFIG_FILE_NAME}",
+                path.display()
+            ),
+        )
+    })?;
+    let config = IndexConfig::from_json_str(&raw).map_err(|error| {
+        CribleError::new(
+            error.code(),
+            format!("{}: {}", path.display(), error.message()),
+        )
+    })?;
+    Ok(config.schema)
+}
+
+/// Refuses a `schema` that differs from the one `index.json` declares.
+///
+/// The schema is frozen (INV-16) and decides which filter structures exist. A
+/// store built with another schema would silently build structures no index
+/// declares, so the two are cross-checked at creation and at every open.
+fn check_declared_schema(index_dir: &Path, schema: &Schema) -> Result<(), CribleError> {
+    let declared = declared_schema(index_dir)?;
+    if &declared == schema {
+        return Ok(());
+    }
+    Err(CribleError::new(
+        ErrorCode::ImmutableSetting,
+        format!(
+            "the schema passed to the store differs from the schema declared by {}; the \
+             schema of an index is frozen, and its filter structures are built from the \
+             declared one",
+            index_dir.join(INDEX_CONFIG_FILE_NAME).display()
+        ),
+    ))
 }
 
 /// Writes one [`GenerationChange`] inside the transaction of its generation,
@@ -916,17 +1143,47 @@ fn segment_value(meta: &SegmentMeta) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{CURRENT_EPOCH_FILE_NAME, GenerationStore, read_current_epoch};
+    use super::{
+        CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, read_current_epoch,
+    };
     use crible_core::config::Schema;
     use crible_core::error::ErrorCode;
     use crible_core::ids::Epoch;
     use std::fs;
 
+    /// JSON schema of an index that indexes no field.
+    const EMPTY_SCHEMA_JSON: &str = r#"{ "document_fields": {}, "passage_fields": {} }"#;
+
+    /// JSON schema of an index indexing one `integer` document field.
+    const YEAR_SCHEMA_JSON: &str =
+        r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#;
+
     /// Schema of an index that indexes no field: these tests commit no row, so
     /// their filter structures stay empty.
     fn empty_schema() -> Schema {
-        Schema::from_json_str(r#"{ "document_fields": {}, "passage_fields": {} }"#)
+        Schema::from_json_str(EMPTY_SCHEMA_JSON)
             .unwrap_or_else(|error| panic!("the empty schema must be valid: {error}"))
+    }
+
+    /// Schema indexing one `integer` document field.
+    fn schema_with_year() -> Schema {
+        Schema::from_json_str(YEAR_SCHEMA_JSON)
+            .unwrap_or_else(|error| panic!("the year schema must be valid: {error}"))
+    }
+
+    /// Writes an index configuration declaring `schema` as its schema.
+    fn write_config(index: &std::path::Path, schema: &str) {
+        let raw = test_config("test", schema);
+        super::write_index_config(index, &raw)
+            .unwrap_or_else(|error| panic!("the index configuration: {error}"));
+    }
+
+    /// Index configuration declaring `schema`, with the settings the store
+    /// ignores.
+    fn test_config(name: &str, schema: &str) -> String {
+        format!(
+            r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{schema},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#
+        )
     }
 
     /// Creation writes the pointer file, readable as a plain decimal number, and
@@ -935,6 +1192,7 @@ mod tests {
     fn create_writes_the_current_epoch_and_the_manifest_of_generation_zero() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
         let store = GenerationStore::create(&index, Epoch::new(3), &empty_schema())
             .expect("the index is created");
 
@@ -952,6 +1210,245 @@ mod tests {
                 .join("0.json")
                 .is_file(),
             "creation must leave the manifest of generation 0"
+        );
+    }
+
+    /// Creating an index that already exists is refused by the store, before
+    /// anything is written, and the existing index keeps its epoch and its
+    /// generation.
+    #[test]
+    fn create_refuses_an_existing_index_and_leaves_it_intact() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let store = GenerationStore::create(&index, Epoch::new(4), &empty_schema())
+            .expect("the index is created");
+        let pointer = index.join(CURRENT_EPOCH_FILE_NAME);
+        let pointer_before = fs::read(&pointer).expect("the pointer is readable");
+        let state_before = store.state().expect("the state is readable");
+        drop(store);
+
+        let error = GenerationStore::create(&index, Epoch::new(9), &empty_schema())
+            .err()
+            .expect("creating an existing index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+
+        assert_eq!(
+            fs::read(&pointer).expect("the pointer is still readable"),
+            pointer_before,
+            "the refusal must not rewrite CURRENT_EPOCH"
+        );
+        let reopened =
+            GenerationStore::open(&index, &empty_schema()).expect("the index still opens");
+        assert_eq!(reopened.epoch(), Epoch::new(4));
+        let state_after = reopened.state().expect("the state is readable");
+        assert_eq!(
+            (
+                state_before.epoch,
+                state_before.generation,
+                state_before.documents,
+                state_before.live_passages,
+            ),
+            (
+                state_after.epoch,
+                state_after.generation,
+                state_after.documents,
+                state_after.live_passages,
+            ),
+            "the refusal must leave the index untouched"
+        );
+    }
+
+    /// A directory without `index.json` is not a complete index: creation is
+    /// refused before anything is written, so the store never builds filter
+    /// structures from a schema no configuration declares.
+    #[test]
+    fn create_refuses_an_index_without_a_declared_schema() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+
+        let error = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .err()
+            .expect("an index without index.json must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(CURRENT_EPOCH_FILE_NAME).exists(),
+            "a refused creation must leave no index"
+        );
+        assert!(
+            !index.join("epochs").exists(),
+            "a refused creation must not write the epoch"
+        );
+    }
+
+    /// A directory holding an epoch but no `CURRENT_EPOCH` is a torn index:
+    /// writing a configuration over it would let `create` reopen a populated
+    /// `records.sqlite` with another schema, so it is refused.
+    #[test]
+    fn write_index_config_refuses_a_torn_index_state() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        let epoch = index.join("epochs").join("1");
+        fs::create_dir_all(&epoch).expect("the epoch directory is created");
+        fs::write(epoch.join("records.sqlite"), b"stale").expect("the stale database is written");
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("a torn index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("epochs"),
+            "the message must name what is present: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+    }
+
+    /// A residual `index.json` is the trace of a creation that stopped before
+    /// its first epoch: nothing else exists, so replacing it loses nothing and
+    /// the creation then succeeds.
+    #[test]
+    fn write_index_config_replaces_a_residual_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+        fs::write(index.join(INDEX_CONFIG_FILE_NAME), r#"{"stale":true}"#)
+            .expect("the residual configuration is written");
+
+        let raw = test_config("test", EMPTY_SCHEMA_JSON);
+        super::write_index_config(&index, &raw).expect("the residual configuration is replaced");
+        assert_eq!(
+            fs::read_to_string(index.join(INDEX_CONFIG_FILE_NAME))
+                .expect("the configuration is readable"),
+            raw,
+            "the residual configuration must be replaced"
+        );
+        GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .expect("the index is created after the replacement");
+    }
+
+    /// `write_index_config` refuses a complete index, like `create`, and names
+    /// the pointer it found.
+    #[test]
+    fn write_index_config_refuses_an_existing_index() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("an existing index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(CURRENT_EPOCH_FILE_NAME),
+            "the message must name what is present: {}",
+            error.message()
+        );
+    }
+
+    /// The schema of `index.json` is the authority: a different schema is
+    /// refused at creation, before the epoch exists.
+    #[test]
+    fn create_refuses_a_schema_that_differs_from_the_index_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(
+            &index,
+            r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#,
+        );
+
+        let error = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .err()
+            .expect("a different schema must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::ImmutableSetting,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(CURRENT_EPOCH_FILE_NAME).exists(),
+            "a refused creation must leave no index"
+        );
+    }
+
+    /// Opening an index with a schema other than the declared one is refused,
+    /// instead of silently building different filter structures.
+    #[test]
+    fn open_refuses_a_schema_that_differs_from_the_index_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(
+            &index,
+            r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#,
+        );
+        let store = GenerationStore::create(&index, Epoch::new(1), &schema_with_year())
+            .expect("the declared schema creates the index");
+        drop(store);
+
+        let error = GenerationStore::open(&index, &empty_schema())
+            .err()
+            .expect("a different schema must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::ImmutableSetting,
+            "wrong error code: {}",
+            error.message()
+        );
+
+        let reopened = GenerationStore::open(&index, &schema_with_year())
+            .expect("the declared schema still opens the index");
+        assert_eq!(reopened.epoch(), Epoch::new(1));
+    }
+
+    /// Opening an index whose `index.json` disappeared is refused: the store
+    /// must not rebuild the filter structures from the caller's schema alone.
+    #[test]
+    fn open_refuses_an_index_without_a_declared_schema() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+        fs::remove_file(index.join(INDEX_CONFIG_FILE_NAME))
+            .expect("the configuration is removed to simulate a lost file");
+
+        let error = GenerationStore::open(&index, &empty_schema())
+            .err()
+            .expect("an index without index.json must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
         );
     }
 

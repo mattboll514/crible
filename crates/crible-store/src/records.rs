@@ -367,6 +367,11 @@ impl RecordStore {
         segment_ids(&self.connection)
     }
 
+    /// Row counts of the reference state, as inspection reports them.
+    pub(crate) fn counts(&self) -> Result<Counts, CribleError> {
+        counts(&self.connection)
+    }
+
     /// Records the epoch in `meta.epoch`, at the creation of the database.
     ///
     /// A database without its `meta` row cannot name its epoch, so the update
@@ -442,6 +447,29 @@ pub(crate) fn segment_ids(connection: &Connection) -> Result<Vec<String>, Crible
         .map_err(|error| database_error("query the segment ids", &error))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| database_error("read the segment ids", &error))
+}
+
+/// Row counts of the reference state, as inspection reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Counts {
+    /// Rows of the `documents` table.
+    pub(crate) documents: u64,
+    /// Rows of the `passages` table, dead passages included.
+    pub(crate) passages: u64,
+}
+
+/// Counts the rows of the two content tables.
+pub(crate) fn counts(connection: &Connection) -> Result<Counts, CribleError> {
+    let documents: i64 = connection
+        .query_row("SELECT count(*) FROM documents", [], |row| row.get(0))
+        .map_err(|error| database_error("count the documents", &error))?;
+    let passages: i64 = connection
+        .query_row("SELECT count(*) FROM passages", [], |row| row.get(0))
+        .map_err(|error| database_error("count the passages", &error))?;
+    Ok(Counts {
+        documents: from_sql_u64(documents, "documents count")?,
+        passages: from_sql_u64(passages, "passages count")?,
+    })
 }
 
 /// Reads the `batches` row of one batch, or `None` when it was never applied.
