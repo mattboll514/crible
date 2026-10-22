@@ -4,7 +4,8 @@
 //!
 //! References: `docs/format-lot-v1.md`, `docs/04-donnees-et-ingestion.md`
 //! (controls 4 to 7), ADR-0012 (public batch format), ADR-0034 (blake3),
-//! ADR-0039 (order of the rows of a document in a batch v1).
+//! ADR-0039 (order of the rows of a document in a batch v1), ADR-0040 (order of
+//! the parts by numeric suffix and unique `doc_id`s).
 //!
 //! [`BatchReader::open`] reads `manifest.json`, applies
 //! [`crible_core::batch::check_manifest`] (controls 1 to 3 and the
@@ -18,18 +19,27 @@
 //! of one document arrive in ascending `ord` order, starting at 0, and in that
 //! order only, so a passage whose `ord` is not the next one expected for its
 //! document is refused. A document may be split across several
-//! `passages-*.parquet` parts, read in increasing suffix order, as long as its
-//! `ord` sequence continues across the parts. The order is also what keeps the
-//! memory of validation bounded: it holds one entry per declared document,
-//! where accepting any row order would cost a state proportional to the
-//! passages (the `ord`s already seen, per document). The failure messages say
-//! that the rows must arrive in ascending `ord` order, so a producer
-//! understands the refusal.
+//! `passages-*.parquet` parts, read in increasing numeric suffix order
+//! (ADR-0040), as long as its `ord` sequence continues across the parts. The
+//! order is also what keeps the memory of validation bounded: it holds one
+//! entry per declared document, where accepting any row order would cost a
+//! state proportional to the passages (the `ord`s already seen, per document).
+//! The failure messages say that the rows must arrive in ascending `ord`
+//! order, so a producer understands the refusal.
+//!
+//! **Uniqueness of a `doc_id`.** A `doc_id` appears at most once in the
+//! documents of a batch, across all its parts, and at most once in its
+//! deletions (ADR-0040). A duplicate is refused rather than merged: two
+//! `doc_hash` values or two field sets for one document would make the result
+//! depend on the order of the parts, and the rule "same `doc_hash`, same
+//! content" would no longer hold.
 //!
 //! Memory stays bounded. Rows are read through Arrow record batches of at most
 //! [`DEFAULT_BATCH_ROWS`] rows, and no Parquet file is ever read as a whole.
 //! Validation keeps one entry per declared document, never one per passage, and
-//! refuses a batch that declares more documents than its manifest announces.
+//! the set of deleted ids, which never grows past `counts.deletions`: a
+//! manifest that declares fewer documents or deletions than its files hold is
+//! refused before the excess is stored.
 //!
 //! A fault of the batch itself is an [`ErrorCode::InvalidRequest`] error: a
 //! malformed manifest, an unknown or malformed checksum, a file that is missing
@@ -39,7 +49,7 @@
 //! or Arrow error keeps the I/O cause; see `arrow_failure` for the case where
 //! arrow-rs flattens it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -180,6 +190,9 @@ impl BatchReader {
     /// The files are streamed in bounded record batches, so validation never
     /// holds a whole role in memory. Documents are tracked one by one: their
     /// identifier and the next `ord` expected for them, never their passages.
+    /// Deletions keep the set of their ids, bounded by `counts.deletions`, to
+    /// refuse a duplicate (ADR-0040): a deletion beyond the declared count is
+    /// refused before its id is stored.
     ///
     /// Controls 6 and 7 share one pass over the passages, so their order in
     /// `docs/04` is not strictly the order in which an error surfaces: a bad
@@ -195,7 +208,9 @@ impl BatchReader {
     /// [`ErrorCode::InvalidRequest`] when a count differs from the manifest,
     /// when the rows of a document do not arrive in ascending `ord` order from
     /// 0, when a document has no passage, when a passage names an undeclared
-    /// document, or when a vector is not finite or not normalized as declared.
+    /// document, when a `doc_id` appears twice in `documents` or in
+    /// `deletions` (ADR-0040), or when a vector is not finite or not normalized
+    /// as declared.
     pub fn validate(&self) -> Result<BatchCounts, CribleError> {
         let (mut documents, document_rows) = self.read_documents()?;
         let passages = self.read_passages(&mut documents)?;
@@ -289,6 +304,12 @@ impl BatchReader {
     /// Reads the document files and returns, per declared document, the next
     /// `ord` expected for it (`None` until its first passage is seen), with the
     /// number of rows read.
+    ///
+    /// A `doc_id` appears at most once in the documents of a batch, across all
+    /// its parts (ADR-0040): a duplicate is refused instead of being merged, so
+    /// two `doc_hash` values cannot coexist for one document. The map holds one
+    /// entry per declared document, so the memory stays bounded by
+    /// `counts.documents`.
     fn read_documents(&self) -> Result<(HashMap<String, Option<u32>>, u64), CribleError> {
         let declared = self.manifest.counts.documents;
         let limit = usize::try_from(declared).unwrap_or(usize::MAX);
@@ -299,19 +320,19 @@ impl BatchReader {
             let ids = string_column(&chunk, "doc_id")?;
             for index in 0..chunk.num_rows() {
                 let doc_id = string_value(ids, index, "doc_id", Role::Documents, &self.manifest)?;
-                if documents.len() >= limit && !documents.contains_key(doc_id) {
+                if documents.contains_key(doc_id) {
+                    return Err(invalid(format!(
+                        "the documents files declare the doc_id '{doc_id}' twice; a doc_id \
+                         appears at most once in the documents of a batch, across all its parts"
+                    )));
+                }
+                if documents.len() >= limit {
                     return Err(invalid(format!(
                         "the documents files declare more documents than counts.documents (\
                          {declared}); the batch must match its manifest"
                     )));
                 }
-                // Note: a duplicated doc_id is merged here rather than refused.
-                // Nothing in `docs/04` (controls 4 to 7) or
-                // `docs/format-lot-v1.md` settles it, so two doc_hash values may
-                // coexist for one document without an error. Refusing it in the
-                // reader, or stating it in the ATTACHER-LOT task, is a decision
-                // that remains to be taken.
-                documents.entry(doc_id.to_owned()).or_insert(None);
+                documents.insert(doc_id.to_owned(), None);
                 rows = rows.saturating_add(1);
             }
         }
@@ -371,14 +392,35 @@ impl BatchReader {
     }
 
     /// Reads the deletion file, when the batch has one.
+    ///
+    /// A `doc_id` appears at most once in the deletions of a batch (ADR-0040),
+    /// so the ids are kept to refuse a duplicate. The set is bounded by
+    /// `counts.deletions`: as in `read_documents`, a row beyond the declared
+    /// count is refused before its id is stored, so a batch that under-declares
+    /// its deletions cannot make the memory grow with the file.
     fn read_deletions(&self) -> Result<u64, CribleError> {
         let declared = self.manifest.counts.deletions;
+        let limit = usize::try_from(declared).unwrap_or(usize::MAX);
+        let mut seen: HashSet<String> = HashSet::new();
         let mut rows = 0_u64;
         for chunk in self.deletions() {
             let chunk = chunk?;
             let ids = string_column(&chunk, "doc_id")?;
             for index in 0..chunk.num_rows() {
-                string_value(ids, index, "doc_id", Role::Deletions, &self.manifest)?;
+                let doc_id = string_value(ids, index, "doc_id", Role::Deletions, &self.manifest)?;
+                if seen.contains(doc_id) {
+                    return Err(invalid(format!(
+                        "the deletions file declares the doc_id '{doc_id}' twice; a doc_id \
+                         appears at most once in the deletions of a batch"
+                    )));
+                }
+                if seen.len() >= limit {
+                    return Err(invalid(format!(
+                        "the deletions file declares more deletions than counts.deletions (\
+                         {declared}); the batch must match its manifest"
+                    )));
+                }
+                seen.insert(doc_id.to_owned());
                 rows = rows.saturating_add(1);
             }
         }

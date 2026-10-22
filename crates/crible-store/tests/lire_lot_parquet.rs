@@ -5,7 +5,9 @@
 //!
 //! References: `docs/phases/P1-stockage-et-recherche-exacte.md` (task
 //! `LIRE-LOT-PARQUET`), `docs/format-lot-v1.md`,
-//! `docs/04-donnees-et-ingestion.md` (contrôles 4 à 7), ADR-0012, ADR-0034.
+//! `docs/04-donnees-et-ingestion.md` (controls 4 to 7), ADR-0012, ADR-0034,
+//! ADR-0039 (order of the rows of a document), ADR-0040 (unique document ids
+//! and parts in a batch v1).
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
@@ -142,17 +144,42 @@ fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
 type DocumentRow<'a> = (&'a str, &'a str, Option<i64>);
 
 fn write_documents(dir: &Path, rows: &[DocumentRow<'_>]) {
-    write_documents_with(dir, &document_schema(), rows);
+    write_documents_named(dir, "documents.parquet", rows);
 }
 
-fn write_documents_with(dir: &Path, schema: &SchemaRef, rows: &[DocumentRow<'_>]) {
+/// Writes one `documents-*.parquet` part of a batch.
+fn write_documents_named(dir: &Path, name: &str, rows: &[DocumentRow<'_>]) {
+    write_documents_named_with(dir, name, &document_schema(), rows);
+}
+
+fn write_documents_named_with(
+    dir: &Path,
+    name: &str,
+    schema: &SchemaRef,
+    rows: &[DocumentRow<'_>],
+) {
     let ids: StringArray = rows.iter().map(|row| Some(row.0)).collect();
     let hashes: StringArray = rows.iter().map(|row| Some(row.1)).collect();
     let years = Int64Array::from(rows.iter().map(|row| row.2).collect::<Vec<_>>());
     write_parquet(
-        &dir.join("documents.parquet"),
+        &dir.join(name),
         schema,
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(years)],
+    );
+}
+
+/// Writes `deletions.parquet` with one `doc_id` per row.
+fn write_deletions(dir: &Path, ids: &[&str]) {
+    let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "doc_id",
+        DataType::Utf8,
+        false,
+    )]));
+    let column: StringArray = ids.iter().map(|id| Some(*id)).collect();
+    write_parquet(
+        &dir.join("deletions.parquet"),
+        &schema,
+        vec![Arc::new(column)],
     );
 }
 
@@ -870,6 +897,245 @@ fn validate_reads_a_document_split_across_two_parts() {
     assert!(chunks.next().is_none(), "the batch holds two parts only");
     assert_eq!(ords_of(&first), vec![0], "the parts are visited in order");
     assert_eq!(ords_of(&second), vec![1], "the ords continue across parts");
+}
+
+/// The parts of a role are visited in increasing numeric value of their
+/// suffix, whatever the number of digits (ADR-0040): `passages-9999.parquet`
+/// comes before `passages-10000.parquet`, so the `ord` sequence of a document
+/// continues across the digit boundary.
+#[test]
+fn validate_reads_parts_in_numeric_suffix_order_across_a_digit_boundary() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages_named(
+        &dir,
+        "passages-9999.parquet",
+        &passage_schema(),
+        &[("doc-a", 0, "text-a", None, unit_vector())],
+    );
+    write_passages_named(
+        &dir,
+        "passages-10000.parquet",
+        &passage_schema(),
+        &[("doc-a", 1, "text-b", None, unit_vector())],
+    );
+    write_manifest(&dir, (1, 2, 0), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let counts = reader
+        .validate()
+        .expect("the ord sequence continues across the digit boundary");
+    assert_eq!(counts.passages, 2);
+
+    let mut chunks = reader.passages();
+    let first = chunks
+        .next()
+        .expect("the first part is read")
+        .expect("the first part decodes");
+    assert_eq!(
+        ords_of(&first),
+        vec![0],
+        "passages-9999.parquet is read before passages-10000.parquet"
+    );
+}
+
+/// Two parts of one role with the same numeric suffix leave the part order
+/// undefined and are refused (ADR-0040).
+#[test]
+fn open_refuses_two_parts_with_the_same_numeric_suffix() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages_named(
+        &dir,
+        "passages-0001.parquet",
+        &passage_schema(),
+        &[("doc-a", 0, "text-a", None, unit_vector())],
+    );
+    write_passages_named(
+        &dir,
+        "passages-00001.parquet",
+        &passage_schema(),
+        &[("doc-a", 1, "text-b", None, unit_vector())],
+    );
+    write_manifest(&dir, (1, 2, 0), "upsert");
+
+    let error = assert_invalid(open(&dir), "two parts numbered 1");
+    assert!(
+        error.message().contains("same numeric suffix"),
+        "the message must explain the repeated value: {}",
+        error.message()
+    );
+}
+
+/// A part suffix that no integer can hold is refused as a fault of the batch,
+/// never by a panic (ADR-0040).
+#[test]
+fn open_refuses_a_part_suffix_too_large_for_an_integer() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages(&dir, &[("doc-a", 0, "text-a", None, unit_vector())]);
+    let name = "passages-99999999999999999999.parquet";
+    fs::write(dir.join(name), b"").expect("the over-long part is created");
+    write_manifest(&dir, (1, 1, 0), "upsert");
+
+    let error = assert_invalid(open(&dir), "a suffix above u64");
+    assert!(
+        error.message().contains("too large"),
+        "the message must say the suffix is too large: {}",
+        error.message()
+    );
+}
+
+// --- ADR-0040: a doc_id appears at most once in documents and in deletions ---
+
+/// A `doc_id` declared twice inside one `documents` part is refused, naming
+/// the identifier (ADR-0040).
+#[test]
+fn validate_refuses_a_doc_id_duplicated_within_one_documents_part() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(
+        &dir,
+        &[
+            ("doc-a", "hash-a", Some(2020)),
+            ("doc-a", "hash-b", Some(2021)),
+        ],
+    );
+    write_passages(&dir, &[("doc-a", 0, "text-a", None, unit_vector())]);
+    write_manifest(&dir, (1, 1, 0), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let error = assert_invalid(reader.validate(), "duplicated doc_id in documents");
+    assert!(
+        error.message().contains("doc-a"),
+        "the message must name the doc_id: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("twice"),
+        "the message must say the doc_id is declared twice: {}",
+        error.message()
+    );
+}
+
+/// The uniqueness of a `doc_id` in `documents` spans every part of the batch
+/// (ADR-0040).
+#[test]
+fn validate_refuses_a_doc_id_duplicated_across_two_documents_parts() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents_named(
+        &dir,
+        "documents-0001.parquet",
+        &[("doc-a", "hash-a", Some(2020))],
+    );
+    write_documents_named(
+        &dir,
+        "documents-0002.parquet",
+        &[("doc-b", "hash-b", None), ("doc-a", "hash-a", Some(2020))],
+    );
+    write_passages(
+        &dir,
+        &[
+            ("doc-a", 0, "text-a", None, unit_vector()),
+            ("doc-b", 0, "text-b", None, unit_vector()),
+        ],
+    );
+    write_manifest(&dir, (2, 2, 0), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let error = assert_invalid(reader.validate(), "duplicated doc_id across two parts");
+    assert!(
+        error.message().contains("doc-a"),
+        "the message must name the doc_id: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("twice"),
+        "the message must say the doc_id is declared twice: {}",
+        error.message()
+    );
+}
+
+/// A `doc_id` declared twice in `deletions` is refused, naming the identifier
+/// (ADR-0040).
+#[test]
+fn validate_refuses_a_doc_id_duplicated_in_deletions() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages(&dir, &[("doc-a", 0, "text-a", None, unit_vector())]);
+    write_deletions(&dir, &["doc-b", "doc-b"]);
+    write_manifest(&dir, (1, 1, 2), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let error = assert_invalid(reader.validate(), "duplicated doc_id in deletions");
+    assert!(
+        error.message().contains("doc-b"),
+        "the message must name the doc_id: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("twice"),
+        "the message must say the doc_id is declared twice: {}",
+        error.message()
+    );
+}
+
+/// A batch with distinct deletions and distinct documents stays accepted.
+#[test]
+fn validate_accepts_distinct_deletions() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages(&dir, &[("doc-a", 0, "text-a", None, unit_vector())]);
+    write_deletions(&dir, &["doc-b", "doc-c"]);
+    write_manifest(&dir, (1, 1, 2), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let counts = reader
+        .validate()
+        .expect("two distinct deletions are part of the format");
+    assert_eq!(counts.deletions, 2);
+}
+
+/// A `deletions.parquet` that holds more rows than `counts.deletions` is
+/// refused before the excess ids are stored, so the memory of validation stays
+/// bounded by the manifest (mirror of the documents count).
+#[test]
+fn validate_refuses_more_deletions_than_the_manifest_declares() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = root.path().join("mini");
+    fs::create_dir_all(&dir).expect("the fixture batch directory is created");
+    write_documents(&dir, &[("doc-a", "hash-a", Some(2020))]);
+    write_passages(&dir, &[("doc-a", 0, "text-a", None, unit_vector())]);
+    write_deletions(&dir, &["doc-b", "doc-c", "doc-d"]);
+    write_manifest(&dir, (1, 1, 1), "upsert");
+
+    let reader = open(&dir).expect("the batch opens");
+    let error = assert_invalid(reader.validate(), "deletions above the declared count");
+    assert!(
+        error
+            .message()
+            .contains("more deletions than counts.deletions"),
+        "the message must report the excess: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("(1)"),
+        "the message must give the declared count: {}",
+        error.message()
+    );
 }
 
 /// The `ord` column of one record batch.
