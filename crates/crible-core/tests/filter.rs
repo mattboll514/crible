@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! The `Filter` AST: parsing from JSON and validation against a schema.
 //!
 //! References: `docs/05-api.md`, section "Grammaire des filtres", and the

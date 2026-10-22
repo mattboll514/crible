@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Fixtures shared by the generation invariant tests (`INV-03`, `INV-04`).
 //!
 //! The API of `crible_store::generation` assumed by these fixtures is
@@ -40,8 +43,9 @@ pub const DIMS: u32 = 4;
 
 /// Creates an empty temporary directory and the path of the index inside it.
 ///
-/// The index directory itself does not exist yet: `GenerationStore::create`
-/// is expected to create it, as `RecordStore::create` does for its database.
+/// The index directory itself does not exist yet: [`create_store_with`] writes
+/// `index.json` there first — `write_index_config` creates the directory — and
+/// `GenerationStore::create` then lays out the epoch inside it.
 pub fn temp_index() -> (tempfile::TempDir, PathBuf) {
     let temp = tempfile::tempdir().unwrap_or_else(|error| {
         panic!("a temporary directory for the index must be creatable: {error}")

@@ -23,8 +23,8 @@
 //!   so the comparison never mixes a text with an integer;
 //! - `Or` is the union of its children, an empty `Or` the empty pool; an empty
 //!   `And` is the whole live set, because `{}` is the empty conjunction;
-//! - `Not` is the complement over the live passages, so it keeps the passages
-//!   whose field is null (ADR-0035).
+//! - `Not` is the complement in the domain it receives — the live passages at
+//!   the top level — so it keeps the passages whose field is null (ADR-0035);
 //!
 //! # Null values
 //!
@@ -39,9 +39,13 @@
 //!
 //! Every intermediate set may still hold a tombstoned passage, because the
 //! structures cover every row of `records.sqlite` and only the live bitmap hides
-//! the dead ones (`docs/03-recherche.md`). The final intersection removes them,
-//! and the complement of `Not` is taken on the live set directly, so the result
-//! is always a subset of the live passages. A pool never returns a tombstone.
+//! the dead ones (`docs/03-recherche.md`). The final intersection with that
+//! bitmap removes them, so a pool never returns a tombstone.
+//!
+//! The complement of `Not` is taken in the domain the node receives: the live
+//! bitmap at the top level, and the set the enclosing conjunction already kept
+//! one level down. Both are subsets of the live passages, so a nested `Not`
+//! never brings a tombstone back.
 
 use crible_core::config::{FieldType, Schema};
 use crible_core::error::{CribleError, ErrorCode};
@@ -66,9 +70,15 @@ impl Pool {
     /// Evaluates a filter validated against the schema of the index.
     ///
     /// The filter is expected to have passed [`Filter::validate`], which
-    /// `docs/05-api.md` performs before a search. The checks are repeated here
-    /// anyway, so a direct caller gets [`ErrorCode::InvalidFilter`] instead of a
-    /// silently empty pool.
+    /// `docs/05-api.md` performs before a search. Every clause is checked again
+    /// here — the field is declared, filterable, the operator fits its type and
+    /// the operand has the right JSON type — so a direct caller gets
+    /// [`ErrorCode::InvalidFilter`] instead of a silently empty pool, whatever
+    /// the order of the clauses.
+    ///
+    /// The limits of ADR-0029 (depth and number of clauses) are **not** checked
+    /// here: [`Filter::from_json_str`] enforces them while it parses, and an AST
+    /// built another way has already left them behind.
     pub fn evaluate(filters: &FilterIndex, filter: &Filter) -> Result<Self, CribleError> {
         let mut bitmap = evaluate_filter(filters, filter, None)?;
         bitmap &= filters.live();

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `INV-06`: "Pool ≤ seuil exact ⇒ résultat identique au calcul exact",
 //! checked against the numpy reference of `synth-small`, plus the acceptance
 //! criteria of the task `RECHERCHER-DENSE-EXACT` (phase P1).
@@ -10,10 +13,9 @@
 //! ("Recherche : réponse"), `tools/README.md` ("Requêtes et résultats
 //! attendus").
 //!
-//! # Assumed API
+//! # API under test
 //!
-//! `crible_search::dense::exact` does not exist yet. These tests assume the
-//! following minimal surface, coherent with the task sheet and `docs/03`:
+//! `crible_search::dense::exact`, as `src/dense/exact.rs` implements it:
 //!
 //! ```text
 //! crible_search::dense::exact::ExactSearcher
@@ -39,7 +41,10 @@
 //! }
 //! ```
 //!
-//! Points the tests pin and that the implementation must respect:
+//! The pool comes from `crible_search::pool::Pool`, which the `INV-07` tests
+//! cover.
+//!
+//! Points the tests pin and that the implementation respects:
 //!
 //! - the query vector is normalised in f32 before the dot product, so the score
 //!   is the cosine (`docs/03-recherche.md`: "score = produit scalaire =

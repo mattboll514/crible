@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `RECHERCHER-DENSE-EXACT`: the properties the numpy reference does not
 //! guarantee by itself, on constructed pools.
 //!

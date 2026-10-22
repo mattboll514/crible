@@ -31,7 +31,7 @@
 - **Livrables** :
   - `.github/workflows/ci.yml` : fmt, clippy `-D warnings`, test (Linux), plus `pytest` quand `clients/python` existera (étape conditionnelle) ;
   - `rustfmt.toml` ;
-  - les lints de workspace : interdire `unwrap` et `expect` hors tests (`clippy::unwrap_used`, `clippy::expect_used` en `warn`, qui devient bloquant avec `-D warnings`) ;
+  - les lints de workspace : interdire `unwrap`, `expect` et `panic` hors tests (`clippy::unwrap_used`, `clippy::expect_used` et `clippy::panic` en `warn`, qui devient bloquant avec `-D warnings`) ;
   - `Makefile` ou `justfile` avec les cibles `check`, `test` et `lint`.
 - **Critères d'acceptation** :
   - `make check` (ou `just check`) passe en local ;

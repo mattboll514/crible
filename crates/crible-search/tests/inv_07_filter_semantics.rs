@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `INV-07`: every operator and every null case, pinned by a hand-written
 //! dataset.
 //!
@@ -8,9 +11,10 @@
 //! ("Grammaire des filtres"), `docs/03-recherche.md` ("Filtres → pool") and
 //! ADR-0035 (the semantics of null values).
 //!
-//! # Assumed API
+//! # API under test
 //!
-//! Same minimal surface as `inv_07_filter_bitmap_matches_sql.rs`:
+//! Same surface as `inv_07_filter_bitmap_matches_sql.rs`, which `src/pool.rs`
+//! implements:
 //!
 //! ```text
 //! crible_search::pool::Pool::evaluate(filters: &FilterIndex, filter: &Filter)
@@ -359,6 +363,64 @@ fn inv_07_each_operator_and_null_follows_adr_0035() {
     check(&fixture, r#"{"partie":{"nin":[]}}"#, &[0, 3, 4]);
 }
 
+/// A nested `$or` and a nested value column see the domain their enclosing `And`
+/// already reduced, and keep the reading of ADR-0035.
+///
+/// The property of `inv_07_filter_bitmap_matches_sql.rs` covers those shapes on
+/// random data. This test states what they must return on the hand-written
+/// dataset, where every expectation can be read off the table of the header:
+/// the first clause of each `$and` really narrows the domain before the nested
+/// node runs, so a nested branch that ignored it would show up here.
+#[test]
+fn inv_07_a_nested_or_and_column_read_the_reduced_domain() {
+    let fixture = small_index();
+
+    // `annee >= 2021` keeps doc-b's passages, {2, 3}. The nested `$or` then
+    // reads the same domain; its union keeps iid 3 (`partie: moyens`) and drops
+    // iid 0 (`partie: corps`), which the first clause had already excluded.
+    check(
+        &fixture,
+        r#"{"$and":[{"annee":{"gte":2021}},{"$or":[{"partie":{"eq":"corps"}},{"partie":{"eq":"moyens"}}]}]}"#,
+        &[3],
+    );
+    // The same shape with a `$not` under the `$or`: the complement is taken in
+    // the domain, nulls included, so the live passages the first clause dropped
+    // stay out (ADR-0035).
+    check(
+        &fixture,
+        r#"{"$and":[{"annee":{"gte":2021}},{"$or":[{"$not":{"partie":{"eq":"corps"}}},{"partie":{"eq":"faits"}}]}]}"#,
+        &[2, 3],
+    );
+    // `ne` on a passage keyword, under the same reduced domain: only a present
+    // value counts, so iid 2 (no `partie`) is not kept.
+    check(
+        &fixture,
+        r#"{"$and":[{"annee":{"gte":2021}},{"partie":{"ne":"corps"}}]}"#,
+        &[3],
+    );
+
+    // A date column nested under a reduced domain: `fonds: LEGI` keeps {0, 1},
+    // and the scan of `jour` then runs over those two ids only.
+    check(
+        &fixture,
+        r#"{"$and":[{"fonds":"LEGI"},{"jour":{"eq":"2020-01-01"}}]}"#,
+        &[0],
+    );
+    // An `in` on an integer column, under a domain reduced by `exists`.
+    check(
+        &fixture,
+        r#"{"$and":[{"partie":{"exists":true}},{"rang":{"in":[0,2]}}]}"#,
+        &[0],
+    );
+    // A domain the first clause emptied: the column is still evaluated, on an
+    // empty set, and the pool is empty without an error.
+    check(
+        &fixture,
+        r#"{"$and":[{"fonds":{"eq":"INCONNU"}},{"annee":{"gte":2020}}]}"#,
+        &[],
+    );
+}
+
 /// A filter the validation refuses must not silently evaluate to an empty or a
 /// full pool: [`Pool::evaluate`] repeats the checks and reports
 /// `invalid_filter`, the code the API uses for a filter the schema rejects.
@@ -418,15 +480,10 @@ fn inv_07_pool_never_holds_a_tombstoned_passage() {
     // `rang` is present on iid 5, which the second generation tombstoned: every
     // other passage of the dataset has a `rang` too, so the filter alone would
     // keep the six rows of `records.sqlite`.
+    let live: Vec<u32> = snapshot.live_iids().map(Iid::get).collect();
     assert_eq!(
-        snapshot.filters().live_iids(),
-        vec![
-            Iid::new(0),
-            Iid::new(1),
-            Iid::new(2),
-            Iid::new(3),
-            Iid::new(4)
-        ],
+        live,
+        vec![0, 1, 2, 3, 4],
         "the live bitmap must be the five passages the tombstone left alive"
     );
     check(&fixture, r#"{"rang":{"gte":0}}"#, &[0, 1, 2]);

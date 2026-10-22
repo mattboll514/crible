@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Fixtures and reference comparison shared by the dense exact search tests
 //! (`INV-06`, task `RECHERCHER-DENSE-EXACT`, phase P1).
 //!

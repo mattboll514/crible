@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Acceptance tests of the schema created by `RecordStore::create`: the five
 //! tables and the two documented indexes of `docs/02-architecture.md`
 //! ("Tables SQLite") exist, `meta` has its single row, and a database of an

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Analysis and display of `PassageKey`, the `doc_id#ord` passage key.
 //!
 //! References: `docs/02-architecture.md` ("Identifiants") and the

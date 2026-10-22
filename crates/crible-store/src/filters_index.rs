@@ -282,11 +282,12 @@ fn clear_present(present: &mut Arc<RoaringBitmap>, iid: Iid) {
 
 /// The bitmaps of one `keyword` field: one per distinct value, plus presence.
 ///
-/// A key is an `Arc<str>`, shared with the generation it was read from: cloning
-/// the field reallocs neither the keys nor the tree nodes' payload, only the
-/// nodes themselves, so a generation that adds no value keeps every key of the
-/// previous one. The map is still written in copy on write: an insert clones the
-/// `O(log n)` nodes of the path it touches.
+/// A key is an `Arc<str>` and a value bitmap an `Arc<RoaringBitmap>`, both
+/// shared with the generation the field was read from. Cloning the field copies
+/// the `BTreeMap` itself: every node is allocated again, while each key and each
+/// bitmap is only handed over through its `Arc`, so no value of the field is
+/// duplicated. An insert then clones the `O(log n)` nodes of the path it
+/// touches, plus the one bitmap it extends.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct KeywordField {
     values: BTreeMap<Arc<str>, Arc<RoaringBitmap>>,
@@ -871,19 +872,12 @@ impl FilterIndex {
     }
 
     /// Bitmap of the live passages: every passage SQLite does not tombstone.
+    ///
+    /// This is the bitmap a caller reads: [`crate::generation::Snapshot::live_iids`]
+    /// walks it directly, so no live identifier is materialised twice.
     #[must_use]
     pub fn live(&self) -> &RoaringBitmap {
         &self.live
-    }
-
-    /// Live internal identifiers, collected in ascending order.
-    ///
-    /// This is the bitmap's reading, materialised only for a caller that wants a
-    /// slice; [`crate::generation::Snapshot::live_iids`] reads the bitmap
-    /// directly, so a snapshot never stores the identifiers twice.
-    #[must_use]
-    pub fn live_iids(&self) -> Vec<Iid> {
-        self.live.iter().map(Iid::new).collect()
     }
 
     /// Structures of one `keyword` field, or `None` when the schema declares no

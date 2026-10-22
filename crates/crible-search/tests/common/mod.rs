@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Fixtures shared by the `INV-07` tests (`EVALUER-FILTRES`, phase P1).
 //!
 //! The module builds a real index in a temporary directory, commits the
 //! reference rows through `GenerationStore`, and evaluates a filter a second
 //! time in SQL over the same `records.sqlite`, which is the oracle of INV-07.
 //!
-//! # Assumed API
+//! # API under test
 //!
-//! `crible_search::pool` does not exist yet; these fixtures assume the
-//! following minimal surface (see the header of
+//! `crible_search::pool`, as `src/pool.rs` implements it (see the header of
 //! `inv_07_filter_bitmap_matches_sql.rs`):
 //!
 //! ```text
@@ -29,7 +31,7 @@
 //! [`sql_matches`] translates a validated [`Filter`] into one `SELECT` over
 //! `records.sqlite` and returns the iids it keeps. The translation follows
 //! `docs/05-api.md` ("Grammaire des filtres"), `docs/03-recherche.md`
-//! ("Filtres → pool") and ADR-0035, never the future Rust code:
+//! ("Filtres → pool") and ADR-0035, independently of the Rust implementation:
 //!
 //! - a comparison is never satisfied by a null, so every comparison is wrapped
 //!   in `COALESCE(..., 0)`: `NULL = 'a'` is UNKNOWN, which `COALESCE` turns into

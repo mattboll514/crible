@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `ModelConfig`, the frozen/replaceable split of its fields, and the model
 //! fingerprint.
 //!

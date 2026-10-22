@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `CONSTRUIRE-BITMAPS`: the filter structures of one generation, and their
 //! update in copy on write after an attach.
 //!
@@ -46,6 +49,15 @@
 //! metadata-only update and a deletion, which is the whole delta of an attach.
 //! The schema of the dataset declares all five field types at both levels, so
 //! every structure is exercised.
+//!
+//! # Serialisation
+//!
+//! `CRIBLE_FAILPOINT` is process-global and cargo runs the tests of a binary
+//! concurrently, so **every** test of this file that commits holds a
+//! `common::SerialGuard`, whether it arms a failpoint or not: a committing test
+//! without the guard would observe the failpoint another test armed (see
+//! `SerialGuard`, `tests/common/mod.rs`). Only `an_empty_index_has_empty_structures`
+//! commits nothing, and it takes no guard.
 
 mod common;
 
@@ -340,6 +352,7 @@ fn passage(iid: u32, doc_id: &str, partie: &str, generation: u64, null: bool) ->
 /// it.
 #[test]
 fn copy_on_write_after_each_generation_equals_a_full_rebuild() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index_dir) = common::temp_index();
     let schema = rich_schema();
     let mut store = common::create_store_with(&index_dir, &schema);
@@ -434,6 +447,7 @@ fn reopening_an_index_rebuilds_the_same_structures() {
 /// A null value is in no value bitmap and in no present bitmap (ADR-0035).
 #[test]
 fn a_null_value_is_absent_from_the_present_bitmaps() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index_dir) = common::temp_index();
     let schema = rich_schema();
     let mut store = common::create_store_with(&index_dir, &schema);
@@ -496,6 +510,7 @@ fn a_null_value_is_absent_from_the_present_bitmaps() {
 /// schema declares them.
 #[test]
 fn a_passage_inherits_the_fields_of_its_document() {
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index_dir) = common::temp_index();
     let schema = rich_schema();
     let mut store = common::create_store_with(&index_dir, &schema);
@@ -580,7 +595,10 @@ fn an_empty_index_has_empty_structures() {
         filters.live().is_empty(),
         "a fresh index has no live passage"
     );
-    assert!(filters.live_iids().is_empty());
+    assert!(
+        snapshot.live_iids().next().is_none(),
+        "a fresh index publishes no live iid"
+    );
     assert_eq!(filters.keyword("partie").map(|field| field.len()), Some(0));
     assert_eq!(filters.memory().total(), 0);
 

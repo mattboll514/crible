@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! INV-16 — a frozen setting cannot be changed through the API.
 //!
 //! References: `docs/08-invariants-et-tests.md` (INV-16),

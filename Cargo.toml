@@ -68,3 +68,4 @@ tempfile = { version = "=3.27.0" }
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+panic = "warn"
