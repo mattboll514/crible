@@ -635,6 +635,15 @@ version = "0.1.0"
 [[package]]
 name = "crible-search"
 version = "0.1.0"
+dependencies = [
+ "crible-core",
+ "crible-store",
+ "proptest",
+ "roaring",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "crible-server"

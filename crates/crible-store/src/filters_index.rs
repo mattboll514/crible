@@ -1195,7 +1195,12 @@ fn invalid_date(field: &str, text: &str) -> CribleError {
 /// function refuses contradicts the reference state. The conversion is
 /// Howard Hinnant's `days_from_civil`, the inverse of the `civil_from_days` the
 /// attach uses.
-fn date_days(text: &str) -> Option<i32> {
+///
+/// Callers turn the date of a validated filter into the `i32` count of days a
+/// [`ValueColumn`] holds: comparing the two forms directly would compare a
+/// text with an integer.
+#[must_use]
+pub fn date_days(text: &str) -> Option<i32> {
     if text.len() != 10 || !text.is_ascii() {
         return None;
     }
