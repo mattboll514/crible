@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `crible-store::batch_reader`: reading a batch written by the Python
 //! `BatchWriter` and applying controls 4 to 7 of `docs/04`.
 //!

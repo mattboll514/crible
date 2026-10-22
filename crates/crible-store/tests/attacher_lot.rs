@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `ATTACHER-LOT`: attaching a validated batch, its invariants and its
 //! acceptance criteria.
 //!

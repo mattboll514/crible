@@ -107,15 +107,21 @@ pub const INDEX_CONFIG_FILE_NAME: &str = "index.json";
 /// so a crash leaves either no configuration or the whole one, never a
 /// truncated `index.json` that a retry would refuse.
 ///
+/// `config_json` is parsed with [`IndexConfig::from_json_str`] before anything
+/// is written: a malformed configuration is refused with
+/// [`ErrorCode::InvalidRequest`] and leaves the directory untouched, rather than
+/// landing in an `index.json` that every later `open` and `create` would have to
+/// reject.
+///
 /// A directory holding any part of an index — `CURRENT_EPOCH`, an `epochs/`
-/// directory or a `records.sqlite` — is refused with
-/// [`ErrorCode::InvalidRequest`], naming what is present. Writing a different
-/// schema over an epoch that already holds rows would change the filter
-/// structures of a populated `records.sqlite`, which `RecordStore::create`
-/// reopens without emptying. A residual `index.json` alone is not such a state:
-/// a creation that stopped before its first epoch left one, and nothing else
-/// exists, so replacing it loses nothing.
+/// directory or a `records.sqlite` — is refused with the same code, naming what
+/// is present. Writing a different schema over an epoch that already holds rows
+/// would change the filter structures of a populated `records.sqlite`, which
+/// `RecordStore::create` reopens without emptying. A residual `index.json` alone
+/// is not such a state: a creation that stopped before its first epoch left one,
+/// and nothing else exists, so replacing it loses nothing.
 pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), CribleError> {
+    IndexConfig::from_json_str(config_json)?;
     if let Some(present) = occupied_index_state(index_dir) {
         return Err(existing_index_error(index_dir, &present));
     }
@@ -127,39 +133,67 @@ pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), Cri
     )
 }
 
+/// Part of an index that already occupies an index directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OccupiedIndex {
+    /// A complete index: `CURRENT_EPOCH` names its current epoch.
+    Complete(PathBuf),
+    /// A tree a creation did not finish: an `epochs/` directory or a
+    /// `records.sqlite` without the pointer that makes it usable.
+    Partial(PathBuf),
+}
+
 /// What already occupies `index_dir`, if it holds any part of an index.
 ///
-/// The three states are checked in the order a creation writes them:
-/// `CURRENT_EPOCH` (a complete index), `epochs/` (an epoch exists, even without
-/// its pointer) and a `records.sqlite` at the index root (an interrupted tree
-/// with no epoch directory). A residual `index.json` is deliberately absent
-/// from this list: it is the only file a creation may replace.
-fn occupied_index_state(index_dir: &Path) -> Option<String> {
+/// The states are checked in the order a creation writes them, except for the
+/// `records.sqlite` at the index root: a creation never writes one there, since
+/// the reference database lives inside its epoch directory. It is the trace of
+/// a tree moved or interrupted by hand, and it is reported last, once neither
+/// the pointer nor `epochs/` explains the directory.
+///
+/// A residual `index.json` is deliberately absent from this list: it is the only
+/// entry a creation may replace.
+fn occupied_index_state(index_dir: &Path) -> Option<OccupiedIndex> {
     let pointer = index_dir.join(CURRENT_EPOCH_FILE_NAME);
     if pointer.exists() {
-        return Some(pointer.display().to_string());
+        return Some(OccupiedIndex::Complete(pointer));
     }
     let epochs = index_dir.join(EPOCHS_DIR_NAME);
     if epochs.exists() {
-        return Some(epochs.display().to_string());
+        return Some(OccupiedIndex::Partial(epochs));
     }
     let records = index_dir.join(RECORDS_FILE_NAME);
     if records.exists() {
-        return Some(records.display().to_string());
+        return Some(OccupiedIndex::Partial(records));
     }
     None
 }
 
 /// Error returned when a creation targets an index that already exists.
-fn existing_index_error(index_dir: &Path, present: &str) -> CribleError {
-    CribleError::new(
-        ErrorCode::InvalidRequest,
-        format!(
-            "an index already exists at {}: {present} is present, and creating an index \
-             never overwrites one; remove it to create a new index",
-            index_dir.display()
+///
+/// A complete index and a partial tree are two different situations, so the
+/// message distinguishes them: the first one is usable and names its commands,
+/// the second one is the trace of a creation that stopped, and only there does
+/// removing the directory make sense.
+fn existing_index_error(index_dir: &Path, occupied: &OccupiedIndex) -> CribleError {
+    let message = match occupied {
+        OccupiedIndex::Complete(pointer) => format!(
+            "an index already exists at {}: {} is present, and creating an index never \
+             overwrites one; use `crible attach`, `crible search` or `crible inspect` on it, \
+             or create another index under another name",
+            index_dir.display(),
+            pointer.display()
         ),
-    )
+        OccupiedIndex::Partial(present) => format!(
+            "a partial index tree is present at {}: {} exists, but the index has no {} pointer, \
+             so no creation can reopen it, and creating an index never overwrites one; \
+             remove it to create a new index",
+            index_dir.display(),
+            present.display(),
+            CURRENT_EPOCH_FILE_NAME
+        ),
+    };
+    CribleError::new(ErrorCode::InvalidRequest, message)
 }
 
 /// Name of the directory holding the epochs of an index.
@@ -263,7 +297,13 @@ impl Snapshot {
 /// store is then reopened the way a restart does. That panic is the expected
 /// outcome of the `INV-03` / `INV-04` tests and cannot be reached in a build
 /// without the `failpoints` feature.
+///
+/// This is the one `panic!` the workspace keeps outside the tests, so the lint
+/// `clippy::panic` of `Cargo.toml` is silenced here and nowhere else: an error
+/// return would not simulate a process death, and the two invariant tests that
+/// read `CRIBLE_FAILPOINT` expect the panic.
 #[cfg(feature = "failpoints")]
+#[allow(clippy::panic)]
 fn stop_at_failpoint(step: &str) {
     let armed = std::env::var(FAILPOINT_ENV).unwrap_or_default();
     if armed == step {
@@ -1019,7 +1059,8 @@ fn check_generation_matches(
 ///
 /// The generation and every row come from SQLite, the only authority on what is
 /// visible: the bitmap of the live passages is a reading of it, and a snapshot
-/// takes its live iids from that bitmap rather than storing them a second time. The segment metadata is read from the segments table and
+/// takes its live iids from that bitmap rather than storing them a second time.
+/// The segment metadata is read from the segments table and
 /// from `segment.json` on disk, which carries the format version and the
 /// precision, then sorted by `iid_start`: a snapshot is read in iid order, and
 /// a restart produces the manifest in the same order as the commit that wrote
@@ -1144,7 +1185,8 @@ fn segment_value(meta: &SegmentMeta) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, read_current_epoch,
+        CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME,
+        RECORDS_FILE_NAME, read_current_epoch,
     };
     use crible_core::config::Schema;
     use crible_core::error::ErrorCode;
@@ -1294,7 +1336,7 @@ mod tests {
 
     /// A directory holding an epoch but no `CURRENT_EPOCH` is a torn index:
     /// writing a configuration over it would let `create` reopen a populated
-    /// `records.sqlite` with another schema, so it is refused.
+    /// `records.sqlite` with another schema, so it is refused as a partial tree.
     #[test]
     fn write_index_config_refuses_a_torn_index_state() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1312,13 +1354,95 @@ mod tests {
             error.message()
         );
         assert!(
+            error.message().contains("partial index tree"),
+            "the message must say the tree is not a usable index: {}",
+            error.message()
+        );
+        assert!(
             error.message().contains("epochs"),
             "the message must name what is present: {}",
             error.message()
         );
         assert!(
+            error.message().contains(CURRENT_EPOCH_FILE_NAME),
+            "the message must name the pointer that is missing: {}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("already exists"),
+            "a torn tree is not an existing index: {}",
+            error.message()
+        );
+        assert!(
             !index.join(INDEX_CONFIG_FILE_NAME).exists(),
             "a refused write must leave no index.json"
+        );
+    }
+
+    /// A single `records.sqlite` at the index root is the fourth state a
+    /// directory can hold: no epoch directory and no pointer, only the trace of
+    /// a tree moved or interrupted by hand. It is refused as a partial tree too.
+    #[test]
+    fn write_index_config_refuses_a_records_file_at_the_index_root() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+        let records = index.join(RECORDS_FILE_NAME);
+        fs::write(&records, b"stale").expect("the stale database is written");
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("a records.sqlite at the index root must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("partial index tree"),
+            "the message must say the tree is not a usable index: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(&records.display().to_string()),
+            "the message must name the file it found: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+        assert!(
+            !index.join(EPOCHS_DIR_NAME).exists(),
+            "a refused write must not create the epoch directory"
+        );
+    }
+
+    /// A configuration that does not parse as an [`IndexConfig`] is refused
+    /// before anything is written: the store never leaves an `index.json` that
+    /// every later `open` would have to reject.
+    #[test]
+    fn write_index_config_refuses_a_configuration_that_does_not_parse() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+
+        for broken in ["{ not json", r#"{"name":"test"}"#] {
+            let error = super::write_index_config(&index, broken)
+                .expect_err("a configuration that does not parse must be refused");
+            assert_eq!(
+                error.code(),
+                ErrorCode::InvalidRequest,
+                "wrong error code for {broken}: {}",
+                error.message()
+            );
+        }
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+        assert!(
+            !index.exists(),
+            "a refused write must not even create the directory"
         );
     }
 
@@ -1345,8 +1469,9 @@ mod tests {
             .expect("the index is created after the replacement");
     }
 
-    /// `write_index_config` refuses a complete index, like `create`, and names
-    /// the pointer it found.
+    /// `write_index_config` refuses a complete index, like `create`: the message
+    /// names the pointer it found, points at the commands that use the index,
+    /// and never invites to remove it.
     #[test]
     fn write_index_config_refuses_an_existing_index() {
         let temp = tempfile::tempdir().expect("temporary directory");
@@ -1366,8 +1491,30 @@ mod tests {
             error.message()
         );
         assert!(
+            error.message().contains("already exists"),
+            "the message must say the index exists: {}",
+            error.message()
+        );
+        assert!(
             error.message().contains(CURRENT_EPOCH_FILE_NAME),
             "the message must name what is present: {}",
+            error.message()
+        );
+        for command in ["attach", "search", "inspect"] {
+            assert!(
+                error.message().contains(command),
+                "the message must point at `crible {command}`: {}",
+                error.message()
+            );
+        }
+        assert!(
+            !error.message().contains("remove"),
+            "a complete index is usable, so the message must not invite to remove it: {}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("partial"),
+            "a complete index is not a partial tree: {}",
             error.message()
         );
     }

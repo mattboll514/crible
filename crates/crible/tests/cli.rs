@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! End-to-end test of the first CLI commands.
 //!
 //! References: `docs/phases/P1-stockage-et-recherche-exacte.md` (task
@@ -295,6 +298,14 @@ fn a_refused_creation_reports_its_code_and_leaves_the_index_intact() {
     assert!(
         stderr.contains("already exists"),
         "the message must say what was refused: {stderr}"
+    );
+    assert!(
+        stderr.contains("attach") && stderr.contains("search") && stderr.contains("inspect"),
+        "the message must point at the commands of an existing index: {stderr}"
+    );
+    assert!(
+        !stderr.contains("remove"),
+        "a complete index is usable, so the refusal must not invite to remove it: {stderr}"
     );
 
     let inspected = crible_ok(&["inspect", "--data", data_arg, "--index", "synth-small"]);

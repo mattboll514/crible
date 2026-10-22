@@ -15,7 +15,7 @@ jobs:
     name: Rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -24,9 +24,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Generate the synthetic dataset
         working-directory: tools
         run: |
@@ -34,13 +34,13 @@ jobs:
           uv run python gen_synth.py --out ../data/synth-small
           uv run python reference_topk.py --dataset ../data/synth-small
       - name: Test
-        run: cargo test
+        run: cargo test --locked
 
   python:
     name: Python
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Detect Python client
         id: detect
         run: |
@@ -51,7 +51,7 @@ jobs:
           fi
       - name: Install uv
         if: steps.detect.outputs.present == 'true'
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Run pytest
         if: steps.detect.outputs.present == 'true'
         working-directory: clients/python
@@ -63,9 +63,9 @@ jobs:
     name: Tools
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
       - name: Run tools tests
         working-directory: tools
         run: |

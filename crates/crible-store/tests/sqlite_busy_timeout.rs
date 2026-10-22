@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Acceptance tests of the SQLite lock wait of `crible_store::records`
 //! (ADR-0038): a second writer waits for the busy timeout before it fails, a
 //! short contention is survived, and the remaining contention is reported as

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `BatchManifest` and `check_manifest`: format, version, mode, model
 //! compatibility, counts and the file list.
 //!

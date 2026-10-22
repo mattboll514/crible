@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Acceptance tests of `crible_store::segment`: a segment written by the writer
 //! is read back with the same values, a corrupted or truncated vector file is
 //! refused at open, an id outside `[iid_start, iid_start + count)` is refused,

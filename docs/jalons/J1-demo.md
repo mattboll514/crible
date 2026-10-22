@@ -122,8 +122,19 @@ code de `docs/05-api.md` :
 ./target/release/crible index create --data data --config data/synth-small/index.json
 ```
 
-Attendu : sortie non nulle et message
-`invalid_request: an index already exists at data/indexes/synth-small: … is present, and creating an index never overwrites one; remove it to create a new index`.
+Attendu : sortie non nulle et message suivant.
+
+```text
+invalid_request: an index already exists at data/indexes/synth-small: …/CURRENT_EPOCH is present, and creating an index never overwrites one; use `crible attach`, `crible search` or `crible inspect` on it, or create another index under another name
+```
+
+Un arbre d'index incomplet — `epochs/` ou un `records.sqlite` à la racine de
+l'index, sans `CURRENT_EPOCH` — produit un autre message, qui dit qu'un arbre
+partiel est présent, le nomme, et propose de le retirer :
+
+```text
+invalid_request: a partial index tree is present at …: … exists, but the index has no CURRENT_EPOCH pointer, so no creation can reopen it, and creating an index never overwrites one; remove it to create a new index
+```
 
 ```sh
 ./target/release/crible search --data data --index synth-small --vector-file missing.npy

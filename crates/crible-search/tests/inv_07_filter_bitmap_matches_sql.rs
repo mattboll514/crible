@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `INV-07`: a filter turned into a bitmap equals the SQL evaluation of the
 //! same filter.
 //!
@@ -8,42 +11,21 @@
 //! ("Filtres → pool"), `docs/05-api.md` ("Grammaire des filtres"), ADR-0018,
 //! ADR-0019, ADR-0029, ADR-0030 and ADR-0035.
 //!
-//! # Assumed API
+//! # API under test
 //!
-//! `crible_search::pool` does not exist yet. This test assumes the minimal
-//! surface the task sheet asks for ("évaluation de l'AST ... ; le résultat
-//! contient la bitmap du pool et sa taille"):
+//! `crible_search::pool`, as `src/pool.rs` implements it:
 //!
 //! ```text
-//! // crates/crible-search/src/pool.rs
-//! pub struct Pool {
-//!     // the bitmap of the pool, and its size
-//! }
-//!
-//! impl Pool {
-//!     /// Evaluates a filter validated against the schema of the index, and
-//!     /// intersects the result with the live passages.
-//!     pub fn evaluate(
-//!         filters: &FilterIndex,
-//!         filter: &Filter,
-//!     ) -> Result<Pool, CribleError>;
-//!
-//!     /// Bitmap of the pool: every iid the filter keeps among the live ones.
-//!     pub fn bitmap(&self) -> &RoaringBitmap;
-//!
-//!     /// Size of the pool, equal to `bitmap().len()`.
-//!     pub fn len(&self) -> u32;
-//!
-//!     /// True when the pool holds no passage.
-//!     pub fn is_empty(&self) -> bool;
-//! }
+//! crible_search::pool::Pool::evaluate(filters: &FilterIndex, filter: &Filter)
+//!     -> Result<Pool, CribleError>;
+//! Pool::bitmap(&self) -> &RoaringBitmap;
+//! Pool::len(&self) -> u32;
+//! Pool::is_empty(&self) -> bool;
 //! ```
 //!
 //! The test passes `snapshot.filters()`, which carries both the per-field
-//! structures and the bitmap of the live passages (`FilterIndex::live`). A
-//! signature taking `&Snapshot` instead would be equally acceptable: only
-//! `Snapshot::filters()` and `Snapshot::live_iids()` are used here to describe
-//! the expected set.
+//! structures and the bitmap of the live passages (`FilterIndex::live`), and
+//! reads `Snapshot::live_iids()` to describe the expected set.
 //!
 //! # What the property states
 //!

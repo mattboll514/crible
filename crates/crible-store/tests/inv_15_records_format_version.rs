@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! INV-15 — every on-disk format is explicitly little-endian and versioned.
 //!
 //! For `records.sqlite`, the invariant is the format version: it is written in

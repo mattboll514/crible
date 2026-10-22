@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! Acceptance tests of `crible_store::records`: text and fields round-trip
 //! through the store, canonical JSON is stable (ADR-0019), text is zstd
 //! compressed, and the documented read queries behave.
