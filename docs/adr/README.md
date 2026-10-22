@@ -92,6 +92,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0036](0036-producer-host-reglable-par-le-producteur.md) | `producer.host` réglable par le producteur | Accepté | 2026-10-21 |
 | [ADR-0037](0037-permissions-de-lecture-du-relecteur.md) | Élargir les permissions de `@relecteur` aux utilitaires de vérification et à Python | Accepté | 2026-10-21 |
 | [ADR-0038](0038-delai-d-attente-sqlite-busy-timeout.md) | Régler un délai d'attente sur les verrous SQLite (`busy_timeout`) | Accepté | 2026-10-21 |
+| [ADR-0039](0039-ordre-des-lignes-dans-un-lot-v1.md) | Ordre des lignes dans un lot v1 | Accepté | 2026-10-21 |
 
 ## Questions ouvertes
 

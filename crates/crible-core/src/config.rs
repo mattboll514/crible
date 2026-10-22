@@ -178,6 +178,22 @@ impl Schema {
         }
     }
 
+    /// Every declared field with its level, document fields first and each
+    /// group sorted by name.
+    ///
+    /// The batch reader walks this list to check the columns of a Parquet file
+    /// against the schema of the index.
+    pub fn fields(&self) -> impl Iterator<Item = (&str, FieldLevel, &FieldSpec)> {
+        self.document_fields
+            .iter()
+            .map(|(name, spec)| (name.as_str(), FieldLevel::Document, spec))
+            .chain(
+                self.passage_fields
+                    .iter()
+                    .map(|(name, spec)| (name.as_str(), FieldLevel::Passage, spec)),
+            )
+    }
+
     fn spec_at(&self, level: FieldLevel, name: &str) -> Option<&FieldSpec> {
         self.map(level).get(name)
     }

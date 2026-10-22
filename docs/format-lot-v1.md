@@ -29,8 +29,11 @@ Les noms de fichiers sont exacts :
 - `deletions.parquet`, sans variante numérotée.
 
 Un même rôle peut donc être réparti sur plusieurs fichiers pour les gros lots.
-Tout autre nom de fichier dans `manifest.json` est refusé. P0 ne refuse pas le
-mélange des deux formes pour un même rôle (`documents.parquet` et
+Les parties d'un rôle se parcourent dans l'ordre croissant de leur suffixe
+(`passages-0001.parquet`, puis `passages-0002.parquet`, …), et les lignes des
+passages d'un même document arrivent dans l'ordre croissant des `ord`
+(ADR-0039). Tout autre nom de fichier dans `manifest.json` est refusé. P0 ne
+refuse pas le mélange des deux formes pour un même rôle (`documents.parquet` et
 `documents-0001.parquet` dans le même manifeste) : le producteur choisit une
 forme par rôle, mais cette règle n'est pas encore contrôlée.
 
@@ -193,7 +196,7 @@ de null. Un champ absent du schéma de l'index est refusé.
 | Colonne | Type Parquet | Nullable | Remarque |
 |---|---|---|---|
 | `doc_id` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Document du passage. |
-| `ord` | `UINT_32` (`uint32`) | non | Rang du passage dans le document, contigu et à partir de 0. |
+| `ord` | `UINT_32` (`uint32`) | non | Rang du passage dans le document, contigu et à partir de 0. Les lignes d'un même document arrivent dans l'ordre croissant des `ord` (ADR-0039). |
 | `text` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Entrée encodeur exacte, sans prompt. |
 | *(un champ de passage)* | selon `type` | oui | Même correspondance que les champs de document. |
 | `vector` | `FIXED_SIZE_BINARY` | non | Voir ci-dessous. |
@@ -241,7 +244,9 @@ La phase P1 ajoute :
 
 5. Le schéma Parquet est conforme au schéma de l'index.
 6. Les comptes correspondent aux lignes lues, les `ord` sont contigus et chaque
-   document a au moins un passage.
+   document a au moins un passage. Les lignes d'un même document arrivent dans
+   l'ordre croissant des `ord`, et cet ordre se poursuit d'une partie à l'autre
+   (ADR-0039).
 7. Les vecteurs sont finis et normalés quand `normalize` est vrai.
 
 La phase P2 ajoute les contrôles 8 (longueur en tokens) et 9 (recette).
@@ -262,5 +267,6 @@ rapport d'origine (INV-10). Le même `batch_id` avec un autre manifeste renvoie
 ## Références
 
 `04-donnees-et-ingestion.md` ; ADR-0005 (précision de référence figée) ;
-ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ;
-`08-invariants-et-tests.md` (INV-03, INV-10, INV-11, INV-12).
+ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ; ADR-0039 (ordre des
+lignes dans un lot v1) ; `08-invariants-et-tests.md` (INV-03, INV-10, INV-11,
+INV-12).
