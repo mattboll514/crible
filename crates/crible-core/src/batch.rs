@@ -304,7 +304,7 @@ fn check_index(manifest: &BatchManifest, index_config: &IndexConfig) -> Result<(
 }
 
 fn check_mode(manifest: &BatchManifest, files: &BatchFiles) -> Result<(), CribleError> {
-    if manifest.mode == BatchMode::ReplaceAll && files.deletions {
+    if manifest.mode == BatchMode::ReplaceAll && files.deletions().is_some() {
         return Err(json::invalid(
             "mode 'replace_all' at $.mode forbids a deletions file; the batch is the complete content of the index",
         ));
@@ -393,17 +393,51 @@ fn incompatible(
 }
 
 /// Files of a batch, grouped by role after their name has been checked.
-struct BatchFiles {
-    documents: usize,
-    passages: usize,
-    deletions: bool,
+///
+/// Names keep the sorted order of the `files` map of the manifest, so two
+/// reads of the same batch visit the files in the same order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchFiles {
+    documents: Vec<String>,
+    passages: Vec<String>,
+    deletions: Option<String>,
 }
 
-fn classify_files(manifest: &BatchManifest) -> Result<BatchFiles, CribleError> {
+impl BatchFiles {
+    /// Names of the `documents` files, sorted.
+    #[must_use]
+    pub fn documents(&self) -> &[String] {
+        &self.documents
+    }
+
+    /// Names of the `passages` files, sorted.
+    #[must_use]
+    pub fn passages(&self) -> &[String] {
+        &self.passages
+    }
+
+    /// Name of the `deletions` file, if the batch has one.
+    #[must_use]
+    pub fn deletions(&self) -> Option<&str> {
+        self.deletions.as_deref()
+    }
+}
+
+/// Groups the files of a manifest by role, refusing any other name.
+///
+/// The checksum itself is only checked for the `blake3:` prefix here: the
+/// strict digest form and the value against the file bytes are the checksum
+/// verification of `crible-store::batch_reader` (control 4 at attach time).
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] for a file name that is not one of the three
+/// documented shapes, or a checksum without a non-empty digest.
+pub fn classify_files(manifest: &BatchManifest) -> Result<BatchFiles, CribleError> {
     let mut files = BatchFiles {
-        documents: 0,
-        passages: 0,
-        deletions: false,
+        documents: Vec::new(),
+        passages: Vec::new(),
+        deletions: None,
     };
     for (name, checksum) in &manifest.files {
         if !checksum.starts_with("blake3:") || checksum.len() == "blake3:".len() {
@@ -412,11 +446,11 @@ fn classify_files(manifest: &BatchManifest) -> Result<BatchFiles, CribleError> {
             )));
         }
         if name == "deletions.parquet" {
-            files.deletions = true;
+            files.deletions = Some(name.clone());
         } else if matches_parquet_name(name, "documents") {
-            files.documents += 1;
+            files.documents.push(name.clone());
         } else if matches_parquet_name(name, "passages") {
-            files.passages += 1;
+            files.passages.push(name.clone());
         } else {
             return Err(json::invalid(format!(
                 "unknown file '{name}' at $.files; expected documents[-NNNN].parquet, passages[-NNNN].parquet or deletions.parquet"
@@ -445,12 +479,12 @@ fn matches_parquet_name(name: &str, stem: &str) -> bool {
 fn check_counts(manifest: &BatchManifest, files: &BatchFiles) -> Result<(), CribleError> {
     let counts = manifest.counts;
 
-    if files.documents == 0 {
+    if files.documents().is_empty() {
         return Err(json::invalid(
             "files at $.files must list at least one documents.parquet file",
         ));
     }
-    if files.passages == 0 {
+    if files.passages().is_empty() {
         return Err(json::invalid(
             "files at $.files must list at least one passages.parquet file",
         ));
@@ -467,16 +501,56 @@ fn check_counts(manifest: &BatchManifest, files: &BatchFiles) -> Result<(), Crib
             counts.documents, counts.passages
         )));
     }
-    if counts.deletions == 0 && files.deletions {
+    if counts.deletions == 0 && files.deletions().is_some() {
         return Err(json::invalid(
             "files list a deletions file but counts.deletions is zero at $.counts.deletions",
         ));
     }
-    if counts.deletions > 0 && !files.deletions {
+    if counts.deletions > 0 && files.deletions().is_none() {
         return Err(json::invalid(format!(
             "counts declare {} deletions at $.counts.deletions but files at $.files do not list deletions.parquet",
             counts.deletions
         )));
     }
     Ok(())
+}
+
+/// True for a blake3 digest written as 64 lowercase hexadecimal digits.
+///
+/// The strict form is required of the `blake3` member of a model file and of
+/// the checksums of a batch's files. The manifest validation of P0 only checks
+/// the `blake3:` prefix; the digest itself is verified at attach time.
+#[must_use]
+pub fn is_blake3_digest(digest: &str) -> bool {
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+/// Parses a `blake3:<hex>` checksum into its digest.
+///
+/// The hexadecimal form is strict: 64 lowercase digits after the prefix, so
+/// the digest has exactly the 32 bytes of a blake3 hash.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] when the prefix is missing or the digest is
+/// not 64 lowercase hexadecimal characters.
+pub fn parse_checksum(checksum: &str) -> Result<blake3::Hash, CribleError> {
+    let Some(digest) = checksum.strip_prefix("blake3:") else {
+        return Err(json::invalid(format!(
+            "checksum '{checksum}' must start with 'blake3:'"
+        )));
+    };
+    if !is_blake3_digest(digest) {
+        return Err(json::invalid(format!(
+            "checksum '{checksum}' must be 'blake3:' followed by 64 lowercase hexadecimal digits"
+        )));
+    }
+    blake3::Hash::from_hex(digest).map_err(|error| {
+        json::invalid(format!(
+            "checksum '{checksum}' is not a valid blake3 digest: {error}"
+        ))
+    })
 }
