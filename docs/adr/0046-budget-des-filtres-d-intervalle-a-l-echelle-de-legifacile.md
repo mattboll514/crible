@@ -1,7 +1,7 @@
 # ADR-0046 — Budget des filtres d'intervalle à l'échelle de Legifacile
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté (décision du propriétaire le 2026-10-22)
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire. Décision « D1 » de `docs/suivi.md`, section « Décisions en attente », issue de MES-14 (tâche `EVALUER-FILTRES`, P1)
 - **Remplace** : —

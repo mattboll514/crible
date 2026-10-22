@@ -131,7 +131,10 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 |---|---|---|
 | Encodage de la requête (CPU, INT8) | 20 à 50 ms | MES-05 |
 | Filtre (bitmaps) | < 1 ms | MES-14 |
+| Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
 | Scan binaire : 8,6 M / pool de 1 M | 20 à 80 ms / quelques ms | MES-02 |
 | Rescoring de N = 1000 | < 1 ms à chaud, ~10 ms à froid | MES-03 |
 | Branche lexicale | à mesurer | MES-06 |
 | Payload (k = 10) | ~1 ms | — |
+
+ADR-0046 sépare les deux lignes : la valeur d'intervalle est **mesurée, pas une cible**, et le dépassement est assumé dans les budgets de bout en bout.

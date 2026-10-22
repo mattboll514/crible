@@ -78,6 +78,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P4 | PLANIFIER-STRATEGIE | A-FAIRE | | |
 | P4 | REGROUPER-RESULTATS | A-FAIRE | | |
 | P4 | MESURER-FIDELITE-BINAIRE | A-FAIRE | | |
+| P4 | INSERER-POOL-EN-ORDRE | A-FAIRE | | Ajoutée par ADR-0046 (D1) |
 | P4 | MESURER-LATENCE-DENSE | A-FAIRE | | |
 | P5 | CONFIGURER-ANALYSEUR | A-FAIRE | | |
 | P5 | INDEXER-TANTIVY-A-L-ATTACHE | A-FAIRE | | |
@@ -149,13 +150,12 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
-| ADR-0046 | Budget des filtres d'intervalle à l'échelle de Legifacile (D1) : budget de `docs/03` séparé en deux, dépassement assumé, tâche `INSERER-POOL-EN-ORDRE` en P4, index de plage différé avec déclencheur en P9 | Toute tâche de P2 (demande du propriétaire) |
 
 **À traiter en premier dans la prochaine session, avant toute tâche de P2** (demande du propriétaire, 2026-10-22). Ces trois décisions viennent des mesures de P1. Aucune ne bloquait J1, mais le propriétaire veut les trancher avant de lancer P2. Pour chacune : présenter les options, recommander, puis faire rédiger un ADR `Proposé` par `@greffier` si la décision change un document de conception, un budget ou une valeur par défaut.
 
 | # | Décision | Options | Source |
 |---|---|---|---|
-| D1 | **Tranchée le 2026-10-22 (options a + c, tâche d'insertion, b différé) → ADR-0046 `Proposé`, à accepter.** Budget des filtres d'intervalle : à 8,58 M passages, une clause d'intervalle coûte 101 à 194 ms à domaine plein et 9,1 à 49,2 ms sous un domaine réduit, contre « filtre < 1 ms » dans `docs/03` (tenu par les clauses en bitmap : 51 à 210 µs) | (a) séparer la ligne de budget de `docs/03` (bitmaps < 1 ms, intervalle avec la valeur mesurée) ; (b) ADR « index de plage » (bitmaps par tranche), prévu par ADR-0018, gain à chiffrer par un rejeu de MES-14 ; (c) dépassement assumé dans les budgets de bout en bout. À part : tâche sur l'insertion du résultat (`RoaringBitmap::insert`, ≈ 13 ms sur 21,1 ms, calculé et non mesuré) | `docs/mesures/MES-14-cout-filtres-intervalles.md` |
+| D1 | **Réglée : ADR-0046 accepté le 2026-10-22 (options a + c, tâche `INSERER-POOL-EN-ORDRE` en P4, index de plage différé à P9).** Budget des filtres d'intervalle : à 8,58 M passages, une clause d'intervalle coûte 101 à 194 ms à domaine plein et 9,1 à 49,2 ms sous un domaine réduit, contre « filtre < 1 ms » dans `docs/03` (tenu par les clauses en bitmap : 51 à 210 µs) | (a) séparer la ligne de budget de `docs/03` (bitmaps < 1 ms, intervalle avec la valeur mesurée) ; (b) ADR « index de plage » (bitmaps par tranche), prévu par ADR-0018, gain à chiffrer par un rejeu de MES-14 ; (c) dépassement assumé dans les budgets de bout en bout. À part : tâche sur l'insertion du résultat (`RoaringBitmap::insert`, ≈ 13 ms sur 21,1 ms, calculé et non mesuré) | `docs/mesures/MES-14-cout-filtres-intervalles.md` |
 | D2 | Phase de MES-13 : la fiche CONSTRUIRE-BITMAPS (P1) demande un « premier chiffre », `docs/08` classe la mesure en P3. Premier chiffre : 20,12 s p50 au démarrage à 8,58 M passages, sous le seuil de 60 s de MESURER-CYCLE-DE-VIE | aligner la fiche ou `docs/08` ; confirmer qu'aucun cache de bitmaps n'est ouvert avant P3 (recommandation de `@mesureur`) ; décider si le décodage JSON une fois par document (47 % du démarrage) devient une tâche | `docs/mesures/MES-13-temps-de-demarrage.md` |
 | D3 | Recommandations de MES-15 (commit en O(passages vivants) : p50 598 à 641 ms à 8,58 M passages, dont 86,5 % pour matérialiser les iid vivants) | dérivation incrémentale de la bitmap des vivants ; cache des `SegmentMeta` seulement si le nombre de segments dépasse quelques centaines ; compresseur zstd réutilisé, à évaluer avec MES-08 | `docs/mesures/MES-15-cout-commit-generation.md`, ligne « GERER-GENERATIONS, mesuré par MES-15 » des idées |
 
@@ -315,3 +315,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-22 | Jalon J1 validé par le propriétaire (« J1 validé ») ; décisions laissées ouvertes : budget des filtres d'intervalle (MES-14), phase de MES-13 (fiche CONSTRUIRE-BITMAPS contre `docs/08`), recommandations de MES-15 |
 | 2026-10-22 | `main` (avec le tag `jalon-J1`) et `phase/P1-stockage-et-recherche-exacte` poussés sur confirmation du propriétaire ; branche `phase/P2-encodeur-et-recette` créée depuis `main` ; trois décisions issues des mesures de P1 (D1 à D3) inscrites dans « Décisions en attente », à trancher en premier à la prochaine session, avant toute tâche de P2, à la demande du propriétaire |
 | 2026-10-22 | D1 tranchée par le propriétaire (options a + c, tâche d'insertion triée en P4, index de plage différé à P9) ; ADR-0046 rédigé par `@greffier` en `Proposé` |
+| 2026-10-22 | ADR-0046 accepté par le propriétaire ; appliqué par `@greffier` (`docs/03`, fiches P4 et P9) ; tâche `INSERER-POOL-EN-ORDRE` ajoutée en P4 |
