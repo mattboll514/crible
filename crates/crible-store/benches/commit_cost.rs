@@ -10,9 +10,10 @@
 //! `commit` does three things whose cost grows with the size of the index:
 //!
 //! 1. one SQLite transaction writes the change (the commit point, ADR-0016);
-//! 2. `build_snapshot` materialises **every live iid** from SQLite and re-reads
-//!    the `segment.json` of **every segment** (the task `CONSTRUIRE-BITMAPS`
-//!    replaces the iid list with a bitmap);
+//! 2. `build_snapshot_after_commit` derives the filter structures of the new
+//!    generation in copy on write, reads the live iids back from the bitmap of
+//!    the live passages and re-reads the `segment.json` of **every segment**
+//!    (the task `CONSTRUIRE-BITMAPS`);
 //! 3. `manifests/<G>.json` is written, fsynced and renamed.
 //!
 //! The bench measures (1)+(2)+(3) end to end, then isolates each part on the
@@ -79,7 +80,7 @@ use std::process::Command;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use crible_core::config::ReferencePrecision;
+use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_store::generation::{GenerationChange, GenerationStore};
 use crible_store::records::{DocumentRecord, PassageRecord};
@@ -261,7 +262,11 @@ fn prepare(args: &Args) -> Result<(), Box<dyn Error>> {
         fs::remove_dir_all(&index)?;
     }
     let started = Instant::now();
-    drop(GenerationStore::create(&index, Epoch::new(1))?);
+    drop(GenerationStore::create(
+        &index,
+        Epoch::new(1),
+        &bench_schema()?,
+    )?);
 
     let epoch_dir = epoch_dir_of(&index);
     let segments_dir = epoch_dir.join("segments");
@@ -289,9 +294,9 @@ fn prepare(args: &Args) -> Result<(), Box<dyn Error>> {
     bulk_load(&records, passages, &metas, dims)?;
     let load_ns = duration_ns(load_started.elapsed());
 
-    let store = GenerationStore::open(&index)?;
+    let store = GenerationStore::open(&index, &bench_schema()?)?;
     let snapshot = store.snapshot();
-    let live = snapshot.live_iids().len();
+    let live = snapshot.live_iids().count();
     let found_segments = snapshot.segments().len();
     let max_iid = snapshot.live_iids().last().map_or(0, |iid| iid.get());
     drop(snapshot);
@@ -479,6 +484,28 @@ fn document_fields(document: u32, dims: u32) -> String {
     )
 }
 
+/// Schema of the index the bench prepares: the fields its rows carry.
+///
+/// `dims` is declared at document level only, though a passage row carries it
+/// too: one name cannot be declared at both levels (ADR-0030), and an undeclared
+/// field of a row is simply not indexed.
+fn bench_schema() -> Result<Schema, Box<dyn Error>> {
+    Ok(Schema::from_json_str(
+        r#"{
+            "document_fields": {
+                "dims": { "type": "integer" },
+                "fonds": { "type": "keyword" },
+                "num": { "type": "keyword" },
+                "source": { "type": "keyword" }
+            },
+            "passage_fields": {
+                "partie": { "type": "keyword" },
+                "rang": { "type": "integer" }
+            }
+        }"#,
+    )?)
+}
+
 /// Fields of a passage row, as canonical JSON.
 fn passage_fields(iid: u32, dims: u32) -> String {
     format!(
@@ -581,9 +608,9 @@ fn measure_point(
     let base_epoch = epoch_dir_of(index);
 
     let (n, s, next_iid) = {
-        let store = GenerationStore::open(index)?;
+        let store = GenerationStore::open(index, &bench_schema()?)?;
         let snapshot = store.snapshot();
-        let live = snapshot.live_iids().len();
+        let live = snapshot.live_iids().count();
         let next_iid = snapshot
             .live_iids()
             .last()
@@ -689,7 +716,7 @@ fn measure_point(
         manifest_ns.push(median(manifest_runs));
 
         // The measured commit.
-        let mut store = GenerationStore::open(&clone_commit)?;
+        let mut store = GenerationStore::open(&clone_commit, &bench_schema()?)?;
         let generation = Generation::new(
             store
                 .generation()
@@ -709,7 +736,7 @@ fn measure_point(
         commit_ns.push(duration_ns(started.elapsed()));
 
         let snapshot = store.snapshot();
-        live_after = snapshot.live_iids().len();
+        live_after = snapshot.live_iids().count();
         segments_after = snapshot.segments().len();
         rss_bytes.push(sample_rss_bytes()?);
         drop(snapshot);

@@ -20,8 +20,8 @@
 //! the full signatures. In short:
 //!
 //! ```rust,ignore
-//! GenerationStore::create(index_dir: &Path, epoch: Epoch) -> Result<Self, CribleError>
-//! GenerationStore::open(index_dir: &Path) -> Result<Self, CribleError>  // runs recovery
+//! GenerationStore::create(index_dir: &Path, epoch: Epoch, schema: &Schema) -> Result<Self, CribleError>
+//! GenerationStore::open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError>  // runs recovery
 //! GenerationStore::generation(&self) -> Generation
 //! GenerationStore::snapshot(&self) -> Arc<Snapshot>
 //! GenerationStore::commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError>

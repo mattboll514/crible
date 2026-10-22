@@ -14,6 +14,7 @@ crible-core = { path = "../crible-core" }
 half.workspace = true
 memmap2.workspace = true
 parquet.workspace = true
+roaring.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 zstd.workspace = true

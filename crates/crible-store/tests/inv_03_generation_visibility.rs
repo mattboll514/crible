@@ -29,12 +29,19 @@
 //!
 //! impl GenerationStore {
 //!     /// Creates `index_dir`, `CURRENT_EPOCH`, `epochs/<epoch>/records.sqlite`
-//!     /// and the snapshot of generation 0.
-//!     pub fn create(index_dir: &Path, epoch: Epoch) -> Result<Self, CribleError>;
+//!     /// and the snapshot of generation 0. `schema` is the schema of
+//!     /// `index.json`, from which the filter structures are built.
+//!     pub fn create(
+//!         index_dir: &Path,
+//!         epoch: Epoch,
+//!         schema: &Schema,
+//!     ) -> Result<Self, CribleError>;
 //!
 //!     /// Reads `CURRENT_EPOCH`, opens the epoch and runs the recovery of
-//!     /// INV-04, then publishes the snapshot of the committed generation.
-//!     pub fn open(index_dir: &Path) -> Result<Self, CribleError>;
+//!     /// INV-04, then publishes the snapshot of the committed generation,
+//!     /// whose filter structures are rebuilt from `records.sqlite` following
+//!     /// `schema`.
+//!     pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError>;
 //!
 //!     pub fn epoch(&self) -> Epoch;
 //!     pub fn generation(&self) -> Generation;
@@ -65,8 +72,9 @@
 //!     pub fn generation(&self) -> Generation;
 //!     pub fn segments(&self) -> &[SegmentMeta];
 //!     /// iids alive in this generation, sorted: tombstones of the generation
-//!     /// and of the previous ones are excluded.
-//!     pub fn live_iids(&self) -> &[Iid];
+//!     /// and of the previous ones are excluded. Read from the bitmap of the
+//!     /// live passages.
+//!     pub fn live_iids(&self) -> impl Iterator<Item = Iid> + '_;
 //! }
 //! ```
 //!
@@ -262,7 +270,7 @@ fn inv_03_snapshot_matches_committed_rows() {
     from_sql.sort_unstable();
 
     let snapshot = store.snapshot();
-    let mut from_snapshot: Vec<u32> = snapshot.live_iids().iter().map(|iid| iid.get()).collect();
+    let mut from_snapshot: Vec<u32> = snapshot.live_iids().map(|iid| iid.get()).collect();
     from_snapshot.sort_unstable();
     assert_eq!(
         from_snapshot, from_sql,

@@ -827,7 +827,7 @@ fn attaching_l1_then_l2_then_l3_gives_the_expected_counts() {
     let model = dataset_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
 
     // L1: creation.
     let report = attach_synth(&mut store, "l1", &index, &model);
@@ -849,7 +849,7 @@ fn attaching_l1_then_l2_then_l3_gives_the_expected_counts() {
     assert_eq!(state.live_documents, 2_000, "L1: live documents");
     assert_eq!(state.live_passages, 10_000, "L1: live passages");
     assert_eq!(
-        u64::try_from(store.snapshot().live_iids().len()).expect("a length"),
+        u64::try_from(store.snapshot().live_iids().count()).expect("a length"),
         10_000,
         "the published snapshot must see every live passage of L1"
     );
@@ -932,7 +932,7 @@ fn attaching_l1_then_l2_then_l3_gives_the_expected_counts() {
         "the reference state of synth-small after L1, L2 and L3"
     );
     assert_eq!(
-        u64::try_from(store.snapshot().live_iids().len()).expect("a length"),
+        u64::try_from(store.snapshot().live_iids().count()).expect("a length"),
         SYNTH_FINAL_PASSAGES,
         "the published snapshot must see exactly the live passages of generation 3"
     );
@@ -1008,13 +1008,13 @@ fn inv_10_replaying_an_applied_batch_changes_nothing() {
     let model = dataset_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
 
     attach_synth(&mut store, "l1", &index, &model);
     let first = attach_synth(&mut store, "l2", &index, &model);
     let state = db_state(&records);
     let segments_before = common::directory_entries(&common::segments_dir(&index_dir));
-    let live_before = store.snapshot().live_iids().len();
+    let live_before = store.snapshot().live_iids().count();
 
     let replay = attach_synth(&mut store, "l2", &index, &model);
 
@@ -1065,7 +1065,7 @@ fn inv_10_replaying_an_applied_batch_changes_nothing() {
         "a replay must not write a second segment for the same batch"
     );
     assert_eq!(
-        store.snapshot().live_iids().len(),
+        store.snapshot().live_iids().count(),
         live_before,
         "the published view of a replay must be the one of the original attach"
     );
@@ -1086,7 +1086,7 @@ fn inv_10_same_batch_id_with_another_manifest_is_a_batch_conflict() {
     let model = dataset_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
 
     attach_synth(&mut store, "l2", &index, &model);
     let state = db_state(&records);
@@ -1157,7 +1157,7 @@ fn inv_03_failed_attach_leaves_the_records_database_untouched() {
     for step in ATTACH_FAILPOINTS {
         let (_temp, index_dir) = common::temp_index();
         let records = common::records_path(&index_dir);
-        let mut store = common::create_store(&index_dir);
+        let mut store = common::create_store_with(&index_dir, &index.schema);
 
         attach_synth(&mut store, "l1", &index, &model);
         let state = db_state(&records);
@@ -1203,7 +1203,7 @@ fn inv_03_failed_attach_leaves_the_records_database_untouched() {
         // segment: nothing is rebuilt from a half-written generation (INV-03
         // and INV-04).
         drop(store);
-        let store = common::open_store(&index_dir);
+        let store = common::open_store_with(&index_dir, &index.schema);
         assert_eq!(
             db_state(&records),
             state,
@@ -1304,7 +1304,7 @@ fn no_sqlite_write_follows_the_commit_point() {
     let model = mini_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
     let batch_root = tempfile::tempdir().expect("a temporary directory");
 
     let batch = write_mini_batch(
@@ -1352,7 +1352,7 @@ fn no_sqlite_write_follows_the_commit_point() {
     // A restart must not change SQLite: nothing was written after the commit
     // point, so there is nothing to repair in the reference state (INV-04).
     drop(store);
-    let store = common::open_store(&index_dir);
+    let store = common::open_store_with(&index_dir, &index.schema);
     assert_eq!(
         db_state(&records),
         state,
@@ -1378,7 +1378,7 @@ fn inv_03_doc_id_in_documents_and_in_deletions_rejects_the_batch() {
     let (_temp, index_dir) = common::temp_index();
     let batch_root = tempfile::tempdir().expect("a temporary directory");
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
     let state = db_state(&records);
     assert_eq!(state.generation, 0, "a fresh index is on generation 0");
 
@@ -1441,7 +1441,7 @@ fn readding_a_deleted_document_brings_it_back_as_a_new_document() {
     let model = mini_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
     let batch_root = tempfile::tempdir().expect("a temporary directory");
 
     let created = write_mini_batch(
@@ -1521,7 +1521,7 @@ fn replace_all_deletes_the_documents_absent_from_the_batch() {
     let model = dataset_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
 
     attach_synth(&mut store, "l1", &index, &model);
     let before: BTreeSet<String> = document_hashes(&records).into_keys().collect();
@@ -1583,7 +1583,7 @@ fn same_content_under_a_new_batch_id_counts_as_unchanged() {
     let model = mini_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
     let batch_root = tempfile::tempdir().expect("a temporary directory");
 
     let first = write_mini_batch(
@@ -1661,7 +1661,7 @@ fn a_deletion_of_an_unknown_doc_id_is_ignored() {
     let model = mini_model();
     let (_temp, index_dir) = common::temp_index();
     let records = common::records_path(&index_dir);
-    let mut store = common::create_store(&index_dir);
+    let mut store = common::create_store_with(&index_dir, &index.schema);
     let batch_root = tempfile::tempdir().expect("a temporary directory");
 
     let removal = write_mini_batch(
