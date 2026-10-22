@@ -137,6 +137,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-21 | GENERER-JEU-SYNTHETIQUE | `producer.host` (« Machine qui a produit le lot ») rend la somme de contrôle versionnée de `synth-small` propre à une machine | ADR-0036 | Accepté le 2026-10-21 |
 | 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | Accepté le 2026-10-21 |
 | 2026-10-21 | LIRE-LOT-PARQUET | Le lecteur en flux exige que les lignes d'un document arrivent dans l'ordre croissant des `ord` (séquence continue d'une partie à l'autre, parties par suffixe croissant) pour garder une mémoire bornée ; `format-lot-v1.md` et `docs/04` n'imposent que des `ord` contigus. Verdict de `@architecte` : NON-COUVERT, option A recommandée (figer l'ordre dans le format v1, `format_version` inchangée) | ADR-0039 | Accepté le 2026-10-21, option A, `format_version` reste à 1 |
+| 2026-10-22 | LIRE-LOT-PARQUET (relecture) | Le format ne dit pas qu'un `doc_id` est unique dans `documents` ni dans `deletions` (le lecteur fusionne un doublon en silence), et deux parties de même valeur numérique de suffixe rendent l'ordre des parties indéfini ; le lecteur trie les parties par nom, pas par valeur numérique | ADR-0040 | Accepté le 2026-10-22, tel que proposé, `format_version` reste à 1 |
 
 ## Décisions en attente
 
@@ -144,7 +145,6 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
-| ADR-0040 | Unicité des documents et des parties dans un lot v1 (`doc_id` unique dans `documents` et dans `deletions`, parties triées par valeur numérique du suffixe) | ATTACHER-LOT |
 
 ## Idées hors périmètre
 
@@ -254,3 +254,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-21 | ADR-0039 accepté par le propriétaire (option A, `format_version` reste à 1) ; `format-lot-v1.md` et `docs/04` mis à jour ; LIRE-LOT-PARQUET repasse EN-COURS, reprise au 3e tour de relecture |
 | 2026-10-22 | LIRE-LOT-PARQUET terminée : commentaires de `batch_reader.rs` et de deux tests réalignés sur ADR-0039 accepté ; revue OK au 3e tour, garde-fou ADR-0037 sans écart ; 227 tests Rust ; 2 mineurs notés en idées (ordre des parties par nom plutôt que par suffixe, en-tête de test en français) |
 | 2026-10-22 | ADR-0040 proposé (unicité des `doc_id` et des parties dans un lot v1), à la demande du propriétaire, avant ATTACHER-LOT ; une petite tâche hors plan corrigera le lecteur après acceptation |
+| 2026-10-22 | ADR-0040 accepté par le propriétaire, tel que proposé ; `format-lot-v1.md` (noms des parties, tableaux `documents` et `deletions`, contrôle 6, erreurs) et `docs/04` (contrôle 6) mis à jour |

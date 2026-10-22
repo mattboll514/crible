@@ -1,8 +1,9 @@
 # ADR-0040 — Unicité des documents et des parties dans un lot v1
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22 (date de proposition)
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-22 par le propriétaire, décision recommandée, sans modification.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite de la relecture de la tâche LIRE-LOT-PARQUET (phase P1), pour trancher deux points laissés ouverts par l'ADR-0039
 - **Remplace** : —
 

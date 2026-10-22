@@ -29,13 +29,17 @@ Les noms de fichiers sont exacts :
 - `deletions.parquet`, sans variante numérotée.
 
 Un même rôle peut donc être réparti sur plusieurs fichiers pour les gros lots.
-Les parties d'un rôle se parcourent dans l'ordre croissant de leur suffixe
-(`passages-0001.parquet`, puis `passages-0002.parquet`, …), et les lignes des
-passages d'un même document arrivent dans l'ordre croissant des `ord`
-(ADR-0039). Tout autre nom de fichier dans `manifest.json` est refusé. P0 ne
-refuse pas le mélange des deux formes pour un même rôle (`documents.parquet` et
-`documents-0001.parquet` dans le même manifeste) : le producteur choisit une
-forme par rôle, mais cette règle n'est pas encore contrôlée.
+Les parties d'un rôle se parcourent dans l'ordre croissant de la **valeur
+numérique** de leur suffixe (`passages-0001.parquet`, puis
+`passages-0002.parquet`, …), quel que soit le nombre de chiffres écrits. Deux
+parties d'un même rôle qui portent la même valeur numérique, par exemple
+`passages-0001.parquet` et `passages-00001.parquet`, font rejeter le lot avec
+`400 invalid_request` (ADR-0040). Les lignes des passages d'un même document
+arrivent dans l'ordre croissant des `ord` (ADR-0039). Tout autre nom de fichier
+dans `manifest.json` est refusé. P0 ne refuse pas le mélange des deux formes
+pour un même rôle (`documents.parquet` et `documents-0001.parquet` dans le même
+manifeste) : le producteur choisit une forme par rôle, mais cette règle n'est
+pas encore contrôlée (ADR-0040).
 
 Le `batch_id` est aussi le nom du dossier : c'est un segment de chemin unique.
 Il ne doit être ni vide, ni `.`, ni `..`, et ne doit contenir ni `/`, ni `\`, ni
@@ -174,7 +178,7 @@ libre ; les noms et les types font foi.
 
 | Colonne | Type Parquet | Nullable | Remarque |
 |---|---|---|---|
-| `doc_id` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Identifiant externe du document, non vide. |
+| `doc_id` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Identifiant externe du document, non vide, unique dans le lot toutes parties confondues (ADR-0040). |
 | `doc_hash` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Opaque, fourni par le producteur. |
 | *(un champ de document)* | selon `type` | oui | Voir la table ci-dessous. |
 
@@ -205,10 +209,12 @@ de null. Un champ absent du schéma de l'index est refusé.
 
 | Colonne | Type Parquet | Nullable | Remarque |
 |---|---|---|---|
-| `doc_id` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Document à supprimer. |
+| `doc_id` | `BYTE_ARRAY` / UTF-8 (`utf8`) | non | Document à supprimer, unique dans le lot (ADR-0040). |
 
-Un `doc_id` présent à la fois dans `documents` et dans `deletions` fait rejeter
-le lot.
+Un `doc_id` apparaît **au plus une fois dans `documents`**, toutes parties
+confondues, et au plus une fois dans `deletions` (ADR-0040). Un doublon dans
+l'un ou l'autre rôle fait rejeter le lot avec `400 invalid_request`. Un `doc_id`
+présent à la fois dans `documents` et dans `deletions` fait rejeter le lot.
 
 ## Vecteurs
 
@@ -246,7 +252,10 @@ La phase P1 ajoute :
 6. Les comptes correspondent aux lignes lues, les `ord` sont contigus et chaque
    document a au moins un passage. Les lignes d'un même document arrivent dans
    l'ordre croissant des `ord`, et cet ordre se poursuit d'une partie à l'autre
-   (ADR-0039).
+   (ADR-0039). Les parties d'un rôle se parcourent dans l'ordre croissant de la
+   valeur numérique de leur suffixe, sans doublon de valeur. Un `doc_id`
+   apparaît au plus une fois dans `documents` et au plus une fois dans
+   `deletions` (ADR-0040).
 7. Les vecteurs sont finis et normalés quand `normalize` est vrai.
 
 La phase P2 ajoute les contrôles 8 (longueur en tokens) et 9 (recette).
@@ -257,6 +266,7 @@ La phase P2 ajoute les contrôles 8 (longueur en tokens) et 9 (recette).
 |---|---|
 | Format ou version inconnus, mode inconnu, lot destiné à un autre index | `400 invalid_request` |
 | Liste de fichiers incohérente, fichier inconnu, checksum mal formé, comptes incohérents | `400 invalid_request` |
+| Deux parties d'un même rôle de même valeur numérique, `doc_id` dupliqué dans `documents` ou dans `deletions` (ADR-0040) | `400 invalid_request` |
 | `replace_all` avec un fichier `deletions` | `400 invalid_request` |
 | Modèle du lot incompatible avec celui de l'index | `422 incompatible_model` |
 
@@ -268,5 +278,5 @@ rapport d'origine (INV-10). Le même `batch_id` avec un autre manifeste renvoie
 
 `04-donnees-et-ingestion.md` ; ADR-0005 (précision de référence figée) ;
 ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ; ADR-0039 (ordre des
-lignes dans un lot v1) ; `08-invariants-et-tests.md` (INV-03, INV-10, INV-11,
-INV-12).
+lignes dans un lot v1) ; ADR-0040 (unicité des documents et des parties dans un
+lot v1) ; `08-invariants-et-tests.md` (INV-03, INV-10, INV-11, INV-12).
