@@ -95,7 +95,8 @@
   - `crible-store::batch_reader` (arrow-rs, parquet) : lecture du manifeste, vérification des checksums, conformité du schéma, lecture en flux par parties ;
   - les contrôles d'`ord`, de finitude et de norme.
 - **Critères d'acceptation** :
-  - les lots `synth-small` sont lus ;
+  - les trois lots `synth-small` (`l1`, `l2`, `l3`), écrits par le `BatchWriter` Python (`clients/python`) via `tools/gen_synth.py`, passent `check_manifest` et la vérification des checksums blake3, puis sont lus entièrement ; c'est l'aller-retour Python → Rust de référence, là où `tools/` et `clients/python/tests` ne comparent que les ensembles de clés du manifeste ;
+  - un lot absent fait échouer le test avec un message qui dit comment le générer ; le test n'est jamais ignoré en silence, et la CI les génère avant `cargo test` ;
   - chaque contrôle a son test d'échec, avec le bon `ErrorCode` ;
   - la mémoire reste bornée : la lecture se fait partie par partie, jamais en chargeant tout le lot.
 - **Hors périmètre** : les longueurs en tokens et la recette (P2).
@@ -109,10 +110,12 @@
   - les règles du tableau du doc 04 (nouveau, hash identique, hash différent, suppression, conflit) ;
   - l'attribution des iid et l'écriture du segment ;
   - les pierres tombales (`dead_since_gen`), l'idempotence par `batch_id` et le `batch_conflict` ;
+  - toutes les écritures SQLite d'une attache (`documents`, `passages`, pierres tombales, `batches`, `segments`, `meta`) dans **une seule transaction**, celle du commit de génération (`crible-store::generation`) ; pas d'autocommit pendant l'attache, contrairement à `records::write_document` et `records::write_passage` ;
   - le rapport d'attache.
 - **Critères d'acceptation** :
   - L1, L2 puis L3 donnent les comptes attendus ;
   - rejouer L2 ne change rien (INV-10) ;
+  - une attache qui échoue après avoir commencé à écrire (erreur provoquée au milieu des écritures) laisse `records.sqlite` exactement dans son état d'avant : aucune ligne nouvelle, `meta.generation` inchangée (INV-03) ;
   - un `doc_id` à la fois dans `documents` et `deletions` fait rejeter le lot, sans aucune trace (INV-03) ;
   - avec `replace_all`, tous les documents absents sont supprimés.
 - **Invariants** : INV-03, INV-10.
@@ -153,6 +156,10 @@
   - la lecture des payloads (champs, texte) pour les k résultats.
 - **Critères d'acceptation** :
   - les 200 requêtes de `synth-small` donnent les mêmes clés que `expected.jsonl`, dans le même ordre (égalité à 1e-5 près sur les scores, et départage stable par clé) ;
+  - deux résultats **adjacents** dont les scores diffèrent de moins de 1e-5 peuvent apparaître dans l'ordre inverse de `expected.jsonl` : la référence est arrondie une fois en f32, le moteur somme en f32 scalaire ; `expected.jsonl` compte 55 requêtes concernées, dont 4 sous 1e-6, mesurées dans `tools/README.md` ;
+  - à la frontière du k-ième résultat, une clé peut être remplacée par une autre dont le score est égal à 1e-5 près, et le test le vérifie ;
+  - en dehors de ces quasi-égalités, l'ordre et les clés sont identiques ;
+  - un résultat dont la ligne `documents` est absente (document supprimé après la prise du snapshot) est rendu avec son texte et ses champs de passage, sans champs de document et sans erreur ; test nommé `missing_document_row_renders_passage_fields` (**ADR-0043**) ;
   - **INV-06**.
 - **Invariants** : INV-06.
 

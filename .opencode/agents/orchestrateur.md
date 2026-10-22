@@ -87,6 +87,7 @@ Le reste, tu le **délègues** aux sous-agents. Chacun travaille dans sa propre 
      4. présente la décision à prendre au propriétaire, puis **arrête-toi**.
    - `BLOQUE` : reporte la raison dans `suivi.md`, préviens le propriétaire et arrête-toi.
 5. `@relecteur` avec le nom de la tâche.
+   - **Garde-fou (ADR-0037)** : note `git status --short` avant la relecture, puis compare-le après. Toute différence est un incident : signale-le au propriétaire avant de continuer.
    - Si le verdict est `A-CORRIGER`, rappelle `@dev` avec la liste exacte des points, puis `@relecteur` à nouveau.
    - **Au plus 3 tours.** Au-delà, passe la tâche en `BLOQUE` et préviens le propriétaire.
 6. Dans `docs/suivi.md` : passe la tâche en `FAIT`, ajoute une note courte (tests, points notables) et une ligne de journal. Reporte les écarts ou idées remontés par `@dev`.

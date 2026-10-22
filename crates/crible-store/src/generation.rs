@@ -1,0 +1,1627 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! Generations of one index: the commit protocol and the recovery at startup.
+//!
+//! References: `docs/02-architecture.md` ("Organisation sur disque",
+//! "Générations et point de commit", "Concurrence"), `ADR-0016` (the SQLite
+//! commit is the only commit point), `docs/08-invariants-et-tests.md`
+//! (INV-03, INV-04).
+//!
+//! # Layout
+//!
+//! ```text
+//! <index>/index.json                                configuration of the index (schema, frozen)
+//! <index>/CURRENT_EPOCH                             current epoch, written tmp then renamed
+//! <index>/epochs/<epoch>/records.sqlite             reference state (WAL)
+//! <index>/epochs/<epoch>/segments/<segment_id>/     immutable vectors, see `segment`
+//! <index>/epochs/<epoch>/manifests/<generation>.json derived view of one generation
+//! ```
+//!
+//! # Commit protocol
+//!
+//! [`GenerationStore::commit`] applies one generation change in the order of
+//! `docs/02-architecture.md`:
+//!
+//! 1. one SQLite transaction writes the segments, the documents, the passages,
+//!    the tombstones, the batch row, `meta.generation = G+1` and
+//!    `meta.next_iid`;
+//! 2. **`COMMIT` — the commit point (ADR-0016)**;
+//! 3. `manifests/<G+1>.json` is written, fsynced and renamed;
+//! 4. a new [`Snapshot`] is built and published through an [`ArcSwap`].
+//!
+//! The segments themselves are written before the call, by the attach that
+//! prepares them: a segment stays invisible until step 1 references it, which
+//! is what makes an abandoned one an orphan that recovery removes.
+//!
+//! [`GenerationStore::commit_with_rows`] runs the same protocol and lets the
+//! caller append its own rows (the attach writes the `batches` row there) to
+//! step 1, still inside the single commit point. It also returns the time spent
+//! in each of its post-write steps, which the attach reports (`docs/04`).
+//!
+//! # Recovery
+//!
+//! [`GenerationStore::open`] restores the last committed generation and nothing
+//! else (INV-04): it reads `CURRENT_EPOCH`, opens SQLite, reads `meta`, removes
+//! every `tmp-*` entry and every segment directory absent from the `segments`
+//! table, rewrites the manifest of the current generation when it is missing,
+//! then publishes the snapshot.
+//!
+//! # Fault injection
+//!
+//! With the `failpoints` cargo feature, and only with it, `commit` stops at the
+//! step named by the `CRIBLE_FAILPOINT` environment variable
+//! (`before_sqlite_commit`, `after_sqlite_commit`, `after_manifest`,
+//! `after_publish`). Stopping means panicking with a message containing
+//! `CRIBLE_FAILPOINT`: unwinding through the transaction rolls it back exactly
+//! as a process death would. That panic is the expected outcome of the
+//! `INV-03` / `INV-04` tests; nothing else in this module panics.
+//!
+//! # What the snapshot carries
+//!
+//! The snapshot carries the metadata of its segments and the filter structures
+//! of its generation ([`FilterIndex`]). It opens no segment, so it never pays
+//! the checksum read of `SegmentReader::open`: loading the vectors into the
+//! snapshot belongs to the dense search tasks.
+//!
+//! The filter structures are built from `records.sqlite` at creation and at
+//! startup, then derived generation by generation in copy on write by
+//! [`FilterIndex::after_commit`] (ADR-0018, ADR-0019). The schema that describes
+//! which field is indexed, and how, therefore reaches the store when it is
+//! created or opened: the reference state holds the values, not the schema.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use arc_swap::ArcSwap;
+use crible_core::config::{IndexConfig, Schema};
+use crible_core::error::{CribleError, ErrorCode};
+use crible_core::ids::{Epoch, Generation, Iid};
+use rusqlite::{Connection, Transaction};
+use serde_json::{Value, json};
+
+use crate::filters_index::{FilterIndex, FilterMemory};
+use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
+use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
+
+/// Version of the derived manifest format (INV-15).
+pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+
+/// Name of the file holding the current epoch of an index.
+pub const CURRENT_EPOCH_FILE_NAME: &str = "CURRENT_EPOCH";
+
+/// Name of the index configuration inside an index directory.
+///
+/// `docs/02-architecture.md` ("Organisation sur disque") places `index.json`
+/// next to `CURRENT_EPOCH`. The store reads its schema from it, so the filter
+/// structures can never be built from a schema the index does not declare.
+pub const INDEX_CONFIG_FILE_NAME: &str = "index.json";
+
+/// Writes the index configuration `index.json` atomically in `index_dir`.
+///
+/// The directory is created when it does not exist. The caller writes the
+/// configuration before [`GenerationStore::create`], which refuses an index
+/// without one. The write is a temporary file, fsync, rename and fsync of the
+/// directory (the protocol of `docs/02-architecture.md` for `CURRENT_EPOCH`),
+/// so a crash leaves either no configuration or the whole one, never a
+/// truncated `index.json` that a retry would refuse.
+///
+/// `config_json` is parsed with [`IndexConfig::from_json_str`] before anything
+/// is written: a malformed configuration is refused with
+/// [`ErrorCode::InvalidRequest`] and leaves the directory untouched, rather than
+/// landing in an `index.json` that every later `open` and `create` would have to
+/// reject.
+///
+/// A directory holding any part of an index — `CURRENT_EPOCH`, an `epochs/`
+/// directory or a `records.sqlite` — is refused with the same code, naming what
+/// is present. Writing a different schema over an epoch that already holds rows
+/// would change the filter structures of a populated `records.sqlite`, which
+/// `RecordStore::create` reopens without emptying. A residual `index.json` alone
+/// is not such a state: a creation that stopped before its first epoch left one,
+/// and nothing else exists, so replacing it loses nothing.
+pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), CribleError> {
+    IndexConfig::from_json_str(config_json)?;
+    if let Some(present) = occupied_index_state(index_dir) {
+        return Err(existing_index_error(index_dir, &present));
+    }
+    fs::create_dir_all(index_dir)
+        .map_err(|error| io_error("create the index directory", index_dir, &error))?;
+    write_atomically(
+        &index_dir.join(INDEX_CONFIG_FILE_NAME),
+        config_json.as_bytes(),
+    )
+}
+
+/// Part of an index that already occupies an index directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OccupiedIndex {
+    /// A complete index: `CURRENT_EPOCH` names its current epoch.
+    Complete(PathBuf),
+    /// A tree a creation did not finish: an `epochs/` directory or a
+    /// `records.sqlite` without the pointer that makes it usable.
+    Partial(PathBuf),
+}
+
+/// What already occupies `index_dir`, if it holds any part of an index.
+///
+/// The states are checked in the order a creation writes them, except for the
+/// `records.sqlite` at the index root: a creation never writes one there, since
+/// the reference database lives inside its epoch directory. It is the trace of
+/// a tree moved or interrupted by hand, and it is reported last, once neither
+/// the pointer nor `epochs/` explains the directory.
+///
+/// A residual `index.json` is deliberately absent from this list: it is the only
+/// entry a creation may replace.
+fn occupied_index_state(index_dir: &Path) -> Option<OccupiedIndex> {
+    let pointer = index_dir.join(CURRENT_EPOCH_FILE_NAME);
+    if pointer.exists() {
+        return Some(OccupiedIndex::Complete(pointer));
+    }
+    let epochs = index_dir.join(EPOCHS_DIR_NAME);
+    if epochs.exists() {
+        return Some(OccupiedIndex::Partial(epochs));
+    }
+    let records = index_dir.join(RECORDS_FILE_NAME);
+    if records.exists() {
+        return Some(OccupiedIndex::Partial(records));
+    }
+    None
+}
+
+/// Error returned when a creation targets an index that already exists.
+///
+/// A complete index and a partial tree are two different situations, so the
+/// message distinguishes them: the first one is usable and names its commands,
+/// the second one is the trace of a creation that stopped, and only there does
+/// removing the directory make sense.
+fn existing_index_error(index_dir: &Path, occupied: &OccupiedIndex) -> CribleError {
+    let message = match occupied {
+        OccupiedIndex::Complete(pointer) => format!(
+            "an index already exists at {}: {} is present, and creating an index never \
+             overwrites one; use `crible attach`, `crible search` or `crible inspect` on it, \
+             or create another index under another name",
+            index_dir.display(),
+            pointer.display()
+        ),
+        OccupiedIndex::Partial(present) => format!(
+            "a partial index tree is present at {}: {} exists, but the index has no {} pointer, \
+             so no creation can reopen it, and creating an index never overwrites one; \
+             remove it to create a new index",
+            index_dir.display(),
+            present.display(),
+            CURRENT_EPOCH_FILE_NAME
+        ),
+    };
+    CribleError::new(ErrorCode::InvalidRequest, message)
+}
+
+/// Name of the directory holding the epochs of an index.
+const EPOCHS_DIR_NAME: &str = "epochs";
+
+/// Name of the reference database inside an epoch directory.
+const RECORDS_FILE_NAME: &str = "records.sqlite";
+
+/// Name of the segments directory inside an epoch directory.
+const SEGMENTS_DIR_NAME: &str = "segments";
+
+/// Name of the derived manifests directory inside an epoch directory.
+const MANIFESTS_DIR_NAME: &str = "manifests";
+
+/// Prefix of a directory or file built before its rename into place.
+///
+/// The same prefix as the one [`SegmentWriter`](crate::segment::SegmentWriter)
+/// uses: recovery removes every `tmp-*` entry of `segments/` and `manifests/`.
+const TEMPORARY_PREFIX: &str = "tmp-";
+
+/// Environment variable naming the step at which `commit` must stop.
+#[cfg(feature = "failpoints")]
+const FAILPOINT_ENV: &str = "CRIBLE_FAILPOINT";
+
+/// One generation change, applied in a single transaction and published whole.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenerationChange {
+    /// Segments the new generation makes visible, already written and renamed.
+    pub segments: Vec<SegmentMeta>,
+    /// Document rows the change writes.
+    pub documents: Vec<DocumentRecord>,
+    /// Passage rows the change adds.
+    pub passages: Vec<PassageRecord>,
+    /// Internal identifiers tombstoned at the new generation.
+    pub deletions: Vec<Iid>,
+}
+
+/// Immutable view of one committed generation, held by a reader for the whole
+/// request (INV-02, INV-03).
+///
+/// A snapshot is never mutated: a commit builds a new one and publishes it, so
+/// a reader that took a snapshot keeps the generation it started on, even while
+/// another thread commits.
+#[derive(Debug)]
+pub struct Snapshot {
+    generation: Generation,
+    segments: Vec<SegmentMeta>,
+    filters: FilterIndex,
+}
+
+impl Snapshot {
+    /// Generation this snapshot describes.
+    #[must_use]
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    /// Segments the generation references, in ascending `iid_start` order, then
+    /// by identifier.
+    #[must_use]
+    pub fn segments(&self) -> &[SegmentMeta] {
+        &self.segments
+    }
+
+    /// Internal identifiers alive in this generation, in ascending order:
+    /// passages tombstoned at this generation and at the previous ones are
+    /// excluded (INV-01 keeps them inside the engine).
+    ///
+    /// The identifiers are read from the bitmap of the live passages, which is
+    /// the only copy the snapshot holds: materialising them again as a slice
+    /// would store every live iid twice.
+    pub fn live_iids(&self) -> impl Iterator<Item = Iid> + '_ {
+        self.filters.live().iter().map(Iid::new)
+    }
+
+    /// Filter structures of the generation: the bitmaps per value, the present
+    /// bitmaps, the value columns and the bitmap of the live passages.
+    #[must_use]
+    pub fn filters(&self) -> &FilterIndex {
+        &self.filters
+    }
+
+    /// Estimated heap size of the filter structures, which `crible inspect`
+    /// reports.
+    ///
+    /// The measure covers the bitmaps, the value columns and the `keyword` values
+    /// themselves. It leaves out the schema the structures were built from, which
+    /// every generation shares and which does not grow with the passage count,
+    /// and the fixed overhead of the maps (see [`FilterMemory`]). `MES-13` is the
+    /// measure that settles what the report must count.
+    #[must_use]
+    pub fn filter_memory(&self) -> FilterMemory {
+        self.filters.memory()
+    }
+}
+
+/// Stops the process at `step` when `CRIBLE_FAILPOINT=<step>` is set.
+///
+/// Simulating a crash means panicking: the unwinding drops the SQLite
+/// transaction, which rolls it back exactly as a process death would, and the
+/// store is then reopened the way a restart does. That panic is the expected
+/// outcome of the `INV-03` / `INV-04` tests and cannot be reached in a build
+/// without the `failpoints` feature.
+///
+/// This is the one `panic!` the workspace keeps outside the tests, so the lint
+/// `clippy::panic` of `Cargo.toml` is silenced here and nowhere else: an error
+/// return would not simulate a process death, and the two invariant tests that
+/// read `CRIBLE_FAILPOINT` expect the panic.
+#[cfg(feature = "failpoints")]
+#[allow(clippy::panic)]
+fn stop_at_failpoint(step: &str) {
+    let armed = std::env::var(FAILPOINT_ENV).unwrap_or_default();
+    if armed == step {
+        panic!("CRIBLE_FAILPOINT={step}: simulated crash at this step of the commit protocol");
+    }
+}
+
+/// Reaches one step of an attach, inside the transaction of its generation.
+///
+/// Only an attach calls this, so the steps `after_attach_documents` and
+/// `after_attach_passages` are never reached by a plain
+/// [`GenerationStore::commit`] (the `GERER-GENERATIONS` tests). The panic it
+/// raises unwinds through the transaction, which rolls it back (INV-03).
+#[cfg(feature = "failpoints")]
+pub(crate) fn attach_failpoint(step: &str) {
+    stop_at_failpoint(step);
+}
+
+/// Reaches one step of an attach; a normal build carries neither the
+/// environment read nor a call.
+#[cfg(not(feature = "failpoints"))]
+pub(crate) fn attach_failpoint(_step: &str) {}
+
+/// Reaches the step `step` of the commit protocol.
+///
+/// Expands to nothing at all without the `failpoints` feature: the normal build
+/// carries neither the environment read nor a call.
+#[cfg(feature = "failpoints")]
+macro_rules! failpoint {
+    ($step:literal) => {
+        stop_at_failpoint($step)
+    };
+}
+
+/// Reaches the step `step` of the commit protocol, which does nothing in a
+/// normal build.
+#[cfg(not(feature = "failpoints"))]
+macro_rules! failpoint {
+    ($step:literal) => {};
+}
+
+/// A committed generation and the time spent in the steps that follow its
+/// writes: the attach turns them into the stage durations of its report.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommittedGeneration {
+    /// Generation the change produced.
+    pub(crate) generation: Generation,
+    /// Time spent in each step of the commit protocol.
+    pub(crate) timings: CommitTimings,
+}
+
+/// Time spent in the steps of [`GenerationStore::commit_with_rows`], measured
+/// around the work this module owns.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CommitTimings {
+    /// Filling the transaction and reaching the commit point.
+    pub(crate) transaction: Duration,
+    /// Writing `manifests/<generation>.json`.
+    pub(crate) manifest: Duration,
+    /// Building the snapshot (its publication is immediate).
+    pub(crate) snapshot: Duration,
+}
+
+/// The generation that follows `generation`, refusing an exhausted counter.
+///
+/// The attach computes its planned generation with this before the transaction,
+/// and [`GenerationStore::commit_with_rows`] recomputes it inside; both must
+/// agree, which the attach checks.
+pub(crate) fn generation_after(generation: Generation) -> Result<Generation, CribleError> {
+    let next = generation.get().checked_add(1).ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "the generation counter is exhausted, no generation can follow it",
+        )
+    })?;
+    Ok(Generation::new(next))
+}
+
+/// Owner of one index: the writable reference database of the epoch and the
+/// published snapshot of the current generation.
+///
+/// One writer per index (`docs/02-architecture.md`, "Concurrence"): the type
+/// holds the only writable connection of `records.sqlite`, so no second writer
+/// can bypass the commit point of ADR-0016.
+pub struct GenerationStore {
+    index_dir: PathBuf,
+    epoch: Epoch,
+    records: RecordStore,
+    snapshot: ArcSwap<Snapshot>,
+}
+
+impl GenerationStore {
+    /// Creates the index at `index_dir`: the epoch directory, its `segments/`
+    /// and `manifests/` directories, `records.sqlite` with its schema, the
+    /// manifest of generation 0, then `CURRENT_EPOCH`.
+    ///
+    /// `schema` is the schema of the index configuration (`index.json`,
+    /// `docs/02-architecture.md`), which says which fields the filter
+    /// structures index and how. A fresh index has no row, so its structures
+    /// are the empty ones of that schema. `index.json` must already be present
+    /// in `index_dir` — written by [`write_index_config`] — and its schema is
+    /// the authority: a different `schema` is refused with
+    /// [`ErrorCode::ImmutableSetting`], because the schema is frozen and a
+    /// mismatch would build structures of another index. An index without a
+    /// declared schema is refused with [`ErrorCode::InvalidRequest`], so no
+    /// index exists whose filter structures no configuration describes.
+    ///
+    /// **An existing index is never overwritten.** When `CURRENT_EPOCH` is
+    /// already present, creation stops with [`ErrorCode::InvalidRequest`]
+    /// before writing anything: rewriting the pointer and `meta.epoch` would
+    /// make a different epoch current while its rows stay in place, which no
+    /// commit produced and no recovery expects. `invalid_request` is the code
+    /// of `docs/05-api.md` for a request the store cannot carry out; the code
+    /// `immutable_setting` is reserved for a frozen setting, which this is not.
+    ///
+    /// `CURRENT_EPOCH` is written last and atomically, and every directory it
+    /// makes reachable is fsynced before it: `segments/`, the epoch directory
+    /// and `epochs/`, in that order, then the index directory by
+    /// `write_current_epoch`. A creation that returns has therefore persisted
+    /// the whole chain, so a crash afterwards leaves a usable index; a crash
+    /// before leaves no `CURRENT_EPOCH`, which [`GenerationStore::open`] refuses
+    /// with [`ErrorCode::InvalidRequest`] instead of reading a half-created
+    /// epoch.
+    pub fn create(index_dir: &Path, epoch: Epoch, schema: &Schema) -> Result<Self, CribleError> {
+        if let Some(present) = occupied_index_state(index_dir) {
+            return Err(existing_index_error(index_dir, &present));
+        }
+        check_declared_schema(index_dir, schema)?;
+
+        let epoch_dir = epoch_directory(index_dir, epoch);
+        let segments = segments_directory(&epoch_dir);
+        let manifests = manifests_directory(&epoch_dir);
+        for directory in [&segments, &manifests] {
+            fs::create_dir_all(directory)
+                .map_err(|error| io_error("create a directory of the epoch", directory, &error))?;
+        }
+
+        let mut records = RecordStore::create(&epoch_dir.join(RECORDS_FILE_NAME))?;
+        records.set_epoch(epoch)?;
+
+        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        write_manifest(&epoch_dir, epoch, &snapshot)?;
+
+        // fsync the directories bottom-up before the pointer that makes them
+        // reachable: POSIX allows a rename to survive while a directory entry
+        // above it does not, and `open` must never find `CURRENT_EPOCH` without
+        // its epoch.
+        let epochs_dir = epoch_dir.parent().ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("{} has no parent directory", epoch_dir.display()),
+            )
+        })?;
+        sync_directory(&segments)?;
+        sync_directory(&epoch_dir)?;
+        sync_directory(epochs_dir)?;
+        write_current_epoch(index_dir, epoch)?;
+
+        Ok(Self {
+            index_dir: index_dir.to_path_buf(),
+            epoch,
+            records,
+            snapshot: ArcSwap::from(Arc::new(snapshot)),
+        })
+    }
+
+    /// Opens an existing index and runs the recovery of INV-04, then publishes
+    /// the snapshot of the committed generation.
+    ///
+    /// Recovery removes every `tmp-*` entry and every segment directory SQLite
+    /// does not reference, and rewrites the manifest of the current generation
+    /// when it is missing. It is idempotent: a second open changes nothing.
+    ///
+    /// `schema` is the schema of the index configuration, as for
+    /// [`GenerationStore::create`]: the filter structures of the committed
+    /// generation are rebuilt from `records.sqlite`, and the schema is what
+    /// tells them which field to index and how. It is cross-checked against the
+    /// schema `index.json` declares, so opening an index with another schema is
+    /// refused with [`ErrorCode::ImmutableSetting`] instead of silently
+    /// building different filter structures. An index directory without
+    /// `index.json` is refused with [`ErrorCode::InvalidRequest`].
+    ///
+    /// A directory that holds no `CURRENT_EPOCH` is not an index of this build
+    /// and is refused with [`ErrorCode::InvalidRequest`], before anything is
+    /// removed from it.
+    pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
+        let epoch = read_current_epoch(index_dir)?;
+        check_declared_schema(index_dir, schema)?;
+        let epoch_dir = epoch_directory(index_dir, epoch);
+        let records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
+
+        let declared = records.meta()?.epoch;
+        if declared != epoch {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "{} names epoch {} but {} declares epoch {}",
+                    index_dir.join(CURRENT_EPOCH_FILE_NAME).display(),
+                    epoch.get(),
+                    epoch_dir.join(RECORDS_FILE_NAME).display(),
+                    declared.get()
+                ),
+            ));
+        }
+
+        recover(&records, index_dir, &epoch_dir)?;
+        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        ensure_manifest(&epoch_dir, epoch, &snapshot)?;
+
+        Ok(Self {
+            index_dir: index_dir.to_path_buf(),
+            epoch,
+            records,
+            snapshot: ArcSwap::from(Arc::new(snapshot)),
+        })
+    }
+
+    /// Epoch of the index, as `CURRENT_EPOCH` names it.
+    #[must_use]
+    pub fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    /// Generation currently published.
+    #[must_use]
+    pub fn generation(&self) -> Generation {
+        self.snapshot.load().generation()
+    }
+
+    /// Takes the snapshot of the published generation.
+    ///
+    /// The caller holds the returned `Arc` for the whole request, so a commit
+    /// that happens meanwhile cannot change the view it reads (INV-02, INV-03).
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<Snapshot> {
+        self.snapshot.load_full()
+    }
+
+    /// Applies `change` as one generation: transaction, commit point, manifest,
+    /// publication, in that order.
+    ///
+    /// Every segment of the change must declare the new generation G+1, and
+    /// every document must name G+1 as the generation that last wrote it, and
+    /// every passage must have been created at G+1: rows that name another
+    /// generation are refused with [`ErrorCode::Internal`], because they would
+    /// write a visible state no commit produced (INV-03).
+    ///
+    /// Any error raised before the SQLite commit rolls the transaction back and
+    /// publishes nothing, so the previous generation stays visible in full
+    /// (INV-03). An error raised **after** the commit point (building the
+    /// snapshot, writing the manifest) means the generation is committed but not
+    /// published: the next [`GenerationStore::open`] rewrites the manifest and
+    /// publishes it (ADR-0016, INV-04). A caller must therefore not read such an
+    /// error as "nothing was written".
+    pub fn commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError> {
+        self.commit_with_rows(|transaction, generation, next_iid| {
+            write_generation_change(transaction, &change, generation, next_iid)
+        })
+        .map(|committed| committed.generation)
+    }
+
+    /// Opens the transaction of a generation, lets `write` fill it, commits it
+    /// once, then writes the manifest and publishes the new snapshot.
+    ///
+    /// The commit protocol is the one of [`GenerationStore::commit`]: the
+    /// callback writes every row of the generation inside the single
+    /// transaction, then `advance_meta` and the `COMMIT` end it (ADR-0016). A
+    /// callback that returns an error, or panics, drops the transaction, which
+    /// rolls it back, so nothing of the generation becomes visible (INV-03).
+    ///
+    /// The callback receives the transaction, the generation it must stamp on
+    /// its rows (G+1), and the first free `iid`; it returns the first free `iid`
+    /// after its rows.
+    ///
+    /// This is how an attach writes the `batches` row, the segments, the
+    /// documents, the passages, the tombstones and the document removals in one
+    /// transaction, which [`GenerationChange`] alone cannot express. The
+    /// returned [`CommittedGeneration`] also carries the time spent in the
+    /// transaction, in the manifest and in the snapshot.
+    pub(crate) fn commit_with_rows<F>(
+        &mut self,
+        write: F,
+    ) -> Result<CommittedGeneration, CribleError>
+    where
+        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<u32, CribleError>,
+    {
+        let epoch_dir = epoch_directory(&self.index_dir, self.epoch);
+
+        let transaction_started = Instant::now();
+        let transaction = self.records.begin()?;
+        let meta = records::read_meta(&transaction)?;
+        let generation = generation_after(meta.generation)?;
+
+        let next_iid = write(&transaction, generation, meta.next_iid)?;
+        records::advance_meta(&transaction, generation, next_iid)?;
+
+        failpoint!("before_sqlite_commit");
+        transaction
+            .commit()
+            .map_err(|error| records::database_error("commit the generation", &error))?;
+        let transaction_time = transaction_started.elapsed();
+        failpoint!("after_sqlite_commit");
+
+        let snapshot_started = Instant::now();
+        let previous = self.snapshot.load_full();
+        let snapshot =
+            build_snapshot_after_commit(&self.records, &epoch_dir, &previous, generation)?;
+        let snapshot_time = snapshot_started.elapsed();
+
+        let manifest_started = Instant::now();
+        write_manifest(&epoch_dir, self.epoch, &snapshot)?;
+        let manifest_time = manifest_started.elapsed();
+        failpoint!("after_manifest");
+
+        self.snapshot.store(Arc::new(snapshot));
+        failpoint!("after_publish");
+        Ok(CommittedGeneration {
+            generation,
+            timings: CommitTimings {
+                transaction: transaction_time,
+                manifest: manifest_time,
+                snapshot: snapshot_time,
+            },
+        })
+    }
+
+    /// Runs `read` on the writable connection of the index, outside any
+    /// transaction.
+    ///
+    /// The store is the only writer of its index, so a read here sees a state
+    /// no other writer can change until the next call that takes `&mut self`.
+    /// The attach uses it to decide its plan before the segment and the
+    /// transaction (`docs/02-architecture.md`, "Attacher un lot").
+    pub(crate) fn with_connection<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> Result<T, CribleError>,
+    ) -> Result<T, CribleError> {
+        read(self.records.connection())
+    }
+
+    /// Reads the `batches` row of `batch_id`, or `None` when it has never been
+    /// applied (INV-10).
+    pub(crate) fn applied_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<records::StoredBatch>, CribleError> {
+        self.records.batch(batch_id)
+    }
+
+    /// Directory of the current epoch: `<index>/epochs/<epoch>`.
+    #[must_use]
+    pub fn epoch_directory(&self) -> PathBuf {
+        epoch_directory(&self.index_dir, self.epoch)
+    }
+
+    /// Path of the reference database of the current epoch.
+    ///
+    /// The search opens its read-only payload connections on this file, at one
+    /// fixed path (ADR-0043), so it never recomputes an epoch directory per
+    /// query.
+    #[must_use]
+    pub fn records_path(&self) -> PathBuf {
+        self.epoch_directory().join(RECORDS_FILE_NAME)
+    }
+
+    /// Directory of the segments of the current epoch.
+    #[must_use]
+    pub fn segments_directory(&self) -> PathBuf {
+        segments_directory(&self.epoch_directory())
+    }
+
+    /// State of the published generation, as `crible inspect` and the index
+    /// state of the API (`docs/05-api.md`) report it.
+    ///
+    /// The counts come from `records.sqlite`, the reference state, while the
+    /// filter memory comes from the published snapshot. The store is the only
+    /// writer of its index, so the two describe the same generation.
+    pub fn state(&self) -> Result<IndexState, CribleError> {
+        let snapshot = self.snapshot();
+        let counts = self.records.counts()?;
+        let live_passages = snapshot.filters().live().len();
+        let dead_passages = counts.passages.checked_sub(live_passages).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the live bitmap holds more passages than the reference state",
+            )
+        })?;
+        Ok(IndexState {
+            epoch: self.epoch,
+            generation: snapshot.generation(),
+            documents: counts.documents,
+            live_passages,
+            dead_passages,
+            segments: snapshot.segments().to_vec(),
+            filter_memory: snapshot.filter_memory(),
+        })
+    }
+}
+
+/// State of one published generation, for inspection.
+///
+/// Every count is taken from the reference state; the segments and the filter
+/// memory describe the snapshot the store published. The dead ratio is a simple
+/// `dead / (live + dead)` and is not stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexState {
+    /// Epoch directory holding the reference state.
+    pub epoch: Epoch,
+    /// Published generation.
+    pub generation: Generation,
+    /// Documents the reference state holds.
+    pub documents: u64,
+    /// Passages alive at this generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at this generation or an earlier one.
+    pub dead_passages: u64,
+    /// Segments the generation references, in `iid_start` order.
+    pub segments: Vec<SegmentMeta>,
+    /// Estimated heap size of the filter structures.
+    pub filter_memory: FilterMemory,
+}
+
+impl IndexState {
+    /// Ratio of dead passages among all the passages of the epoch, or 0 when
+    /// the epoch holds none.
+    #[must_use]
+    pub fn dead_ratio(&self) -> f64 {
+        let total = self.live_passages.saturating_add(self.dead_passages);
+        if total == 0 {
+            return 0.0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = self.dead_passages as f64 / total as f64;
+        ratio
+    }
+}
+
+/// Reads the schema `index.json` declares.
+///
+/// An index always carries `index.json`: [`GenerationStore::create`] refuses an
+/// index directory without it, and [`write_index_config`] is the only way the
+/// store writes one. A directory without it is therefore not a complete index,
+/// and its caller's schema must not become the only authority, or the filter
+/// structures could be built from a schema no index declares.
+fn declared_schema(index_dir: &Path) -> Result<Schema, CribleError> {
+    let path = index_dir.join(INDEX_CONFIG_FILE_NAME);
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        CribleError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "cannot read the index configuration {}: {error}; a Crible index always \
+                 declares its schema in {INDEX_CONFIG_FILE_NAME}",
+                path.display()
+            ),
+        )
+    })?;
+    let config = IndexConfig::from_json_str(&raw).map_err(|error| {
+        CribleError::new(
+            error.code(),
+            format!("{}: {}", path.display(), error.message()),
+        )
+    })?;
+    Ok(config.schema)
+}
+
+/// Refuses a `schema` that differs from the one `index.json` declares.
+///
+/// The schema is frozen (INV-16) and decides which filter structures exist. A
+/// store built with another schema would silently build structures no index
+/// declares, so the two are cross-checked at creation and at every open.
+fn check_declared_schema(index_dir: &Path, schema: &Schema) -> Result<(), CribleError> {
+    let declared = declared_schema(index_dir)?;
+    if &declared == schema {
+        return Ok(());
+    }
+    Err(CribleError::new(
+        ErrorCode::ImmutableSetting,
+        format!(
+            "the schema passed to the store differs from the schema declared by {}; the \
+             schema of an index is frozen, and its filter structures are built from the \
+             declared one",
+            index_dir.join(INDEX_CONFIG_FILE_NAME).display()
+        ),
+    ))
+}
+
+/// Writes one [`GenerationChange`] inside the transaction of its generation,
+/// and returns the first free `iid` after its passages.
+fn write_generation_change(
+    transaction: &Transaction<'_>,
+    change: &GenerationChange,
+    generation: Generation,
+    next_iid: u32,
+) -> Result<u32, CribleError> {
+    let GenerationChange {
+        segments,
+        documents,
+        passages,
+        deletions,
+    } = change;
+
+    let mut next_iid = next_iid;
+    for segment in segments {
+        check_generation_matches(
+            "segment",
+            &segment.segment_id,
+            segment.generation,
+            generation,
+        )?;
+        records::insert_segment(transaction, segment)?;
+    }
+    for document in documents {
+        check_generation_matches(
+            "document",
+            &document.doc_id,
+            document.updated_generation,
+            generation,
+        )?;
+        records::insert_document(transaction, document)?;
+    }
+    for passage in passages {
+        check_generation_matches(
+            "passage",
+            &passage.doc_id,
+            passage.created_generation,
+            generation,
+        )?;
+        records::insert_passage(transaction, passage)?;
+        next_iid = next_iid.max(passage.iid.get().checked_add(1).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "iid {} leaves no free identifier after it",
+                    passage.iid.get()
+                ),
+            )
+        })?);
+    }
+    for iid in deletions {
+        records::tombstone_passage(transaction, *iid, generation)?;
+    }
+    Ok(next_iid)
+}
+
+/// Directory of one epoch: `<index>/epochs/<epoch>`.
+fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    index_dir
+        .join(EPOCHS_DIR_NAME)
+        .join(epoch.get().to_string())
+}
+
+/// Directory of the segments of an epoch.
+fn segments_directory(epoch_dir: &Path) -> PathBuf {
+    epoch_dir.join(SEGMENTS_DIR_NAME)
+}
+
+/// Directory of the derived manifests of an epoch.
+fn manifests_directory(epoch_dir: &Path) -> PathBuf {
+    epoch_dir.join(MANIFESTS_DIR_NAME)
+}
+
+/// Path of the derived manifest of one generation.
+fn manifest_path(epoch_dir: &Path, generation: Generation) -> PathBuf {
+    manifests_directory(epoch_dir).join(format!("{}.json", generation.get()))
+}
+
+/// Reads `CURRENT_EPOCH`, the decimal number of the current epoch.
+///
+/// The file is plain text, one decimal number, as
+/// `docs/02-architecture.md` describes the layout: the version of the on-disk
+/// layout is carried by the `epochs/<epoch>/` structure and by the format
+/// versions of the files inside it, not by this pointer, which has to stay
+/// readable by an operator with `cat`.
+fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
+    let path = index_dir.join(CURRENT_EPOCH_FILE_NAME);
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        CribleError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "{} is not a Crible index: cannot read {}: {error}",
+                index_dir.display(),
+                path.display()
+            ),
+        )
+    })?;
+    let trimmed = raw.trim();
+    trimmed.parse::<u32>().map(Epoch::new).map_err(|error| {
+        CribleError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "{} must hold the decimal number of the current epoch, found {trimmed:?}: \
+                 {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+/// Writes `CURRENT_EPOCH` atomically: temporary file, fsync, rename, fsync of
+/// the index directory.
+fn write_current_epoch(index_dir: &Path, epoch: Epoch) -> Result<(), CribleError> {
+    let bytes = format!("{}\n", epoch.get());
+    write_atomically(&index_dir.join(CURRENT_EPOCH_FILE_NAME), bytes.as_bytes())
+}
+
+/// Writes a file atomically: `tmp-<name>` in the same directory, fsync, rename,
+/// then fsync of the directory, so a crash leaves either the old bytes or the
+/// new ones, never a truncated file.
+fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CribleError> {
+    let parent = path.parent().ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "{} has no parent directory, so no atomic write",
+                path.display()
+            ),
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "{} has no UTF-8 file name, so no atomic write",
+                    path.display()
+                ),
+            )
+        })?;
+    let temporary = parent.join(format!("{TEMPORARY_PREFIX}{file_name}"));
+    write_file_synced(&temporary, bytes)?;
+    fs::rename(&temporary, path)
+        .map_err(|error| io_error("rename the temporary file into place", &temporary, &error))?;
+    sync_directory(parent)
+}
+
+/// Removes what an interrupted commit or creation left behind (INV-04).
+///
+/// Every `tmp-*` entry is removed, including a residual `tmp-<segment_id>` that
+/// would make [`SegmentWriter::create`](crate::segment::SegmentWriter) fail on
+/// the next attempt with the same identifier, and a residual
+/// `tmp-CURRENT_EPOCH` that an interrupted creation left in `index_dir`. Every
+/// segment directory absent from the `segments` table is removed too: SQLite
+/// never referenced it, so it belongs to a generation that was never committed
+/// (ADR-0016).
+///
+/// The caller has read `CURRENT_EPOCH` before calling this, so a directory that
+/// is not an index is never touched: a missing or unreadable pointer file is
+/// refused earlier, by [`read_current_epoch`].
+fn recover(records: &RecordStore, index_dir: &Path, epoch_dir: &Path) -> Result<(), CribleError> {
+    let segments = segments_directory(epoch_dir);
+    let manifests = manifests_directory(epoch_dir);
+    for directory in [&segments, &manifests] {
+        fs::create_dir_all(directory)
+            .map_err(|error| io_error("create a directory of the epoch", directory, &error))?;
+    }
+    remove_temporary_entries(&manifests)?;
+    remove_temporary_entries(index_dir)?;
+
+    let referenced = records.segment_ids()?;
+    let mut removed = false;
+    for entry in fs::read_dir(&segments)
+        .map_err(|error| io_error("list the segments of the epoch", &segments, &error))?
+    {
+        let entry = entry.map_err(|error| io_error("read a segment entry", &segments, &error))?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "{} has no UTF-8 file name, so recovery cannot tell whether \
+                     SQLite references it",
+                    path.display()
+                ),
+            ));
+        };
+        let temporary = name.starts_with(TEMPORARY_PREFIX);
+        if !temporary && referenced.iter().any(|id| id == name) {
+            continue;
+        }
+        remove_entry(&path)?;
+        removed = true;
+    }
+    if removed {
+        sync_directory(&segments)?;
+    }
+    Ok(())
+}
+
+/// Removes every `tmp-*` entry of `dir`.
+fn remove_temporary_entries(dir: &Path) -> Result<(), CribleError> {
+    let mut removed = false;
+    for entry in fs::read_dir(dir).map_err(|error| io_error("list the directory", dir, &error))? {
+        let entry = entry.map_err(|error| io_error("read a directory entry", dir, &error))?;
+        let name = entry.file_name();
+        let temporary = name
+            .to_str()
+            .is_some_and(|name| name.starts_with(TEMPORARY_PREFIX));
+        if temporary {
+            remove_entry(&entry.path())?;
+            removed = true;
+        }
+    }
+    if removed {
+        sync_directory(dir)?;
+    }
+    Ok(())
+}
+
+/// Removes one file or one directory tree.
+fn remove_entry(path: &Path) -> Result<(), CribleError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| io_error("inspect a leftover entry", path, &error))?;
+    let outcome = if metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    outcome.map_err(|error| io_error("remove a leftover entry", path, &error))
+}
+
+/// Rejects a row whose generation contradicts the one being committed.
+///
+/// A segment becomes visible with the generation it declares, a document names
+/// the generation that last wrote it, and a passage is created by the
+/// generation it declares: all three must be the generation this commit
+/// publishes (G+1), otherwise the visible state would hold a generation number
+/// that no commit ever produced, and a snapshot would mix two of them (INV-03).
+/// A caller that prepares a change for another generation is out of step with
+/// the store, which is an internal error, not a bad request.
+fn check_generation_matches(
+    kind: &str,
+    identifier: &str,
+    declared: Generation,
+    committed: Generation,
+) -> Result<(), CribleError> {
+    if declared == committed {
+        return Ok(());
+    }
+    Err(CribleError::new(
+        ErrorCode::Internal,
+        format!(
+            "{kind} {identifier} declares generation {} but this commit publishes {}",
+            declared.get(),
+            committed.get()
+        ),
+    ))
+}
+
+/// Builds the snapshot of the committed generation from the reference state.
+///
+/// The generation and every row come from SQLite, the only authority on what is
+/// visible: the bitmap of the live passages is a reading of it, and a snapshot
+/// takes its live iids from that bitmap rather than storing them a second time.
+/// The segment metadata is read from the segments table and
+/// from `segment.json` on disk, which carries the format version and the
+/// precision, then sorted by `iid_start`: a snapshot is read in iid order, and
+/// a restart produces the manifest in the same order as the commit that wrote
+/// it. The filter structures are rebuilt from every row of `passages` and
+/// `documents`, following `schema` (ADR-0018, ADR-0019). No vector file is
+/// opened here: the snapshot of this task holds metadata and filters, not
+/// mmaps.
+fn build_snapshot(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    schema: &Schema,
+) -> Result<Snapshot, CribleError> {
+    Ok(Snapshot {
+        generation: records.meta()?.generation,
+        segments: segments_of(records, epoch_dir)?,
+        filters: FilterIndex::from_records(records.connection(), schema)?,
+    })
+}
+
+/// Builds the snapshot that follows the commit of `generation`.
+///
+/// The filter structures are derived from those of the previous snapshot in
+/// copy on write: only the rows the generation stamped are read, and the
+/// bitmaps and column blocks no change touches are shared with the generation
+/// the readers still hold (INV-02).
+///
+/// The previous snapshot is at generation G-1 whenever the commit succeeded, so
+/// the delta is the whole difference. It is not when an earlier commit stopped
+/// **after** its SQLite commit (a manifest that could not be written): that
+/// generation is committed but was never published, and a delta would leave its
+/// rows out. The snapshot is then rebuilt from `records.sqlite`, which is what
+/// the next [`GenerationStore::open`] would do (INV-04).
+fn build_snapshot_after_commit(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    previous: &Snapshot,
+    generation: Generation,
+) -> Result<Snapshot, CribleError> {
+    let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
+        previous
+            .filters()
+            .after_commit(records.connection(), generation)?
+    } else {
+        FilterIndex::from_records(records.connection(), previous.filters().schema())?
+    };
+    Ok(Snapshot {
+        generation,
+        segments: segments_of(records, epoch_dir)?,
+        filters,
+    })
+}
+
+/// Metadata of the segments the reference state references, in `iid_start`
+/// order then by identifier.
+fn segments_of(records: &RecordStore, epoch_dir: &Path) -> Result<Vec<SegmentMeta>, CribleError> {
+    let segments_dir = segments_directory(epoch_dir);
+    let mut segments = Vec::new();
+    for segment_id in records.segment_ids()? {
+        segments.push(segment::read_meta(&segments_dir.join(&segment_id))?);
+    }
+    segments.sort_by(|left, right| {
+        left.iid_start
+            .get()
+            .cmp(&right.iid_start.get())
+            .then_with(|| left.segment_id.cmp(&right.segment_id))
+    });
+    Ok(segments)
+}
+
+/// Writes the derived manifest of `snapshot`, atomically.
+fn write_manifest(epoch_dir: &Path, epoch: Epoch, snapshot: &Snapshot) -> Result<(), CribleError> {
+    let path = manifest_path(epoch_dir, snapshot.generation());
+    let bytes = manifest_json(epoch, snapshot)?;
+    write_atomically(&path, bytes.as_bytes())
+}
+
+/// Writes the manifest of `snapshot` when it is missing, as recovery does.
+fn ensure_manifest(epoch_dir: &Path, epoch: Epoch, snapshot: &Snapshot) -> Result<(), CribleError> {
+    if manifest_path(epoch_dir, snapshot.generation()).exists() {
+        return Ok(());
+    }
+    write_manifest(epoch_dir, epoch, snapshot)
+}
+
+/// Serializes the derived view of one generation as canonical JSON.
+///
+/// The manifest is a derived view, never a source of truth (ADR-0016): it names
+/// its generation, its epoch and its segments, with the same fields as
+/// `segment.json`, so an operator can read one generation with `cat`. It
+/// carries the version of its own format (INV-15).
+fn manifest_json(epoch: Epoch, snapshot: &Snapshot) -> Result<String, CribleError> {
+    let segments: Vec<Value> = snapshot.segments().iter().map(segment_value).collect();
+    let manifest = json!({
+        "epoch": epoch.get(),
+        "format_version": MANIFEST_FORMAT_VERSION,
+        "generation": snapshot.generation().get(),
+        "segments": segments,
+    });
+    serde_json::to_string(&manifest).map_err(|error| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("cannot serialize the manifest of a generation: {error}"),
+        )
+    })
+}
+
+/// Derived view of one segment inside a manifest, with the fields of its
+/// `segment.json`.
+fn segment_value(meta: &SegmentMeta) -> Value {
+    json!({
+        "batch_id": meta.batch_id,
+        "checksums": meta.checksums,
+        "count": meta.count,
+        "dims": meta.dims,
+        "format_version": meta.format_version,
+        "generation": meta.generation.get(),
+        "iid_start": meta.iid_start.get(),
+        "segment_id": meta.segment_id,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME,
+        RECORDS_FILE_NAME, read_current_epoch,
+    };
+    use crible_core::config::Schema;
+    use crible_core::error::ErrorCode;
+    use crible_core::ids::Epoch;
+    use std::fs;
+
+    /// JSON schema of an index that indexes no field.
+    const EMPTY_SCHEMA_JSON: &str = r#"{ "document_fields": {}, "passage_fields": {} }"#;
+
+    /// JSON schema of an index indexing one `integer` document field.
+    const YEAR_SCHEMA_JSON: &str =
+        r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#;
+
+    /// Schema of an index that indexes no field: these tests commit no row, so
+    /// their filter structures stay empty.
+    fn empty_schema() -> Schema {
+        Schema::from_json_str(EMPTY_SCHEMA_JSON)
+            .unwrap_or_else(|error| panic!("the empty schema must be valid: {error}"))
+    }
+
+    /// Schema indexing one `integer` document field.
+    fn schema_with_year() -> Schema {
+        Schema::from_json_str(YEAR_SCHEMA_JSON)
+            .unwrap_or_else(|error| panic!("the year schema must be valid: {error}"))
+    }
+
+    /// Writes an index configuration declaring `schema` as its schema.
+    fn write_config(index: &std::path::Path, schema: &str) {
+        let raw = test_config("test", schema);
+        super::write_index_config(index, &raw)
+            .unwrap_or_else(|error| panic!("the index configuration: {error}"));
+    }
+
+    /// Index configuration declaring `schema`, with the settings the store
+    /// ignores.
+    fn test_config(name: &str, schema: &str) -> String {
+        format!(
+            r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{schema},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#
+        )
+    }
+
+    /// Creation writes the pointer file, readable as a plain decimal number, and
+    /// the manifest of generation 0, so a fresh index is inspectable.
+    #[test]
+    fn create_writes_the_current_epoch_and_the_manifest_of_generation_zero() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let store = GenerationStore::create(&index, Epoch::new(3), &empty_schema())
+            .expect("the index is created");
+
+        assert_eq!(store.epoch(), Epoch::new(3));
+        assert_eq!(store.generation().get(), 0);
+        assert_eq!(
+            read_current_epoch(&index).expect("the pointer file is readable"),
+            Epoch::new(3)
+        );
+        assert!(
+            index
+                .join("epochs")
+                .join("3")
+                .join("manifests")
+                .join("0.json")
+                .is_file(),
+            "creation must leave the manifest of generation 0"
+        );
+    }
+
+    /// Creating an index that already exists is refused by the store, before
+    /// anything is written, and the existing index keeps its epoch and its
+    /// generation.
+    #[test]
+    fn create_refuses_an_existing_index_and_leaves_it_intact() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let store = GenerationStore::create(&index, Epoch::new(4), &empty_schema())
+            .expect("the index is created");
+        let pointer = index.join(CURRENT_EPOCH_FILE_NAME);
+        let pointer_before = fs::read(&pointer).expect("the pointer is readable");
+        let state_before = store.state().expect("the state is readable");
+        drop(store);
+
+        let error = GenerationStore::create(&index, Epoch::new(9), &empty_schema())
+            .err()
+            .expect("creating an existing index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+
+        assert_eq!(
+            fs::read(&pointer).expect("the pointer is still readable"),
+            pointer_before,
+            "the refusal must not rewrite CURRENT_EPOCH"
+        );
+        let reopened =
+            GenerationStore::open(&index, &empty_schema()).expect("the index still opens");
+        assert_eq!(reopened.epoch(), Epoch::new(4));
+        let state_after = reopened.state().expect("the state is readable");
+        assert_eq!(
+            (
+                state_before.epoch,
+                state_before.generation,
+                state_before.documents,
+                state_before.live_passages,
+            ),
+            (
+                state_after.epoch,
+                state_after.generation,
+                state_after.documents,
+                state_after.live_passages,
+            ),
+            "the refusal must leave the index untouched"
+        );
+    }
+
+    /// A directory without `index.json` is not a complete index: creation is
+    /// refused before anything is written, so the store never builds filter
+    /// structures from a schema no configuration declares.
+    #[test]
+    fn create_refuses_an_index_without_a_declared_schema() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+
+        let error = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .err()
+            .expect("an index without index.json must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(CURRENT_EPOCH_FILE_NAME).exists(),
+            "a refused creation must leave no index"
+        );
+        assert!(
+            !index.join("epochs").exists(),
+            "a refused creation must not write the epoch"
+        );
+    }
+
+    /// A directory holding an epoch but no `CURRENT_EPOCH` is a torn index:
+    /// writing a configuration over it would let `create` reopen a populated
+    /// `records.sqlite` with another schema, so it is refused as a partial tree.
+    #[test]
+    fn write_index_config_refuses_a_torn_index_state() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        let epoch = index.join("epochs").join("1");
+        fs::create_dir_all(&epoch).expect("the epoch directory is created");
+        fs::write(epoch.join("records.sqlite"), b"stale").expect("the stale database is written");
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("a torn index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("partial index tree"),
+            "the message must say the tree is not a usable index: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("epochs"),
+            "the message must name what is present: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(CURRENT_EPOCH_FILE_NAME),
+            "the message must name the pointer that is missing: {}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("already exists"),
+            "a torn tree is not an existing index: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+    }
+
+    /// A single `records.sqlite` at the index root is the fourth state a
+    /// directory can hold: no epoch directory and no pointer, only the trace of
+    /// a tree moved or interrupted by hand. It is refused as a partial tree too.
+    #[test]
+    fn write_index_config_refuses_a_records_file_at_the_index_root() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+        let records = index.join(RECORDS_FILE_NAME);
+        fs::write(&records, b"stale").expect("the stale database is written");
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("a records.sqlite at the index root must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("partial index tree"),
+            "the message must say the tree is not a usable index: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(&records.display().to_string()),
+            "the message must name the file it found: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+        assert!(
+            !index.join(EPOCHS_DIR_NAME).exists(),
+            "a refused write must not create the epoch directory"
+        );
+    }
+
+    /// A configuration that does not parse as an [`IndexConfig`] is refused
+    /// before anything is written: the store never leaves an `index.json` that
+    /// every later `open` would have to reject.
+    #[test]
+    fn write_index_config_refuses_a_configuration_that_does_not_parse() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+
+        for broken in ["{ not json", r#"{"name":"test"}"#] {
+            let error = super::write_index_config(&index, broken)
+                .expect_err("a configuration that does not parse must be refused");
+            assert_eq!(
+                error.code(),
+                ErrorCode::InvalidRequest,
+                "wrong error code for {broken}: {}",
+                error.message()
+            );
+        }
+        assert!(
+            !index.join(INDEX_CONFIG_FILE_NAME).exists(),
+            "a refused write must leave no index.json"
+        );
+        assert!(
+            !index.exists(),
+            "a refused write must not even create the directory"
+        );
+    }
+
+    /// A residual `index.json` is the trace of a creation that stopped before
+    /// its first epoch: nothing else exists, so replacing it loses nothing and
+    /// the creation then succeeds.
+    #[test]
+    fn write_index_config_replaces_a_residual_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        fs::create_dir_all(&index).expect("the index directory is created");
+        fs::write(index.join(INDEX_CONFIG_FILE_NAME), r#"{"stale":true}"#)
+            .expect("the residual configuration is written");
+
+        let raw = test_config("test", EMPTY_SCHEMA_JSON);
+        super::write_index_config(&index, &raw).expect("the residual configuration is replaced");
+        assert_eq!(
+            fs::read_to_string(index.join(INDEX_CONFIG_FILE_NAME))
+                .expect("the configuration is readable"),
+            raw,
+            "the residual configuration must be replaced"
+        );
+        GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .expect("the index is created after the replacement");
+    }
+
+    /// `write_index_config` refuses a complete index, like `create`: the message
+    /// names the pointer it found, points at the commands that use the index,
+    /// and never invites to remove it.
+    #[test]
+    fn write_index_config_refuses_an_existing_index() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+
+        let error = super::write_index_config(&index, &test_config("test", EMPTY_SCHEMA_JSON))
+            .expect_err("an existing index must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("already exists"),
+            "the message must say the index exists: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(CURRENT_EPOCH_FILE_NAME),
+            "the message must name what is present: {}",
+            error.message()
+        );
+        for command in ["attach", "search", "inspect"] {
+            assert!(
+                error.message().contains(command),
+                "the message must point at `crible {command}`: {}",
+                error.message()
+            );
+        }
+        assert!(
+            !error.message().contains("remove"),
+            "a complete index is usable, so the message must not invite to remove it: {}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("partial"),
+            "a complete index is not a partial tree: {}",
+            error.message()
+        );
+    }
+
+    /// The schema of `index.json` is the authority: a different schema is
+    /// refused at creation, before the epoch exists.
+    #[test]
+    fn create_refuses_a_schema_that_differs_from_the_index_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(
+            &index,
+            r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#,
+        );
+
+        let error = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .err()
+            .expect("a different schema must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::ImmutableSetting,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            !index.join(CURRENT_EPOCH_FILE_NAME).exists(),
+            "a refused creation must leave no index"
+        );
+    }
+
+    /// Opening an index with a schema other than the declared one is refused,
+    /// instead of silently building different filter structures.
+    #[test]
+    fn open_refuses_a_schema_that_differs_from_the_index_configuration() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(
+            &index,
+            r#"{ "document_fields": { "annee": { "type": "integer" } }, "passage_fields": {} }"#,
+        );
+        let store = GenerationStore::create(&index, Epoch::new(1), &schema_with_year())
+            .expect("the declared schema creates the index");
+        drop(store);
+
+        let error = GenerationStore::open(&index, &empty_schema())
+            .err()
+            .expect("a different schema must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::ImmutableSetting,
+            "wrong error code: {}",
+            error.message()
+        );
+
+        let reopened = GenerationStore::open(&index, &schema_with_year())
+            .expect("the declared schema still opens the index");
+        assert_eq!(reopened.epoch(), Epoch::new(1));
+    }
+
+    /// Opening an index whose `index.json` disappeared is refused: the store
+    /// must not rebuild the filter structures from the caller's schema alone.
+    #[test]
+    fn open_refuses_an_index_without_a_declared_schema() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+        fs::remove_file(index.join(INDEX_CONFIG_FILE_NAME))
+            .expect("the configuration is removed to simulate a lost file");
+
+        let error = GenerationStore::open(&index, &empty_schema())
+            .err()
+            .expect("an index without index.json must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+    }
+
+    /// A directory without `CURRENT_EPOCH` is not an index: opening it is a bad
+    /// request, and recovery does not touch it.
+    #[test]
+    fn read_current_epoch_refuses_a_directory_that_is_not_an_index() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let error = read_current_epoch(temp.path())
+            .expect_err("a directory without CURRENT_EPOCH is not an index");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+
+        let path = temp.path().join(CURRENT_EPOCH_FILE_NAME);
+        fs::write(&path, "not a number").expect("the pointer file is written");
+        let error =
+            read_current_epoch(temp.path()).expect_err("a pointer file that is not a number");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "wrong error code: {}",
+            error.message()
+        );
+    }
+}

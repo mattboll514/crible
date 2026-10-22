@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `IndexConfig`, `Schema`, `FieldType` and `FieldLevel`.
 //!
 //! References: `docs/04-donnees-et-ingestion.md`, section "Configuration d'un

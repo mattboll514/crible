@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! `BatchManifest` and `check_manifest`: format, version, mode, model
 //! compatibility, counts and the file list.
 //!
-//! References: `docs/04-donnees-et-ingestion.md` (format de lot v1, contrôles 1
-//! à 4), `docs/format-lot-v1.md`, and the `DEFINIR-FORMAT-LOT` task of
+//! References: `docs/04-donnees-et-ingestion.md` (batch format v1, controls 1
+//! to 4), `docs/format-lot-v1.md`, and the `DEFINIR-FORMAT-LOT` task of
 //! `docs/phases/P0-fondations.md`.
 
-use crible_core::batch::{BatchManifest, BatchMode, check_manifest};
+use crible_core::batch::{BatchManifest, BatchMode, check_manifest, classify_files};
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::ModelConfig;
@@ -363,6 +366,88 @@ fn numbered_parquet_files_are_accepted() {
     });
 
     check(&manifest).expect("numbered Parquet files are part of the format");
+}
+
+/// The parts of a role are visited in increasing numeric value of their
+/// suffix, whatever the number of digits they write (ADR-0040).
+#[test]
+fn numbered_parts_are_ordered_by_their_numeric_suffix() {
+    let manifest = mutated(|value| {
+        let files = value["files"].as_object_mut().expect("files is an object");
+        files.remove("documents.parquet");
+        files.remove("passages.parquet");
+        files.insert("passages-10000.parquet".to_owned(), json!("blake3:…"));
+        files.insert("passages-9999.parquet".to_owned(), json!("blake3:…"));
+        files.insert("documents-0002.parquet".to_owned(), json!("blake3:…"));
+        files.insert("documents-0001.parquet".to_owned(), json!("blake3:…"));
+    });
+
+    let files = classify_files(&manifest)
+        .unwrap_or_else(|error| panic!("the numbered parts are part of the format: {error}"));
+    assert_eq!(
+        files.passages(),
+        [
+            "passages-9999.parquet".to_owned(),
+            "passages-10000.parquet".to_owned()
+        ],
+        "passages-9999.parquet is read before passages-10000.parquet"
+    );
+    assert_eq!(
+        files.documents(),
+        [
+            "documents-0001.parquet".to_owned(),
+            "documents-0002.parquet".to_owned()
+        ],
+        "the documents parts follow the same numeric order"
+    );
+}
+
+/// Two parts of one role whose suffixes hold the same number, such as
+/// `passages-0001.parquet` and `passages-00001.parquet`, leave the part order
+/// undefined and are refused (ADR-0040).
+#[test]
+fn two_parts_with_the_same_numeric_suffix_are_rejected() {
+    let manifest = mutated(|value| {
+        let files = value["files"].as_object_mut().expect("files is an object");
+        files.remove("passages.parquet");
+        files.insert("passages-0001.parquet".to_owned(), json!("blake3:…"));
+        files.insert("passages-00001.parquet".to_owned(), json!("blake3:…"));
+    });
+
+    let error = classify_files(&manifest).expect_err("the part order would be undefined");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("same numeric suffix"),
+        "the message must explain the repeated value: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("passages-00001.parquet"),
+        "the message must name the second part: {}",
+        error.message()
+    );
+}
+
+/// A suffix that no integer can hold is a fault of the batch, reported as such
+/// and never a panic (ADR-0040).
+#[test]
+fn a_part_suffix_too_large_for_an_integer_is_rejected() {
+    let manifest = mutated(|value| {
+        let files = value["files"].as_object_mut().expect("files is an object");
+        files.remove("passages.parquet");
+        files.insert(
+            "passages-99999999999999999999.parquet".to_owned(),
+            json!("blake3:…"),
+        );
+    });
+
+    let error = classify_files(&manifest).expect_err("a 20-digit suffix exceeds u64");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("too large"),
+        "the message must say the suffix is too large: {}",
+        error.message()
+    );
 }
 
 #[test]

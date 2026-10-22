@@ -93,7 +93,7 @@ Fichier `models/<name>/model.json` :
 - **`passage_hash`** : blake3 de `text`, calculé par Crible. Il sert à `dedup: content`.
 - **Règles** :
   - un document présent dans un lot arrive avec **tous** ses passages ;
-  - les `ord` sont contigus et commencent à 0 ;
+  - les `ord` sont contigus et commencent à 0 ; les lignes d'un même document arrivent dans l'ordre croissant des `ord`, et cet ordre se poursuit d'une partie à l'autre (ADR-0039) ;
   - un document a au moins un passage ; pour le retirer, on passe par `deletions`.
 
 ## Format de lot v1
@@ -152,14 +152,16 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 | `doc_id` inconnu | Ajout de ses passages |
 | Connu, `doc_hash` identique | Passages ignorés ; champs de document mis à jour s'ils diffèrent |
 | Connu, `doc_hash` différent | Anciens passages → pierres tombales ; nouveaux ajoutés ; champs mis à jour |
-| Dans `deletions` | Pierres tombales sur tous ses passages ; document retiré |
+| Dans `deletions` | Pierres tombales sur tous ses passages ; document retiré (ligne `documents` supprimée) |
 | `doc_id` à la fois dans `documents` et `deletions` | Le lot est rejeté |
 | Suppression d'un `doc_id` inconnu | Ignorée, comptée dans le rapport |
 
+- **Document retiré** (ADR-0041) : la ligne `documents` est supprimée dans la transaction du commit de génération, qu'il soit nommé dans `deletions` ou absent d'un lot `replace_all`. C'est la même transaction que les pierres tombales, le segment, la ligne `batches` et `meta.generation` ; il n'y a pas de seconde écriture après le point de commit (ADR-0016). Les pierres tombales restent posées sur les passages : c'est elles qui portent l'état de suppression jusqu'à la compaction. Un document ré-ajouté ensuite est un document neuf : il n'a ni `doc_hash` ni champs hérités.
 - **Atomicité** : le lot passe entièrement ou pas du tout (**INV-03**).
 - **Idempotence** :
-  - un `batch_id` déjà appliqué ne fait rien, et renvoie le rapport d'origine (**INV-10**) ;
+  - un `batch_id` déjà appliqué ne fait rien, et renvoie le rapport **persisté** de l'attache d'origine — six comptes, statistiques de recette et génération —, sans durées (**INV-10**, ADR-0042) ;
   - le même `batch_id` avec un autre manifeste (`manifest_blake3` différent) renvoie `409 batch_conflict`.
+  - `manifest_blake3` est le digest blake3 des octets de `manifest.json` **tels qu'ils ont été lus**, calculé avant toute désérialisation et jamais recalculé depuis une structure en mémoire. La forme est `blake3:<hex>`, `<hex>` en hexadécimal minuscule, comme les checksums de fichiers du lot (ADR-0041). Un manifeste re-sérialisé à l'identique sur le fond mais différent sur la forme (espaces, ordre des clés, échappements) donne donc un `manifest_blake3` différent, et `409 batch_conflict` s'il a déjà été appliqué. L'idempotence sert à rejouer le même dossier octet pour octet, pas à rattraper un manifeste réécrit ; ce n'est pas un contrôle d'intégrité du manifeste, mais une identification de contenu.
 
 ## Contrôles et recette, dans l'ordre
 
@@ -168,7 +170,7 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 3. Le modèle du lot est compatible avec celui de l'index : chaque champ (`hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompt_document`) est comparé à la configuration résolue du modèle (`ModelConfig`). Sinon : `422 incompatible_model`.
 4. Les checksums des fichiers correspondent au manifeste.
 5. Le schéma Parquet est conforme à celui de l'index : colonnes présentes et types corrects.
-6. Les comptes correspondent au manifeste ; les `ord` sont contigus ; chaque document a au moins un passage.
+6. Les comptes correspondent au manifeste ; les `ord` sont contigus ; les lignes d'un même document arrivent dans l'ordre croissant des `ord`, d'une partie à l'autre comprise (ADR-0039) ; les parties d'un rôle se parcourent dans l'ordre croissant de la valeur numérique de leur suffixe, et deux parties d'un même rôle de même valeur numérique font rejeter le lot ; un `doc_id` est unique dans `documents`, toutes parties confondues, et dans `deletions` (ADR-0040) ; chaque document a au moins un passage.
 7. Les vecteurs sont finis, et leur norme est proche de 1 (|‖v‖ − 1| ≤ 1e-2) si `normalize` est vrai.
 8. **Longueur** : le nombre de tokens, prompt compris, ne dépasse pas `max_tokens`. Sinon, le lot est rejeté (**INV-11**, aucune troncature silencieuse).
 9. **Recette** :
@@ -179,11 +181,24 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 
    C'est la généralisation de la recette de Legifacile, qui a déjà détecté un écart de version de transformers (cosinus 0,988).
 
-**Le rapport d'attache** donne :
-- les comptes : ajoutés, remplacés, inchangés, métadonnées mises à jour, supprimés, ignorés ;
+**Le rapport d'attache** donne six comptes **par document et mutuellement exclusifs** (ADR-0041), puis :
+
+| Clé | Cas compté |
+|---|---|
+| `added` | `doc_id` inconnu, passages ajoutés |
+| `replaced` | `doc_id` connu, `doc_hash` différent : anciens passages en pierres tombales, nouveaux ajoutés |
+| `unchanged` | `doc_id` connu, `doc_hash` identique, champs de document identiques |
+| `metadata_updated` | `doc_id` connu, `doc_hash` identique, champs de document différents |
+| `deleted` | `doc_id` connu nommé dans `deletions`, ou absent d'un lot `replace_all` |
+| `ignored` | suppression d'un `doc_id` inconnu |
+
+Un document compte dans exactement une de ces six catégories, donc la somme des six vaut le nombre de documents traités. Les comptes de passages ne sont pas repris dans le rapport : ce sont ceux du manifeste du lot (`counts.passages`).
+
+Le rapport **persisté** donne aussi :
 - les statistiques de la recette ;
-- la durée de chaque étape ;
 - la génération obtenue.
+
+Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `manifest`, `snapshot` — est mesurée, mais ces durées sont de la **télémétrie d'appel** : elles sont rendues au seul appelant d'origine de l'attache et restent disponibles pour la journalisation et les mesures. Aucune n'entre dans `batches.report`, et aucune écriture n'a lieu après le point de commit (ADR-0016).
 
 ## Mode en ligne (sans producteur)
 

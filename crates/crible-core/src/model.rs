@@ -132,10 +132,7 @@ fn required_file<'a>(
 }
 
 fn valid_blake3(text: &str) -> bool {
-    text.len() == 64
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    crate::batch::is_blake3_digest(text)
 }
 
 /// Configuration of the model of an index.

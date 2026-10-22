@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
+// Test helpers may panic; `allow-panic-in-tests` covers `#[test]` functions only.
+#![allow(clippy::panic)]
+
 //! INV-01 — an internal id never leaves the engine.
 //!
 //! The invariant is enforced at the type level: `Iid` must not be serializable,

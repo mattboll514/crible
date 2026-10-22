@@ -77,6 +77,11 @@ exchange/                               # dossier monté : inbox/ (lots), outbox
 
 Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`.
 
+Deux fichiers méritent une description de format propre :
+
+- **`CURRENT_EPOCH`** : un nombre décimal ASCII suivi d'un saut de ligne, sans version propre. La version des formats est portée par `meta.format_version` de `records.sqlite` et par les `format_version` des fichiers de l'époque. Le fichier est écrit dans `tmp-CURRENT_EPOCH`, puis fsync, renommage et fsync du dossier de l'index ; `meta.epoch` en garde une copie, vérifiée à l'ouverture : un désaccord est une erreur interne. `create` fsynce les dossiers de l'époque de bas en haut (`segments/`, puis le dossier de l'époque, puis `epochs/`) avant d'écrire `CURRENT_EPOCH`.
+- **`manifests/<generation>.json`** : un JSON canonique — clés triées, compact (ADR-0027) ; versionné (INV-15) — dérivé de SQLite, jamais source de vérité (ADR-0016). Il porte `epoch`, `format_version` (1), `generation` et `segments`, la liste des segments de la génération, triée par `iid_start` puis par `segment_id`. Chaque segment y reprend les champs de son `segment.json` (`iid_start`, `count`, `dims`, `format_version`, `generation`, `batch_id`, `checksums`) et son `segment_id`, tiré du nom du dossier. Il est écrit de façon atomique — fichier `tmp-`, fsync, renommage, fsync du dossier — et la reprise le reconstruit depuis SQLite et les `segment.json` s'il manque.
+
 ## Tables SQLite (`records.sqlite`, une base par époque)
 
 | Table | Colonnes principales |
@@ -88,6 +93,9 @@ Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqli
 | `passages` | `iid` (PK), `doc_id`, `ord`, `text` (zstd), `passage_hash`, `fields` (JSON), `segment_id`, `created_generation`, `dead_since_gen` (NULL = vivant) |
 
 Index SQLite : `passages(doc_id)`, `passages(dead_since_gen)`.
+
+- `batches.manifest_blake3` est le digest blake3 des octets de `manifest.json` tels que lus, sous la forme `blake3:<hex>`, `<hex>` en hexadécimal minuscule (ADR-0041). Il identifie le contenu du manifeste pour comparer deux tentatives du même `batch_id` ; ce n'est pas un contrôle d'intégrité.
+- Une ligne `documents` n'existe que pour un document vivant. Sa suppression appartient à la transaction du commit de génération, que le document soit nommé dans `deletions` ou absent d'un lot `replace_all` (ADR-0041). Un document ré-ajouté ensuite est un document neuf.
 
 En v1, les champs sont stockés en JSON canonique (ADR-0019). Les bitmaps et les colonnes de valeurs en sont dérivées.
 
@@ -110,6 +118,7 @@ Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3,
 
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
+- Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`.
 - Comparer la charge utile du dernier commit tantivy (Gt) à G :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
@@ -125,7 +134,7 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 - **Chaque requête prend un `Arc<Snapshot>` au départ.** L'instantané contient les segments (fp16 en mmap, codes en RAM), les bitmaps, les colonnes de valeurs, le `Searcher` tantivy et la génération.
 - **Libération.** Un instantané est libéré quand son dernier lecteur se termine. Les fichiers d'une époque supprimée ne sont effacés qu'après.
 - **Payloads.** Les textes et champs des résultats viennent d'un pool de connexions SQLite en lecture (WAL).
-  - Limite connue : les champs d'un document peuvent refléter une génération plus récente que celle utilisée pour filtrer. Seule une modification de métadonnées peut produire cet écart, ce qui est accepté.
+  - Limite connue : les champs d'un document peuvent refléter une génération plus récente que celle utilisée pour filtrer. Deux causes produisent cet écart, toutes deux acceptées : une modification de métadonnées, et la suppression du document, dont la ligne `documents` a alors disparu (ADR-0041). Dans ce second cas, le résultat est rendu avec son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043).
   - Textes et vecteurs sont immuables pour un iid donné.
 - **Calcul.** Les scans tournent sur un pool rayon dédié, jamais sur les threads tokio.
 

@@ -87,6 +87,18 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0031](0031-cle-inconnue-dans-un-patch-de-configuration.md) | Refuser une clé inconnue dans un `PATCH` de configuration | Accepté | 2026-10-19 |
 | [ADR-0032](0032-acces-a-la-production.md) | Accès des agents à la production Legifacile : SSH, lecture seule, informations hors git | Accepté | 2026-10-19 |
 | [ADR-0033](0033-orchestrateur-dans-claude-code.md) | L'orchestrateur tourne dans Claude Code (Opus), les agents restent dans opencode (DeepSeek via Ollama) | Accepté | 2026-10-20 |
+| [ADR-0034](0034-dependance-python-blake3-pour-les-checksums.md) | Dépendance Python `blake3` pour les checksums des lots | Accepté | 2026-10-21 |
+| [ADR-0035](0035-semantique-des-valeurs-nulles-dans-les-filtres.md) | Sémantique des valeurs nulles dans les filtres | Accepté | 2026-10-21 |
+| [ADR-0036](0036-producer-host-reglable-par-le-producteur.md) | `producer.host` réglable par le producteur | Accepté | 2026-10-21 |
+| [ADR-0037](0037-permissions-de-lecture-du-relecteur.md) | Élargir les permissions de `@relecteur` aux utilitaires de vérification et à Python | Accepté | 2026-10-21 |
+| [ADR-0038](0038-delai-d-attente-sqlite-busy-timeout.md) | Régler un délai d'attente sur les verrous SQLite (`busy_timeout`) | Accepté | 2026-10-21 |
+| [ADR-0039](0039-ordre-des-lignes-dans-un-lot-v1.md) | Ordre des lignes dans un lot v1 | Accepté | 2026-10-21 |
+| [ADR-0040](0040-unicite-des-documents-et-des-parties-dans-un-lot-v1.md) | Unicité des documents et des parties dans un lot v1 | Accepté | 2026-10-22 |
+| [ADR-0041](0041-semantique-d-attache-document-supprime-digest-du-manifeste-et-rapport.md) | Sémantique d'attache : document supprimé, digest du manifeste et rapport | Accepté | 2026-10-22 |
+| [ADR-0042](0042-durees-du-rapport-d-attache-telemetrie-d-appel-non-persistee.md) | Durées du rapport d'attache : télémétrie d'appel, non persistée | Accepté | 2026-10-22 |
+| [ADR-0043](0043-payload-d-un-resultat-dont-le-document-est-supprime.md) | Payload d'un résultat dont le document a été supprimé après le snapshot | Accepté | 2026-10-22 |
+| [ADR-0044](0044-regles-du-relecteur-verifications-executees.md) | Règles de `@relecteur` : faire passer les vérifications et ne rapporter que ce qui a été exécuté | Accepté | 2026-10-22 |
+| [ADR-0045](0045-reference-de-synth-small-calculee-exactement-independante-de-la-blas.md) | Référence de `synth-small` calculée exactement, indépendante de la bibliothèque BLAS | Accepté | 2026-10-22 |
 
 ## Questions ouvertes
 

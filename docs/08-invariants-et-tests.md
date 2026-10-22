@@ -8,7 +8,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 |---|---|---|
 | INV-01 | Aucun iid ne sort du moteur : ni API, ni logs, ni analytics, ni exports | Recherche de motifs dans les réponses et les logs des tests d'intégration ; les types de l'API n'ont pas de champ iid |
 | INV-02 | Une lecture n'est jamais bloquée par une écriture | Charge de recherches concurrentes pendant une attache et une compaction : aucune requête au-delà du p99 de référence × 3 |
-| INV-03 | Une génération est visible entièrement ou pas du tout | Lecteurs concurrents pendant des attaches : jamais d'état mixte (ancienne et nouvelle version d'un document, ou aucune des deux) |
+| INV-03 | Une génération est visible entièrement ou pas du tout. Portée : pool, scores et classement ; les payloads n'en font pas partie (ADR-0043) | Lecteurs concurrents pendant des attaches : jamais d'état mixte (ancienne et nouvelle version d'un document, ou aucune des deux) |
 | INV-04 | Au redémarrage, l'état est la dernière génération commitée ; tout le reste est reconstruit ou nettoyé | Injection de pannes : arrêt brutal à chaque étape du protocole d'attache, puis redémarrage et vérification |
 | INV-05 | Les branches dense et lexicale utilisent le même pool | Test du pipeline : les candidats des deux branches sont inclus dans le pool |
 | INV-06 | Pool ≤ seuil exact ⇒ résultat identique au calcul exact | Comparaison avec la référence numpy sur le jeu synthétique |
@@ -68,6 +68,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
+| MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1 |
 
 ## Cibles chiffrées
 

@@ -39,7 +39,7 @@ Format unique :
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
-| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte (`Retry-After`) |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038) (`Retry-After`) |
 | `timeout` | 504 | Requête trop longue |
 | `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) |
 
@@ -100,6 +100,11 @@ Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `in
 | `integer`, `float`, `date` | `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `in`, `exists` |
 | `bool` | `eq`, `exists` |
 
+- **Valeurs nulles** (ADR-0035) :
+  - les comparaisons (`eq`, `ne`, `in`, `nin`, `lt`, `lte`, `gt`, `gte`) ne sont **jamais** satisfaites par un null ;
+  - `exists: true` vaut « présent et non null » ; `exists: false` vaut « absent ou null » ;
+  - `$not` est le complément sur les vivants. Il inclut donc les passages dont le champ est null : `{"$not": {"f": {"eq": "a"}}}` et `{"f": {"ne": "a"}}` ne sont **pas** équivalents.
+
 - **Limites** (ADR-0029) :
   - `in` et `nin` : 1 000 valeurs au plus ;
   - profondeur : 8 au plus. On compte les **niveaux d'objets et de tableaux** ; la racine vaut 1 ; un objet d'opérateurs de champ compte pour un niveau ; un tableau `$and` ou `$or` compte pour un niveau, et chacun de ses éléments pour le niveau suivant. Neuf `$not` imbriqués sont refusés, quatre sont acceptés ;
@@ -137,7 +142,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `group_by` | `"document"` ou null | null | Regroupement par document |
 | `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
-| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé |
+| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
 | `debug` | bool | false | Ajoute plan, temps et rangs ; journalise si le journal est activé |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
@@ -160,6 +165,8 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
   "request_id": "…"
 }
 ```
+
+Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ».
 
 Avec `debug: true`, la réponse ajoute :
 
@@ -188,6 +195,8 @@ Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 
 Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé au debug.
 
+Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la ligne `documents` est présente » et `alive` vaut « le document a au moins un passage vivant ». Ils restent distincts ; `exists: false` signifie que le `doc_id` n'a jamais existé ou a été supprimé.
+
 ## Recherche multi-index
 
 `POST /v1/search`
@@ -208,11 +217,15 @@ Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'e
 { "id": "job_…", "kind": "attach_batch", "index": "decisions", "state": "succeeded",
   "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1288,
   "progress": { "step": "commit", "done": 932, "total": 932 },
-  "result": { "report": { "added": 932, "replaced": 428, "unchanged": 1230, "deleted": 221,
+  "result": { "report": { "added": 421, "replaced": 428, "unchanged": 1230,
+                          "metadata_updated": 137, "deleted": 221, "ignored": 3,
                           "acceptance": { "sample": 200, "min_cosine": 0.99971, "p1": 0.9998, "p50": 0.99995 } } },
   "error": null }
 ```
 
+- Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
+- `progress.done` et `progress.total` comptent les **passages** traités, comme `counts.passages` du manifeste ; ils ne se comparent pas aux comptes du rapport.
+- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune.
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 

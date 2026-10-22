@@ -1,3 +1,5 @@
-# Tests may unwrap and expect; production code returns typed errors instead.
+# Tests may unwrap, expect and panic; production code returns typed errors or
+# stops only where the design says so (the failpoint of a commit).
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+allow-panic-in-tests = true

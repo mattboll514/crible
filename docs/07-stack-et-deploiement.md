@@ -45,7 +45,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | CLI | `clap` | |
 | Tests | `proptest`, `criterion`, `tempfile` | |
 
-**Côté Python** : `uv`, `pyarrow`, `numpy`, `httpx`, `pytest`. Les outils d'export ONNX (`optimum`, `onnxruntime`) restent dans `tools/` et ne sont pas des dépendances du paquet.
+**Côté Python** : `uv`, `pyarrow`, `numpy`, `httpx`, `pytest`, `blake3` (ADR-0034). Les outils d'export ONNX (`optimum`, `onnxruntime`) restent dans `tools/` et ne sont pas des dépendances du paquet.
 
 ## Environnement de développement (Mac)
 
