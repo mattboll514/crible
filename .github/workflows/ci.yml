@@ -32,6 +32,7 @@ jobs:
         run: |
           uv sync
           uv run python gen_synth.py --out ../data/synth-small
+          uv run python reference_topk.py --dataset ../data/synth-small
       - name: Test
         run: cargo test
 

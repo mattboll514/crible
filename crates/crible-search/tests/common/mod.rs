@@ -58,6 +58,10 @@
 // index. The same allowance as `crates/crible-store/tests/common/mod.rs`.
 #![allow(dead_code)]
 
+/// Fixtures of the dense exact search tests (`INV-06`, `RECHERCHER-DENSE-EXACT`),
+/// included here so every binary of this crate can share them.
+pub mod dense;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

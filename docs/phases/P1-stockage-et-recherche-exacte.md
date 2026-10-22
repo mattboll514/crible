@@ -159,6 +159,7 @@
   - deux résultats **adjacents** dont les scores diffèrent de moins de 1e-5 peuvent apparaître dans l'ordre inverse de `expected.jsonl` : la référence somme en f32 via BLAS, le moteur dans un autre ordre ; `expected.jsonl` compte 55 requêtes concernées, dont 5 sous 1e-6, mesurées dans `tools/README.md` ;
   - à la frontière du k-ième résultat, une clé peut être remplacée par une autre dont le score est égal à 1e-5 près, et le test le vérifie ;
   - en dehors de ces quasi-égalités, l'ordre et les clés sont identiques ;
+  - un résultat dont la ligne `documents` est absente (document supprimé après la prise du snapshot) est rendu avec son texte et ses champs de passage, sans champs de document et sans erreur ; test nommé `missing_document_row_renders_passage_fields` (**ADR-0043**) ;
   - **INV-06**.
 - **Invariants** : INV-06.
 

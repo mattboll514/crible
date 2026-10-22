@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 crible-core = { path = "../crible-core" }
 crible-store = { path = "../crible-store" }
+rayon.workspace = true
 roaring.workspace = true
 serde_json.workspace = true
 

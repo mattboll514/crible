@@ -14,8 +14,9 @@
 
 use std::path::Path;
 
+use crible_core::error::ErrorCode;
 use crible_core::ids::{Generation, Iid};
-use crible_store::records::{DocumentRecord, PassageRecord, RecordStore};
+use crible_store::records::{DocumentRecord, PassageRecord, ReadPool, RecordStore};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -366,4 +367,118 @@ fn database_uses_wal_journal_mode() {
         .query_row("PRAGMA journal_mode", [], |row| row.get(0))
         .unwrap_or_else(|error| panic!("journal_mode is readable: {error}"));
     assert_eq!(mode, "wal", "readers must not block writers (INV-02)");
+}
+
+#[test]
+fn read_pool_reads_documents_passages_and_keys() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("records.sqlite");
+
+    {
+        let mut store = RecordStore::create(&path).expect("the database is created");
+        store
+            .write_document(&document("doc-1", json!({ "titre": "T" })))
+            .expect("the document is written");
+        store
+            .write_passage(&passage(3, "doc-1", 4, "texte accentué"))
+            .expect("the passage is written");
+    }
+
+    let pool = ReadPool::new(&path, 2).expect("the read pool is created");
+    pool.verify().expect("the read pool verifies the database");
+
+    let document = pool
+        .read_document("doc-1")
+        .expect("the document is read")
+        .expect("the document exists");
+    assert_eq!(document.fields, json!({ "titre": "T" }));
+    let record = pool
+        .read_passage(Iid::new(3))
+        .expect("the passage is read")
+        .expect("the passage exists");
+    assert_eq!(record.text, "texte accentué");
+    assert_eq!(record.ord, 4);
+    let key = pool
+        .read_passage_key(Iid::new(3))
+        .expect("the key is read")
+        .expect("the key exists");
+    assert_eq!(key.to_string(), "doc-1#4", "the key is doc_id#ord");
+    assert_eq!(key.ord(), 4);
+
+    assert!(
+        pool.read_document("absent")
+            .expect("an unknown doc_id is not an error")
+            .is_none(),
+        "an unknown doc_id reads as None"
+    );
+    assert!(
+        pool.read_passage(Iid::new(99))
+            .expect("an unknown iid is not an error")
+            .is_none(),
+        "an unknown iid reads as None"
+    );
+    assert!(
+        pool.read_passage_key(Iid::new(99))
+            .expect("an unknown iid is not an error")
+            .is_none(),
+        "an unknown iid has no key, which is the None branch the search maps to internal"
+    );
+}
+
+#[test]
+fn read_passage_key_reads_no_text() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    let path = dir.path().join("records.sqlite");
+
+    {
+        let mut store = RecordStore::create(&path).expect("the database is created");
+        store
+            .write_passage(&passage(3, "doc-1", 4, "texte"))
+            .expect("the passage is written");
+    }
+
+    // Replace the zstd frame by bytes that do not decode: the key read of the
+    // scan must not touch the column, while the payload read must fail on it.
+    raw_connection(&path)
+        .execute(
+            "UPDATE passages SET text = X'01020304' WHERE iid = ?1",
+            [3_i64],
+        )
+        .expect("the stored text is corrupted");
+
+    let pool = ReadPool::new(&path, 1).expect("the read pool is created");
+    let key = pool
+        .read_passage_key(Iid::new(3))
+        .expect("the key read must not decode the text")
+        .expect("the key exists");
+    assert_eq!(key.to_string(), "doc-1#4");
+    assert!(
+        pool.read_passage(Iid::new(3)).is_err(),
+        "the payload read decodes the text, so it must see the corruption"
+    );
+}
+
+#[test]
+fn read_pool_verification_refuses_an_unreadable_database() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+
+    let missing = dir.path().join("absent.sqlite");
+    let pool = ReadPool::new(&missing, 1).expect("the read pool opens lazily");
+    let error = pool
+        .verify()
+        .expect_err("a missing database must fail the verification");
+    assert_eq!(error.code(), ErrorCode::Internal);
+
+    let foreign = dir.path().join("foreign.sqlite");
+    std::fs::write(&foreign, b"not a SQLite database at all\n")
+        .expect("the foreign file is written");
+    let pool = ReadPool::new(&foreign, 1).expect("the read pool opens lazily");
+    let error = pool
+        .verify()
+        .expect_err("a foreign file must fail the verification");
+    assert_eq!(
+        error.code(),
+        ErrorCode::Internal,
+        "SQLite accepts the open call and only rejects the file at the first query"
+    );
 }
