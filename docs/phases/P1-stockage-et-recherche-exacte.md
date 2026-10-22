@@ -156,7 +156,7 @@
   - la lecture des payloads (champs, texte) pour les k résultats.
 - **Critères d'acceptation** :
   - les 200 requêtes de `synth-small` donnent les mêmes clés que `expected.jsonl`, dans le même ordre (égalité à 1e-5 près sur les scores, et départage stable par clé) ;
-  - deux résultats **adjacents** dont les scores diffèrent de moins de 1e-5 peuvent apparaître dans l'ordre inverse de `expected.jsonl` : la référence somme en f32 via BLAS, le moteur dans un autre ordre ; `expected.jsonl` compte 55 requêtes concernées, dont 5 sous 1e-6, mesurées dans `tools/README.md` ;
+  - deux résultats **adjacents** dont les scores diffèrent de moins de 1e-5 peuvent apparaître dans l'ordre inverse de `expected.jsonl` : la référence est arrondie une fois en f32, le moteur somme en f32 scalaire ; `expected.jsonl` compte 55 requêtes concernées, dont 4 sous 1e-6, mesurées dans `tools/README.md` ;
   - à la frontière du k-ième résultat, une clé peut être remplacée par une autre dont le score est égal à 1e-5 près, et le test le vérifie ;
   - en dehors de ces quasi-égalités, l'ordre et les clés sont identiques ;
   - un résultat dont la ligne `documents` est absente (document supprimé après la prise du snapshot) est rendu avec son texte et ses champs de passage, sans champs de document et sans erreur ; test nommé `missing_document_row_renders_passage_fields` (**ADR-0043**) ;

@@ -1,7 +1,7 @@
 # ADR-0045 — Référence de `synth-small` calculée exactement, indépendante de la bibliothèque BLAS
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, d'après le diagnostic de l'agent dev et le verdict de l'agent architecte ; tâche d'origine : RECHERCHER-DENSE-EXACT (phase P1), après l'échec de la CI du run `39794175404`
 - **Remplace** : —
