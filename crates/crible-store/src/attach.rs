@@ -184,12 +184,11 @@ impl AttachReport {
     /// Serializes the report the `batches.report` column stores.
     ///
     /// The persisted report carries the six counters, the generation and, from
-    /// P2, the acceptance statistics. It never carries durations (ADR-0042).
-    /// The wire key of the ignored deletions is `ignored`, the name ADR-0041
-    /// and `docs/04` use.
+    /// P2, the acceptance statistics. It never carries the `batch_id`, which
+    /// the call already knows, nor durations (ADR-0042). The wire key of the
+    /// ignored deletions is `ignored`, the name ADR-0041 and `docs/04` use.
     fn to_json(&self) -> Value {
         json!({
-            "batch_id": self.batch_id.as_str(),
             "generation": self.generation.get(),
             "added": self.added,
             "replaced": self.replaced,
@@ -389,13 +388,15 @@ pub fn attach(
     let segment = write_segment(
         &reader,
         &plan.refresh,
-        next_iid,
         &segments_dir,
-        &segment_id,
-        generation,
-        &batch_id,
-        dims,
-        precision,
+        &SegmentTarget {
+            segment_id: segment_id.clone(),
+            iid_start: next_iid,
+            generation,
+            batch_id: batch_id.clone(),
+            dims,
+            precision,
+        },
     )?;
     let segment_duration = segment_started.elapsed();
 
@@ -619,6 +620,26 @@ fn write_document_rows(
     Ok(())
 }
 
+/// Identity and layout shared by every passage vector of one attach's segment.
+///
+/// The target is fixed for the whole attach: it names the segment, its place in
+/// the epoch (`generation`, `iid_start`, `batch_id`) and the shape of the
+/// vectors it stores (`dims`, `precision`).
+struct SegmentTarget {
+    /// Identifier of the segment file, derived from the batch id.
+    segment_id: String,
+    /// First free internal identifier of the generation.
+    iid_start: u32,
+    /// Generation that makes the segment visible.
+    generation: Generation,
+    /// Batch that produced the segment.
+    batch_id: String,
+    /// Number of dimensions of each vector.
+    dims: u32,
+    /// Storage precision of the vectors.
+    precision: ReferencePrecision,
+}
+
 /// Streams the passage files, writes the vector of every refreshed document
 /// into a new segment, and returns the first free `iid` after them.
 ///
@@ -626,17 +647,11 @@ fn write_document_rows(
 /// passages, so its rows are skipped: only the documents of [`Plan::refresh`]
 /// reach the segment. When no passage is written, no segment is created, which
 /// is what a metadata-only or deletion-only attach expects.
-#[allow(clippy::too_many_arguments)]
 fn write_segment(
     reader: &BatchReader,
     refresh: &HashSet<String>,
-    iid_start: u32,
     segments_dir: &Path,
-    segment_id: &str,
-    generation: Generation,
-    batch_id: &str,
-    dims: u32,
-    precision: ReferencePrecision,
+    target: &SegmentTarget,
 ) -> Result<Option<SegmentMeta>, CribleError> {
     let mut writer: Option<SegmentWriter> = None;
 
@@ -649,18 +664,18 @@ fn write_segment(
             if !refresh.contains(doc_id) {
                 continue;
             }
-            let vector = decode_vector(vectors.value(row), precision)?;
+            let vector = decode_vector(vectors.value(row), target.precision)?;
 
             if writer.is_none() {
                 writer = Some(SegmentWriter::create(
                     segments_dir,
                     SegmentSpec {
-                        segment_id: segment_id.to_owned(),
-                        iid_start: Iid::new(iid_start),
-                        dims,
-                        generation,
-                        batch_id: batch_id.to_owned(),
-                        precision,
+                        segment_id: target.segment_id.clone(),
+                        iid_start: Iid::new(target.iid_start),
+                        dims: target.dims,
+                        generation: target.generation,
+                        batch_id: target.batch_id.clone(),
+                        precision: target.precision,
                     },
                 )?);
             }
@@ -967,7 +982,7 @@ fn stored_count(value: &Value, batch_id: &str, key: &str) -> Result<u64, CribleE
 fn stored_report_error(batch_id: &str, key: &str) -> CribleError {
     CribleError::new(
         ErrorCode::Internal,
-        format!("the stored report of batch '{batch_id}' has no '{key}' counter"),
+        format!("the stored report of batch '{batch_id}' has no '{key}' member"),
     )
 }
 
