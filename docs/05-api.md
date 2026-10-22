@@ -223,6 +223,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
 - `progress.done` et `progress.total` comptent les **passages** traités, comme `counts.passages` du manifeste ; ils ne se comparent pas aux comptes du rapport.
+- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune.
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 

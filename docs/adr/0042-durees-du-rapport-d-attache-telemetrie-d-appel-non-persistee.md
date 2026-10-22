@@ -1,8 +1,9 @@
 # ADR-0042 — Durées du rapport d'attache : télémétrie d'appel, non persistée
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22
+- **Statut** : Accepté
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-22 par le propriétaire, option B telle que proposée, sans modification.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, au 3e tour de relecture de la tâche ATTACHER-LOT (phase P1), après le verdict **ECART** de `@architecte`
 - **Remplace** : —
 

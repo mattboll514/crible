@@ -95,7 +95,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0039](0039-ordre-des-lignes-dans-un-lot-v1.md) | Ordre des lignes dans un lot v1 | Accepté | 2026-10-21 |
 | [ADR-0040](0040-unicite-des-documents-et-des-parties-dans-un-lot-v1.md) | Unicité des documents et des parties dans un lot v1 | Accepté | 2026-10-22 |
 | [ADR-0041](0041-semantique-d-attache-document-supprime-digest-du-manifeste-et-rapport.md) | Sémantique d'attache : document supprimé, digest du manifeste et rapport | Accepté | 2026-10-22 |
-| [ADR-0042](0042-durees-du-rapport-d-attache-telemetrie-d-appel-non-persistee.md) | Durées du rapport d'attache : télémétrie d'appel, non persistée | Proposé | 2026-10-22 |
+| [ADR-0042](0042-durees-du-rapport-d-attache-telemetrie-d-appel-non-persistee.md) | Durées du rapport d'attache : télémétrie d'appel, non persistée | Accepté | 2026-10-22 |
 
 ## Questions ouvertes
 

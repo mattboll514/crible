@@ -159,7 +159,7 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 - **Document retiré** (ADR-0041) : la ligne `documents` est supprimée dans la transaction du commit de génération, qu'il soit nommé dans `deletions` ou absent d'un lot `replace_all`. C'est la même transaction que les pierres tombales, le segment, la ligne `batches` et `meta.generation` ; il n'y a pas de seconde écriture après le point de commit (ADR-0016). Les pierres tombales restent posées sur les passages : c'est elles qui portent l'état de suppression jusqu'à la compaction. Un document ré-ajouté ensuite est un document neuf : il n'a ni `doc_hash` ni champs hérités.
 - **Atomicité** : le lot passe entièrement ou pas du tout (**INV-03**).
 - **Idempotence** :
-  - un `batch_id` déjà appliqué ne fait rien, et renvoie le rapport d'origine (**INV-10**) ;
+  - un `batch_id` déjà appliqué ne fait rien, et renvoie le rapport **persisté** de l'attache d'origine — six comptes, statistiques de recette et génération —, sans durées (**INV-10**, ADR-0042) ;
   - le même `batch_id` avec un autre manifeste (`manifest_blake3` différent) renvoie `409 batch_conflict`.
   - `manifest_blake3` est le digest blake3 des octets de `manifest.json` **tels qu'ils ont été lus**, calculé avant toute désérialisation et jamais recalculé depuis une structure en mémoire. La forme est `blake3:<hex>`, `<hex>` en hexadécimal minuscule, comme les checksums de fichiers du lot (ADR-0041). Un manifeste re-sérialisé à l'identique sur le fond mais différent sur la forme (espaces, ordre des clés, échappements) donne donc un `manifest_blake3` différent, et `409 batch_conflict` s'il a déjà été appliqué. L'idempotence sert à rejouer le même dossier octet pour octet, pas à rattraper un manifeste réécrit ; ce n'est pas un contrôle d'intégrité du manifeste, mais une identification de contenu.
 
@@ -194,10 +194,11 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
 
 Un document compte dans exactement une de ces six catégories, donc la somme des six vaut le nombre de documents traités. Les comptes de passages ne sont pas repris dans le rapport : ce sont ceux du manifeste du lot (`counts.passages`).
 
-Le rapport donne aussi :
+Le rapport **persisté** donne aussi :
 - les statistiques de la recette ;
-- la durée de chaque étape ;
 - la génération obtenue.
+
+Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `manifest`, `snapshot` — est mesurée, mais ces durées sont de la **télémétrie d'appel** : elles sont rendues au seul appelant d'origine de l'attache et restent disponibles pour la journalisation et les mesures. Aucune n'entre dans `batches.report`, et aucune écriture n'a lieu après le point de commit (ADR-0016).
 
 ## Mode en ligne (sans producteur)
 
