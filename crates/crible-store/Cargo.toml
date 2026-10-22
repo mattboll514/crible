@@ -35,5 +35,13 @@ tempfile.workspace = true
 name = "commit_cost"
 harness = false
 
+# MES-13: the startup-cost bench rebuilds the filter structures from
+# `records.sqlite` and isolates the read, the JSON decode and the insertion.
+# Same harness choice as `commit_cost`: a scenario matrix, not a criterion
+# function, so it adds no dependency.
+[[bench]]
+name = "startup_cost"
+harness = false
+
 [lints]
 workspace = true

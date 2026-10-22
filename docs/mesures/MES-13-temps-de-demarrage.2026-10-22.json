@@ -1,0 +1,635 @@
+{
+  "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+  "date": "2026-10-22",
+  "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+  "measure": "MES-13",
+  "points": [
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 45446,
+        "columns": 529248,
+        "keywords": 88835,
+        "live": 8208,
+        "total": 671737
+      },
+      "generated_at": 1792681589,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "label": "synth-small",
+      "live_passages": 9750,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 7236542,
+          "min_ns": 5624375,
+          "p50_ns": 5719375,
+          "p95_ns": 7236542,
+          "p99_ns": 7236542,
+          "phase": "sql_read",
+          "values_ns": [
+            7236542,
+            5944792,
+            5637875,
+            5624375,
+            5719375
+          ]
+        },
+        {
+          "max_ns": 21095583,
+          "min_ns": 18649500,
+          "p50_ns": 18877042,
+          "p95_ns": 21095583,
+          "p99_ns": 21095583,
+          "phase": "json_decode",
+          "values_ns": [
+            21095583,
+            18919375,
+            18840750,
+            18649500,
+            18877042
+          ]
+        },
+        {
+          "max_ns": 23905750,
+          "min_ns": 23247584,
+          "p50_ns": 23549625,
+          "p95_ns": 23905750,
+          "p99_ns": 23905750,
+          "phase": "build",
+          "values_ns": [
+            23549625,
+            23905750,
+            23518000,
+            23247584,
+            23679708
+          ]
+        },
+        {
+          "max_ns": 24130541,
+          "min_ns": 23190167,
+          "p50_ns": 23648917,
+          "p95_ns": 24130541,
+          "p99_ns": 24130541,
+          "phase": "open",
+          "values_ns": [
+            23648917,
+            23190167,
+            23889083,
+            23216084,
+            24130541
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 4247552,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 45446,
+        "columns": 529248,
+        "keywords": 88835,
+        "live": 8208,
+        "total": 671737
+      },
+      "generated_at": 1792681592,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "label": "synth-small",
+      "live_passages": 9750,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-sql_read",
+          "first_access_ns": 14108458,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-json_decode",
+          "first_access_ns": 26463417,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-build",
+          "first_access_ns": 33500000,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-open",
+          "first_access_ns": 32710458,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 4247552
+    },
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 785496,
+        "columns": 40787248,
+        "keywords": 3563813,
+        "live": 131208,
+        "total": 45267765
+      },
+      "generated_at": 1792681627,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "label": "fixture-1m",
+      "live_passages": 1000000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 448778250,
+          "min_ns": 440539958,
+          "p50_ns": 442872208,
+          "p95_ns": 448778250,
+          "p99_ns": 448778250,
+          "phase": "sql_read",
+          "values_ns": [
+            440539958,
+            442872208,
+            445043750,
+            448778250,
+            442871167
+          ]
+        },
+        {
+          "max_ns": 1578128917,
+          "min_ns": 1523958041,
+          "p50_ns": 1542710250,
+          "p95_ns": 1578128917,
+          "p99_ns": 1578128917,
+          "phase": "json_decode",
+          "values_ns": [
+            1523958041,
+            1553384083,
+            1536660209,
+            1542710250,
+            1578128917
+          ]
+        },
+        {
+          "max_ns": 2022987708,
+          "min_ns": 1950296959,
+          "p50_ns": 1976415000,
+          "p95_ns": 2022987708,
+          "p99_ns": 2022987708,
+          "phase": "build",
+          "values_ns": [
+            1976415000,
+            2011308583,
+            1950296959,
+            1975037292,
+            2022987708
+          ]
+        },
+        {
+          "max_ns": 2026663000,
+          "min_ns": 1963127458,
+          "p50_ns": 2020738958,
+          "p95_ns": 2026663000,
+          "p99_ns": 2026663000,
+          "phase": "open",
+          "values_ns": [
+            1963127458,
+            2020738958,
+            2004642125,
+            2022411208,
+            2026663000
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 213811200,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 785496,
+        "columns": 40787248,
+        "keywords": 3563813,
+        "live": 131208,
+        "total": 45267765
+      },
+      "generated_at": 1792681638,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "label": "fixture-1m",
+      "live_passages": 1000000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-sql_read",
+          "first_access_ns": 752773666,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-json_decode",
+          "first_access_ns": 1872834417,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-build",
+          "first_access_ns": 2342186625,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-open",
+          "first_access_ns": 2307100375,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 213811200
+    },
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 6445248,
+        "columns": 349645248,
+        "keywords": 30064429,
+        "live": 1074208,
+        "total": 387229133
+      },
+      "generated_at": 1792681973,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "label": "fixture-8m58",
+      "live_passages": 8580000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 6487018667,
+          "min_ns": 6414759125,
+          "p50_ns": 6473387750,
+          "p95_ns": 6487018667,
+          "p99_ns": 6487018667,
+          "phase": "sql_read",
+          "values_ns": [
+            6414759125,
+            6465260541,
+            6487018667,
+            6473387750,
+            6476654750
+          ]
+        },
+        {
+          "max_ns": 16174833542,
+          "min_ns": 15866434667,
+          "p50_ns": 15885663584,
+          "p95_ns": 16174833542,
+          "p99_ns": 16174833542,
+          "phase": "json_decode",
+          "values_ns": [
+            15885663584,
+            15866434667,
+            15880044125,
+            15969885375,
+            16174833542
+          ]
+        },
+        {
+          "max_ns": 20207763584,
+          "min_ns": 20147315083,
+          "p50_ns": 20161305333,
+          "p95_ns": 20207763584,
+          "p99_ns": 20207763584,
+          "phase": "build",
+          "values_ns": [
+            20157901208,
+            20161305333,
+            20207763584,
+            20175291625,
+            20147315083
+          ]
+        },
+        {
+          "max_ns": 20151686292,
+          "min_ns": 20086431208,
+          "p50_ns": 20124317583,
+          "p95_ns": 20151686292,
+          "p99_ns": 20151686292,
+          "phase": "open",
+          "values_ns": [
+            20151686292,
+            20143857916,
+            20118587709,
+            20086431208,
+            20124317583
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 1849311232,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 6445248,
+        "columns": 349645248,
+        "keywords": 30064429,
+        "live": 1074208,
+        "total": 387229133
+      },
+      "generated_at": 1792682039,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "label": "fixture-8m58",
+      "live_passages": 8580000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-sql_read",
+          "first_access_ns": 6820468375,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-json_decode",
+          "first_access_ns": 16266646625,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-build",
+          "first_access_ns": 20331717334,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-open",
+          "first_access_ns": 20384909708,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 1849311232
+    },
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 45446,
+        "columns": 529248,
+        "keywords": 88835,
+        "live": 8208,
+        "total": 671737
+      },
+      "generated_at": 1792682099,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "label": "synth-small",
+      "live_passages": 9750,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 7085125,
+          "min_ns": 5408208,
+          "p50_ns": 5554042,
+          "p95_ns": 7085125,
+          "p99_ns": 7085125,
+          "phase": "sql_read",
+          "values_ns": [
+            7085125,
+            5700458,
+            5453791,
+            5408208,
+            5554042
+          ]
+        },
+        {
+          "max_ns": 20844125,
+          "min_ns": 18238000,
+          "p50_ns": 18949917,
+          "p95_ns": 20844125,
+          "p99_ns": 20844125,
+          "phase": "json_decode",
+          "values_ns": [
+            20844125,
+            19118625,
+            18238000,
+            18886208,
+            18949917
+          ]
+        },
+        {
+          "max_ns": 24605666,
+          "min_ns": 22827542,
+          "p50_ns": 23428250,
+          "p95_ns": 24605666,
+          "p99_ns": 24605666,
+          "phase": "build",
+          "values_ns": [
+            24605666,
+            22827542,
+            23016167,
+            23471334,
+            23428250
+          ]
+        },
+        {
+          "max_ns": 23935500,
+          "min_ns": 23260292,
+          "p50_ns": 23805833,
+          "p95_ns": 23935500,
+          "p99_ns": 23935500,
+          "phase": "open",
+          "values_ns": [
+            23260292,
+            23907500,
+            23736291,
+            23935500,
+            23805833
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 4247552,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 785496,
+        "columns": 40787248,
+        "keywords": 3563813,
+        "live": 131208,
+        "total": 45267765
+      },
+      "generated_at": 1792682132,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "label": "fixture-1m",
+      "live_passages": 1000000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 496673917,
+          "min_ns": 442008583,
+          "p50_ns": 451649125,
+          "p95_ns": 496673917,
+          "p99_ns": 496673917,
+          "phase": "sql_read",
+          "values_ns": [
+            449956458,
+            442008583,
+            451649125,
+            470104584,
+            496673917
+          ]
+        },
+        {
+          "max_ns": 1710307166,
+          "min_ns": 1538102667,
+          "p50_ns": 1552002417,
+          "p95_ns": 1710307166,
+          "p99_ns": 1710307166,
+          "phase": "json_decode",
+          "values_ns": [
+            1542842208,
+            1710307166,
+            1552002417,
+            1565594583,
+            1538102667
+          ]
+        },
+        {
+          "max_ns": 2051249292,
+          "min_ns": 1976528958,
+          "p50_ns": 2011189542,
+          "p95_ns": 2051249292,
+          "p99_ns": 2051249292,
+          "phase": "build",
+          "values_ns": [
+            2011189542,
+            2051249292,
+            1976528958,
+            1998113208,
+            2031976791
+          ]
+        },
+        {
+          "max_ns": 2094561791,
+          "min_ns": 1947649875,
+          "p50_ns": 2016849708,
+          "p95_ns": 2094561791,
+          "p99_ns": 2094561791,
+          "phase": "open",
+          "values_ns": [
+            1947649875,
+            2011948375,
+            2016849708,
+            2094561791,
+            2023114167
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 213811200,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "warm",
+      "commit": "6dbb22dc5be87dea7979f69ca03efaef11aabbb1",
+      "date": "2026-10-22",
+      "filter_memory": {
+        "booleans": 6445248,
+        "columns": 349645248,
+        "keywords": 30064429,
+        "live": 1074208,
+        "total": 387229133
+      },
+      "generated_at": 1792682463,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "label": "fixture-8m58",
+      "live_passages": 8580000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 6472764334,
+          "min_ns": 6434080167,
+          "p50_ns": 6462129709,
+          "p95_ns": 6472764334,
+          "p99_ns": 6472764334,
+          "phase": "sql_read",
+          "values_ns": [
+            6454791083,
+            6469300792,
+            6434080167,
+            6462129709,
+            6472764334
+          ]
+        },
+        {
+          "max_ns": 16068167959,
+          "min_ns": 15837342750,
+          "p50_ns": 15908277709,
+          "p95_ns": 16068167959,
+          "p99_ns": 16068167959,
+          "phase": "json_decode",
+          "values_ns": [
+            15869955917,
+            15981755958,
+            16068167959,
+            15908277709,
+            15837342750
+          ]
+        },
+        {
+          "max_ns": 20198489084,
+          "min_ns": 19547306958,
+          "p50_ns": 20119305667,
+          "p95_ns": 20198489084,
+          "p99_ns": 20198489084,
+          "phase": "build",
+          "values_ns": [
+            20114040833,
+            20176118041,
+            20198489084,
+            20119305667,
+            19547306958
+          ]
+        },
+        {
+          "max_ns": 20161497708,
+          "min_ns": 17854912625,
+          "p50_ns": 20116501250,
+          "p95_ns": 20161497708,
+          "p99_ns": 20161497708,
+          "phase": "open",
+          "values_ns": [
+            20153469125,
+            20106791458,
+            20116501250,
+            20161497708,
+            17854912625
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 1849311232,
+      "repeats": 5,
+      "warmup": 1
+    }
+  ]
+}
