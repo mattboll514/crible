@@ -68,7 +68,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
-| MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1 |
+| MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
 
 ## Cibles chiffrées
 

@@ -1,7 +1,7 @@
 # ADR-0048 — Rejeu de MES-15 en P3 et compresseur zstd réutilisé
 
-- **Statut** : Proposé
-- **Date** : 2026-10-22 (proposition)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-22)
+- **Date** : 2026-10-22 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire. Décision « D3 » de `docs/suivi.md`, section « Décisions en attente », issue de MES-15 (tâche hors plan `MESURER-COUT-COMMIT`, P1)
 - **Remplace** : —
