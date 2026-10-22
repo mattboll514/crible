@@ -97,6 +97,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0041](0041-semantique-d-attache-document-supprime-digest-du-manifeste-et-rapport.md) | Sémantique d'attache : document supprimé, digest du manifeste et rapport | Accepté | 2026-10-22 |
 | [ADR-0042](0042-durees-du-rapport-d-attache-telemetrie-d-appel-non-persistee.md) | Durées du rapport d'attache : télémétrie d'appel, non persistée | Accepté | 2026-10-22 |
 | [ADR-0043](0043-payload-d-un-resultat-dont-le-document-est-supprime.md) | Payload d'un résultat dont le document a été supprimé après le snapshot | Accepté | 2026-10-22 |
+| [ADR-0044](0044-regles-du-relecteur-verifications-executees.md) | Règles de `@relecteur` : faire passer les vérifications et ne rapporter que ce qui a été exécuté | Proposé | 2026-10-22 |
 
 ## Questions ouvertes
 
