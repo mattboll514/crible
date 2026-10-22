@@ -2,6 +2,7 @@
 
 //! Persistent storage for the Crible engine.
 
+pub mod attach;
 pub mod batch_reader;
 pub mod generation;
 pub mod records;

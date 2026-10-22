@@ -193,6 +193,8 @@ Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 
 Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé au debug.
 
+Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la ligne `documents` est présente » et `alive` vaut « le document a au moins un passage vivant ». Ils restent distincts ; `exists: false` signifie que le `doc_id` n'a jamais existé ou a été supprimé.
+
 ## Recherche multi-index
 
 `POST /v1/search`
@@ -213,11 +215,15 @@ Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'e
 { "id": "job_…", "kind": "attach_batch", "index": "decisions", "state": "succeeded",
   "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1288,
   "progress": { "step": "commit", "done": 932, "total": 932 },
-  "result": { "report": { "added": 932, "replaced": 428, "unchanged": 1230, "deleted": 221,
+  "result": { "report": { "added": 421, "replaced": 428, "unchanged": 1230,
+                          "metadata_updated": 137, "deleted": 221, "ignored": 3,
                           "acceptance": { "sample": 200, "min_cosine": 0.99971, "p1": 0.9998, "p50": 0.99995 } } },
   "error": null }
 ```
 
+- Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
+- `progress.done` et `progress.total` comptent les **passages** traités, comme `counts.passages` du manifeste ; ils ne se comparent pas aux comptes du rapport.
+- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune.
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 

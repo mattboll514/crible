@@ -112,6 +112,8 @@ impl Role {
 #[derive(Debug)]
 pub struct BatchReader {
     manifest: BatchManifest,
+    manifest_json: String,
+    manifest_blake3: String,
     schema: Schema,
     dims: u32,
     precision: ReferencePrecision,
@@ -140,12 +142,14 @@ impl BatchReader {
         index_config: &IndexConfig,
         model_config: &ModelConfig,
     ) -> Result<Self, CribleError> {
-        let manifest = read_manifest(batch_dir)?;
+        let (manifest, manifest_json) = read_manifest(batch_dir)?;
         crible_core::batch::check_manifest(&manifest, index_config, model_config)?;
         check_checksums(batch_dir, &manifest)?;
 
         let files = classify_files(&manifest)?;
         let reader = Self {
+            manifest_blake3: format!("blake3:{}", blake3::hash(manifest_json.as_bytes()).to_hex()),
+            manifest_json,
             schema: index_config.schema.clone(),
             dims: model_config.dims,
             precision: index_config.reference_precision,
@@ -164,6 +168,23 @@ impl BatchReader {
     #[must_use]
     pub fn manifest(&self) -> &BatchManifest {
         &self.manifest
+    }
+
+    /// Raw bytes of `manifest.json`, decoded as UTF-8, exactly as they were
+    /// read.
+    ///
+    /// The attach stores them in `batches.manifest`; its digest identifies the
+    /// batch for INV-10 (ADR-0041).
+    #[must_use]
+    pub fn manifest_json(&self) -> &str {
+        &self.manifest_json
+    }
+
+    /// `blake3:<hex>` digest of the bytes of `manifest.json` as read, never
+    /// recomputed from the parsed structure (ADR-0041).
+    #[must_use]
+    pub fn manifest_blake3(&self) -> &str {
+        &self.manifest_blake3
     }
 
     /// Rows of the document files, part by part.
@@ -215,7 +236,7 @@ impl BatchReader {
         let (mut documents, document_rows) = self.read_documents()?;
         let passages = self.read_passages(&mut documents)?;
         check_every_document_has_a_passage(&documents)?;
-        let deletions = self.read_deletions()?;
+        let deletions = self.read_deletions(&documents)?;
         Ok(BatchCounts {
             documents: document_rows,
             passages,
@@ -398,7 +419,12 @@ impl BatchReader {
     /// `counts.deletions`: as in `read_documents`, a row beyond the declared
     /// count is refused before its id is stored, so a batch that under-declares
     /// its deletions cannot make the memory grow with the file.
-    fn read_deletions(&self) -> Result<u64, CribleError> {
+    ///
+    /// A `doc_id` that the documents files also declare is refused: the batch
+    /// would both add and remove one document, and the result would depend on
+    /// the role applied last. The attach semantics of `docs/04` require the
+    /// whole batch to be rejected, before any write.
+    fn read_deletions(&self, documents: &HashMap<String, Option<u32>>) -> Result<u64, CribleError> {
         let declared = self.manifest.counts.deletions;
         let limit = usize::try_from(declared).unwrap_or(usize::MAX);
         let mut seen: HashSet<String> = HashSet::new();
@@ -408,6 +434,13 @@ impl BatchReader {
             let ids = string_column(&chunk, "doc_id")?;
             for index in 0..chunk.num_rows() {
                 let doc_id = string_value(ids, index, "doc_id", Role::Deletions, &self.manifest)?;
+                if documents.contains_key(doc_id) {
+                    return Err(invalid(format!(
+                        "the doc_id '{doc_id}' is declared both in the documents and in the \
+                         deletions of batch '{}'; a batch cannot add and remove one document",
+                        self.manifest.batch_id
+                    )));
+                }
                 if seen.contains(doc_id) {
                     return Err(invalid(format!(
                         "the deletions file declares the doc_id '{doc_id}' twice; a doc_id \
@@ -518,11 +551,16 @@ impl Iterator for RowChunks {
     }
 }
 
-/// Reads `manifest.json` of a batch directory.
-fn read_manifest(batch_dir: &Path) -> Result<BatchManifest, CribleError> {
+/// Reads `manifest.json` of a batch directory, and returns the parsed manifest
+/// with its raw text.
+///
+/// The attach digests the raw text, before any deserialization, so the digest
+/// identifies the bytes the producer wrote (ADR-0041).
+fn read_manifest(batch_dir: &Path) -> Result<(BatchManifest, String), CribleError> {
     let path = batch_dir.join("manifest.json");
     let raw = std::fs::read_to_string(&path).map_err(|error| file_error("read", &path, &error))?;
-    BatchManifest::from_json_str(&raw)
+    let manifest = BatchManifest::from_json_str(&raw)?;
+    Ok((manifest, raw))
 }
 
 /// Resolves the file names of the manifest inside the batch directory.
