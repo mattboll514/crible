@@ -1337,7 +1337,6 @@ fn no_sqlite_write_follows_the_commit_point() {
     assert_eq!(
         report,
         serde_json::json!({
-            "batch_id": "commit-proof",
             "generation": 1,
             "added": 1,
             "replaced": 0,
