@@ -4,8 +4,9 @@
 //! require reading the Parquet files.
 //!
 //! References: `docs/format-lot-v1.md`,
-//! `docs/04-donnees-et-ingestion.md` (format de lot v1, contrôles 1 à 4), and
-//! ADR-0012 (public batch format).
+//! `docs/04-donnees-et-ingestion.md` (batch format v1, controls 1 to 4), and
+//! ADR-0012 (public batch format), ADR-0039 (order of the rows of a document),
+//! ADR-0040 (order of the parts by numeric suffix and unique `doc_id`s).
 
 use std::collections::BTreeMap;
 
@@ -394,8 +395,10 @@ fn incompatible(
 
 /// Files of a batch, grouped by role after their name has been checked.
 ///
-/// Names keep the sorted order of the `files` map of the manifest, so two
-/// reads of the same batch visit the files in the same order.
+/// The parts of a role are ordered by the numeric value of their suffix, not
+/// by their name (ADR-0040), so `passages-9999.parquet` comes before
+/// `passages-10000.parquet` and two reads of the same batch visit the files in
+/// the same order whatever the number of digits written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchFiles {
     documents: Vec<String>,
@@ -404,13 +407,13 @@ pub struct BatchFiles {
 }
 
 impl BatchFiles {
-    /// Names of the `documents` files, sorted.
+    /// Names of the `documents` parts, in increasing numeric suffix order.
     #[must_use]
     pub fn documents(&self) -> &[String] {
         &self.documents
     }
 
-    /// Names of the `passages` files, sorted.
+    /// Names of the `passages` parts, in increasing numeric suffix order.
     #[must_use]
     pub fn passages(&self) -> &[String] {
         &self.passages
@@ -425,6 +428,10 @@ impl BatchFiles {
 
 /// Groups the files of a manifest by role, refusing any other name.
 ///
+/// The parts of a role are collected with the numeric value of their suffix so
+/// the caller reads them in that order; a value repeated in one role is
+/// refused (ADR-0040), because the order of the parts would be undefined.
+///
 /// The checksum itself is only checked for the `blake3:` prefix here: the
 /// strict digest form and the value against the file bytes are the checksum
 /// verification of `crible-store::batch_reader` (control 4 at attach time).
@@ -432,13 +439,13 @@ impl BatchFiles {
 /// # Errors
 ///
 /// [`ErrorCode::InvalidRequest`] for a file name that is not one of the three
-/// documented shapes, or a checksum without a non-empty digest.
+/// documented shapes, a part suffix that does not fit an integer, two parts of
+/// one role with the same numeric suffix, or a checksum without a non-empty
+/// digest.
 pub fn classify_files(manifest: &BatchManifest) -> Result<BatchFiles, CribleError> {
-    let mut files = BatchFiles {
-        documents: Vec::new(),
-        passages: Vec::new(),
-        deletions: None,
-    };
+    let mut documents = Parts::new("documents");
+    let mut passages = Parts::new("passages");
+    let mut deletions = None;
     for (name, checksum) in &manifest.files {
         if !checksum.starts_with("blake3:") || checksum.len() == "blake3:".len() {
             return Err(json::invalid(format!(
@@ -446,34 +453,93 @@ pub fn classify_files(manifest: &BatchManifest) -> Result<BatchFiles, CribleErro
             )));
         }
         if name == "deletions.parquet" {
-            files.deletions = Some(name.clone());
-        } else if matches_parquet_name(name, "documents") {
-            files.documents.push(name.clone());
-        } else if matches_parquet_name(name, "passages") {
-            files.passages.push(name.clone());
-        } else {
+            deletions = Some(name.clone());
+        } else if !documents.add(name)? && !passages.add(name)? {
             return Err(json::invalid(format!(
                 "unknown file '{name}' at $.files; expected documents[-NNNN].parquet, passages[-NNNN].parquet or deletions.parquet"
             )));
         }
     }
-    Ok(files)
+    Ok(BatchFiles {
+        documents: documents.into_names(),
+        passages: passages.into_names(),
+        deletions,
+    })
 }
 
-fn matches_parquet_name(name: &str, stem: &str) -> bool {
-    if name == format!("{stem}.parquet") {
-        return true;
+/// Parts of one role, collected in the order they will be read.
+#[derive(Debug)]
+struct Parts {
+    role: &'static str,
+    /// The unnumbered `{role}.parquet`, when the batch uses that form.
+    plain: Option<String>,
+    /// The `{role}-NNNN.parquet` parts, with the numeric value of their suffix.
+    numbered: Vec<(u64, String)>,
+}
+
+impl Parts {
+    fn new(role: &'static str) -> Self {
+        Self {
+            role,
+            plain: None,
+            numbered: Vec::new(),
+        }
     }
-    let Some(rest) = name.strip_prefix(stem) else {
-        return false;
-    };
-    let Some(rest) = rest.strip_prefix('-') else {
-        return false;
-    };
-    let Some(digits) = rest.strip_suffix(".parquet") else {
-        return false;
-    };
-    digits.len() >= 4 && digits.bytes().all(|byte| byte.is_ascii_digit())
+
+    /// Classifies one manifest name for this role.
+    ///
+    /// Returns `true` when the name belongs to the role, `false` when it
+    /// belongs to another one, and an error when the name is a part of this
+    /// role whose suffix does not fit a `u64` or repeats a value already taken
+    /// by another part of the role.
+    fn add(&mut self, name: &str) -> Result<bool, CribleError> {
+        let role = self.role;
+        if name == format!("{role}.parquet") {
+            self.plain = Some(name.to_owned());
+            return Ok(true);
+        }
+        let Some(rest) = name
+            .strip_prefix(role)
+            .and_then(|rest| rest.strip_prefix('-'))
+        else {
+            return Ok(false);
+        };
+        let Some(digits) = rest.strip_suffix(".parquet") else {
+            return Ok(false);
+        };
+        if digits.len() < 4 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Ok(false);
+        }
+        // A suffix too large for a `u64` is a fault of the batch, not a panic.
+        let number = digits.parse::<u64>().map_err(|_| {
+            json::invalid(format!(
+                "file '{name}' at $.files has a numeric suffix too large for an integer: \
+                 '{digits}'; the parts of a role are ordered by that number"
+            ))
+        })?;
+        if let Some((_, other)) = self.numbered.iter().find(|(value, _)| *value == number) {
+            return Err(json::invalid(format!(
+                "files at $.files list two {role} parts with the same numeric suffix: \
+                 '{other}' and '{name}' both number {number}; the parts of a role are read in \
+                 increasing suffix order, so each value may appear once (ADR-0040)"
+            )));
+        }
+        self.numbered.push((number, name.to_owned()));
+        Ok(true)
+    }
+
+    /// Names of the parts, in increasing numeric suffix order.
+    ///
+    /// The mixing of `{role}.parquet` and `{role}-NNNN.parquet` is not
+    /// controlled by format v1 (ADR-0040). When both appear, the unnumbered
+    /// file is read after the numbered parts, which keeps the order of the
+    /// previous lexicographic visit.
+    fn into_names(mut self) -> Vec<String> {
+        self.numbered.sort_by_key(|(number, _)| *number);
+        let mut names: Vec<String> = self.numbered.into_iter().map(|(_, name)| name).collect();
+        names.extend(self.plain);
+        names
+    }
 }
 
 fn check_counts(manifest: &BatchManifest, files: &BatchFiles) -> Result<(), CribleError> {
