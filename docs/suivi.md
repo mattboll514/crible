@@ -49,7 +49,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P1 | ECRIRE-SEGMENTS-VECTEURS | FAIT | tache/ECRIRE-SEGMENTS-VECTEURS | `crible-store::segment` : `vectors.f16`/`vectors.f32` en little-endian explicite, `segment.json` versionné et canonique (champs de `docs/02` + `format_version`, `precision` et `segment_id` dérivés à l'ouverture sur verdict de `@architecte`), checksums blake3 vérifiés à l'ouverture, écriture atomique `tmp-<id>` → fsync → rename, lecteur mmap (`// SAFETY:` testé) ; erreurs : entrée client → `invalid_request`, état disque ou iid hors plage → `internal` (INV-01) ; 21 tests (8 `inv_15_*`), 189 Rust ; relecture OK au 2e tour |
 | P1 | GERER-GENERATIONS | FAIT | tache/GERER-GENERATIONS | `crible-store::generation` : `GenerationStore` (`CURRENT_EPOCH` décimal, une transaction SQLite comme unique point de commit, ADR-0016, refus des lignes d'une autre génération, manifeste `manifests/<G>.json` dérivé en JSON canonique versionné, `Snapshot` publié par `ArcSwap`), reprise (nettoyage des `tmp-*` et des segments orphelins, réécriture du manifeste manquant), 4 failpoints derrière la feature `failpoints` ; le `Snapshot` ne porte que des métadonnées (politique de `SegmentReader::open` inchangée) ; 12 tests `inv_03_*`/`inv_04_*` ; 203 tests Rust (207 avec `failpoints`) ; relecture OK au 2e tour, 2 mineurs notés en idées |
 | P1 | LIRE-LOT-PARQUET | FAIT | tache/LIRE-LOT-PARQUET | `crible-store::batch_reader` : lecture de `manifest.json`, `check_manifest`, checksums blake3, schémas Parquet, puis un seul passage en flux par fichier (blocs Arrow de 8 192 lignes au plus) pour les comptes, les séquences d'`ord`, les documents et les vecteurs finis et normés ; ordre des lignes imposé par ADR-0039 (mémoire bornée à une entrée par document) ; défaut du lot → `invalid_request`, vraie E/S → `internal` ; la CI génère `synth-small` avant `cargo test` ; 20 tests d'intégration, 227 tests Rust ; relecture OK au 3e tour (bloquée au 2e par ADR-0039), 2 mineurs notés en idées |
-| P1 | ATTACHER-LOT | A-FAIRE | | |
+| P1 | ATTACHER-LOT | BLOQUE | tache/ATTACHER-LOT | En attente d'ADR-0041 (ligne `documents` d'un document supprimé, base de `manifest_blake3`, compteurs du rapport), décision du propriétaire requise. Tests d'invariants écrits par `@testeur` (`crates/crible-store/tests/attacher_lot.rs`, 6 tests, non commités, compilent quand `crible_store::attach` existera) ; `@dev` pas encore lancé |
 | P1 | CONSTRUIRE-BITMAPS | A-FAIRE | | |
 | P1 | EVALUER-FILTRES | A-FAIRE | | |
 | P1 | RECHERCHER-DENSE-EXACT | A-FAIRE | | |
@@ -138,6 +138,7 @@ Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR ac
 | 2026-10-21 | STOCKER-ENREGISTREMENTS-SQLITE | Aucun `busy_timeout` n'est réglé sur `records.sqlite` : un `SQLITE_BUSY` transitoire ressort en `internal`. Fixer un délai est une valeur par défaut, donc un ADR | ADR-0038 | Accepté le 2026-10-21 |
 | 2026-10-21 | LIRE-LOT-PARQUET | Le lecteur en flux exige que les lignes d'un document arrivent dans l'ordre croissant des `ord` (séquence continue d'une partie à l'autre, parties par suffixe croissant) pour garder une mémoire bornée ; `format-lot-v1.md` et `docs/04` n'imposent que des `ord` contigus. Verdict de `@architecte` : NON-COUVERT, option A recommandée (figer l'ordre dans le format v1, `format_version` inchangée) | ADR-0039 | Accepté le 2026-10-21, option A, `format_version` reste à 1 |
 | 2026-10-22 | LIRE-LOT-PARQUET (relecture) | Le format ne dit pas qu'un `doc_id` est unique dans `documents` ni dans `deletions` (le lecteur fusionne un doublon en silence), et deux parties de même valeur numérique de suffixe rendent l'ordre des parties indéfini ; le lecteur trie les parties par nom, pas par valeur numérique | ADR-0040 | Accepté le 2026-10-22, tel que proposé, `format_version` reste à 1 |
+| 2026-10-22 | ATTACHER-LOT | Avant implémentation, verdicts de `@architecte` : (1) NON-COUVERT, « document retiré » (`docs/04`) ne dit pas si la ligne `documents` tombe au commit ou survit jusqu'à la compaction ; (2) NON-COUVERT, la base de `manifest_blake3` (octets lus ou JSON canonique) n'est pas définie ; (3) ECART, `docs/04` énumère six comptes du rapport, l'exemple de `docs/05` quatre, en mélangeant passages et documents | ADR-0041 | |
 
 ## Décisions en attente
 
@@ -145,6 +146,7 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 | ADR | Sujet | À décider avant |
 |---|---|---|
+| ADR-0041 | Sémantique d'attache : ligne `documents` supprimée au commit (1), `manifest_blake3` sur les octets lus (2), six comptes par document dans le rapport (3) | ATTACHER-LOT |
 
 ## Idées hors périmètre
 
@@ -255,3 +257,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-22 | ADR-0040 accepté par le propriétaire, tel que proposé ; `format-lot-v1.md` (noms des parties, tableaux `documents` et `deletions`, contrôle 6, erreurs) et `docs/04` (contrôle 6) mis à jour |
 | 2026-10-22 | Début de la tâche hors plan COMPLETER-LECTURE-LOT sur `tache/COMPLETER-LECTURE-LOT` (application d'ADR-0040 au lecteur, et en-tête de `tests/lire_lot_parquet.rs`, sur décision du propriétaire) |
 | 2026-10-22 | Tâche hors plan COMPLETER-LECTURE-LOT terminée : parties triées par valeur numérique du suffixe (`passages-9999` avant `passages-10000`), valeur répétée et suffixe hors `u64` refusés ; `doc_id` unique dans `documents` (toutes parties) et dans `deletions` ; suppressions bornées par `counts.deletions` avant insertion ; en-têtes de tests en anglais ; 12 tests ajoutés, 238 tests Rust ; revue A-CORRIGER au 1er tour (borne des suppressions, en-tête de `batch_manifest.rs`), OK au 2e ; 3 idées retirées de la liste |
+| 2026-10-22 | Début de la tâche ATTACHER-LOT sur `tache/ATTACHER-LOT` |
+| 2026-10-22 | ATTACHER-LOT : 6 tests écrits par `@testeur` (INV-03, INV-10, comptes L1-L3, `replace_all`), non commités ; 3 points de conception soumis à `@architecte` avant `@dev` (2 NON-COUVERT, 1 ECART) ; ADR-0041 proposé ; tâche BLOQUE, décision du propriétaire requise |
