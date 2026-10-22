@@ -7,6 +7,21 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+crible-core = { path = "../crible-core" }
+crible-store = { path = "../crible-store" }
+roaring.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# INV-07 (`tests/inv_07_*.rs`) builds a real index, reads `records.sqlite` for
+# the SQL oracle, and generates random filters. `proptest`, `rusqlite` and
+# `tempfile` are the test crates `docs/07-stack-et-deploiement.md` lists
+# (l. 37 and 46), so no ADR is needed. The other crates the fixtures need
+# (`crible-core`, `crible-store`, `roaring`, `serde_json`) are already regular
+# dependencies and are therefore usable from the tests.
+proptest.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true
