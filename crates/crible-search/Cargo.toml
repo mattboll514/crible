@@ -24,5 +24,14 @@ proptest.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
 
+# MES-14: the pool-filter bench drives `Pool::evaluate` on a case matrix
+# (keyword alone, column alone, column under a reduced domain) on `synth-small`
+# and on a fixture at scale; the harness is `harness = false` because the
+# measure is that matrix, not a criterion function. No criterion dependency is
+# added for it.
+[[bench]]
+name = "pool_filter"
+harness = false
+
 [lints]
 workspace = true
