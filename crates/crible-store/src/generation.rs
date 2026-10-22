@@ -22,7 +22,8 @@
 //! `docs/02-architecture.md`:
 //!
 //! 1. one SQLite transaction writes the segments, the documents, the passages,
-//!    the tombstones, `meta.generation = G+1` and `meta.next_iid`;
+//!    the tombstones, the batch row, `meta.generation = G+1` and
+//!    `meta.next_iid`;
 //! 2. **`COMMIT` — the commit point (ADR-0016)**;
 //! 3. `manifests/<G+1>.json` is written, fsynced and renamed;
 //! 4. a new [`Snapshot`] is built and published through an [`ArcSwap`].
@@ -30,6 +31,11 @@
 //! The segments themselves are written before the call, by the attach that
 //! prepares them: a segment stays invisible until step 1 references it, which
 //! is what makes an abandoned one an orphan that recovery removes.
+//!
+//! [`GenerationStore::commit_with_rows`] runs the same protocol and lets the
+//! caller append its own rows (the attach writes the `batches` row there) to
+//! step 1, still inside the single commit point. It also returns the time spent
+//! in each of its post-write steps, which the attach reports (`docs/04`).
 //!
 //! # Recovery
 //!
@@ -59,10 +65,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Epoch, Generation, Iid};
+use rusqlite::{Connection, Transaction};
 use serde_json::{Value, json};
 
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
@@ -160,6 +168,22 @@ fn stop_at_failpoint(step: &str) {
     }
 }
 
+/// Reaches one step of an attach, inside the transaction of its generation.
+///
+/// Only an attach calls this, so the steps `after_attach_documents` and
+/// `after_attach_passages` are never reached by a plain
+/// [`GenerationStore::commit`] (the `GERER-GENERATIONS` tests). The panic it
+/// raises unwinds through the transaction, which rolls it back (INV-03).
+#[cfg(feature = "failpoints")]
+pub(crate) fn attach_failpoint(step: &str) {
+    stop_at_failpoint(step);
+}
+
+/// Reaches one step of an attach; a normal build carries neither the
+/// environment read nor a call.
+#[cfg(not(feature = "failpoints"))]
+pub(crate) fn attach_failpoint(_step: &str) {}
+
 /// Reaches the step `step` of the commit protocol.
 ///
 /// Expands to nothing at all without the `failpoints` feature: the normal build
@@ -176,6 +200,43 @@ macro_rules! failpoint {
 #[cfg(not(feature = "failpoints"))]
 macro_rules! failpoint {
     ($step:literal) => {};
+}
+
+/// A committed generation and the time spent in the steps that follow its
+/// writes: the attach turns them into the stage durations of its report.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommittedGeneration {
+    /// Generation the change produced.
+    pub(crate) generation: Generation,
+    /// Time spent in each step of the commit protocol.
+    pub(crate) timings: CommitTimings,
+}
+
+/// Time spent in the steps of [`GenerationStore::commit_with_rows`], measured
+/// around the work this module owns.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CommitTimings {
+    /// Filling the transaction and reaching the commit point.
+    pub(crate) transaction: Duration,
+    /// Writing `manifests/<generation>.json`.
+    pub(crate) manifest: Duration,
+    /// Building the snapshot (its publication is immediate).
+    pub(crate) snapshot: Duration,
+}
+
+/// The generation that follows `generation`, refusing an exhausted counter.
+///
+/// The attach computes its planned generation with this before the transaction,
+/// and [`GenerationStore::commit_with_rows`] recomputes it inside; both must
+/// agree, which the attach checks.
+pub(crate) fn generation_after(generation: Generation) -> Result<Generation, CribleError> {
+    let next = generation.get().checked_add(1).ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "the generation counter is exhausted, no generation can follow it",
+        )
+    })?;
+    Ok(Generation::new(next))
 }
 
 /// Owner of one index: the writable reference database of the epoch and the
@@ -321,80 +382,160 @@ impl GenerationStore {
     /// publishes it (ADR-0016, INV-04). A caller must therefore not read such an
     /// error as "nothing was written".
     pub fn commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError> {
-        let GenerationChange {
-            segments,
-            documents,
-            passages,
-            deletions,
-        } = change;
+        self.commit_with_rows(|transaction, generation, next_iid| {
+            write_generation_change(transaction, &change, generation, next_iid)
+        })
+        .map(|committed| committed.generation)
+    }
+
+    /// Opens the transaction of a generation, lets `write` fill it, commits it
+    /// once, then writes the manifest and publishes the new snapshot.
+    ///
+    /// The commit protocol is the one of [`GenerationStore::commit`]: the
+    /// callback writes every row of the generation inside the single
+    /// transaction, then `advance_meta` and the `COMMIT` end it (ADR-0016). A
+    /// callback that returns an error, or panics, drops the transaction, which
+    /// rolls it back, so nothing of the generation becomes visible (INV-03).
+    ///
+    /// The callback receives the transaction, the generation it must stamp on
+    /// its rows (G+1), and the first free `iid`; it returns the first free `iid`
+    /// after its rows.
+    ///
+    /// This is how an attach writes the `batches` row, the segments, the
+    /// documents, the passages, the tombstones and the document removals in one
+    /// transaction, which [`GenerationChange`] alone cannot express. The
+    /// returned [`CommittedGeneration`] also carries the time spent in the
+    /// transaction, in the manifest and in the snapshot.
+    pub(crate) fn commit_with_rows<F>(
+        &mut self,
+        write: F,
+    ) -> Result<CommittedGeneration, CribleError>
+    where
+        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<u32, CribleError>,
+    {
         let epoch_dir = epoch_directory(&self.index_dir, self.epoch);
 
+        let transaction_started = Instant::now();
         let transaction = self.records.begin()?;
         let meta = records::read_meta(&transaction)?;
-        let generation =
-            Generation::new(meta.generation.get().checked_add(1).ok_or_else(|| {
-                CribleError::new(
-                    ErrorCode::Internal,
-                    "the generation counter is exhausted, no generation can follow it",
-                )
-            })?);
+        let generation = generation_after(meta.generation)?;
 
-        let mut next_iid = meta.next_iid;
-        for segment in &segments {
-            check_generation_matches(
-                "segment",
-                &segment.segment_id,
-                segment.generation,
-                generation,
-            )?;
-            records::insert_segment(&transaction, segment)?;
-        }
-        for document in &documents {
-            check_generation_matches(
-                "document",
-                &document.doc_id,
-                document.updated_generation,
-                generation,
-            )?;
-            records::insert_document(&transaction, document)?;
-        }
-        for passage in &passages {
-            check_generation_matches(
-                "passage",
-                &passage.doc_id,
-                passage.created_generation,
-                generation,
-            )?;
-            records::insert_passage(&transaction, passage)?;
-            next_iid = next_iid.max(passage.iid.get().checked_add(1).ok_or_else(|| {
-                CribleError::new(
-                    ErrorCode::Internal,
-                    format!(
-                        "iid {} leaves no free identifier after it",
-                        passage.iid.get()
-                    ),
-                )
-            })?);
-        }
-        for iid in &deletions {
-            records::tombstone_passage(&transaction, *iid, generation)?;
-        }
+        let next_iid = write(&transaction, generation, meta.next_iid)?;
         records::advance_meta(&transaction, generation, next_iid)?;
 
         failpoint!("before_sqlite_commit");
         transaction
             .commit()
             .map_err(|error| records::database_error("commit the generation", &error))?;
+        let transaction_time = transaction_started.elapsed();
         failpoint!("after_sqlite_commit");
 
+        let snapshot_started = Instant::now();
         let snapshot = build_snapshot(&self.records, &epoch_dir)?;
+        let snapshot_time = snapshot_started.elapsed();
+
+        let manifest_started = Instant::now();
         write_manifest(&epoch_dir, self.epoch, &snapshot)?;
+        let manifest_time = manifest_started.elapsed();
         failpoint!("after_manifest");
 
         self.snapshot.store(Arc::new(snapshot));
         failpoint!("after_publish");
-        Ok(generation)
+        Ok(CommittedGeneration {
+            generation,
+            timings: CommitTimings {
+                transaction: transaction_time,
+                manifest: manifest_time,
+                snapshot: snapshot_time,
+            },
+        })
     }
+
+    /// Runs `read` on the writable connection of the index, outside any
+    /// transaction.
+    ///
+    /// The store is the only writer of its index, so a read here sees a state
+    /// no other writer can change until the next call that takes `&mut self`.
+    /// The attach uses it to decide its plan before the segment and the
+    /// transaction (`docs/02-architecture.md`, "Attacher un lot").
+    pub(crate) fn with_connection<T>(
+        &self,
+        read: impl FnOnce(&Connection) -> Result<T, CribleError>,
+    ) -> Result<T, CribleError> {
+        read(self.records.connection())
+    }
+
+    /// Reads the `batches` row of `batch_id`, or `None` when it has never been
+    /// applied (INV-10).
+    pub(crate) fn applied_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<Option<records::StoredBatch>, CribleError> {
+        self.records.batch(batch_id)
+    }
+
+    /// Directory of the segments of the current epoch.
+    pub(crate) fn segments_directory(&self) -> PathBuf {
+        segments_directory(&epoch_directory(&self.index_dir, self.epoch))
+    }
+}
+
+/// Writes one [`GenerationChange`] inside the transaction of its generation,
+/// and returns the first free `iid` after its passages.
+fn write_generation_change(
+    transaction: &Transaction<'_>,
+    change: &GenerationChange,
+    generation: Generation,
+    next_iid: u32,
+) -> Result<u32, CribleError> {
+    let GenerationChange {
+        segments,
+        documents,
+        passages,
+        deletions,
+    } = change;
+
+    let mut next_iid = next_iid;
+    for segment in segments {
+        check_generation_matches(
+            "segment",
+            &segment.segment_id,
+            segment.generation,
+            generation,
+        )?;
+        records::insert_segment(transaction, segment)?;
+    }
+    for document in documents {
+        check_generation_matches(
+            "document",
+            &document.doc_id,
+            document.updated_generation,
+            generation,
+        )?;
+        records::insert_document(transaction, document)?;
+    }
+    for passage in passages {
+        check_generation_matches(
+            "passage",
+            &passage.doc_id,
+            passage.created_generation,
+            generation,
+        )?;
+        records::insert_passage(transaction, passage)?;
+        next_iid = next_iid.max(passage.iid.get().checked_add(1).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "iid {} leaves no free identifier after it",
+                    passage.iid.get()
+                ),
+            )
+        })?);
+    }
+    for iid in deletions {
+        records::tombstone_passage(transaction, *iid, generation)?;
+    }
+    Ok(next_iid)
 }
 
 /// Directory of one epoch: `<index>/epochs/<epoch>`.

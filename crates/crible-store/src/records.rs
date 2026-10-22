@@ -124,6 +124,20 @@ pub struct DocumentRecord {
     pub updated_generation: Generation,
 }
 
+/// One row of `batches`, as the idempotence check of an attach reads it.
+///
+/// Only what a replay needs is kept: the digest that identifies its manifest
+/// and the report of the original attach (INV-10, ADR-0041). `applied_at` names
+/// the wall clock, which no decision depends on, and the generation of the
+/// batch is read from the report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredBatch {
+    /// `blake3:<hex>` digest of the bytes of its `manifest.json` (ADR-0041).
+    pub manifest_blake3: String,
+    /// Report of the original attach, as JSON.
+    pub report: String,
+}
+
 /// One row of `passages`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageRecord {
@@ -336,9 +350,23 @@ impl RecordStore {
             .collect()
     }
 
+    /// Borrows the writable connection of the reference database.
+    ///
+    /// Only `GenerationStore` uses it, to read the reference state outside a
+    /// transaction while it holds the single writer of the index.
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
     /// Values of the `meta` row of this database.
     pub(crate) fn meta(&self) -> Result<Meta, CribleError> {
         read_meta(&self.connection)
+    }
+
+    /// Reads the `batches` row of `batch_id`, or `None` when the batch has
+    /// never been applied (INV-10).
+    pub(crate) fn batch(&self, batch_id: &str) -> Result<Option<StoredBatch>, CribleError> {
+        batch_by_id(&self.connection, batch_id)
     }
 
     /// Identifiers of the segments SQLite references, in ascending order.
@@ -425,6 +453,118 @@ pub(crate) fn segment_ids(connection: &Connection) -> Result<Vec<String>, Crible
         .map_err(|error| database_error("query the segment ids", &error))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| database_error("read the segment ids", &error))
+}
+
+/// Reads the `batches` row of one batch, or `None` when it was never applied.
+pub(crate) fn batch_by_id(
+    connection: &Connection,
+    batch_id: &str,
+) -> Result<Option<StoredBatch>, CribleError> {
+    let row = connection
+        .query_row(
+            "SELECT manifest_blake3, report FROM batches WHERE batch_id = ?1",
+            params![batch_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| database_error("read a batch", &error))?;
+    row.map(|(manifest_blake3, report)| {
+        Ok(StoredBatch {
+            manifest_blake3,
+            report,
+        })
+    })
+    .transpose()
+}
+
+/// Records one applied batch in the transaction of its generation (INV-10).
+///
+/// `applied_at` is written by SQLite in RFC 3339 UTC: no decision of the engine
+/// reads it, and the value is only there for an operator.
+pub(crate) fn insert_batch(
+    transaction: &Transaction<'_>,
+    batch_id: &str,
+    generation: Generation,
+    manifest_blake3: &str,
+    manifest: &str,
+    report: &str,
+) -> Result<(), CribleError> {
+    transaction
+        .execute(
+            "INSERT INTO batches (batch_id, generation, applied_at, manifest_blake3, manifest, report)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4, ?5)",
+            params![
+                batch_id,
+                to_sql_u64(generation.get(), "generation")?,
+                manifest_blake3,
+                manifest,
+                report,
+            ],
+        )
+        .map_err(|error| database_error("record the batch in the commit transaction", &error))?;
+    Ok(())
+}
+
+/// `doc_id`s of the live documents, in ascending order.
+///
+/// A document row exists only for a living document (ADR-0041), so this is the
+/// set a `replace_all` batch compares itself with.
+pub(crate) fn document_ids(connection: &Connection) -> Result<Vec<String>, CribleError> {
+    let mut statement = connection
+        .prepare("SELECT doc_id FROM documents ORDER BY doc_id")
+        .map_err(|error| database_error("prepare the document ids query", &error))?;
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| database_error("query the document ids", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the document ids", &error))
+}
+
+/// Internal identifiers of the live passages of one document, in ascending
+/// order.
+///
+/// Read before the new passages of a replacement are added, so the returned
+/// set is exactly the passages the replacement or the deletion must tombstone.
+pub(crate) fn live_iids_of_document(
+    connection: &Connection,
+    doc_id: &str,
+) -> Result<Vec<Iid>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT iid FROM passages
+             WHERE doc_id = ?1 AND dead_since_gen IS NULL ORDER BY iid",
+        )
+        .map_err(|error| database_error("prepare the live iids of a document", &error))?;
+    let iids = statement
+        .query_map(params![doc_id], |row| row.get::<_, i64>(0))
+        .map_err(|error| database_error("query the live iids of a document", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the live iids of a document", &error))?;
+    iids.into_iter()
+        .map(|iid| from_sql_u32(iid, "iid").map(Iid::new))
+        .collect()
+}
+
+/// Removes the `documents` row of a deleted document, in the transaction of its
+/// generation (ADR-0041).
+///
+/// A removed document must exist: a missing row means the caller and the
+/// reference state disagree, which is an internal error rather than a silent
+/// no-op.
+pub(crate) fn delete_document(
+    transaction: &Transaction<'_>,
+    doc_id: &str,
+) -> Result<(), CribleError> {
+    let changed = transaction
+        .execute("DELETE FROM documents WHERE doc_id = ?1", params![doc_id])
+        .map_err(|error| database_error("remove a document in the commit transaction", &error))?;
+    if changed != 1 {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            format!("no document row has doc_id '{doc_id}', so it cannot be removed"),
+        ));
+    }
+    Ok(())
 }
 
 /// Records one segment in the transaction of the generation that makes it
@@ -957,7 +1097,7 @@ fn upsert_document(connection: &Connection, record: &DocumentRecord) -> Result<(
 }
 
 /// Reads one document, the query "documents by id".
-fn document_by_id(
+pub(crate) fn document_by_id(
     connection: &Connection,
     doc_id: &str,
 ) -> Result<Option<DocumentRecord>, CribleError> {
