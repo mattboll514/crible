@@ -1001,7 +1001,7 @@ fn from_sql_u64(value: i64, field: &str) -> Result<u64, CribleError> {
 }
 
 /// Converts an integer read back from a `u32` column.
-fn from_sql_u32(value: i64, field: &str) -> Result<u32, CribleError> {
+pub(crate) fn from_sql_u32(value: i64, field: &str) -> Result<u32, CribleError> {
     u32::try_from(value).map_err(|_| {
         CribleError::new(
             ErrorCode::Internal,

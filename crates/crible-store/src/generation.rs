@@ -55,12 +55,18 @@
 //! as a process death would. That panic is the expected outcome of the
 //! `INV-03` / `INV-04` tests; nothing else in this module panics.
 //!
-//! # What this module does not do yet
+//! # What the snapshot carries
 //!
-//! The snapshot carries the metadata of its segments, not their vectors: it
-//! opens no segment, so it never pays the checksum read of
-//! `SegmentReader::open`. Loading the vectors and the bitmaps into the snapshot
-//! belongs to `CONSTRUIRE-BITMAPS` and to the dense search tasks.
+//! The snapshot carries the metadata of its segments and the filter structures
+//! of its generation ([`FilterIndex`]). It opens no segment, so it never pays
+//! the checksum read of `SegmentReader::open`: loading the vectors into the
+//! snapshot belongs to the dense search tasks.
+//!
+//! The filter structures are built from `records.sqlite` at creation and at
+//! startup, then derived generation by generation in copy on write by
+//! [`FilterIndex::after_commit`] (ADR-0018, ADR-0019). The schema that describes
+//! which field is indexed, and how, therefore reaches the store when it is
+//! created or opened: the reference state holds the values, not the schema.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,11 +74,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
+use crible_core::config::Schema;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::{Connection, Transaction};
 use serde_json::{Value, json};
 
+use crate::filters_index::{FilterIndex, FilterMemory};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
 use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
 
@@ -127,7 +135,7 @@ pub struct GenerationChange {
 pub struct Snapshot {
     generation: Generation,
     segments: Vec<SegmentMeta>,
-    live_iids: Vec<Iid>,
+    filters: FilterIndex,
 }
 
 impl Snapshot {
@@ -147,9 +155,32 @@ impl Snapshot {
     /// Internal identifiers alive in this generation, in ascending order:
     /// passages tombstoned at this generation and at the previous ones are
     /// excluded (INV-01 keeps them inside the engine).
+    ///
+    /// The identifiers are read from the bitmap of the live passages, which is
+    /// the only copy the snapshot holds: materialising them again as a slice
+    /// would store every live iid twice.
+    pub fn live_iids(&self) -> impl Iterator<Item = Iid> + '_ {
+        self.filters.live().iter().map(Iid::new)
+    }
+
+    /// Filter structures of the generation: the bitmaps per value, the present
+    /// bitmaps, the value columns and the bitmap of the live passages.
     #[must_use]
-    pub fn live_iids(&self) -> &[Iid] {
-        &self.live_iids
+    pub fn filters(&self) -> &FilterIndex {
+        &self.filters
+    }
+
+    /// Estimated heap size of the filter structures, which `crible inspect`
+    /// reports.
+    ///
+    /// The measure covers the bitmaps, the value columns and the `keyword` values
+    /// themselves. It leaves out the schema the structures were built from, which
+    /// every generation shares and which does not grow with the passage count,
+    /// and the fixed overhead of the maps (see [`FilterMemory`]). `MES-13` is the
+    /// measure that settles what the report must count.
+    #[must_use]
+    pub fn filter_memory(&self) -> FilterMemory {
+        self.filters.memory()
     }
 }
 
@@ -257,6 +288,11 @@ impl GenerationStore {
     /// and `manifests/` directories, `records.sqlite` with its schema, the
     /// manifest of generation 0, then `CURRENT_EPOCH`.
     ///
+    /// `schema` is the schema of the index configuration (`index.json`,
+    /// `docs/02-architecture.md`), which says which fields the filter
+    /// structures index and how. A fresh index has no row, so its structures
+    /// are the empty ones of that schema.
+    ///
     /// `CURRENT_EPOCH` is written last and atomically, and every directory it
     /// makes reachable is fsynced before it: `segments/`, the epoch directory
     /// and `epochs/`, in that order, then the index directory by
@@ -265,7 +301,7 @@ impl GenerationStore {
     /// before leaves no `CURRENT_EPOCH`, which [`GenerationStore::open`] refuses
     /// with [`ErrorCode::InvalidRequest`] instead of reading a half-created
     /// epoch.
-    pub fn create(index_dir: &Path, epoch: Epoch) -> Result<Self, CribleError> {
+    pub fn create(index_dir: &Path, epoch: Epoch, schema: &Schema) -> Result<Self, CribleError> {
         let epoch_dir = epoch_directory(index_dir, epoch);
         let segments = segments_directory(&epoch_dir);
         let manifests = manifests_directory(&epoch_dir);
@@ -277,7 +313,7 @@ impl GenerationStore {
         let mut records = RecordStore::create(&epoch_dir.join(RECORDS_FILE_NAME))?;
         records.set_epoch(epoch)?;
 
-        let snapshot = build_snapshot(&records, &epoch_dir)?;
+        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
         write_manifest(&epoch_dir, epoch, &snapshot)?;
 
         // fsync the directories bottom-up before the pointer that makes them
@@ -310,10 +346,15 @@ impl GenerationStore {
     /// does not reference, and rewrites the manifest of the current generation
     /// when it is missing. It is idempotent: a second open changes nothing.
     ///
+    /// `schema` is the schema of the index configuration, as for
+    /// [`GenerationStore::create`]: the filter structures of the committed
+    /// generation are rebuilt from `records.sqlite`, and the schema is what
+    /// tells them which field to index and how.
+    ///
     /// A directory that holds no `CURRENT_EPOCH` is not an index of this build
     /// and is refused with [`ErrorCode::InvalidRequest`], before anything is
     /// removed from it.
-    pub fn open(index_dir: &Path) -> Result<Self, CribleError> {
+    pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
         let epoch_dir = epoch_directory(index_dir, epoch);
         let records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
@@ -333,7 +374,7 @@ impl GenerationStore {
         }
 
         recover(&records, index_dir, &epoch_dir)?;
-        let snapshot = build_snapshot(&records, &epoch_dir)?;
+        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
 
         Ok(Self {
@@ -431,7 +472,9 @@ impl GenerationStore {
         failpoint!("after_sqlite_commit");
 
         let snapshot_started = Instant::now();
-        let snapshot = build_snapshot(&self.records, &epoch_dir)?;
+        let previous = self.snapshot.load_full();
+        let snapshot =
+            build_snapshot_after_commit(&self.records, &epoch_dir, &previous, generation)?;
         let snapshot_time = snapshot_started.elapsed();
 
         let manifest_started = Instant::now();
@@ -747,15 +790,64 @@ fn check_generation_matches(
 
 /// Builds the snapshot of the committed generation from the reference state.
 ///
-/// The generation and the live iids come from SQLite, the only authority on
-/// what is visible. The segment metadata is read from the segments table and
+/// The generation and every row come from SQLite, the only authority on what is
+/// visible: the bitmap of the live passages is a reading of it, and a snapshot
+/// takes its live iids from that bitmap rather than storing them a second time. The segment metadata is read from the segments table and
 /// from `segment.json` on disk, which carries the format version and the
 /// precision, then sorted by `iid_start`: a snapshot is read in iid order, and
 /// a restart produces the manifest in the same order as the commit that wrote
-/// it. No vector file is opened here: the snapshot of this task holds metadata,
-/// not mmaps.
-fn build_snapshot(records: &RecordStore, epoch_dir: &Path) -> Result<Snapshot, CribleError> {
-    let generation = records.meta()?.generation;
+/// it. The filter structures are rebuilt from every row of `passages` and
+/// `documents`, following `schema` (ADR-0018, ADR-0019). No vector file is
+/// opened here: the snapshot of this task holds metadata and filters, not
+/// mmaps.
+fn build_snapshot(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    schema: &Schema,
+) -> Result<Snapshot, CribleError> {
+    Ok(Snapshot {
+        generation: records.meta()?.generation,
+        segments: segments_of(records, epoch_dir)?,
+        filters: FilterIndex::from_records(records.connection(), schema)?,
+    })
+}
+
+/// Builds the snapshot that follows the commit of `generation`.
+///
+/// The filter structures are derived from those of the previous snapshot in
+/// copy on write: only the rows the generation stamped are read, and the
+/// bitmaps and column blocks no change touches are shared with the generation
+/// the readers still hold (INV-02).
+///
+/// The previous snapshot is at generation G-1 whenever the commit succeeded, so
+/// the delta is the whole difference. It is not when an earlier commit stopped
+/// **after** its SQLite commit (a manifest that could not be written): that
+/// generation is committed but was never published, and a delta would leave its
+/// rows out. The snapshot is then rebuilt from `records.sqlite`, which is what
+/// the next [`GenerationStore::open`] would do (INV-04).
+fn build_snapshot_after_commit(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    previous: &Snapshot,
+    generation: Generation,
+) -> Result<Snapshot, CribleError> {
+    let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
+        previous
+            .filters()
+            .after_commit(records.connection(), generation)?
+    } else {
+        FilterIndex::from_records(records.connection(), previous.filters().schema())?
+    };
+    Ok(Snapshot {
+        generation,
+        segments: segments_of(records, epoch_dir)?,
+        filters,
+    })
+}
+
+/// Metadata of the segments the reference state references, in `iid_start`
+/// order then by identifier.
+fn segments_of(records: &RecordStore, epoch_dir: &Path) -> Result<Vec<SegmentMeta>, CribleError> {
     let segments_dir = segments_directory(epoch_dir);
     let mut segments = Vec::new();
     for segment_id in records.segment_ids()? {
@@ -767,11 +859,7 @@ fn build_snapshot(records: &RecordStore, epoch_dir: &Path) -> Result<Snapshot, C
             .cmp(&right.iid_start.get())
             .then_with(|| left.segment_id.cmp(&right.segment_id))
     });
-    Ok(Snapshot {
-        generation,
-        segments,
-        live_iids: records.live_iids()?,
-    })
+    Ok(segments)
 }
 
 /// Writes the derived manifest of `snapshot`, atomically.
@@ -829,9 +917,17 @@ fn segment_value(meta: &SegmentMeta) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{CURRENT_EPOCH_FILE_NAME, GenerationStore, read_current_epoch};
+    use crible_core::config::Schema;
     use crible_core::error::ErrorCode;
     use crible_core::ids::Epoch;
     use std::fs;
+
+    /// Schema of an index that indexes no field: these tests commit no row, so
+    /// their filter structures stay empty.
+    fn empty_schema() -> Schema {
+        Schema::from_json_str(r#"{ "document_fields": {}, "passage_fields": {} }"#)
+            .unwrap_or_else(|error| panic!("the empty schema must be valid: {error}"))
+    }
 
     /// Creation writes the pointer file, readable as a plain decimal number, and
     /// the manifest of generation 0, so a fresh index is inspectable.
@@ -839,7 +935,8 @@ mod tests {
     fn create_writes_the_current_epoch_and_the_manifest_of_generation_zero() {
         let temp = tempfile::tempdir().expect("temporary directory");
         let index = temp.path().join("index");
-        let store = GenerationStore::create(&index, Epoch::new(3)).expect("the index is created");
+        let store = GenerationStore::create(&index, Epoch::new(3), &empty_schema())
+            .expect("the index is created");
 
         assert_eq!(store.epoch(), Epoch::new(3));
         assert_eq!(store.generation().get(), 0);

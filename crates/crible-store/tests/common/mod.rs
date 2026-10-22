@@ -25,7 +25,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crible_core::config::ReferencePrecision;
+use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
 use crible_store::records::{DocumentRecord, PassageRecord};
@@ -80,9 +80,30 @@ pub fn current_epoch_path(index: &Path) -> PathBuf {
     index.join("CURRENT_EPOCH")
 }
 
-/// Creates a generation store on an index that does not exist yet.
+/// Schema of the fixtures of this module.
+///
+/// One field per level, of the types the fixtures write: a document carries
+/// `title` (a `keyword`), a passage carries `part` (an `integer`). A test that
+/// indexes another schema passes it to [`create_store_with`].
+pub fn fixture_schema() -> Schema {
+    Schema::from_json_str(
+        r#"{
+            "document_fields": { "title": { "type": "keyword" } },
+            "passage_fields": { "part": { "type": "integer" } }
+        }"#,
+    )
+    .unwrap_or_else(|error| panic!("the fixture schema must be valid: {error}"))
+}
+
+/// Creates a generation store on an index that does not exist yet, indexing the
+/// fields of [`fixture_schema`].
 pub fn create_store(index: &Path) -> GenerationStore {
-    GenerationStore::create(index, Epoch::new(EPOCH)).unwrap_or_else(|error| {
+    create_store_with(index, &fixture_schema())
+}
+
+/// Creates a generation store whose filter structures follow `schema`.
+pub fn create_store_with(index: &Path, schema: &Schema) -> GenerationStore {
+    GenerationStore::create(index, Epoch::new(EPOCH), schema).unwrap_or_else(|error| {
         panic!(
             "the generation store must be created under {}: {error}",
             index.display()
@@ -92,7 +113,12 @@ pub fn create_store(index: &Path) -> GenerationStore {
 
 /// Opens an existing index, which runs recovery, the way a restart does.
 pub fn open_store(index: &Path) -> GenerationStore {
-    GenerationStore::open(index).unwrap_or_else(|error| {
+    open_store_with(index, &fixture_schema())
+}
+
+/// Opens an existing index whose filter structures follow `schema`.
+pub fn open_store_with(index: &Path, schema: &Schema) -> GenerationStore {
+    GenerationStore::open(index, schema).unwrap_or_else(|error| {
         panic!(
             "the generation store must reopen and recover {}: {error}",
             index.display()
@@ -220,7 +246,7 @@ pub fn assert_view(snapshot: &Snapshot, generation: u64, segment_ids: &[&str], l
         "the snapshot of generation {generation} must reference exactly these segments"
     );
 
-    let mut actual_iids: Vec<u32> = snapshot.live_iids().iter().map(|iid| iid.get()).collect();
+    let mut actual_iids: Vec<u32> = snapshot.live_iids().map(|iid| iid.get()).collect();
     actual_iids.sort_unstable();
     let mut expected_iids = live_iids.to_vec();
     expected_iids.sort_unstable();
