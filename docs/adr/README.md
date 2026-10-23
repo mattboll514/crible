@@ -104,6 +104,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0048](0048-rejeu-de-mes-15-en-p3-et-compresseur-zstd-reutilise.md) | Rejeu de MES-15 en P3 et compresseur zstd réutilisé | Accepté | 2026-10-22 |
 | [ADR-0049](0049-dependances-du-groupe-export-de-tools-nommees-dans-docs-07.md) | Dépendances du groupe `export` de `tools/` nommées dans `docs/07` | Remplacé par ADR-0050 | 2026-10-23 |
 | [ADR-0050](0050-reference-mdenseon-sous-transformers-5-14-1-et-reexport-onnx.md) | Référence mDenseOn sous transformers 5.14.1 et ré-export de l'ONNX | Accepté | 2026-10-23 (proposition et acceptation) |
+| [ADR-0051](0051-cache-des-requetes-et-sessions-int8-et-fp32-de-l-encodeur.md) | Cache des requêtes et sessions INT8 et fp32 de l'encodeur | Proposé | 2026-10-23 |
 
 ## Questions ouvertes
 
