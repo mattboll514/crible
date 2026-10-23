@@ -40,9 +40,30 @@
   - les lots sont lus par `LIRE-LOT-PARQUET`.
 - **Hors périmètre** : les schémas définitifs (P9).
 
+### REEXPORTER-MODELE-TRANSFORMERS-5
+- **Objectif** : ré-exporter l'ONNX de mDenseOn sous `transformers==5.14.1`, la version qui a produit les vecteurs de production de Legifacile, et prouver la fidélité contre ces vecteurs.
+- **Dépend de** : EXPORTER-MODELE-ONNX, CONSTITUER-ECHANTILLON-LEGIFACILE
+- **À lire** : `04-donnees-et-ingestion.md` (le modèle) ; `08-invariants-et-tests.md` (INV-12, MES-04) ; `adr/0050-reference-mdenseon-sous-transformers-5-14-1-et-reexport-onnx.md` ; `data/legifacile-sample/README.md` (« Limite connue »).
+- **Livrables** :
+  - `tools/pyproject.toml` et `tools/uv.lock` : `optimum` retiré du groupe `export`, `transformers==5.14.1` épinglé, `onnx` et `onnxscript` ajoutés si l'exportateur les exige ;
+  - `tools/export_onnx.py` adapté : export fp32 par `torch.onnx.export`, quantification INT8 dynamique par `onnxruntime.quantization` ; `model.json` porte le champ `export` (versions de `transformers`, `torch`, `onnxruntime`) ;
+  - `model.json` réécrit de façon atomique, `max_tokens` reverifié à 8192 ;
+  - `tools/README.md` : la nouvelle procédure d'export, la disparition d'`optimum`, et la façon de reproduire les deux mesures ;
+  - les chiffres des deux critères, dans le rapport de la tâche.
+- **Critères d'acceptation** :
+  - (i) sur les 100 textes de parité, cosinus PyTorch (transformers 5.14.1) contre ONNX fp32 ≥ 0,9999 ;
+  - (ii) sur un tirage déterministe de 100 passages par structure, soit 600 passages de `data/legifacile-sample/`, cosinus ONNX fp32 avec prompt de document contre les vecteurs de production ≥ 0,999 ; minimum, p1 et médiane dans le rapport ;
+  - `max_tokens` = 8192 vérifié sur le graphe ré-exporté ;
+  - l'export est reproductible : même révision, mêmes hash fp32 ;
+  - `tools/export_onnx.py` échoue proprement, sans `unwrap()` ni trace non interceptée, si le moteur d'export refuse le modèle.
+- **Invariants / mesures** : INV-11 (aucune troncature silencieuse), INV-12 (seuil de recette) ; prépare MES-04.
+- **Hors périmètre** : le code Rust ; les seuils de recette ; le modèle INT8 au-delà de sa quantification ; toute modification de `docs/`.
+
+**Clause d'arrêt** : si `torch.onnx.export` ne produit pas un graphe exécutable pour ce modèle (opérateur non supporté, sortie instable, exécution à 8 192 tokens impossible), la tâche **s'arrête** et remonte une `QUESTION-CONCEPTION` ; elle ne réutilise pas l'ONNX exporté sous transformers 4.57.6, qui ne retrouve les vecteurs de production qu'à 0,983–0,990.
+
 ### CHARGER-MODELE
 - **Objectif** : charger un modèle ONNX dans `crible-encode`.
-- **Dépend de** : EXPORTER-MODELE-ONNX
+- **Dépend de** : REEXPORTER-MODELE-TRANSFORMERS-5
 - **À lire** : `04-donnees-et-ingestion.md` (le modèle) ; `07-stack-et-deploiement.md` (environnement de développement, ONNX Runtime).
 - **Livrables** :
   - `crible-encode::Model` : lecture de `model.json`, vérification des hash, `ort` en `load-dynamic`, tokenizer, pooling CLS, normalisation L2, prompts ;
