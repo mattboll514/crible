@@ -45,7 +45,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | CLI | `clap` | |
 | Tests | `proptest`, `criterion`, `tempfile` | |
 
-**Côté Python** : `uv`, `pyarrow`, `numpy`, `httpx`, `pytest`, `blake3` (ADR-0034). Les outils d'export ONNX (`optimum`, `onnxruntime`) restent dans `tools/` et ne sont pas des dépendances du paquet.
+**Côté Python** : `uv`, `pyarrow`, `numpy`, `httpx`, `pytest`, `blake3` (ADR-0034). Les outils d'export ONNX restent dans `tools/` et ne sont pas des dépendances du paquet : ils forment le groupe `uv` séparé `export` de `tools/pyproject.toml` — `optimum[onnxruntime]`, `onnxruntime`, `torch`, `transformers`, `tokenizers`, `huggingface-hub` (ADR-0049). Ce groupe n'est pas installé par un `uv sync` par défaut, donc la CI ne l'installe pas ; il s'installe avec `uv sync --group export`. `torch` vient de l'index CPU `pytorch-cpu`, ce qui évite la pile CUDA sous Linux (plusieurs Go). Les bornes de version font foi dans `tools/pyproject.toml`.
 
 ## Environnement de développement (Mac)
 

@@ -102,6 +102,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0046](0046-budget-des-filtres-d-intervalle-a-l-echelle-de-legifacile.md) | Budget des filtres d'intervalle à l'échelle de Legifacile | Accepté | 2026-10-22 |
 | [ADR-0047](0047-phase-de-mes-13-et-ordre-des-remedes-au-temps-de-demarrage.md) | Phase de MES-13 et ordre des remèdes au temps de démarrage | Accepté | 2026-10-22 |
 | [ADR-0048](0048-rejeu-de-mes-15-en-p3-et-compresseur-zstd-reutilise.md) | Rejeu de MES-15 en P3 et compresseur zstd réutilisé | Accepté | 2026-10-22 |
+| [ADR-0049](0049-dependances-du-groupe-export-de-tools-nommees-dans-docs-07.md) | Dépendances du groupe `export` de `tools/` nommées dans `docs/07` | Accepté | 2026-10-23 |
 
 ## Questions ouvertes
 
