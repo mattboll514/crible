@@ -68,6 +68,11 @@ Fichier `models/<name>/model.json` :
   "pooling": "cls",
   "normalize": true,
   "max_tokens": 8192,
+  "export": {
+    "transformers": "<version>",
+    "torch": "<version>",
+    "onnxruntime": "<version>"
+  },
   "prompts": { "query": "query: ", "document": "document: " },
   "files": {
     "fp32":      { "path": "model.onnx",       "blake3": "…" },
@@ -79,6 +84,7 @@ Fichier `models/<name>/model.json` :
 
 - **Empreinte** : blake3 du JSON canonique de `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompts`, et des hash des fichiers `fp32` et `tokenizer`. Le fichier INT8 n'entre pas dans l'empreinte, car il ne sert qu'aux requêtes.
 - **`max_tokens`** : la longueur maximale réellement supportée par l'export ONNX, à vérifier dans `EXPORTER-MODELE-ONNX`.
+- **`export`** : versions de `transformers`, `torch` et `onnxruntime` qui ont produit le fichier fp32. Ce champ est **hors de l'empreinte** (ADR-0028, ADR-0050) : il sert au diagnostic, jamais à refuser un lot. La fidélité du modèle se mesure par la recette (contrôle 9, INV-12).
 - **Usage des précisions** :
   - les **requêtes** sont encodées en INT8 (réglable : `fp32`) ;
   - la **recette** et l'**encodage en ligne de documents** se font en fp32.

@@ -1,6 +1,6 @@
 # ADR-0049 — Dépendances du groupe `export` de `tools/` nommées dans `docs/07`
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-23)
+- **Statut** : Remplacé par ADR-0050
 - **Date** : 2026-10-23 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire. Écart relevé par `@relecteur` au 2e tour de la tâche `EXPORTER-MODELE-ONNX` (phase P2, commit `1669ee5`)

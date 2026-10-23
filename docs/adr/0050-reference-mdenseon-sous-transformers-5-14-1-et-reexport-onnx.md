@@ -1,7 +1,7 @@
 # ADR-0050 — Référence mDenseOn sous transformers 5.14.1 et ré-export de l'ONNX
 
-- **Statut** : Proposé
-- **Date** : 2026-10-23 (date de proposition ; ajouter la date de décision quand elle tombe)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-23)
+- **Date** : 2026-10-23 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : `QUESTION-CONCEPTION` remontée par `@dev` pendant la tâche `CONSTITUER-ECHANTILLON-LEGIFACILE` (phase P2). Verdict de `@architecte` : **NON-COUVERT** par `docs/04` et les ADR acceptés ; les options « abaisser le seuil » et « accepter par exception » sont des **ECART** à `docs/04` et à INV-12.
 - **Remplace** : ADR-0049 (seulement la liste des paquets du groupe `export` de `tools/`, voir point 3)
