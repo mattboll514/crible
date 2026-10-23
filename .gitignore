@@ -29,3 +29,7 @@
 .env
 .env.*
 !.env.prod.example
+
+# Fixture de test versionnée de CHARGER-MODELE : 20 × 768 vecteurs fp32,
+# 61 440 octets, ce n'est pas une donnée volumineuse.
+!crates/crible-encode/tests/fixtures/mdenseon/vectors.f32

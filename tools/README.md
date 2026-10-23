@@ -8,7 +8,8 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `gen_synth.py` | Génère `synth-small` en trois lots et son jeu de requêtes ; option `--large` pour le jeu de latence. |
 | `reference_topk.py` | Rejoue l'attache des lots et calcule le top-k exact en numpy ; écrit `expected.jsonl`. |
 | `export_onnx.py` | Exporte l'encodeur mDenseOn en ONNX (fp32 et INT8), copie `tokenizer.json` et écrit `model.json`. |
-| `tests/` | Tests pytest des trois outils. |
+| `reference_vectors.py` | Écrit les 20 textes et vecteurs de référence du test Rust de `CHARGER-MODELE`. |
+| `tests/` | Tests pytest des quatre outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
 | `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
 
@@ -44,6 +45,41 @@ embarque la grappe CUDA, soit plusieurs Go inutiles. `transformers` est
 **épinglé à `5.14.1`** (borne exacte, ADR-0050) : c'est la version sous laquelle
 ont été calculés les vecteurs de production de Legifacile. La relever demande
 une nouvelle mesure de fidélité (critère (ii) plus bas).
+
+### ONNX Runtime sur Mac, pour les tests Rust
+
+`crible-encode` charge ONNX Runtime **dynamiquement** (`ort` en `load-dynamic`,
+`docs/07-stack-et-deploiement.md`) : la bibliothèque n'est pas liée à la
+compilation, et `ORT_DYLIB_PATH` doit nommer son fichier à l'exécution. Les tests
+Rust qui chargent un modèle sont **ignorés** par défaut, parce que la CI n'a ni
+modèle ni ONNX Runtime ; `--ignored` les lance.
+
+Deux provenances :
+
+- par Homebrew, `brew install onnxruntime`, puis `ORT_DYLIB_PATH` vaut
+  `$(brew --prefix onnxruntime)/lib/libonnxruntime.dylib` (sur Intel,
+  `/usr/local` remplace `/opt/homebrew`) ;
+- la roue Python du groupe `export`, déjà installée par
+  `uv sync --group export`. Afficher le chemin, puis l'exporter :
+
+```sh
+cd tools
+uv run python -c 'import onnxruntime, pathlib; print(next((pathlib.Path(onnxruntime.__file__).parent / "capi").glob("libonnxruntime*.dylib")))'
+export ORT_DYLIB_PATH=/chemin/absolu/affiché
+```
+
+Lancer ensuite les tests depuis la racine du dépôt. Sur les cinq tests de
+`crible-encode`, deux tournent sans modèle (les hash) et trois chargent le
+modèle ; c'est l'option `--ignored` qui lance ces trois-là.
+
+```sh
+cargo test -p crible-encode                  # 2 tests, sans modèle
+ORT_DYLIB_PATH=/chemin/absolu/libonnxruntime.dylib \
+  cargo test -p crible-encode -- --ignored   # 3 tests, avec le modèle
+```
+
+Version mesurée le 2026-10-23 sur un Mac arm64 : ONNX Runtime **1.31.0**, celle
+de la roue Python et du champ `export` de `model.json`.
 
 ## Générer `synth-small`
 
@@ -430,6 +466,56 @@ et l'export reproductible en deux dossiers par
 donc `tokenizer.json` avec la bibliothèque `tokenizers`, qui est aussi celle que
 Crible utilise côté Rust : les identifiants sont exactement ceux du fichier
 exporté.
+
+## Vecteurs de référence de `CHARGER-MODELE`
+
+Le critère d'acceptation de `CHARGER-MODELE` (phase P2) compare le vecteur rendu
+par `crible_encode::Model` à celui de `tools/export_onnx.py` en fp32, à `1e-4`
+près. La référence est une petite fixture versionnée, dans
+`crates/crible-encode/tests/fixtures/mdenseon/` :
+
+| Fichier | Contenu |
+|---|---|
+| `texts.txt` | les 20 textes de référence, un par ligne, en UTF-8 |
+| `vectors.f32` | 20 × 768 flottants fp32 little-endian, dans le même ordre |
+
+Les 20 textes sont les premiers de `comparison_texts()`, le corpus français
+déterministe de la parité. Les vecteurs sont calculés par le graphe ONNX fp32
+avec le prompt `document: `, puis pooling CLS et normalisation L2, exactement
+comme `onnx_vectors` : c'est ce que le moteur doit retrouver.
+
+Pour régénérer la fixture, depuis `tools/`, avec le groupe `export` installé et
+`data/models/mdenseon/` présent :
+
+```sh
+uv sync --group export
+uv run python reference_vectors.py
+```
+
+Le script relit `data/models/mdenseon/model.onnx`, il ne l'exporte pas ; un
+modèle ré-exporté se régénère d'abord par la commande de la section
+« Exporter mDenseOn en ONNX ». Le script affiche le blake3 des deux fichiers.
+Mesure du 2026-10-23, avec
+`onnxruntime` 1.31.0 :
+
+```
+texts.txt    blake3:5dd96a6a618520a2c6adeb0638f0470564d3fe754820c2a2f504796caf61eeba
+vectors.f32  blake3:b2ce1dc7e03523690272b81b412d8dc8dfd9b82ed5ba743adbedf47ed2f33eae
+```
+
+Le test Rust `matches_the_python_fp32_vectors_within_1e_4` est **ignoré** par
+défaut : il lui faut le dossier du modèle et `ORT_DYLIB_PATH`. Depuis la racine
+du dépôt, avec la bibliothèque de la section « ONNX Runtime sur Mac » :
+
+```sh
+ORT_DYLIB_PATH=/chemin/absolu/libonnxruntime.dylib \
+  cargo test -p crible-encode -p crible-core -- --ignored --nocapture
+```
+
+Les quatre tests ignorés sont ceux qui lisent le modèle : le `model.json` réel,
+le chargement séquentiel, le chargement concurrent, et la parité 1e-4. Sans le
+modèle ou la bibliothèque, `--ignored` échoue avec la commande d'export, au lieu
+de passer sans rien vérifier.
 
 ## Tests
 
