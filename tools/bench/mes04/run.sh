@@ -19,6 +19,10 @@ TOOLS="$ROOT/tools"
 DATA="$ROOT/data/mes04"
 COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 DATE=${DATE:-$(date +%F)}
+# The analysis JSON is a work file by default. The versioned artefact is a copy
+# of it: ANALYSIS_OUT=$ROOT/docs/mesures/MES-04-parite-encodeur.$DATE.json writes
+# it directly, and the campaign prints the copy command at the end either way.
+ANALYSIS_OUT=${ANALYSIS_OUT:-$DATA/analysis.json}
 
 export ORT_DYLIB_PATH=${ORT_DYLIB_PATH:-$(cd "$TOOLS" && uv run python -c \
     'import onnxruntime, pathlib; print(next((pathlib.Path(onnxruntime.__file__).parent / "capi").glob("libonnxruntime*.dylib")))')}
@@ -42,7 +46,9 @@ cargo build --release --example measure_queries -p crible-encode
     --commit "$COMMIT" --date "$DATE" \
     --machine "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7, native" \
     --fidelity "$DATA/fidelity.json" \
-    --out "$DATA/analysis.json")
+    --out "$ANALYSIS_OUT")
+# Cross-check of the Rust harness against onnxruntime on five queries.
+(cd "$TOOLS" && uv run python bench/mes04/compare_onnx.py --limit 5)
 
 # MES-05: 1 000 warm encodings per precision, twice, plus the first call.
 for precision in int8 fp32; do
@@ -68,3 +74,8 @@ done
 (cd "$TOOLS" && uv run python bench/mes04/threads.py)
 
 echo "campaign files under $DATA"
+if [ "$ANALYSIS_OUT" != "$DATA/analysis.json" ]; then
+    echo "analysis written to $ANALYSIS_OUT"
+else
+    echo "versioned copy: cp $DATA/analysis.json docs/mesures/MES-04-parite-encodeur.$DATE.json"
+fi

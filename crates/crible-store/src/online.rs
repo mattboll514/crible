@@ -555,7 +555,7 @@ fn survey(
                 let counter = counter.ok_or_else(|| {
                     internal("the token limit of an onnx model needs its token counter (INV-11)")
                 })?;
-                let tokens = counter.count(Side::Document, &passage.text)?;
+                let tokens = counter.count_document(&passage.text)?;
                 if u64::try_from(tokens).unwrap_or(u64::MAX) > u64::from(limit) {
                     return Err(invalid(format!(
                         "passage '{key}' of the online lot holds {tokens} tokens, above \

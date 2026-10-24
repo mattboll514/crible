@@ -17,6 +17,7 @@
 //! | `ingest_refuses_a_document_over_max_tokens_before_encoding` | yes | the length refusal of the online mode happens before the graph is loaded: ONNX Runtime is not even configured, and the index is untouched |
 //! | `ingest_refuses_a_document_that_is_not_a_document_without_leaking_its_values` | yes | a malformed line is refused by its line number, without echoing a value |
 //! | `only_a_write_opening_removes_the_stale_online_batches` | yes | a read command leaves `<data>/tmp` alone, and a write opening removes a leftover `online-*` with its lock (ADR-0056) |
+//! | `a_failed_presence_lock_writes_a_json_line_on_stderr` | yes | the journal installed by the binary writes a JSON object on stderr for a warning (docs/07, ADR-0056) |
 //! | `the_online_lot_matches_the_equivalent_batch_with_the_same_vectors` | yes | an online lot and the equivalent batch carrying the same vectors return the same search response |
 //! | `one_hundred_documents_ingested_online_are_found_by_a_text_query` | `#[ignore]` | 100 documents encoded online are found by `crible search --query` |
 //!
@@ -508,8 +509,10 @@ fn ingest_refuses_a_document_over_max_tokens_before_encoding() {
     let output = ingest(&fixture, ONLINE_INDEX, &documents);
     assert!(!output.status.success(), "an over-long document is refused");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // The journal writes warnings on stderr too (JSON lines since NETTOYER-P2),
+    // so the error is not necessarily the first line: look for its code.
     assert!(
-        stderr.starts_with("invalid_request:"),
+        stderr.contains("invalid_request:"),
         "the refusal is an invalid_request, got: {stderr}"
     );
     assert!(
@@ -554,8 +557,9 @@ fn ingest_refuses_a_document_that_is_not_a_document_without_leaking_its_values()
     let output = ingest(&fixture, ONLINE_INDEX, &documents);
     assert!(!output.status.success(), "a malformed line is refused");
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Same as above: the journal may have written a JSON line first.
     assert!(
-        stderr.starts_with("invalid_request:"),
+        stderr.contains("invalid_request:"),
         "the refusal is an invalid_request, got: {stderr}"
     );
     assert!(
@@ -632,6 +636,59 @@ fn only_a_write_opening_removes_the_stale_online_batches() {
         "the presence lock goes with the directory"
     );
     assert_eq!(online_entries(&fixture.data), Vec::<String>::new());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_presence_lock_writes_a_json_line_on_stderr() {
+    // `docs/07` lists `tracing-subscriber` "(JSON)": the binary installs a JSON
+    // journal on stderr. The warning of `remove_stale_batches` is the only one
+    // the CLI can reach today, and a lock path that cannot be opened makes
+    // `lock_presence` fail (ADR-0056). A Unix socket is such a path, and the
+    // lot directory is absent, so the entry takes the orphan-lock branch.
+    let fixture = prepare();
+    create_index(&fixture, ONLINE_INDEX, EXTERNAL_MODEL);
+    let root = fixture.data.join("tmp");
+    fs::create_dir_all(&root).expect("the temporary directory must be creatable");
+    let _socket = std::os::unix::net::UnixListener::bind(root.join("online-deadbeef.lock"))
+        .expect("the lock path must be creatable as a socket");
+
+    let vocabulary = vocabulary();
+    let documents = write_lines(
+        fixture.root(),
+        "documents.jsonl",
+        &[json!({
+            "doc_id": "D1",
+            "passages": [{
+                "text": "droit contrat",
+                "vector": base64_vector(&fake_vector(&vocabulary, "droit contrat", true)),
+            }],
+        })],
+    );
+    let ingested = ingest(&fixture, ONLINE_INDEX, &documents);
+    assert!(
+        ingested.status.success(),
+        "crible ingest must succeed despite the failed lock, stderr: {}",
+        String::from_utf8_lossy(&ingested.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&ingested.stderr);
+    let warning = stderr
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .next()
+        .unwrap_or_else(|| panic!("the journal must write a JSON line, got: {stderr}"));
+    assert_eq!(warning["level"], "WARN", "the line is a warning: {warning}");
+    assert_eq!(
+        warning["fields"]["message"],
+        "cannot take the presence lock of an online batch; the lot is left in place"
+    );
+    assert!(
+        warning["fields"]["path"]
+            .as_str()
+            .is_some_and(|path| path.ends_with("online-deadbeef.lock")),
+        "the line names the lock file: {warning}"
+    );
 }
 
 #[test]

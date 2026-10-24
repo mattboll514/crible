@@ -9,6 +9,7 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `reference_topk.py` | Rejoue l'attache des lots et calcule le top-k exact en numpy ; écrit `expected.jsonl`. |
 | `export_onnx.py` | Exporte l'encodeur mDenseOn en ONNX (fp32 et INT8), copie `tokenizer.json` et écrit `model.json`. |
 | `reference_vectors.py` | Écrit les 20 textes et vecteurs de référence du test Rust de `CHARGER-MODELE`. |
+| `fake_encoder.py` | Génère le petit modèle ONNX factice versionné, utilisé par les tests Rust qui n'ont pas le modèle réel. |
 | `demo_j2_batches.py` | Construit les deux lots fautifs de la démo J2 (vecteurs sans prompt, passage trop long) à partir de l'échantillon Legifacile. |
 | `tests/` | Tests pytest des outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
@@ -306,7 +307,7 @@ sortie :
 | Fichier | Contenu |
 |---|---|
 | `model.onnx` | export fp32, axes `batch` et `sequence_length` dynamiques ; entrées `input_ids` et `attention_mask`, sortie `last_hidden_state` |
-| `model.int8.onnx` | même graphe, poids quantifiés en INT8 par quantification dynamique d'ONNX Runtime ; sert aux requêtes |
+| `model.int8.onnx` | même graphe, poids quantifiés en INT8 par quantification dynamique d'ONNX Runtime ; graphe optionnel, réservé aux comparaisons, au repli et au diagnostic (ADR-0052) : les requêtes sont encodées en fp32 par défaut |
 | `tokenizer.json` | tokenizer rapide de la révision épinglée, copié tel quel |
 | `model.json` | hash blake3 des trois fichiers, révision, dimensions, pooling, normalisation, prompts, `max_tokens`, et champ `export` (versions de `transformers`, `torch` et `onnxruntime` de l'exécution, hors empreinte — ADR-0050) |
 
@@ -380,7 +381,9 @@ fichier, lu tel quel par l'empreinte du modèle.
 de la troncature de `tokenizer.json`. Le script la vérifie en exécutant le
 graphe exporté sur exactement 8192 tokens, avec la valeur relue dans le
 `model.json` en cours d'écriture : l'exécution rend la forme attendue
-`[1, 8192, 768]`, en 55 s sur le Mac de mesure.
+`[1, 8192, 768]`, en 55 s sur le Mac de mesure. Cette vérification appartient
+au rapport de parité : `--skip-parity` la saute, et `max_tokens` reste alors la
+valeur déclarée par le modèle, sans exécution à cette longueur.
 
 Aucune troncature n'est silencieuse (**INV-11**) : `encode_tokens` mesure d'abord
 la longueur réelle de l'entrée, sans troncature, et **refuse** un texte qui
@@ -402,9 +405,10 @@ qu'aucune troncature n'intervient.
 | fp32 | 100 | 0,9999999998854414 | 0,9999999999971361 |
 
 L'écart au cosinus parfait vaut 1,1·10⁻¹⁰ au pire : très au-dessus de la barre
-de 0,9999. Le fichier INT8 ne sert qu'aux requêtes et n'entre pas dans
-l'empreinte du modèle ; il n'est pas comparé ici, ce que fera MES-04 sur les
-requêtes réelles. Les nombres ci-dessus sont écrits par le script dans
+de 0,9999. Le fichier INT8 ne sert qu'aux comparaisons, au repli et au
+diagnostic (ADR-0052) : les requêtes sont encodées en fp32 par défaut. Il
+n'entre pas dans l'empreinte du modèle et n'est pas comparé ici, ce que fera
+MES-04 sur les requêtes réelles. Les nombres ci-dessus sont écrits par le script dans
 `parity.json`, à côté du modèle, avec la révision et la date.
 
 La comparaison porte sur le **vecteur regroupé et normalisé**, le seul que
@@ -489,7 +493,6 @@ Pour régénérer la fixture, depuis `tools/`, avec le groupe `export` installé
 `data/models/mdenseon/` présent :
 
 ```sh
-uv sync --group export
 uv run python reference_vectors.py
 ```
 

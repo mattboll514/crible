@@ -2,9 +2,10 @@
 
 //! Encoding of search queries, with an in-memory LRU cache.
 //!
-//! Queries are encoded in INT8 by default (`[encoder].query_precision`), or in
-//! fp32 on request, and fall back to fp32 when the model directory has no INT8
-//! graph (`docs/04-donnees-et-ingestion.md`, ADR-0051).
+//! Queries are encoded in fp32 by default ([`DEFAULT_QUERY_PRECISION`],
+//! `[encoder].query_precision`, ADR-0052), or in INT8 on request, and fall back
+//! to fp32 when the model directory has no INT8 graph
+//! (`docs/04-donnees-et-ingestion.md`, ADR-0051).
 //!
 //! The cache is per instance, bounded by `[limits].query_cache_entries`
 //! (1 024 entries by default), and **never persisted**: it disappears at
@@ -15,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::ModelConfig;
@@ -27,6 +28,14 @@ use crate::registry::ModelRegistry;
 /// `crible.toml` (ADR-0051). At 768 dimensions, 1 024 fp32 vectors weigh 3,0
 /// Mio.
 pub const DEFAULT_QUERY_CACHE_ENTRIES: usize = 1_024;
+
+/// Default precision of query encoding, `[encoder].query_precision` of
+/// `crible.toml` (ADR-0052).
+///
+/// The INT8 graph keeps only 79,2 % of the exact top-10 of fp32 (MES-04), so it
+/// is no longer the default: it stays available for comparisons, fallback and
+/// diagnosis. The CLI has no `crible.toml` loader yet and uses this constant.
+pub const DEFAULT_QUERY_PRECISION: Precision = Precision::Fp32;
 
 /// A query encoded by [`QueryEncoder`].
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +71,32 @@ pub struct QueryEncoder {
     directory: PathBuf,
     registry: Arc<ModelRegistry>,
     cache: Mutex<QueryCache>,
+    /// Identity of the model directory, read once at the first query.
+    resolved: OnceLock<ResolvedModel>,
+}
+
+/// Fingerprint and INT8 declaration of one model directory.
+///
+/// `model.json` is read at the first query only. A model directory is frozen
+/// for the life of an index (`docs/04-donnees-et-ingestion.md`, the fingerprint
+/// is copied into `index.json`), and a cache hit must not pay a file read plus a
+/// JSON parse on every query. An integrity fault still surfaces at the first
+/// query, and on every cache miss, because the registry reads `model.json`
+/// before loading a session.
+#[derive(Debug)]
+struct ResolvedModel {
+    /// Fingerprint of the frozen part of the model (ADR-0028).
+    fingerprint: String,
+    /// Whether `model.json` declares a `files.int8` graph.
+    declares_int8: bool,
+}
+
+impl ResolvedModel {
+    /// Precision actually used: the requested one, unless INT8 is requested and
+    /// the model declares no INT8 graph.
+    fn precision(&self, requested: Precision) -> Precision {
+        resolve_precision(self.declares_int8, requested)
+    }
 }
 
 impl std::fmt::Debug for QueryEncoder {
@@ -92,7 +127,32 @@ impl QueryEncoder {
             directory: directory.into(),
             registry,
             cache: Mutex::new(QueryCache::new(cache_entries)),
+            resolved: OnceLock::new(),
         }
+    }
+
+    /// Identity of the model directory: read at the first query, kept after.
+    ///
+    /// The errors are those of the `model.json` read inside, plus
+    /// [`ErrorCode::Internal`] when the one-time slot cannot be read back.
+    fn resolved(&self) -> Result<&ResolvedModel, CribleError> {
+        if let Some(resolved) = self.resolved.get() {
+            return Ok(resolved);
+        }
+        let config = read_config(&self.directory)?;
+        let resolved = ResolvedModel {
+            fingerprint: config.fingerprint(),
+            declares_int8: declares_int8(&config),
+        };
+        // A concurrent caller may have filled the slot first; in that case both
+        // read the same `model.json`, so either value is right.
+        let _ = self.resolved.set(resolved);
+        self.resolved.get().ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the resolved model of the query encoder disappeared after it was set",
+            )
+        })
     }
 
     /// Encodes `text` with `precision`, or with fp32 when the model declares no
@@ -105,6 +165,11 @@ impl QueryEncoder {
     /// damaged, and silently serving another graph would hide the damage. The
     /// hash check of the INT8 file follows the same rule, so a modified or
     /// deleted declared graph is never replaced by fp32.
+    ///
+    /// `model.json` is read once for the cache key, at the first query, and its
+    /// fingerprint and INT8 declaration are kept: a cache hit costs one map
+    /// lookup, not a file read. The registry still reads it when it loads a
+    /// session, so an integrity fault surfaces on the first miss.
     ///
     /// The `query` prompt is added by the model, and the token count includes
     /// it. A second call with the same text, model and effective precision is
@@ -122,10 +187,10 @@ impl QueryEncoder {
         text: &str,
         precision: Precision,
     ) -> Result<EncodedQuery, CribleError> {
-        let config = read_config(&self.directory)?;
-        let precision = resolve_precision(&config, precision);
+        let resolved = self.resolved()?;
+        let precision = resolved.precision(precision);
         let key = QueryKey {
-            fingerprint: config.fingerprint(),
+            fingerprint: resolved.fingerprint.clone(),
             precision,
             text: text.to_owned(),
         };
@@ -146,7 +211,7 @@ impl QueryEncoder {
         let model = self
             .registry
             .get_or_load_precision(&self.directory, precision)?;
-        let encoded = model.encode_with_limit(Side::Query, text, config.max_tokens)?;
+        let encoded = model.encode_with_limit(Side::Query, text, model.config().max_tokens)?;
         let entry = CacheEntry {
             vector: encoded.vector.clone(),
             truncated: encoded.truncated,
@@ -172,19 +237,23 @@ impl QueryEncoder {
     }
 }
 
-/// Applies the INT8 fallback: the requested precision stands unless it is INT8
-/// and the model declares no INT8 file.
+/// Tells whether `model.json` declares an INT8 graph (`files.int8`).
 ///
-/// Only the **declaration** is looked at here. A declared file that is absent
-/// or corrupt is an integrity error raised by [`Model::load_precision`], not a
+/// Only the **declaration** is looked at. A declared file that is absent or
+/// corrupt is an integrity error raised by `Model::load_precision`, not a
 /// fallback: the directory says it has an INT8 graph, so serving fp32 would hide
 /// a broken model.
-fn resolve_precision(config: &ModelConfig, requested: Precision) -> Precision {
-    let has_int8 = config
+fn declares_int8(config: &ModelConfig) -> bool {
+    config
         .files
         .as_ref()
-        .is_some_and(|files| files.int8.is_some());
-    if requested == Precision::Int8 && !has_int8 {
+        .is_some_and(|files| files.int8.is_some())
+}
+
+/// Applies the INT8 fallback: the requested precision stands unless it is INT8
+/// and the model declares no INT8 file.
+fn resolve_precision(declares_int8: bool, requested: Precision) -> Precision {
+    if requested == Precision::Int8 && !declares_int8 {
         Precision::Fp32
     } else {
         requested
@@ -311,8 +380,13 @@ fn poisoned_cache() -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CacheEntry, Precision, QueryCache, QueryKey, resolve_precision};
+    use super::{
+        CacheEntry, DEFAULT_QUERY_PRECISION, Precision, QueryCache, QueryEncoder, QueryKey,
+        declares_int8, resolve_precision,
+    };
+    use crate::registry::ModelRegistry;
     use crible_core::model::ModelConfig;
+    use std::sync::Arc;
 
     fn key(text: &str, precision: Precision) -> QueryKey {
         QueryKey {
@@ -401,7 +475,13 @@ mod tests {
     }
 
     fn config(files: &str) -> ModelConfig {
-        let raw = format!(
+        ModelConfig::from_json_str(&raw_config(files))
+            .expect("the synthetic configuration is valid")
+    }
+
+    /// Text of a synthetic `model.json` whose `files` object holds `files`.
+    fn raw_config(files: &str) -> String {
+        format!(
             r#"{{
   "name": "synthetic",
   "kind": "onnx",
@@ -420,33 +500,88 @@ mod tests {
 }}"#,
             "a".repeat(64),
             "b".repeat(64),
-        );
-        ModelConfig::from_json_str(&raw).expect("the synthetic configuration is valid")
+        )
+    }
+
+    /// Declaration of an INT8 graph, as a member of the `files` object.
+    fn int8_member() -> String {
+        format!(
+            r#""int8": {{ "path": "model.int8.onnx", "blake3": "{}" }},"#,
+            "c".repeat(64)
+        )
+    }
+
+    #[test]
+    fn the_default_query_precision_is_fp32() {
+        // ADR-0052 replaces the `int8` default of ADR-0051: INT8 keeps only
+        // 79,2 % of the exact top-10 of fp32 (MES-04).
+        assert_eq!(DEFAULT_QUERY_PRECISION, Precision::Fp32);
     }
 
     #[test]
     fn falls_back_to_fp32_when_the_model_declares_no_int8_file() {
         let without_int8 = config("");
+        assert!(
+            !declares_int8(&without_int8),
+            "the synthetic model declares no INT8 graph"
+        );
         assert_eq!(
-            resolve_precision(&without_int8, Precision::Int8),
+            resolve_precision(declares_int8(&without_int8), Precision::Int8),
             Precision::Fp32,
             "an absent INT8 graph falls back to fp32"
         );
         assert_eq!(
-            resolve_precision(&without_int8, Precision::Fp32),
+            resolve_precision(declares_int8(&without_int8), Precision::Fp32),
             Precision::Fp32,
             "the fp32 request is unchanged"
         );
 
-        let int8 = format!(
-            r#""int8": {{ "path": "model.int8.onnx", "blake3": "{}" }},"#,
-            "c".repeat(64)
-        );
-        let with_int8 = config(&int8);
+        let with_int8 = config(&int8_member());
         assert_eq!(
-            resolve_precision(&with_int8, Precision::Int8),
+            resolve_precision(declares_int8(&with_int8), Precision::Int8),
             Precision::Int8,
             "a declared INT8 graph is used"
+        );
+    }
+
+    #[test]
+    fn reads_the_model_configuration_once_per_encoder() {
+        // A cache hit must not read `model.json` again: the fingerprint and the
+        // INT8 declaration are resolved at the first query and kept. A model
+        // directory is frozen for the life of an index, so a later edit is not
+        // a supported case; this test pins the one read.
+        let temp = tempfile::tempdir().expect("a temporary directory is created");
+        let path = temp.path().join("model.json");
+        std::fs::write(&path, raw_config("")).expect("the synthetic model.json is written");
+        let encoder = QueryEncoder::new(temp.path(), Arc::new(ModelRegistry::new()), 8);
+
+        let first = encoder.resolved().expect("the model is read");
+        assert_eq!(first.precision(Precision::Int8), Precision::Fp32);
+        let fingerprint = first.fingerprint.clone();
+
+        std::fs::write(&path, raw_config(&int8_member()))
+            .expect("the synthetic model.json is rewritten");
+        let second = encoder.resolved().expect("the model stays resolved");
+        assert_eq!(
+            second.precision(Precision::Int8),
+            Precision::Fp32,
+            "the INT8 declaration is not read again"
+        );
+        assert_eq!(second.fingerprint, fingerprint, "the fingerprint is kept");
+    }
+
+    #[test]
+    fn a_missing_model_json_is_reported_at_the_first_query() {
+        let temp = tempfile::tempdir().expect("a temporary directory is created");
+        let encoder = QueryEncoder::new(temp.path(), Arc::new(ModelRegistry::new()), 8);
+        let error = encoder
+            .resolved()
+            .expect_err("a directory without model.json is refused");
+        assert_eq!(error.code(), crible_core::error::ErrorCode::InvalidRequest);
+        assert!(
+            error.message().contains("model.json"),
+            "the message names the missing file: {}",
+            error.message()
         );
     }
 }

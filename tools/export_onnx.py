@@ -22,7 +22,9 @@ The graph is exported by ``torch.onnx.export`` under ``transformers==5.14.1``
 (ADR-0050), the version that produced the production vectors of Legifacile,
 with the sequence length left dynamic. The declared ``max_tokens`` (8192) is
 checked twice: against the model config, and by running the exported graph on an
-input of exactly that length.
+input of exactly that length. The second check belongs to the parity report, so
+``--skip-parity`` skips it: without that flag the limit is exercised, with it
+``max_tokens`` is only the value the model declares.
 
 Three acceptance criteria are checked here:
 
@@ -127,6 +129,10 @@ SAMPLE_BATCH_SUFFIX = "-v1"
 #: Truncation limit used to measure the real length of an input. Far above any
 #: passage of the sample, so the count is the untruncated one.
 UNLIMITED_TOKENS = 1 << 20
+#: Storage precision of the sample vectors, the only one this module can decode
+#: (``stored_vector`` reads little-endian fp16). The sample declares it in its
+#: manifests, and the fidelity measurement refuses any other value.
+SAMPLE_VECTOR_DTYPE = "fp16"
 #: Target length of the longest comparison text, in characters. French legal
 #: prose runs at about 4.5 characters per token, so this lands close to the
 #: 8192-token limit without depending on the tokenizer.
@@ -506,18 +512,12 @@ def write_reproducible_graph(source: Path, target: Path) -> None:
     onnx.save(model, str(target))
 
 
-def export_fp32(snapshot: Path, target: Path, revision: str) -> None:
+def export_fp32(snapshot: Path, target: Path) -> None:
     """Exports the transformer to fp32 ONNX with dynamic batch and length axes.
 
     ``torch.onnx.export`` replaces ``optimum`` (ADR-0050). The wrapper returns
     the last hidden state: the graph applies neither the prompt nor the pooling,
     which Crible does itself. The weights are inline, so the graph is one file.
-
-    ``revision`` is the pinned commit SHA the snapshot was resolved from. The
-    export does not need it to trace the graph, but the step is the only one
-    that produces bytes tied to a revision, and the caller of this step (and its
-    tests) names it: dropping it would make the step silent about what it
-    exported. It stays for that reason, not for a computation.
     """
     import torch
     from transformers import AutoModel
@@ -762,7 +762,8 @@ def check_sample_provenance(sample_dir: str | Path, revision: str) -> dict:
     very blindness ADR-0050 denounces. Every batch manifest declares its model
     (``model.revision``, ``model.prompt_document``, ``model.dims``,
     ``model.vector_dtype``), so a disagreement stops the measurement instead of
-    producing a flattering cosine.
+    producing a flattering cosine. The storage type must be ``fp16``, the only
+    one this module decodes.
 
     Returns the common declaration, as read from the manifests.
     """
@@ -800,6 +801,12 @@ def check_sample_provenance(sample_dir: str | Path, revision: str) -> dict:
             raise ValueError(
                 f"batch '{structure}' was encoded with prompt "
                 f"{entry['prompt_document']!r}, not {PROMPTS['document']!r}"
+            )
+        if entry["vector_dtype"] != SAMPLE_VECTOR_DTYPE:
+            raise ValueError(
+                f"batch '{structure}' stores its vectors as "
+                f"'{entry['vector_dtype']}', not '{SAMPLE_VECTOR_DTYPE}'; "
+                f"their length would be read wrong"
             )
         if declared is None:
             declared = entry
@@ -914,7 +921,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="replace the model.json and parity.json of a previous export",
+        help=(
+            "write into a non-empty output directory, replacing the files this "
+            "export writes"
+        ),
     )
     parser.add_argument(
         "--skip-parity",
@@ -950,10 +960,22 @@ def export(
     snapshot = download_snapshot(pinned)
     check_model_config(snapshot)
 
+    # The heavy files are staged in a hidden directory of the target, then
+    # renamed into place: an export that fails during the fp32 export, the
+    # tokenizer copy or the INT8 quantization leaves the previous export
+    # intact, manifest included (``tools/README.md``).
+    staging = Path(tempfile.mkdtemp(dir=directory, prefix=".export-"))
+    try:
+        staged_fp32 = staging / FP32_PATH
+        export_fp32(snapshot, staged_fp32)
+        shutil.copyfile(snapshot / TOKENIZER_PATH, staging / TOKENIZER_PATH)
+        quantize_int8(staged_fp32, staging / INT8_PATH)
+        for name in (FP32_PATH, INT8_PATH, TOKENIZER_PATH):
+            os.replace(staging / name, directory / name)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
     fp32_path = directory / FP32_PATH
-    export_fp32(snapshot, fp32_path, pinned)
-    shutil.copyfile(snapshot / TOKENIZER_PATH, directory / TOKENIZER_PATH)
-    quantize_int8(fp32_path, directory / INT8_PATH)
 
     # The new heavy files are in place: the manifest and the report of a
     # previous export are now outdated, and must not survive next to these.
@@ -976,7 +998,6 @@ def export(
         report["max_tokens_verified_seconds"] = verify_max_tokens(
             fp32_path, payload["max_tokens"]
         )
-        report["min_cosine_required"] = MIN_PARITY_COSINE
         report["revision"] = pinned
         report["date"] = time.strftime("%Y-%m-%d", time.gmtime())
         if report["min_cosine"] < MIN_PARITY_COSINE:

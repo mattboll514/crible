@@ -36,14 +36,17 @@ pub enum Side {
 
 /// Precision of an ONNX graph of the model.
 ///
-/// Queries use [`Precision::Int8`] by default, and the acceptance check and the
-/// online document encoding use [`Precision::Fp32`] (`docs/04-donnees-et-ingestion.md`,
-/// ADR-0051).
+/// Queries use [`Precision::Fp32`] by default
+/// ([`crate::DEFAULT_QUERY_PRECISION`], ADR-0052), and the acceptance check and
+/// the online document encoding also use [`Precision::Fp32`]
+/// (`docs/04-donnees-et-ingestion.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Precision {
-    /// Dynamically quantized graph, used for queries.
+    /// Dynamically quantized graph, kept for comparisons, fallback and
+    /// diagnosis (ADR-0052).
     Int8,
-    /// Reference graph, used for the acceptance check and online documents.
+    /// Reference graph, the default for queries, the acceptance check and
+    /// online documents.
     Fp32,
 }
 
@@ -364,7 +367,23 @@ impl TokenCounter {
         Self::load_with_config(directory, &config)
     }
 
-    fn load_with_config(directory: &Path, config: &ModelConfig) -> Result<Self, CribleError> {
+    /// Loads the tokenizer of the `onnx` model of `directory`, whose
+    /// configuration the caller already read.
+    ///
+    /// A command that also needs the [`ModelConfig`] for other controls (the
+    /// CLI attach needs it for `max_tokens`) reads `model.json` once and calls
+    /// this constructor, instead of calling [`Self::load`] next to its own
+    /// read. The tokenizer file is hashed and compared to the declared digest
+    /// exactly as [`Self::load`] does.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::load`].
+    pub fn load_with_config(
+        directory: impl AsRef<Path>,
+        config: &ModelConfig,
+    ) -> Result<Self, CribleError> {
+        let directory = directory.as_ref();
         if config.kind != ModelKind::Onnx {
             return Err(invalid(format!(
                 "model '{}' is external: it has no tokenizer to count the passage lengths",
@@ -407,13 +426,26 @@ impl TokenCounter {
         self.max_tokens
     }
 
+    /// Number of tokens of one document passage: the prompt, the text and the
+    /// special tokens, with no truncation.
+    ///
+    /// The online lot of ADR-0055 checks one passage at a time and needs this
+    /// single-passage form; a batch goes through [`Self::count_documents`].
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] when the tokenizer fails.
+    pub fn count_document(&self, text: &str) -> Result<usize, CribleError> {
+        self.count(Side::Document, text)
+    }
+
     /// Number of tokens of one input of `side`: the prompt, the text and the
     /// special tokens, with no truncation.
     ///
     /// # Errors
     ///
     /// [`ErrorCode::InvalidRequest`] when the tokenizer fails.
-    pub fn count(&self, side: Side, text: &str) -> Result<usize, CribleError> {
+    fn count(&self, side: Side, text: &str) -> Result<usize, CribleError> {
         let prompt = match side {
             Side::Query => &self.prompts.query,
             Side::Document => &self.prompts.document,
@@ -425,9 +457,15 @@ impl TokenCounter {
     /// Number of tokens of several document passages, in the same order as
     /// `texts`.
     ///
-    /// The passages are counted in parallel on the current rayon pool. The
-    /// result keeps the order of the slice, so the caller can name the
+    /// The passages are counted in parallel on the **global** rayon pool
+    /// (`par_iter`), not on the `ScanPool` of
+    /// `docs/07-stack-et-deploiement.md`: that pool belongs to the search path.
+    /// The result keeps the order of the slice, so the caller can name the
     /// offending passages in the order of the batch rows.
+    ///
+    /// Calling this from a tokio worker (the P6 server) would block that worker
+    /// and compete with request handling: the route must run the attach on a
+    /// blocking thread, and the pool question is to be settled in P6.
     ///
     /// # Errors
     ///

@@ -58,7 +58,8 @@ lots fautifs sont construits par `tools/demo_j2_batches.py`, jamais à la main :
 
 Les deux lots ont un manifeste, un schéma et des sommes de contrôle valides :
 le moteur les refuse sur leur contenu, pas sur leur forme. Le script vérifie les
-hash blake3 du modèle, fixe `created_at` et `host`, et ne supprime rien.
+hash blake3 du graphe fp32 et du tokenizer, fixe `created_at` et `host`, et ne
+supprime rien.
 
 ```sh
 cd tools
@@ -95,7 +96,7 @@ Attendu : **code de sortie 1** et ce message sur la sortie d'erreur, sans aucun
 texte de passage :
 
 ```text
-acceptance_failed: batch 'j2-wrong-prompt' is refused: the acceptance check re-encoded 20 passage(s) in fp32 and got min cosine 0.732275, below acceptance_min_cosine = 0.999 (INV-12); p1 = 0.732275, p50 = 0.813774
+acceptance_failed: batch 'j2-wrong-prompt' is refused: the acceptance check re-encoded 20 passage(s) in fp32 and got min cosine 0.732275, below acceptance_min_cosine = 0.999000 (INV-12); p1 = 0.732275, p50 = 0.813774
 ```
 
 Le refus est celui de la recette (contrôle 9, INV-12), pas d'un format : le lot
@@ -192,12 +193,12 @@ index 'dole': 7628 passages in the pool, generation 1, 3 result(s), … ms
 ```
 
 **Les scores ne sont pas consignés ici, volontairement.** La précision des
-requêtes n'est pas exposée par la CLI : elle vaut `int8` par défaut aujourd'hui
-(ADR-0051) et passera à `fp32` dans la tâche `NETTOYER-P2` (ADR-0052). Sur cette
-requête, le premier résultat est le même aux deux précisions, vérifié hors CLI
-avec le modèle épinglé ; seule la valeur du score change, par exemple 0,598 en
-`int8` et 0,624 en `fp32` pour `JORFDOLE000047079143#0`. `took_ms` varie aussi :
-il inclut le chargement de la session ONNX à la première requête.
+requêtes n'est pas exposée par la CLI : elle vaut `fp32` par défaut depuis
+l'ADR-0052. Sur cette requête, le premier résultat est le même aux deux
+précisions, vérifié hors CLI avec le modèle épinglé ; seule la valeur du score
+change, par exemple 0,598 en `int8` et 0,624 en `fp32` pour
+`JORFDOLE000047079143#0`. `took_ms` varie aussi : il inclut le chargement de la
+session ONNX à chaque appel, car chaque `crible search` est un processus neuf.
 
 La même recherche au format JSON, celui de `docs/05-api.md` :
 

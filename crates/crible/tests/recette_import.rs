@@ -68,14 +68,15 @@
 //! manifest and `model.json` only. The `external` test needs no encoder at all.
 //! The two premise tests compute the expected vectors of the fake graph in Rust.
 //!
-//! # Expected state before the implementation
+//! # What the implementation does
 //!
-//! Control 9 does not exist yet, so `batches.report` carries no `acceptance`
-//! object and a batch encoded without the prompt is accepted: the acceptance
-//! tests fail on the missing refusal or the missing statistics, not on a
-//! compilation error. The `incompatible_model` and `external` tests describe
-//! behaviour that control 3 and the `external` model already have; they are the
-//! regression guard of INV-12 around the new control.
+//! Control 9 lives in `crible-store::attach`, after `validate()` and control 8,
+//! before any write. It draws a deterministic sample from `batch_id`, re-encodes
+//! it in fp32 with `prompt_document`, refuses the batch with
+//! `acceptance_failed` below `acceptance_min_cosine`, and stores
+//! `acceptance {sample, min_cosine, p1, p50}` in `batches.report`, which a replay
+//! returns unchanged (INV-10). An `external` model has no check, and a batch
+//! without a passage carries no statistics.
 
 mod common;
 
