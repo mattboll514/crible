@@ -6,10 +6,12 @@
 //! `IndexConfig`, `Schema`, `FieldType` and `FieldLevel`.
 //!
 //! References: `docs/04-donnees-et-ingestion.md`, section "Configuration d'un
-//! index", and the `DEFINIR-CONFIG-INDEX` task of `docs/phases/P0-fondations.md`.
+//! index", the `DEFINIR-CONFIG-INDEX` task of `docs/phases/P0-fondations.md`,
+//! and ADR-0054 (bounds of the acceptance settings).
 
 use crible_core::config::{
-    FieldLevel, FieldType, FusionConfig, IndexConfig, ReferencePrecision, Schema,
+    FieldLevel, FieldType, FusionConfig, IndexConfig, IndexPatch, ReferencePrecision, Schema,
+    apply_patch,
 };
 use crible_core::error::ErrorCode;
 
@@ -227,6 +229,69 @@ fn index_config_rejects_an_empty_name() {
 fn index_config_rejects_malformed_json() {
     let error = IndexConfig::from_json_str("{ \"name\": ").expect_err("truncated JSON is invalid");
     assert_eq!(error.code(), ErrorCode::InvalidRequest);
+}
+
+/// ADR-0054: the acceptance settings are bounded at creation, `invalid_request`.
+#[test]
+fn index_config_rejects_an_unbounded_acceptance_setting() {
+    for (sample, min_cosine) in [(0_u32, 0.999_f64), (200, 0.0), (200, -0.1), (200, 1.000_1)] {
+        let raw = config_with(
+            "ingest",
+            &format!(
+                r#"{{ "acceptance_sample": {sample}, "acceptance_min_cosine": {min_cosine} }}"#
+            ),
+        );
+
+        let error = IndexConfig::from_json_str(&raw)
+            .expect_err("a sample of zero or a threshold outside ]0, 1] is refused (ADR-0054)");
+
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    }
+}
+
+/// ADR-0054: the bounds themselves are accepted: one passage and a threshold
+/// of 1, and the two ends of the open/closed interval.
+#[test]
+fn index_config_accepts_the_bounds_of_the_acceptance_settings() {
+    for (sample, min_cosine) in [(1_u32, 1.0_f64), (200, 0.000_1)] {
+        let raw = config_with(
+            "ingest",
+            &format!(
+                r#"{{ "acceptance_sample": {sample}, "acceptance_min_cosine": {min_cosine} }}"#
+            ),
+        );
+
+        let config = parse(&raw);
+
+        assert_eq!(config.ingest.acceptance_sample, sample);
+        assert_eq!(config.ingest.acceptance_min_cosine, min_cosine);
+    }
+}
+
+/// ADR-0054: a `PATCH` cannot smuggle a value that creation refuses; the
+/// rejected patch changes nothing.
+#[test]
+fn index_patch_rejects_an_unbounded_acceptance_setting() {
+    for patch in [
+        r#"{ "ingest": { "acceptance_sample": 0 } }"#,
+        r#"{ "ingest": { "acceptance_min_cosine": 0 } }"#,
+        r#"{ "ingest": { "acceptance_min_cosine": -0.5 } }"#,
+        r#"{ "ingest": { "acceptance_min_cosine": 1.5 } }"#,
+    ] {
+        let original = parse(DECISIONS_CONFIG);
+        let mut config = original.clone();
+        let patch = IndexPatch::from_json_str(patch)
+            .unwrap_or_else(|error| panic!("the patch is well-formed JSON: {error}"));
+
+        let error = apply_patch(&mut config, &patch)
+            .expect_err("an unbounded acceptance setting is refused (ADR-0054)");
+
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert_eq!(
+            config, original,
+            "a rejected patch must leave the configuration untouched"
+        );
+    }
 }
 
 #[test]

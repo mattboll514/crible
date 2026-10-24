@@ -5,7 +5,8 @@
 //!
 //! References: `docs/04-donnees-et-ingestion.md`, section "Configuration d'un
 //! index" and "Ce qui est figé, ce qui est réglable"; ADR-0030; ADR-0031;
-//! INV-16 (`docs/08-invariants-et-tests.md`).
+//! ADR-0054 (bounds of the acceptance settings); INV-16
+//! (`docs/08-invariants-et-tests.md`).
 
 use std::collections::BTreeMap;
 
@@ -451,10 +452,36 @@ impl IngestConfig {
             path,
             &["acceptance_sample", "acceptance_min_cosine"],
         )?;
-        Ok(Self {
+        let ingest = Self {
             acceptance_sample: json::u32_member(object, path, "acceptance_sample")?,
             acceptance_min_cosine: json::float_member(object, path, "acceptance_min_cosine")?,
-        })
+        };
+        ingest.validate(path)?;
+        Ok(ingest)
+    }
+
+    /// Refuses the two acceptance settings outside their domain (ADR-0054).
+    ///
+    /// A sample of zero would silently disable control 9 of `docs/04`, and a
+    /// threshold outside `]0, 1]` cannot express "close enough"; the comparison
+    /// is written so that NaN is outside the domain too. The default of
+    /// `acceptance_min_cosine` (0,999, ADR-0052) is unchanged.
+    fn validate(&self, path: &str) -> Result<(), CribleError> {
+        if self.acceptance_sample == 0 {
+            return Err(json::invalid(format!(
+                "setting 'acceptance_sample' must be at least 1 at \
+                 {path}.acceptance_sample; zero would disable the acceptance check \
+                 (ADR-0054)"
+            )));
+        }
+        if !(self.acceptance_min_cosine > 0.0 && self.acceptance_min_cosine <= 1.0) {
+            return Err(json::invalid(format!(
+                "setting 'acceptance_min_cosine' must be in ]0, 1] at \
+                 {path}.acceptance_min_cosine, got {} (ADR-0054)",
+                self.acceptance_min_cosine
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -986,6 +1013,7 @@ pub fn apply_patch(config: &mut IndexConfig, patch: &IndexPatch) -> Result<(), C
         schema.apply(&mut candidate.schema)?;
     }
     candidate.schema.validate()?;
+    candidate.ingest.validate("$.ingest")?;
 
     *config = candidate;
     Ok(())
@@ -1022,7 +1050,8 @@ fn immutable(setting: &str, path: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::Schema;
+    use super::{IngestConfig, Schema};
+    use crate::error::ErrorCode;
 
     /// `to_json_string` round-trips through `from_json_str`, writes both
     /// options explicitly even when they took their default, and sorts the
@@ -1065,6 +1094,28 @@ mod tests {
             text.find("\"a\"").expect("a is serialized")
                 < text.find("\"b\"").expect("b is serialized"),
             "the document fields must be sorted: {text}"
+        );
+    }
+
+    /// ADR-0054: `acceptance_min_cosine` is in `]0, 1]`, NaN included in the
+    /// refused values. JSON cannot carry NaN, so the check is exercised on the
+    /// structure directly.
+    #[test]
+    fn an_acceptance_threshold_of_nan_is_refused() {
+        let ingest = IngestConfig {
+            acceptance_sample: 1,
+            acceptance_min_cosine: f64::NAN,
+        };
+
+        let error = ingest
+            .validate("$.ingest")
+            .expect_err("NaN is outside ]0, 1]");
+
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert!(
+            error.message().contains("acceptance_min_cosine"),
+            "the message names the setting: {}",
+            error.message()
         );
     }
 }

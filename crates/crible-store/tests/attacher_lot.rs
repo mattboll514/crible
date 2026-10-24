@@ -210,7 +210,7 @@ fn attach_batch(
     index: &IndexConfig,
     model: &ModelConfig,
 ) -> AttachReport {
-    attach(store, batch_dir, index, model, None).unwrap_or_else(|error| {
+    attach(store, batch_dir, index, model, None, None).unwrap_or_else(|error| {
         panic!(
             "the attach of {} must succeed, got {} ({}): {}",
             batch_dir.display(),
@@ -1102,7 +1102,7 @@ fn inv_10_same_batch_id_with_another_manifest_is_a_batch_conflict() {
     let copied = copy_batch(&require_batch("l2"), &copied_root.path().join("l2"));
     reformat_manifest(&copied);
 
-    let outcome = attach(&mut store, &copied, &index, &model, None);
+    let outcome = attach(&mut store, &copied, &index, &model, None, None);
     let error: CribleError = match outcome {
         Ok(report) => panic!(
             "the same batch_id with another manifest must be refused, but the attach returned \
@@ -1171,7 +1171,7 @@ fn inv_03_failed_attach_leaves_the_records_database_untouched() {
         let halted = {
             let _armed = AttachFailpoint::arm(step);
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                attach(&mut store, &batch, &index, &model, None)
+                attach(&mut store, &batch, &index, &model, None, None)
             }));
             assert_halted_at_failpoint(outcome, step)
         };
@@ -1324,7 +1324,7 @@ fn no_sqlite_write_follows_the_commit_point() {
     let halted = {
         let _armed = AttachFailpoint::arm("after_sqlite_commit");
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            attach(&mut store, &batch, &index, &model, None)
+            attach(&mut store, &batch, &index, &model, None, None)
         }));
         assert_halted_at_failpoint(outcome, "after_sqlite_commit")
     };
@@ -1396,7 +1396,7 @@ fn inv_03_doc_id_in_documents_and_in_deletions_rejects_the_batch() {
         },
     );
 
-    let outcome = attach(&mut store, &batch, &index, &model, None);
+    let outcome = attach(&mut store, &batch, &index, &model, None, None);
     let message = match outcome {
         Ok(report) => panic!(
             "a doc_id in both documents and deletions must be refused, but the attach \

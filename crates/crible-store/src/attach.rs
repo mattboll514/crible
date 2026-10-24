@@ -6,9 +6,12 @@
 //! d'attache", "Le rapport d'attache"), `docs/02-architecture.md` ("Générations
 //! et point de commit", "Tables SQLite", "Suppressions, pierres tombales et
 //! compaction"), ADR-0016 (the SQLite commit is the only commit point),
-//! ADR-0040 (unique `doc_id`s per role) and ADR-0041 (removed document row,
-//! manifest digest, six per-document counters). `docs/08-invariants-et-tests.md`
-//! covers INV-03 and INV-10.
+//! ADR-0040 (unique `doc_id`s per role), ADR-0041 (removed document row,
+//! manifest digest, six per-document counters), ADR-0052 (the acceptance
+//! threshold is 0.999), ADR-0053 (the encoder of control 9 is loaded by the
+//! caller) and ADR-0054 (the caller provides a loader; `attach` chooses when to
+//! call it). `docs/08-invariants-et-tests.md` covers INV-03, INV-10, INV-11 and
+//! INV-12.
 //!
 //! # Validation, segment, then one transaction
 //!
@@ -16,8 +19,10 @@
 //!
 //! 1. [`BatchReader::open`] and [`BatchReader::validate`] check the batch, then
 //!    control 8 counts the tokens of every passage and refuses an over-long one
-//!    (**INV-11**), and a read-only pass over `documents` decides the fate of
-//!    every document. No state is modified yet.
+//!    (**INV-11**), control 9 re-encodes a deterministic sample in fp32 and
+//!    refuses vectors that do not match it (**INV-12**), and a read-only pass
+//!    over `documents` decides the fate of every document. No state is modified
+//!    yet.
 //! 2. The segment is written in `segments/tmp-<id>/`, fsynced and renamed to
 //!    `segments/<id>/`. It stays invisible until SQLite references it, so an
 //!    attach that stops later leaves an unreferenced directory that recovery
@@ -32,9 +37,10 @@
 //!
 //! Once the commit point is passed, no SQLite write follows: the report stored
 //! in `batches.report` is the one written by the transaction, with the six
-//! counters and the generation. The durations of the steps are call telemetry,
-//! returned to the caller that ran the attach and never persisted
-//! (ADR-0042); a replay (INV-10) returns the stored report, without durations.
+//! counters, the acceptance statistics of control 9 and the generation. The
+//! durations of the steps are call telemetry, returned to the caller that ran
+//! the attach and never persisted (ADR-0042); a replay (INV-10) returns the
+//! stored report, without durations.
 //!
 //! The batch files are streamed several times: validation, the read-only
 //! planning pass, the segment write and the transaction each open them again.
@@ -81,7 +87,8 @@
 //! [`GenerationStore::commit`](crate::generation::GenerationStore::commit)
 //! does, so the transaction rolls back (INV-03).
 
-use std::collections::HashSet;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -90,11 +97,13 @@ use arrow::array::{
     StringArray, UInt32Array,
 };
 use crible_core::batch::BatchMode;
-use crible_core::config::{FieldLevel, FieldType, IndexConfig, ReferencePrecision, Schema};
+use crible_core::config::{
+    FieldLevel, FieldType, IndexConfig, IngestConfig, ReferencePrecision, Schema,
+};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Generation, Iid};
 use crible_core::model::{ModelConfig, ModelKind};
-use crible_encode::TokenCounter;
+use crible_encode::{Model, Side, TokenCounter};
 use half::f16;
 use rusqlite::{Connection, Transaction};
 use serde_json::{Map, Number, Value, json};
@@ -109,7 +118,7 @@ use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 /// Every counter counts **documents**, the unit of update: a document whose
 /// `doc_hash` changed counts once under `replaced`, whatever its number of
 /// passages.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AttachReport {
     /// Batch that was applied.
     pub batch_id: String,
@@ -128,6 +137,12 @@ pub struct AttachReport {
     pub deleted: u64,
     /// Deletions naming a `doc_id` the index does not know, which are ignored.
     pub ignored: u64,
+    /// Statistics of control 9 (the acceptance check of `docs/04`, INV-12).
+    ///
+    /// `None` means "no acceptance check ran": an `external` model has no
+    /// encoder to re-encode with, and a batch without a passage has nothing to
+    /// sample.
+    pub acceptance: Option<AcceptanceReport>,
     /// Time spent in each step of this attach, when the report comes from the
     /// call that ran it.
     ///
@@ -138,6 +153,62 @@ pub struct AttachReport {
     pub durations: Option<AttachDurations>,
 }
 
+/// Statistics of the acceptance check of control 9, as `docs/05` names them.
+///
+/// They summarize the cosines between the vectors of the drawn sample and their
+/// fp32 re-encoding: `sample` passages were re-encoded, and `min_cosine`, `p1`
+/// and `p50` describe the distribution. They carry no identifier and no text
+/// (AGENTS.md, "Confidentialité").
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcceptanceReport {
+    /// Number of passages actually re-encoded: `acceptance_sample`, capped by
+    /// the number of passages of the batch.
+    pub sample: u32,
+    /// Smallest cosine of the sample, the value compared to
+    /// `acceptance_min_cosine`.
+    pub min_cosine: f64,
+    /// First percentile of the cosines, nearest rank.
+    pub p1: f64,
+    /// Median cosine, nearest rank.
+    pub p50: f64,
+}
+
+impl AcceptanceReport {
+    /// Serializes the statistics as the `acceptance` member of the report.
+    fn to_json(self) -> Value {
+        json!({
+            "sample": self.sample,
+            "min_cosine": self.min_cosine,
+            "p1": self.p1,
+            "p50": self.p50,
+        })
+    }
+
+    /// Summarizes the cosines of one acceptance check.
+    ///
+    /// `sample` is the number of passages the check re-encoded and `cosines`
+    /// holds one finite value per passage. The percentiles are nearest rank: no
+    /// interpolation, so the reported value is always one that was measured.
+    fn from_cosines(sample: usize, cosines: &mut [f64]) -> Result<Self, CribleError> {
+        cosines.sort_by(f64::total_cmp);
+        let min_cosine = cosines.first().copied().ok_or_else(no_cosine)?;
+        let p1 = percentile(cosines, 1)?;
+        let p50 = percentile(cosines, 50)?;
+        let sample = u32::try_from(sample).map_err(|_| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("the acceptance sample of {sample} passages does not fit a u32"),
+            )
+        })?;
+        Ok(Self {
+            sample,
+            min_cosine,
+            p1,
+            p50,
+        })
+    }
+}
+
 /// Time spent in each step of one attach, in the order of
 /// `docs/02-architecture.md` ("Attacher un lot").
 ///
@@ -145,9 +216,10 @@ pub struct AttachReport {
 /// document: that pass is what lets the segment be written before the
 /// transaction, and `docs/02` has no separate step for it.
 ///
-/// The lexical step of `docs/02` does not exist yet (it belongs to phase 2), and
-/// the acceptance statistics of `docs/04` belong to P2: neither is reported
-/// here.
+/// The lexical step of `docs/02` does not exist yet (it belongs to phase 2).
+/// The acceptance statistics of `docs/04` are not a duration of this structure:
+/// they are content of the report, carried by
+/// [`AttachReport::acceptance`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AttachDurations {
     /// Opening the batch, checking its controls, validating its content, and
@@ -185,10 +257,12 @@ fn micros(duration: Duration) -> u64 {
 impl AttachReport {
     /// Serializes the report the `batches.report` column stores.
     ///
-    /// The persisted report carries the six counters, the generation and, from
-    /// P2, the acceptance statistics. It never carries the `batch_id`, which
-    /// the call already knows, nor durations (ADR-0042). The wire key of the
-    /// ignored deletions is `ignored`, the name ADR-0041 and `docs/04` use.
+    /// The persisted report carries the six counters, the generation and the
+    /// acceptance statistics of control 9. It never carries the `batch_id`,
+    /// which the call already knows, nor durations (ADR-0042). The wire key of
+    /// the ignored deletions is `ignored`, the name ADR-0041 and `docs/04` use.
+    /// A missing acceptance check is written `null`, so a reader of the report
+    /// tells "no check ran" from "a check ran and found nothing wrong".
     fn to_json(&self) -> Value {
         json!({
             "generation": self.generation.get(),
@@ -198,6 +272,7 @@ impl AttachReport {
             "metadata_updated": self.metadata_updated,
             "deleted": self.deleted,
             "ignored": self.ignored,
+            "acceptance": self.acceptance.map(AcceptanceReport::to_json),
         })
     }
 
@@ -222,12 +297,18 @@ impl AttachReport {
             metadata_updated: stored_count(&value, batch_id, "metadata_updated")?,
             deleted: stored_count(&value, batch_id, "deleted")?,
             ignored: stored_count(&value, batch_id, "ignored")?,
+            acceptance: stored_acceptance(&value, batch_id)?,
             durations: None,
         })
     }
 
     /// Builds the report of a live attach from its counters.
-    fn from_counters(batch_id: &str, generation: Generation, counters: Counters) -> Self {
+    fn from_counters(
+        batch_id: &str,
+        generation: Generation,
+        counters: Counters,
+        acceptance: Option<AcceptanceReport>,
+    ) -> Self {
         Self {
             batch_id: batch_id.to_owned(),
             generation,
@@ -237,6 +318,7 @@ impl AttachReport {
             metadata_updated: counters.metadata_updated,
             deleted: counters.deleted,
             ignored: counters.ignored,
+            acceptance,
             durations: None,
         }
     }
@@ -320,6 +402,16 @@ impl Plan {
 /// model without its counter is a caller fault, reported as
 /// [`ErrorCode::Internal`].
 ///
+/// `document_encoder` is how the caller loads the fp32 encoder of an `onnx`
+/// model (control 9 of `docs/04`, **INV-12**). The caller provides a loader and
+/// keeps the policy — which directory, which precision, which cache; `attach`
+/// only chooses *when* to call it, after controls 3 and 8 have accepted the
+/// batch and before the first write (ADR-0054). Loading it lazily is what spares
+/// the ONNX Runtime session to a batch refused earlier, for another model or for
+/// any other control. `None` is the `external` model, which has nothing to
+/// re-encode with; an `onnx` model without a loader is a caller fault, reported
+/// as [`ErrorCode::Internal`].
+///
 /// # Errors
 ///
 /// - [`ErrorCode::BatchConflict`] when the same `batch_id` was applied with
@@ -327,10 +419,13 @@ impl Plan {
 /// - [`ErrorCode::InvalidRequest`] for a fault of the batch, including a
 ///   `doc_id` declared both in `documents` and in `deletions`, and a passage
 ///   longer than `max_tokens`;
+/// - [`ErrorCode::IncompatibleModel`] when the batch announces another model;
+/// - [`ErrorCode::AcceptanceFailed`] when the minimum cosine of the acceptance
+///   sample is below `acceptance_min_cosine`;
 /// - [`ErrorCode::Internal`] for an unexpected state of the store.
 ///
 /// A replay of an applied batch is not an error: it writes nothing and returns
-/// the report of the original attach (INV-10).
+/// the report of the original attach, acceptance statistics included (INV-10).
 ///
 /// **An error raised after the commit point.** The commit is the SQLite commit
 /// of the generation (ADR-0016), and no SQLite write follows it: the report is
@@ -349,6 +444,7 @@ pub fn attach(
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>>,
 ) -> Result<AttachReport, CribleError> {
     let validation_started = Instant::now();
     let reader = BatchReader::open(batch_dir, index_config, model_config)?;
@@ -374,6 +470,15 @@ pub fn attach(
     reader.validate()?;
     // Control 8: no passage is truncated silently (INV-11).
     check_passage_lengths(&reader, model_config.kind, token_counter)?;
+    // Control 9: the acceptance check re-encodes a deterministic sample in
+    // fp32, and a refused batch never reaches the segment (INV-12).
+    let acceptance = check_acceptance(
+        &reader,
+        model_config.kind,
+        document_encoder,
+        &index_config.ingest,
+        index_config.reference_precision,
+    )?;
 
     let mode = reader.manifest().mode;
     let manifest_json = reader.manifest_json().to_owned();
@@ -485,7 +590,7 @@ pub fn attach(
                 records::delete_document(transaction, doc_id)?;
             }
 
-            let applied = AttachReport::from_counters(&batch_id, generation, counters);
+            let applied = AttachReport::from_counters(&batch_id, generation, counters, acceptance);
             records::insert_batch(
                 transaction,
                 &applied.batch_id,
@@ -500,7 +605,8 @@ pub fn attach(
             Ok(after_passages)
         })?;
 
-    let mut report = AttachReport::from_counters(&batch_id, committed.generation, counters);
+    let mut report =
+        AttachReport::from_counters(&batch_id, committed.generation, counters, acceptance);
     report.durations = Some(
         AttachDurations {
             validation,
@@ -594,6 +700,235 @@ fn check_passage_lengths(
         keys.len(),
         keys.join(", ")
     )))
+}
+
+/// Control 9 of `docs/04-donnees-et-ingestion.md`: the acceptance check.
+///
+/// A deterministic sample of `acceptance_sample` passages, drawn with a seed
+/// derived from the `batch_id`, is re-encoded in ONNX fp32 with the document
+/// prompt, and each vector is compared with the one the batch stores. The batch
+/// is refused with [`ErrorCode::AcceptanceFailed`] when the smallest cosine is
+/// below `acceptance_min_cosine` (**INV-12**); otherwise the statistics of the
+/// sample go to the report.
+///
+/// The passages are streamed in bounded record batches and only the drawn ones
+/// are kept — their text and their stored vector, never the whole batch
+/// (ADR-0039). The error message carries figures only: never the text of a
+/// passage (AGENTS.md, "Confidentialité").
+///
+/// An `external` model has no encoder to re-encode with and is out of the
+/// control, as `docs/04` requires. A batch without a passage has nothing to
+/// sample: it carries no statistics rather than a fabricated distribution. A
+/// sample size of zero cannot reach this function, since `crible-core` refuses
+/// it at index creation and at `PATCH` (ADR-0054).
+fn check_acceptance(
+    reader: &BatchReader,
+    kind: ModelKind,
+    document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>>,
+    ingest: &IngestConfig,
+    precision: ReferencePrecision,
+) -> Result<Option<AcceptanceReport>, CribleError> {
+    if kind == ModelKind::External {
+        return Ok(None);
+    }
+    let batch_id = reader.manifest().batch_id.clone();
+    let document_encoder = document_encoder.ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "batch '{batch_id}' belongs to an onnx model, whose vectors must pass the \
+                 acceptance check, but the caller passed no fp32 encoder (INV-12)"
+            ),
+        )
+    })?;
+    let wanted =
+        acceptance_sample_size(ingest.acceptance_sample, reader.manifest().counts.passages);
+    if wanted == 0 {
+        // `crible-core` refuses a configuration with `acceptance_sample = 0`
+        // (ADR-0054), so an empty sample here means the batch holds no passage
+        // at all, a deletion-only batch: there is nothing to draw.
+        return Ok(None);
+    }
+
+    let drawn = draw_acceptance_sample(reader, &batch_id, wanted, precision)?;
+    let encoder = document_encoder()?;
+    let mut cosines = Vec::with_capacity(drawn.len());
+    for passage in &drawn {
+        let reencoded = encoder.encode(Side::Document, &passage.text)?;
+        cosines.push(cosine(&passage.vector, &reencoded, &batch_id)?);
+    }
+    let report = AcceptanceReport::from_cosines(drawn.len(), &mut cosines)?;
+    if report.min_cosine < ingest.acceptance_min_cosine {
+        return Err(CribleError::new(
+            ErrorCode::AcceptanceFailed,
+            format!(
+                "batch '{batch_id}' is refused: the acceptance check re-encoded {} passage(s) in \
+                 fp32 and got min cosine {:.6}, below acceptance_min_cosine = {} (INV-12); p1 = \
+                 {:.6}, p50 = {:.6}",
+                report.sample,
+                report.min_cosine,
+                ingest.acceptance_min_cosine,
+                report.p1,
+                report.p50
+            ),
+        ));
+    }
+    Ok(Some(report))
+}
+
+/// Number of passages the acceptance check re-encodes: `acceptance_sample`,
+/// capped by the passages of the batch.
+fn acceptance_sample_size(configured: u32, passages: u64) -> usize {
+    usize::try_from(u64::from(configured).min(passages)).unwrap_or(usize::MAX)
+}
+
+/// One passage kept by the acceptance draw, with the vector the batch stores.
+struct SampledPassage {
+    /// Priority in the draw; the smallest priorities are kept.
+    priority: u64,
+    /// Position of the row in the batch, from zero.
+    index: u64,
+    /// Text of the passage, which the check re-encodes with the document
+    /// prompt.
+    text: String,
+    /// Vector of the passage, decoded from the batch into fp32.
+    vector: Vec<f32>,
+}
+
+impl Ord for SampledPassage {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.priority, self.index).cmp(&(other.priority, other.index))
+    }
+}
+
+impl PartialOrd for SampledPassage {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for SampledPassage {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for SampledPassage {}
+
+/// Draws the acceptance sample: the `wanted` passages of smallest priority,
+/// where a priority is a blake3 digest of the `batch_id` digest and the row
+/// index.
+///
+/// The draw is a pure function of `(batch_id, wanted, rows)`, so two attaches of
+/// one batch re-encode the same passages and report the same distribution. It
+/// holds at most `wanted` passages, whatever the size of the batch (ADR-0039).
+fn draw_acceptance_sample(
+    reader: &BatchReader,
+    batch_id: &str,
+    wanted: usize,
+    precision: ReferencePrecision,
+) -> Result<Vec<SampledPassage>, CribleError> {
+    let seed = blake3::hash(batch_id.as_bytes());
+    let mut sample: BinaryHeap<SampledPassage> = BinaryHeap::with_capacity(wanted);
+    let mut index = 0_u64;
+
+    for chunk in reader.passages() {
+        let chunk = chunk?;
+        let texts = string_column(&chunk, "text")?;
+        let vectors = fixed_binary_column(&chunk, "vector")?;
+        for row in 0..chunk.num_rows() {
+            let priority = acceptance_priority(seed.as_bytes(), index);
+            let position = index;
+            index = index.saturating_add(1);
+            if let Some(worst) = sample.peek()
+                && sample.len() >= wanted
+                && (priority, position) >= (worst.priority, worst.index)
+            {
+                continue;
+            }
+            let text = required_string(texts, row, "text")?;
+            let vector = decode_vector(vectors.value(row), precision)?;
+            if sample.len() == wanted {
+                sample.pop();
+            }
+            sample.push(SampledPassage {
+                priority,
+                index: position,
+                text: text.to_owned(),
+                vector,
+            });
+        }
+    }
+
+    let mut drawn = sample.into_vec();
+    drawn.sort_by_key(|passage| passage.index);
+    Ok(drawn)
+}
+
+/// Priority of one batch row in the acceptance draw.
+fn acceptance_priority(seed: &[u8; 32], index: u64) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(seed);
+    hasher.update(&index.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut head = [0_u8; 8];
+    head.copy_from_slice(&digest.as_bytes()[..8]);
+    u64::from_le_bytes(head)
+}
+
+/// Cosine of two vectors of the same width, computed in `f64`.
+///
+/// A cosine that is not a number comes from a zero-norm vector, which no
+/// comparison can rank: the batch is refused as a fault of its content. The
+/// result is clamped to `[-1, 1]`, where rounding may overshoot.
+fn cosine(left: &[f32], right: &[f32], batch_id: &str) -> Result<f64, CribleError> {
+    if left.len() != right.len() {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "the acceptance check compares vectors of {} and {} components in batch \
+                 '{batch_id}'",
+                left.len(),
+                right.len()
+            ),
+        ));
+    }
+    let mut dot = 0.0_f64;
+    let mut left_norm = 0.0_f64;
+    let mut right_norm = 0.0_f64;
+    for (left, right) in left.iter().zip(right) {
+        dot += f64::from(*left) * f64::from(*right);
+        left_norm += f64::from(*left) * f64::from(*left);
+        right_norm += f64::from(*right) * f64::from(*right);
+    }
+    let cosine = dot / (left_norm.sqrt() * right_norm.sqrt());
+    if !cosine.is_finite() {
+        return Err(invalid(format!(
+            "batch '{batch_id}' is refused: a sampled vector has no cosine with its re-encoding \
+             (zero norm)"
+        )));
+    }
+    Ok(cosine.clamp(-1.0, 1.0))
+}
+
+/// Nearest-rank percentile of a sorted slice: the value of rank
+/// `ceil(percent × len / 100)`, clamped to the slice.
+fn percentile(sorted: &[f64], percent: u32) -> Result<f64, CribleError> {
+    let len = sorted.len();
+    if len == 0 {
+        return Err(no_cosine());
+    }
+    let scaled = u64::from(percent) * u64::try_from(len).unwrap_or(u64::MAX);
+    let rank = usize::try_from(scaled.div_ceil(100)).unwrap_or(len).max(1);
+    sorted.get(rank.min(len) - 1).copied().ok_or_else(no_cosine)
+}
+
+/// Error raised when an acceptance check has no cosine to summarize.
+fn no_cosine() -> CribleError {
+    CribleError::new(
+        ErrorCode::Internal,
+        "the acceptance check has no cosine to summarize",
+    )
 }
 
 /// Reads the batch documents and the reference state, and decides what happens
@@ -1072,6 +1407,41 @@ fn stored_count(value: &Value, batch_id: &str, key: &str) -> Result<u64, CribleE
         .ok_or_else(|| stored_report_error(batch_id, key))
 }
 
+/// Reads the acceptance statistics of a stored report (INV-10).
+///
+/// A report written before control 9 existed, an `external` model and a batch
+/// without a passage carry no statistics: an absent member and an explicit
+/// `null` both mean "no acceptance check ran".
+fn stored_acceptance(
+    value: &Value,
+    batch_id: &str,
+) -> Result<Option<AcceptanceReport>, CribleError> {
+    let acceptance = match value.get("acceptance") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(acceptance) => acceptance,
+    };
+    let sample = acceptance
+        .get("sample")
+        .and_then(Value::as_u64)
+        .and_then(|sample| u32::try_from(sample).ok())
+        .ok_or_else(|| stored_report_error(batch_id, "acceptance.sample"))?;
+    Ok(Some(AcceptanceReport {
+        sample,
+        min_cosine: stored_statistic(acceptance, batch_id, "min_cosine")?,
+        p1: stored_statistic(acceptance, batch_id, "p1")?,
+        p50: stored_statistic(acceptance, batch_id, "p50")?,
+    }))
+}
+
+/// Reads one numeric member of the stored acceptance statistics.
+fn stored_statistic(acceptance: &Value, batch_id: &str, key: &str) -> Result<f64, CribleError> {
+    acceptance
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|statistic| statistic.is_finite())
+        .ok_or_else(|| stored_report_error(batch_id, &format!("acceptance.{key}")))
+}
+
 /// Error naming the missing member of a stored report.
 fn stored_report_error(batch_id: &str, key: &str) -> CribleError {
     CribleError::new(
@@ -1082,7 +1452,12 @@ fn stored_report_error(batch_id: &str, key: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_days, format_date};
+    use crible_core::ids::Generation;
+
+    use super::{
+        AcceptanceReport, AttachReport, Counters, acceptance_sample_size, civil_from_days,
+        format_date, percentile,
+    };
 
     #[test]
     fn a_date32_converts_to_the_calendar_day() {
@@ -1100,5 +1475,82 @@ mod tests {
     #[test]
     fn civil_from_days_round_trips_a_leap_day() {
         assert_eq!(civil_from_days(18_321), (2020, 2, 29));
+    }
+
+    #[test]
+    fn the_acceptance_sample_is_capped_by_the_passages_of_the_batch() {
+        assert_eq!(acceptance_sample_size(200, 7_628), 200);
+        assert_eq!(acceptance_sample_size(4, 6), 4);
+        assert_eq!(acceptance_sample_size(500, 10), 10);
+        assert_eq!(acceptance_sample_size(0, 10), 0);
+    }
+
+    #[test]
+    fn the_stored_report_round_trips_the_acceptance_statistics() {
+        let acceptance = AcceptanceReport {
+            sample: 4,
+            min_cosine: 0.9995,
+            p1: 0.9997,
+            p50: 0.9999,
+        };
+        let live = AttachReport::from_counters(
+            "recette",
+            Generation::new(2),
+            Counters::default(),
+            Some(acceptance),
+        );
+        let stored = super::report_json(&live);
+        assert!(stored.is_ok(), "the report must serialize: {stored:?}");
+        let Ok(stored) = stored else {
+            return;
+        };
+        let read = AttachReport::from_stored(&stored, "recette");
+        assert!(read.is_ok(), "the stored report must be readable: {read:?}");
+        let Ok(read) = read else {
+            return;
+        };
+        assert_eq!(read.acceptance, Some(acceptance));
+        assert_eq!(read.durations, None);
+        assert_eq!(read.generation, live.generation);
+    }
+
+    #[test]
+    fn a_report_without_acceptance_round_trips_as_an_explicit_null() {
+        let live =
+            AttachReport::from_counters("externe", Generation::new(1), Counters::default(), None);
+        let stored = super::report_json(&live);
+        assert!(stored.is_ok(), "the report must serialize: {stored:?}");
+        let Ok(stored) = stored else {
+            return;
+        };
+        assert!(
+            stored.contains("\"acceptance\":null"),
+            "a report without an acceptance check must say so: {stored}"
+        );
+        let read = AttachReport::from_stored(&stored, "externe");
+        assert!(read.is_ok(), "the stored report must be readable: {read:?}");
+        let Ok(read) = read else {
+            return;
+        };
+        assert_eq!(read.acceptance, None);
+    }
+
+    #[test]
+    fn the_percentiles_are_nearest_rank() {
+        let cosines: Vec<f64> = (1..=100).map(|value| f64::from(value) / 100.0).collect();
+        let p1 = percentile(&cosines, 1);
+        let p50 = percentile(&cosines, 50);
+        let p100 = percentile(&cosines, 100);
+        assert!(p1.is_ok() && p50.is_ok() && p100.is_ok());
+        assert_eq!(
+            (p1.ok(), p50.ok(), p100.ok()),
+            (Some(0.01), Some(0.50), Some(1.0)),
+            "nearest rank over a hundred cosines"
+        );
+    }
+
+    #[test]
+    fn a_percentile_of_an_empty_sample_is_an_error() {
+        assert!(percentile(&[], 50).is_err());
     }
 }

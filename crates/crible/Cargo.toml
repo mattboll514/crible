@@ -22,6 +22,7 @@ serde_json.workspace = true
 [dev-dependencies]
 arrow.workspace = true
 blake3.workspace = true
+half.workspace = true
 parquet.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
