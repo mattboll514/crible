@@ -77,14 +77,14 @@ jobs:
         working-directory: tools
         run: |
           uv sync --group ci
-          uv run pytest
+          uv run pytest -rs
 
   rust-onnx:
     name: Rust with ONNX Runtime
     runs-on: ubuntu-latest
-    # Wide on purpose until the first cold run is measured (ADR-0057): the job
-    # downloads 1.2 GiB, then runs the whole workspace with ONNX Runtime.
-    timeout-minutes: 60
+    # 4 min 20 s on the first cold run (40118324771, no model cache): 20 minutes
+    # leave room for a slow Hugging Face download and a loaded runner.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Install toolchain

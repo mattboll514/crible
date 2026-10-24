@@ -264,9 +264,11 @@ def ensure_artifact(
 ) -> list[str]:
     """Places every file of the manifest in `destination`, verified.
 
-    Present files are the restored cache and are verified; absent ones are
-    downloaded, verified, then renamed into place. Nothing is left behind when a
-    digest differs.
+    A complete restored cache is verified in place. A partially restored cache
+    fails with the cache key to purge: an Actions cache cannot be overwritten
+    under the same key, so completing it silently would download the missing
+    files on every run. An absent cache is downloaded, verified, then renamed
+    into place; nothing is left behind when a digest differs.
     """
     validate_manifest(manifest)
     key = cache_key(manifest)
