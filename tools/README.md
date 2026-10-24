@@ -9,7 +9,8 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `reference_topk.py` | Rejoue l'attache des lots et calcule le top-k exact en numpy ; écrit `expected.jsonl`. |
 | `export_onnx.py` | Exporte l'encodeur mDenseOn en ONNX (fp32 et INT8), copie `tokenizer.json` et écrit `model.json`. |
 | `reference_vectors.py` | Écrit les 20 textes et vecteurs de référence du test Rust de `CHARGER-MODELE`. |
-| `tests/` | Tests pytest des quatre outils. |
+| `demo_j2_batches.py` | Construit les deux lots fautifs de la démo J2 (vecteurs sans prompt, passage trop long) à partir de l'échantillon Legifacile. |
+| `tests/` | Tests pytest des outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
 | `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
 

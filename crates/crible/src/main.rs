@@ -97,6 +97,10 @@ enum Command {
         /// Number of results, between 1 and 1000.
         #[arg(long, default_value_t = 10)]
         k: usize,
+        /// Output format: `json` (the response of `docs/05-api.md`, default) or
+        /// `text` (readable report with a text excerpt).
+        #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
+        format: commands::SearchFormat,
     },
     /// Report the state of one index or of every index of an instance.
     Inspect {
@@ -162,6 +166,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             model,
             filter,
             k,
+            format,
         } => commands::search(&commands::SearchRequest {
             data: &data,
             index: &index,
@@ -171,6 +176,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             model: model.as_deref(),
             filter: filter.as_deref(),
             k,
+            format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
     }
