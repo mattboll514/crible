@@ -181,24 +181,24 @@ coupé.
 
 ```text
 index 'dole': 7628 passages in the pool, generation 1, 3 result(s), … ms
-1. JORFDOLE000047079143#0  score … (cosine)
+1. JORFDOLE000047079143#0  score 0.623664 (cosine)
    fields: {"annee":2024,"type":"LOI_PUBLIEE"}
    text: LOI n° 2024-42 du 26 janvier 2024 pour contrôler l'immigration, améliorer l'intégration
-2. JORFDOLE000051903428#0  score … (cosine)
+2. JORFDOLE000051903428#0  score 0.547399 (cosine)
    fields: {"annee":2025,"type":"ORDONNANCE_PUBLIEE"}
    text: Ordonnance n° 2025-646 du 16 juillet 2025 portant extension et adaptation des dispositions de la loi n° 2024-42 du 26 janvier 2024 pour contrôler l'immigration,…
-3. JORFDOLE000047079143#3  score … (cosine)
+3. JORFDOLE000047079143#3  score 0.529660 (cosine)
    fields: {"annee":2024,"type":"LOI_PUBLIEE"}
    text: La loi d’orientation et du programmation du ministère de l’intérieur3 a acté une hausse du budget pour permettre d’atteindre l’objectif de 3 000 places de réten…
 ```
 
-**Les scores ne sont pas consignés ici, volontairement.** La précision des
-requêtes n'est pas exposée par la CLI : elle vaut `fp32` par défaut depuis
-l'ADR-0052. Sur cette requête, le premier résultat est le même aux deux
-précisions, vérifié hors CLI avec le modèle épinglé ; seule la valeur du score
-change, par exemple 0,598 en `int8` et 0,624 en `fp32` pour
-`JORFDOLE000047079143#0`. `took_ms` varie aussi : il inclut le chargement de la
-session ONNX à chaque appel, car chaque `crible search` est un processus neuf.
+**Les scores sont figés**, en fp32, la précision par défaut des requêtes depuis
+l'ADR-0052 : 0,623664, 0,547399 et 0,529660 pour les trois premiers résultats.
+La CLI n'expose pas la précision employée ; ces valeurs viennent du modèle
+épinglé, et le même top-1 est obtenu en `int8`, avec un score différent
+(0,598 pour `JORFDOLE000047079143#0`). `took_ms` varie, en revanche : il inclut
+le chargement de la session ONNX à chaque appel, car chaque `crible search` est
+un processus neuf.
 
 La même recherche au format JSON, celui de `docs/05-api.md` :
 

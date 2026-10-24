@@ -76,5 +76,62 @@ jobs:
       - name: Run tools tests
         working-directory: tools
         run: |
+          uv sync --group ci
+          uv run pytest -rs
+
+  rust-onnx:
+    name: Rust with ONNX Runtime
+    runs-on: ubuntu-latest
+    # 4 min 20 s on the first cold run (40118324771, no model cache): 20 minutes
+    # leave room for a slow Hugging Face download and a loaded runner.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Generate the synthetic dataset
+        working-directory: tools
+        run: |
           uv sync
-          uv run pytest
+          uv run python gen_synth.py --out ../data/synth-small
+          uv run python reference_topk.py --dataset ../data/synth-small
+      - name: Install the CI group
+        working-directory: tools
+        run: uv sync --group ci
+      - name: Expose the ONNX Runtime of the wheel
+        working-directory: tools
+        run: |
+          library="$(uv run python -c 'import onnxruntime, pathlib; print(pathlib.Path(onnxruntime.__file__).parent / "capi" / "libonnxruntime.so.1.31.0")')"
+          test -f "$library"
+          echo "ORT_DYLIB_PATH=$library" >> "$GITHUB_ENV"
+      - name: Validate the manifest and compute the cache key
+        id: artifact
+        working-directory: tools
+        run: echo "key=$(uv run python fetch_model_artifact.py cache-key)" >> "$GITHUB_OUTPUT"
+      # The cache is never a source of trust: the fetch step verifies every
+      # restored file against the manifest, exactly like a fresh download. A
+      # divergent or incomplete restored cache fails there and names the key to
+      # purge. A complete cache is therefore verified in place, and a missing one
+      # is downloaded; an incomplete cache is never completed silently, because
+      # an Actions cache key cannot be overwritten with a new content.
+      - name: Restore the model artifact
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/models/mdenseon
+          key: ${{ runner.os }}-${{ steps.artifact.outputs.key }}
+      - name: Fetch and verify the model artifact
+        working-directory: tools
+        run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
+      - name: Save the model artifact
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/models/mdenseon
+          key: ${{ runner.os }}-${{ steps.artifact.outputs.key }}
+      - name: Test with ONNX Runtime
+        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check

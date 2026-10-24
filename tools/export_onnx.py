@@ -518,6 +518,11 @@ def export_fp32(snapshot: Path, target: Path) -> None:
     ``torch.onnx.export`` replaces ``optimum`` (ADR-0050). The wrapper returns
     the last hidden state: the graph applies neither the prompt nor the pooling,
     which Crible does itself. The weights are inline, so the graph is one file.
+
+    The revision is deliberately **not** a parameter: :func:`export` resolves it
+    once with :func:`resolve_revision` and downloads that pinned snapshot, so this
+    step always traces the commit recorded in ``model.json``. ``check_model_config``
+    has already checked the snapshot against the declared model.
     """
     import torch
     from transformers import AutoModel
@@ -1000,6 +1005,9 @@ def export(
         )
         report["revision"] = pinned
         report["date"] = time.strftime("%Y-%m-%d", time.gmtime())
+        # `run_parity` is the only writer of `min_cosine_required`; this check
+        # reads the field and the constant, it does not write the field again
+        # (the duplicate write the J2 review found is gone).
         if report["min_cosine"] < MIN_PARITY_COSINE:
             raise ValueError(
                 f"parity below the required cosine: {report['min_cosine']} "

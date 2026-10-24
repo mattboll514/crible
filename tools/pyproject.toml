@@ -7,6 +7,16 @@ dependencies = ["blake3>=1.0", "crible", "numpy>=1.26"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# Runtime of the Rust ONNX tests in CI (ADR-0057). It carries the ONNX Runtime
+# wheel the tests load through `ORT_DYLIB_PATH`, and the tokenizer the MES-04
+# comparison tests need. It never carries `torch`: this is the runtime, not the
+# export chain. Install it with `uv sync --group ci`.
+ci = [
+    # Exact pin (ADR-0057): the version of the `export` field of `model.json`.
+    "onnxruntime==1.31.0",
+    # `tools/bench/mes04/tests/test_compare_onnx.py` skips without it.
+    "tokenizers>=0.22.2",
+]
 # ONNX export is the only part of `tools/` that needs a model runtime. It stays
 # out of the default environment, which CI and the tests use without PyTorch
 # (`docs/07-stack-et-deploiement.md`): install it with `uv sync --group export`.
