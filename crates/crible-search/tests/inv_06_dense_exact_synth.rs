@@ -326,7 +326,7 @@ fn attach_batch(
     index: &IndexConfig,
     model: &ModelConfig,
 ) {
-    attach(store, batch, index, model).unwrap_or_else(|error| {
+    attach(store, batch, index, model, None).unwrap_or_else(|error| {
         panic!(
             "the attach of {} must succeed, got {} ({}): {}",
             batch.display(),

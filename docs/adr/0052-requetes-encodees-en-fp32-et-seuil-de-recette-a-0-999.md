@@ -1,8 +1,9 @@
 # ADR-0052 — Requêtes encodées en fp32 et seuil de recette à 0,999
 
-- **Statut** : Proposé
-- **Date** : 2026-10-24
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-24 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : requêtes encodées en fp32 par défaut, `acceptance_min_cosine = 0,999` avec Q-06 close, réglages de session ONNX laissés aux défauts.
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : tâche `MESURER-PARITE-ENCODEUR` (phase P2, fiche `docs/phases/P2-encodeur-et-recette.md`), mesures MES-04 et MES-05, relues OK.
 - **Remplace** : — (le point 3 d'ADR-0051, qui fixe le défaut `int8` de `[encoder].query_precision`, devient caduc si cet ADR est accepté)
 

@@ -20,8 +20,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::model::ModelConfig;
+use crible_core::model::{ModelConfig, ModelKind, Prompts};
 use ort::session::Session;
+use rayon::prelude::*;
 use tokenizers::Tokenizer;
 
 /// Side of the model a text belongs to, which picks the prompt.
@@ -146,25 +147,7 @@ impl Model {
         verify_hash(&graph_path, graph_hash)?;
         let tokenizer_path = directory.join(&files.tokenizer.path);
         verify_hash(&tokenizer_path, &files.tokenizer.blake3)?;
-
-        let mut tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|error| {
-            invalid(format!(
-                "cannot read the tokenizer {}: {error}",
-                tokenizer_path.display()
-            ))
-        })?;
-        // `tokenizer.json` carries the 8192-token truncation limit of the
-        // Hugging Face revision. Crible never truncates silently (INV-11): the
-        // limit is removed here, so an over-long input reaches ONNX Runtime
-        // instead of losing its tail. Queries are truncated explicitly by
-        // `encode_with_limit`, with a `truncated` flag (ADR-0051); documents are
-        // checked by `CONTROLER-LONGUEURS`.
-        tokenizer.with_truncation(None).map_err(|error| {
-            invalid(format!(
-                "cannot clear the truncation of the tokenizer {}: {error}",
-                tokenizer_path.display()
-            ))
-        })?;
+        let tokenizer = read_tokenizer(&tokenizer_path)?;
 
         let environment = environment()?;
         let session = Session::builder(environment)
@@ -257,17 +240,7 @@ impl Model {
             Side::Query => &prompts.query,
             Side::Document => &prompts.document,
         };
-        let input = format!("{prompt}{text}");
-        let encoding = self
-            .tokenizer
-            .encode(input.as_str(), true)
-            .map_err(|error| {
-                invalid(format!(
-                    "cannot tokenize an input of side {side:?}: {error}"
-                ))
-            })?;
-        let mut ids = encoding.get_ids().to_vec();
-        let mut mask = encoding.get_attention_mask().to_vec();
+        let (mut ids, mut mask) = tokenize(&self.tokenizer, side, prompt, text)?;
         let truncated = match max_tokens {
             Some(limit) => truncate(&mut ids, &mut mask, limit)?,
             None => false,
@@ -352,6 +325,166 @@ impl std::fmt::Debug for Model {
             .field("fingerprint", &self.fingerprint())
             .finish_non_exhaustive()
     }
+}
+
+/// Tokenizer of one model, used to count the tokens of a text.
+///
+/// Control 8 of `docs/04-donnees-et-ingestion.md` counts the tokens of every
+/// passage at attach, prompt included, and refuses the batch when one exceeds
+/// `max_tokens` (**INV-11**). The count needs the tokenizer only: loading ONNX
+/// Runtime is neither necessary nor wanted there, so [`TokenCounter`] reads
+/// `model.json`, verifies the declared blake3 of `tokenizer.json`, removes the
+/// truncation declared by that file, and counts the ids.
+///
+/// The truncation is cleared exactly as [`Model::load_precision`] does: a
+/// `truncation` in `tokenizer.json` describes the Hugging Face revision, never
+/// the check, so it must not hide an over-long passage.
+#[derive(Debug)]
+pub struct TokenCounter {
+    prompts: Prompts,
+    max_tokens: u32,
+    tokenizer: Tokenizer,
+}
+
+impl TokenCounter {
+    /// Loads the tokenizer of the `onnx` model directory `directory`.
+    ///
+    /// The tokenizer file is hashed and compared to the digest declared by
+    /// `model.json` before it is read, as when a full [`Model`] is loaded.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] when `model.json` is malformed, the model
+    /// is `external` (it has no tokenizer, so it is out of control 8), the
+    /// tokenizer is missing or does not match its declared hash, or the
+    /// tokenizer cannot be read.
+    pub fn load(directory: impl AsRef<Path>) -> Result<Self, CribleError> {
+        let directory = directory.as_ref();
+        let config = read_config(directory)?;
+        Self::load_with_config(directory, &config)
+    }
+
+    fn load_with_config(directory: &Path, config: &ModelConfig) -> Result<Self, CribleError> {
+        if config.kind != ModelKind::Onnx {
+            return Err(invalid(format!(
+                "model '{}' is external: it has no tokenizer to count the passage lengths",
+                config.name
+            )));
+        }
+        let files = config.files.as_ref().ok_or_else(|| {
+            invalid(format!(
+                "model '{}' declares no files; an onnx model needs them",
+                config.name
+            ))
+        })?;
+        let prompts = config.prompts.as_ref().ok_or_else(|| {
+            invalid(format!(
+                "model '{}' declares no prompts; an onnx model needs them",
+                config.name
+            ))
+        })?;
+        let max_tokens = config.max_tokens.ok_or_else(|| {
+            invalid(format!(
+                "model '{}' declares no max_tokens; an onnx model needs it",
+                config.name
+            ))
+        })?;
+        let tokenizer_path = directory.join(&files.tokenizer.path);
+        verify_hash(&tokenizer_path, &files.tokenizer.blake3)?;
+        Ok(Self {
+            prompts: prompts.clone(),
+            max_tokens,
+            tokenizer: read_tokenizer(&tokenizer_path)?,
+        })
+    }
+
+    /// `max_tokens` declared by `model.json`.
+    ///
+    /// `ModelConfig::validate` requires it for an `onnx` model, so the value is
+    /// always present here.
+    #[must_use]
+    pub fn max_tokens(&self) -> u32 {
+        self.max_tokens
+    }
+
+    /// Number of tokens of one input of `side`: the prompt, the text and the
+    /// special tokens, with no truncation.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] when the tokenizer fails.
+    pub fn count(&self, side: Side, text: &str) -> Result<usize, CribleError> {
+        let prompt = match side {
+            Side::Query => &self.prompts.query,
+            Side::Document => &self.prompts.document,
+        };
+        let (ids, _) = tokenize(&self.tokenizer, side, prompt, text)?;
+        Ok(ids.len())
+    }
+
+    /// Number of tokens of several document passages, in the same order as
+    /// `texts`.
+    ///
+    /// The passages are counted in parallel on the current rayon pool. The
+    /// result keeps the order of the slice, so the caller can name the
+    /// offending passages in the order of the batch rows.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] when the tokenizer fails on one text.
+    pub fn count_documents(&self, texts: &[&str]) -> Result<Vec<usize>, CribleError> {
+        texts
+            .par_iter()
+            .map(|text| self.count(Side::Document, text))
+            .collect()
+    }
+}
+
+/// Counts the ids of `prompt` followed by `text`, with the special tokens.
+///
+/// The truncation of the tokenizer was cleared at load, so the ids are the whole
+/// input; the prompt and the special tokens are part of them, which is what
+/// control 8 of `docs/04` counts.
+fn tokenize(
+    tokenizer: &Tokenizer,
+    side: Side,
+    prompt: &str,
+    text: &str,
+) -> Result<(Vec<u32>, Vec<u32>), CribleError> {
+    let input = format!("{prompt}{text}");
+    let encoding = tokenizer.encode(input.as_str(), true).map_err(|error| {
+        invalid(format!(
+            "cannot tokenize an input of side {side:?}: {error}"
+        ))
+    })?;
+    Ok((
+        encoding.get_ids().to_vec(),
+        encoding.get_attention_mask().to_vec(),
+    ))
+}
+
+/// Reads `path` as a tokenizer and clears the truncation it declares.
+///
+/// `tokenizer.json` carries the 8192-token truncation limit of the Hugging Face
+/// revision. Crible never truncates silently (INV-11): the limit is removed
+/// here, so an over-long input reaches the caller instead of losing its tail.
+/// Queries are truncated explicitly by [`Model::encode_with_limit`], with a
+/// `truncated` flag (ADR-0051); documents are checked by
+/// `CONTROLER-LONGUEURS`.
+fn read_tokenizer(path: &Path) -> Result<Tokenizer, CribleError> {
+    let mut tokenizer = Tokenizer::from_file(path).map_err(|error| {
+        invalid(format!(
+            "cannot read the tokenizer {}: {error}",
+            path.display()
+        ))
+    })?;
+    tokenizer.with_truncation(None).map_err(|error| {
+        invalid(format!(
+            "cannot clear the truncation of the tokenizer {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(tokenizer)
 }
 
 /// Truncates `ids` and `mask` to `limit` tokens, reporting whether they were

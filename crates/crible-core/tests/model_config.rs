@@ -490,6 +490,38 @@ fn onnx_model_without_prompts_is_rejected() {
 }
 
 #[test]
+fn onnx_model_without_max_tokens_is_rejected() {
+    // `docs/04` lists `max_tokens` among the members of an `onnx` model.json,
+    // and makes `external` the only kind without it. The control 8 of the attach
+    // (INV-11) and the query truncation both read it, so an `onnx` model that
+    // omits it is refused at load, before any batch is attached.
+    let mut value = fixture();
+    value
+        .as_object_mut()
+        .expect("the model is an object")
+        .remove("max_tokens");
+    let error = ModelConfig::from_value(&value).expect_err("max_tokens is required");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("max_tokens"),
+        "the message names the missing member: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn external_model_needs_no_max_tokens() {
+    // The type stays optional: the sole `onnx` kind carries a tokenizer and a
+    // prompt, so it is the only one that must declare its supported length.
+    let model = parse(
+        r#"{ "name": "client-vectors", "kind": "external", "dims": 512, "normalize": true }"#,
+    );
+    assert_eq!(model.kind, ModelKind::External);
+    assert_eq!(model.max_tokens, None);
+}
+
+#[test]
 fn model_config_rejects_malformed_json() {
     let error = ModelConfig::from_json_str("{ \"kind\": ").expect_err("truncated JSON is invalid");
     assert_eq!(error.code(), ErrorCode::InvalidRequest);

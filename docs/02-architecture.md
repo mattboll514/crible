@@ -14,7 +14,7 @@
                     │  API REST /v1 : auth, limites, jobs     │
                     │  ├─ écrivain : un par index, file bornée│
                     │  ├─ recherche : instantanés, pool rayon │
-                    │  ├─ encodeur de requêtes (ONNX INT8)    │
+                    │  ├─ encodeur de requêtes (ONNX fp32)    │
                     │  └─ analytics + journal (asynchrones)   │
                     │  index : articles, jorf, decisions, …   │
                     └─────────────────────────────────────────┘
@@ -176,15 +176,15 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 | Codes binaires | RAM, chargés en mémoire (pas en mmap, pour ne pas être évincés) | 0,82 Go |
 | Bitmaps (keyword, bool, vivants) | RAM | quelques Mo à ~50 Mo |
 | Colonnes de valeurs (nombres, dates) | RAM | ~34 Mo par champ date (`i32`) |
-| Modèle ONNX INT8 | RAM | ~0,3 Go |
-| Modèle ONNX fp32 | RAM, chargé au premier usage seulement (recette, encodage en ligne) | plus d'1 Go |
+| Modèle ONNX fp32 | RAM, chargé au premier usage (une requête suffit) | plus d'1 Go |
+| Modèle ONNX INT8 | RAM, chargé seulement si `query_precision = "int8"` (comparaison, repli, diagnostic) | ~0,3 Go |
 | Vecteurs de référence fp16 | disque, mmap | 13,2 Go |
 | SQLite (texte zstd, champs) | disque | ~4 à 5 Go (estimation) |
 | tantivy | disque, mmap | à mesurer (MES-06) |
 
-Le minimum incompressible est d'environ 1,2 Go, plus ~34 Mo par champ date, à quoi s'ajoute le fp32 quand il est chargé. Toute la RAM restante sert de cache au système. Un même modèle n'est chargé qu'une fois par instance : il est partagé par tous les index qui ont la même empreinte.
+Le minimum incompressible est d'environ 1,2 Go quand seule la session INT8 est chargée ; une instance qui sert des requêtes charge la session fp32 (plus d'1 Gio) dès la première requête, et son minimum passe donc à environ 2,0 Go (ADR-0052). À cela s'ajoute ~34 Mo par champ date. Toute la RAM restante sert de cache au système. Un même modèle n'est chargé qu'une fois par instance : il est partagé par tous les index qui ont la même empreinte.
 
-Les sessions de l'encodeur sont indexées par `(empreinte du modèle, précision)` et chargées **paresseusement**, chacune au premier usage de sa précision (ADR-0051). Une instance qui ne sert que des requêtes ne charge donc que l'INT8 ; la session fp32 n'apparaît qu'après une recette ou un encodage en ligne de documents, et elle est **gardée jusqu'à l'arrêt de l'instance**. Une instance qui a fait une recette a donc besoin de plus d'1 Go de plus que ce minimum.
+Les sessions de l'encodeur sont indexées par `(empreinte du modèle, précision)` et chargées **paresseusement**, chacune au premier usage de sa précision (ADR-0051). Les requêtes étant encodées en **fp32 par défaut** (ADR-0052), une instance qui ne sert que des requêtes ne charge que le fp32 : c'est le budget d'environ 2,0 Go. La session INT8 (~0,3 Go) n'apparaît que si `[encoder].query_precision = "int8"`, pour une comparaison (MES-04) ou un diagnostic. Toute session chargée est **gardée jusqu'à l'arrêt de l'instance** : une instance qui a fait une recette ou servi des requêtes INT8 porte donc les deux sessions.
 
 ## Évolutions prévues hors v1
 

@@ -14,9 +14,10 @@
 //!
 //! An attach follows the order of `docs/02-architecture.md` ("Attacher un lot"):
 //!
-//! 1. [`BatchReader::open`] and [`BatchReader::validate`] check the batch, and a
-//!    read-only pass over `documents` decides the fate of every document. No
-//!    state is modified yet.
+//! 1. [`BatchReader::open`] and [`BatchReader::validate`] check the batch, then
+//!    control 8 counts the tokens of every passage and refuses an over-long one
+//!    (**INV-11**), and a read-only pass over `documents` decides the fate of
+//!    every document. No state is modified yet.
 //! 2. The segment is written in `segments/tmp-<id>/`, fsynced and renamed to
 //!    `segments/<id>/`. It stays invisible until SQLite references it, so an
 //!    attach that stops later leaves an unreferenced directory that recovery
@@ -92,7 +93,8 @@ use crible_core::batch::BatchMode;
 use crible_core::config::{FieldLevel, FieldType, IndexConfig, ReferencePrecision, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Generation, Iid};
-use crible_core::model::ModelConfig;
+use crible_core::model::{ModelConfig, ModelKind};
+use crible_encode::TokenCounter;
 use half::f16;
 use rusqlite::{Connection, Transaction};
 use serde_json::{Map, Number, Value, json};
@@ -311,12 +313,20 @@ impl Plan {
 /// [`BatchReader::open`] wants them. The mode comes from `manifest.mode`, so
 /// the batch declares how it applies.
 ///
+/// `token_counter` is the tokenizer of the model, when the model is `onnx`: it
+/// counts the tokens of every passage, prompt included, and refuses the batch
+/// when one exceeds `max_tokens` (control 8 of `docs/04`, **INV-11**). An
+/// `external` model has no tokenizer and is out of that control; an `onnx`
+/// model without its counter is a caller fault, reported as
+/// [`ErrorCode::Internal`].
+///
 /// # Errors
 ///
 /// - [`ErrorCode::BatchConflict`] when the same `batch_id` was applied with
 ///   another manifest digest;
 /// - [`ErrorCode::InvalidRequest`] for a fault of the batch, including a
-///   `doc_id` declared both in `documents` and in `deletions`;
+///   `doc_id` declared both in `documents` and in `deletions`, and a passage
+///   longer than `max_tokens`;
 /// - [`ErrorCode::Internal`] for an unexpected state of the store.
 ///
 /// A replay of an applied batch is not an error: it writes nothing and returns
@@ -338,6 +348,7 @@ pub fn attach(
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
 ) -> Result<AttachReport, CribleError> {
     let validation_started = Instant::now();
     let reader = BatchReader::open(batch_dir, index_config, model_config)?;
@@ -361,6 +372,8 @@ pub fn attach(
 
     // Controls 6 and 7, including the cross-check of the two roles.
     reader.validate()?;
+    // Control 8: no passage is truncated silently (INV-11).
+    check_passage_lengths(&reader, model_config.kind, token_counter)?;
 
     let mode = reader.manifest().mode;
     let manifest_json = reader.manifest_json().to_owned();
@@ -500,6 +513,87 @@ pub fn attach(
     );
     debug_assert_eq!(report.generation, committed.generation);
     Ok(report)
+}
+
+/// Number of offending passage keys one length refusal lists.
+///
+/// The deliverable of `CONTROLER-LONGUEURS` names the first twenty keys, in the
+/// order of the batch rows, so the message stays short on a batch that holds
+/// thousands of over-long passages.
+const LENGTH_REPORT_KEYS: usize = 20;
+
+/// Control 8 of `docs/04-donnees-et-ingestion.md`: the token count of every
+/// passage, prompt included, must not exceed `max_tokens` (**INV-11**).
+///
+/// The passages are streamed again in bounded record batches, so the memory
+/// stays the one of [`BatchReader`] and never grows with the batch. Every
+/// passage is counted, refreshed or not, because the batch is refused as a
+/// whole. The count is parallel inside one record batch and keeps the row order,
+/// so the reported keys are the first ones of the batch.
+///
+/// An `external` model declares neither tokenizer nor prompt: it is out of the
+/// control, as `docs/04` requires. An `onnx` model without a counter is a caller
+/// fault, never a silent acceptance.
+fn check_passage_lengths(
+    reader: &BatchReader,
+    kind: ModelKind,
+    counter: Option<&TokenCounter>,
+) -> Result<(), CribleError> {
+    let counter = match (kind, counter) {
+        (ModelKind::External, _) => return Ok(()),
+        (ModelKind::Onnx, Some(counter)) => counter,
+        (ModelKind::Onnx, None) => {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "batch '{}' belongs to an onnx model, whose passage lengths must be \
+                     checked, but the caller passed no token counter (INV-11)",
+                    reader.manifest().batch_id
+                ),
+            ));
+        }
+    };
+    let max_tokens = counter.max_tokens();
+    let limit = usize::try_from(max_tokens).unwrap_or(usize::MAX);
+    let mut offending = 0_u64;
+    let mut keys: Vec<String> = Vec::new();
+
+    for chunk in reader.passages() {
+        let chunk = chunk?;
+        let ids = string_column(&chunk, "doc_id")?;
+        let ords = u32_column(&chunk, "ord")?;
+        let texts = string_column(&chunk, "text")?;
+        let mut values = Vec::with_capacity(chunk.num_rows());
+        for row in 0..chunk.num_rows() {
+            values.push(required_string(texts, row, "text")?);
+        }
+        for (row, count) in counter.count_documents(&values)?.into_iter().enumerate() {
+            if count <= limit {
+                continue;
+            }
+            offending = offending.saturating_add(1);
+            if keys.len() < LENGTH_REPORT_KEYS {
+                // The message carries keys only: never the text of a passage
+                // (AGENTS.md, "Confidentialité").
+                keys.push(format!(
+                    "{}#{}",
+                    required_string(ids, row, "doc_id")?,
+                    ords.value(row)
+                ));
+            }
+        }
+    }
+
+    if offending == 0 {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "batch '{}' is refused: {offending} passage(s) exceed max_tokens = {max_tokens} tokens, \
+         prompt included (INV-11); the first {} keys, in the order of the batch rows, are: {}",
+        reader.manifest().batch_id,
+        keys.len(),
+        keys.join(", ")
+    )))
 }
 
 /// Reads the batch documents and the reference state, and decides what happens
