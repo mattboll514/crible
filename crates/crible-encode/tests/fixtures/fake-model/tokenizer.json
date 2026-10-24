@@ -1,0 +1,46 @@
+{
+  "added_tokens": [
+    {
+      "content": "[UNK]",
+      "id": 0,
+      "lstrip": false,
+      "normalized": false,
+      "rstrip": false,
+      "single_word": false,
+      "special": true
+    }
+  ],
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "unk_token": "[UNK]",
+    "vocab": {
+      "[UNK]": 0,
+      "article": 8,
+      "choses": 13,
+      "code": 7,
+      "contrat": 4,
+      "des": 11,
+      "document:": 2,
+      "droit": 3,
+      "du": 10,
+      "fait": 12,
+      "juge": 15,
+      "la": 9,
+      "personne": 5,
+      "query:": 1,
+      "responsabilite": 6,
+      "tribunal": 14
+    }
+  },
+  "normalizer": {
+    "type": "Lowercase"
+  },
+  "padding": null,
+  "post_processor": null,
+  "pre_tokenizer": {
+    "type": "WhitespaceSplit"
+  },
+  "truncation": null,
+  "version": "1.0"
+}

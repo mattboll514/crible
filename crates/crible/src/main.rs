@@ -53,7 +53,7 @@ enum Command {
         /// Batch directory holding `manifest.json` and its Parquet files.
         batch: PathBuf,
     },
-    /// Search an index with a provided vector.
+    /// Search an index with a provided vector or a text query.
     Search {
         /// Root data directory (`<data>/indexes/<index>`).
         #[arg(long)]
@@ -61,9 +61,21 @@ enum Command {
         /// Index name, as declared in its `index.json`.
         #[arg(long)]
         index: String,
-        /// NumPy `.npy` or JSON file holding the query vector.
+        /// NumPy `.npy` or JSON file holding the query vector; one of
+        /// `--vector-file` and `--query` is required.
         #[arg(long)]
-        vector_file: PathBuf,
+        vector_file: Option<PathBuf>,
+        /// Text query, encoded by the model of the index or by `--model`.
+        #[arg(long)]
+        query: Option<String>,
+        /// Root models directory (`[paths] models` of `crible.toml`); required
+        /// with `--query`.
+        #[arg(long)]
+        models: Option<PathBuf>,
+        /// ONNX encoder to use for `--query`; defaults to the model of the
+        /// index, which must be an `onnx` model.
+        #[arg(long)]
+        model: Option<String>,
         /// Filter as a JSON object, in the grammar of `docs/05-api.md`.
         #[arg(long)]
         filter: Option<String>,
@@ -123,9 +135,21 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             data,
             index,
             vector_file,
+            query,
+            models,
+            model,
             filter,
             k,
-        } => commands::search(&data, &index, &vector_file, filter.as_deref(), k),
+        } => commands::search(&commands::SearchRequest {
+            data: &data,
+            index: &index,
+            vector_file: vector_file.as_deref(),
+            query: query.as_deref(),
+            models: models.as_deref(),
+            model: model.as_deref(),
+            filter: filter.as_deref(),
+            k,
+        }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
     }
 }

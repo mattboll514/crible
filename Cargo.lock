@@ -659,6 +659,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "crible-core",
+ "crible-encode",
  "crible-search",
  "crible-store",
  "serde_json",
@@ -683,6 +684,7 @@ dependencies = [
  "blake3",
  "crible-core",
  "ort",
+ "serde_json",
  "tempfile",
  "tokenizers",
 ]
