@@ -107,6 +107,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0051](0051-cache-des-requetes-et-sessions-int8-et-fp32-de-l-encodeur.md) | Cache des requêtes et sessions INT8 et fp32 de l'encodeur | Accepté (décidé le 2026-10-24 ; point 3 remplacé par ADR-0052) | 2026-10-23 |
 | [ADR-0052](0052-requetes-encodees-en-fp32-et-seuil-de-recette-a-0-999.md) | Requêtes encodées en fp32 et seuil de recette à 0,999 | Accepté | 2026-10-24 (proposition et acceptation) |
 | [ADR-0053](0053-encodeur-dans-le-chemin-d-attache-arete-crible-store-vers-crible-encode.md) | Encodeur dans le chemin d'attache : arête `crible-store` → `crible-encode` | Accepté | 2026-10-24 (proposition et acceptation) |
+| [ADR-0054](0054-chargement-differe-du-modele-a-l-attache-et-bornes-de-la-recette.md) | Chargement différé du modèle à l'attache et bornes de la recette | Proposé | 2026-10-24 |
 
 ## Questions ouvertes
 
