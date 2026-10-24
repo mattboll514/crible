@@ -130,7 +130,7 @@ fn dataset_model() -> ModelConfig {
 /// Attaches one batch of `synth-small` to `store`.
 fn attach_synth(store: &mut GenerationStore, name: &str, index: &IndexConfig, model: &ModelConfig) {
     let batch = require_batch(name);
-    attach(store, &batch, index, model).unwrap_or_else(|error| {
+    attach(store, &batch, index, model, None, None).unwrap_or_else(|error| {
         panic!(
             "the attach of {} must succeed, got {} ({}): {}",
             batch.display(),

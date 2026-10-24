@@ -54,6 +54,15 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 
 Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**).
 
+Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0054) :
+
+| Réglage | Domaine | Défaut |
+|---|---|---|
+| `acceptance_sample` | `≥ 1` | `200` |
+| `acceptance_min_cosine` | `∈ ]0, 1]` | `0,999` (ADR-0052) |
+
+Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la configuration est invalide en elle-même, quelle que soit la tâche qui la lit, et c'est la validation de la configuration qui la refuse, pas l'attache. `ingest.*` reste réglable par `PATCH` : aucune clé n'est retirée, et la valeur par défaut ne change pas.
+
 ## Le modèle
 
 Fichier `models/<name>/model.json` :
@@ -68,6 +77,11 @@ Fichier `models/<name>/model.json` :
   "pooling": "cls",
   "normalize": true,
   "max_tokens": 8192,
+  "export": {
+    "transformers": "<version>",
+    "torch": "<version>",
+    "onnxruntime": "<version>"
+  },
   "prompts": { "query": "query: ", "document": "document: " },
   "files": {
     "fp32":      { "path": "model.onnx",       "blake3": "…" },
@@ -77,11 +91,13 @@ Fichier `models/<name>/model.json` :
 }
 ```
 
-- **Empreinte** : blake3 du JSON canonique de `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompts`, et des hash des fichiers `fp32` et `tokenizer`. Le fichier INT8 n'entre pas dans l'empreinte, car il ne sert qu'aux requêtes.
+- **Empreinte** : blake3 du JSON canonique de `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompts`, et des hash des fichiers `fp32` et `tokenizer`. Le fichier INT8 n'entre pas dans l'empreinte, car il ne change pas les vecteurs de référence (ADR-0028) ; il sert aux comparaisons, au repli et au diagnostic (ADR-0052).
 - **`max_tokens`** : la longueur maximale réellement supportée par l'export ONNX, à vérifier dans `EXPORTER-MODELE-ONNX`.
+- **`export`** : versions de `transformers`, `torch` et `onnxruntime` qui ont produit le fichier fp32. Ce champ est **hors de l'empreinte** (ADR-0028, ADR-0050) : il sert au diagnostic, jamais à refuser un lot. La fidélité du modèle se mesure par la recette (contrôle 9, INV-12).
 - **Usage des précisions** :
-  - les **requêtes** sont encodées en INT8 (réglable : `fp32`) ;
+  - les **requêtes** sont encodées en fp32 par défaut (réglable par `[encoder].query_precision` : `fp32` ou `int8`, ADR-0052) ; `int8` ne garde que 79,2 % du top-10 exact du fp32 (MES-04) et sert aux comparaisons, au repli et au diagnostic ;
   - la **recette** et l'**encodage en ligne de documents** se font en fp32.
+  - Le registre de sessions est indexé par `(empreinte, précision)` et chaque session est chargée à son premier usage : le fichier INT8 hors empreinte ne peut donc pas se confondre avec le graphe fp32 du même modèle (ADR-0051).
 - **`kind: "external"`** : pour un projet qui apporte ses propres vecteurs. Le modèle n'a alors que `dims` et `normalize`, sans encodeur. Il n'y a pas de recette, et chaque requête doit fournir un `vector`.
 
 ## Modèle documents → passages
@@ -177,9 +193,11 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
    - on tire un échantillon de `acceptance_sample` passages, avec une graine dérivée du `batch_id` ;
    - on les ré-encode en ONNX fp32, avec `prompt_document` ;
    - on calcule le cosinus avec les vecteurs du lot ;
-   - si le minimum est sous `acceptance_min_cosine`, le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
+   - si le minimum est sous `acceptance_min_cosine` (0,999 : valeur fixée par ADR-0052, elle n'est plus provisoire ; domaine `]0, 1]`, ADR-0054), le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
 
    C'est la généralisation de la recette de Legifacile, qui a déjà détecté un écart de version de transformers (cosinus 0,988).
+
+   Un lot **sans aucun passage** — seulement des `deletions` — n'a rien à tirer au sort : son rapport porte `acceptance: null`, et c'est un fait du lot, pas un réglage (ADR-0054). `acceptance: null` n'a donc pas d'autre signification : `acceptance_sample` ne peut pas valoir `0`, et un lot qui contient des passages ne peut pas produire un rapport sans statistiques de recette.
 
 **Le rapport d'attache** donne six comptes **par document et mutuellement exclusifs** (ADR-0041), puis :
 
@@ -202,11 +220,39 @@ Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'at
 
 ## Mode en ligne (sans producteur)
 
-`POST /v1/indexes/{index}/documents` accepte des documents avec leurs passages :
+`POST /v1/indexes/{index}/documents` accepte des documents avec leurs passages (ADR-0055) :
 - **sans vecteurs** : le serveur encode les passages lui-même en fp32 sur CPU. C'est lent, donc réservé aux petits volumes ;
 - **avec vecteurs** : mode « j'apporte mes vecteurs ».
 
 Le serveur construit ensuite un lot interne et suit exactement le même chemin qu'un lot produit ailleurs.
+
+**Document en ligne.** Un document porte `doc_id`, un `doc_hash` facultatif, ses `fields` et ses `passages` (`text`, `fields`, et un `vector` facultatif par passage). **Un seul type** décrit ce document : il sert au corps HTTP de la route et à la commande de la CLI, pour qu'aucun format parallèle ne soit maintenu.
+
+**Fichier d'entrée de `crible ingest`.** `crible ingest --data … --models … --index … documents.jsonl` lit un objet document par ligne, au format ci-dessus. `--models` est obligatoire, comme pour `crible attach` : le modèle vit hors du volume de données. L'enveloppe est **implicite** : le mode vaut `upsert` et le fichier ne porte pas de suppressions ; une suppression passe par un lot déposé.
+
+**Lot interne.** Le lot est écrit dans `<data>/tmp/online-<batch_id>/`, **hors du dossier de l'index**, avec `std::fs`, et supprimé par un garde qui s'exécute en succès comme en échec. Il n'est jamais un dossier `tmp-*` du dossier de l'index : la reprise efface ces dossiers (INV-04), et une ouverture concurrente ferait disparaître le lot sous l'attache en cours.
+
+**Verrou de présence.** Un lot en ligne est vivant tant qu'un verrou exclusif est tenu sur `<data>/tmp/online-<batch_id>.lock` (ADR-0056). L'ingestion ouvre ce fichier en lecture-écriture avec création, y prend le verrou avec `try_lock` **avant** de créer le dossier du lot, et le tient jusqu'**après** `attach`. Si le verrou est déjà tenu, l'ingestion échoue en `overloaded` (503) sans rien créer, ni dossier ni ligne dans `batches` : le message nomme le fichier de verrou et invite à réessayer. Le garde supprime le dossier, puis le verrou. `<data>/tmp/` étant commun à tous les index d'une racine, la présence du verrou est la seule preuve qu'un lot n'est pas un résidu : sans verrou pris, le nettoyage ne supprime rien (ADR-0056).
+
+**Identité et manifeste.**
+
+- `batch_id` = `online-<blake3 des octets du fichier>` pour la CLI. L'identité vient du **contenu**, comme le digest d'ADR-0041 : rejouer le même fichier ne fait rien (INV-10). Deux fichiers d'octets différents qui portent les mêmes documents donnent deux lots, dont le second est entièrement `unchanged`. La route HTTP prend son `batch_id` dans le corps de la requête ; l'idempotence reste celle de la section « Sémantique d'attache ».
+- Le manifeste du lot interne est **déterministe**, pour qu'un rejeu ne produise pas de `409 batch_conflict` :
+
+| Champ | Valeur |
+|---|---|
+| `producer.name` | `crible-online` |
+| `producer.version` | `1` — version du **format du lot en ligne**, pas du binaire |
+| `producer.host` | `crible-online` |
+| `chunker` | `{ "name": "none", "version": "1" }` |
+| `template` | `{ "name": "none", "version": "1" }` |
+| `created_at` | `1970-01-01T00:00:00Z`, sentinelle documentée |
+
+`producer.version` porte la version du format, parce que la version du binaire change à chaque mise à jour de Crible : un rejeu après mise à jour produirait un autre manifeste, donc un `409`. Il doit être incrémenté **seulement** avec un changement de format du lot en ligne. `created_at` est une sentinelle parce qu'aucun contrôle ni rapport ne la lit, et que le mtime n'est pas stable d'une copie à l'autre.
+
+**Mode.** Le lot en ligne n'accepte que **`upsert`**, pour la CLI comme pour la route. `replace_all` est refusé en `invalid_request`, avec un message qui nomme le mode : 10 000 passages au plus par requête (`docs/05-api.md`) le rendent inutilisable, et `replace_all` reste le mode du lot déposé.
+
+**`doc_hash`.** Le `doc_hash` du lot interne est **toujours** rempli : le document le fournit, ou il vaut le blake3 du JSON canonique de ses passages (règle et forme dans `docs/05-api.md`, ADR-0055).
 
 ## Producteurs
 

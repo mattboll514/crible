@@ -416,6 +416,28 @@ def test_manifest_members_match_the_rust_manifest_struct(tmp_path):
         assert CHECKSUM.match(checksum)
 
 
+def test_export_versions_of_model_json_are_accepted_and_ignored(tmp_path):
+    """``model.json`` carries ``export`` since ADR-0050; the manifest must not.
+
+    The writer documents that it accepts the resolved ``model.json`` of the
+    model. The Rust ``ModelConfig`` reads ``export`` and leaves it out of the
+    manifest, so the Python writer accepts the same file and ignores the field
+    the same way.
+    """
+    resolved = model()
+    resolved["export"] = {
+        "transformers": "5.14.1",
+        "torch": "2.14.1",
+        "onnxruntime": "1.31.0",
+    }
+    batch = writer(tmp_path, model=resolved)
+    batch.add_document("doc", "hash", {}, [passage("t")])
+    manifest = read_manifest(batch.close())
+
+    assert "export" not in manifest["model"]
+    assert manifest["model"]["hf_id"] == "lightonai/mDenseOn"
+
+
 def test_external_model_manifest_leaves_encoder_fields_out(tmp_path):
     batch = writer(tmp_path, model=model("external"))
     batch.add_document("doc", "hash", {}, [passage("t")])

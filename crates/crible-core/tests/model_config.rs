@@ -490,7 +490,217 @@ fn onnx_model_without_prompts_is_rejected() {
 }
 
 #[test]
+fn onnx_model_without_max_tokens_is_rejected() {
+    // `docs/04` lists `max_tokens` among the members of an `onnx` model.json,
+    // and makes `external` the only kind without it. The control 8 of the attach
+    // (INV-11) and the query truncation both read it, so an `onnx` model that
+    // omits it is refused at load, before any batch is attached.
+    let mut value = fixture();
+    value
+        .as_object_mut()
+        .expect("the model is an object")
+        .remove("max_tokens");
+    let error = ModelConfig::from_value(&value).expect_err("max_tokens is required");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("max_tokens"),
+        "the message names the missing member: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn onnx_model_with_zero_max_tokens_is_rejected() {
+    // The positivity control sits next to `dims`: zero is a present but unusable
+    // value, and both control 8 (INV-11) and the query truncation would refuse
+    // every input instead of reading a limit.
+    let mut value = fixture();
+    value["max_tokens"] = serde_json::json!(0);
+    let error = ModelConfig::from_value(&value).expect_err("max_tokens must be positive");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("max_tokens"),
+        "the message names the setting: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn external_model_needs_no_max_tokens() {
+    // The type stays optional: the sole `onnx` kind carries a tokenizer and a
+    // prompt, so it is the only one that must declare its supported length.
+    let model = parse(
+        r#"{ "name": "client-vectors", "kind": "external", "dims": 512, "normalize": true }"#,
+    );
+    assert_eq!(model.kind, ModelKind::External);
+    assert_eq!(model.max_tokens, None);
+}
+
+#[test]
 fn model_config_rejects_malformed_json() {
     let error = ModelConfig::from_json_str("{ \"kind\": ").expect_err("truncated JSON is invalid");
     assert_eq!(error.code(), ErrorCode::InvalidRequest);
+}
+
+/// The `export` object of `docs/04-donnees-et-ingestion.md`: the versions of the
+/// libraries that produced the fp32 export (ADR-0050).
+const EXPORT_VERSIONS: &str = r#"{
+    "transformers": "5.14.1",
+    "torch": "2.14.1",
+    "onnxruntime": "1.31.0"
+  }"#;
+
+#[test]
+fn export_is_accepted_and_stays_out_of_the_fingerprint() {
+    // ADR-0050: `export` records the versions of the export for diagnosis. It
+    // is outside the fingerprint (ADR-0028), so adding or changing it must not
+    // invalidate an index nor refuse a batch.
+    let without_export = parse(MODEL_JSON);
+    let mut value = fixture();
+    value["export"] = serde_json::from_str(EXPORT_VERSIONS).expect("the export object is JSON");
+    let with_export = parse_value(&value);
+
+    let export = with_export
+        .export
+        .as_ref()
+        .expect("the export versions are parsed");
+    assert_eq!(export.transformers, "5.14.1");
+    assert_eq!(export.torch, "2.14.1");
+    assert_eq!(export.onnxruntime, "1.31.0");
+
+    assert_eq!(
+        with_export.fingerprint(),
+        without_export.fingerprint(),
+        "the export versions stay out of the fingerprint"
+    );
+    assert_eq!(
+        with_export.fingerprint_payload(),
+        without_export.fingerprint_payload(),
+        "the canonical payload does not carry the export versions"
+    );
+    assert!(
+        !with_export.fingerprint_payload().contains("export"),
+        "no export field leaks into the hashed JSON: {}",
+        with_export.fingerprint_payload()
+    );
+    assert_eq!(
+        with_export.fingerprint(),
+        KNOWN_FINGERPRINT,
+        "a model with export keeps the frozen fingerprint of the documented example"
+    );
+}
+
+#[test]
+fn export_requires_every_version_and_rejects_unknown_keys() {
+    let mut missing = fixture();
+    missing["export"] = json!({ "transformers": "5.14.1", "torch": "2.14.1" });
+    let error = ModelConfig::from_value(&missing).expect_err("onnxruntime is required");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("onnxruntime"),
+        "the message names the missing version: {}",
+        error.message()
+    );
+
+    let mut unknown = fixture();
+    unknown["export"] = json!({
+        "transformers": "5.14.1",
+        "torch": "2.14.1",
+        "onnxruntime": "1.31.0",
+        "optimum": "2.0.0"
+    });
+    let error = ModelConfig::from_value(&unknown).expect_err("optimum is not an export version");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("optimum"),
+        "the message names the unknown key: {}",
+        error.message()
+    );
+}
+
+#[test]
+#[ignore = "needs the gitignored model directory; run: cargo test -p crible-core --test model_config -- --ignored"]
+fn real_model_json_with_export_is_accepted() {
+    // The model directory of the project is gitignored, so this test is
+    // ignored unless asked for. It proves that the `model.json` written by
+    // `tools/export_onnx.py`, with its root `export` object, loads without
+    // complaint. Generate it first with:
+    //   cd tools && uv sync --group export
+    //   uv run python export_onnx.py --out ../data/models/mdenseon --overwrite
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data/models/mdenseon/model.json");
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "{} is missing or unreadable ({error}); export the model before running \
+             `--ignored`:\n  cd tools && uv run python export_onnx.py --out \
+             ../data/models/mdenseon --overwrite",
+            path.display()
+        )
+    });
+    let model = parse(&raw);
+    let export = model
+        .export
+        .as_ref()
+        .expect("the exported model.json carries its export versions");
+    assert!(!export.transformers.is_empty());
+    assert!(!export.torch.is_empty());
+    assert!(!export.onnxruntime.is_empty());
+
+    let mut value: Value = serde_json::from_str(&raw).expect("the model.json is valid JSON");
+    value
+        .as_object_mut()
+        .expect("the model is an object")
+        .remove("export");
+    let without_export =
+        ModelConfig::from_value(&value).expect("the model is valid without export");
+    assert_eq!(
+        model.fingerprint(),
+        without_export.fingerprint(),
+        "the real export versions stay out of the fingerprint"
+    );
+}
+
+#[test]
+fn model_file_paths_must_stay_inside_the_model_directory() {
+    // `ModelFile.path` is documented relative to the model directory. A
+    // `model.json` copied from another machine must not load a file elsewhere,
+    // so an absolute path or a parent component is refused at parsing time.
+    for (member, bad) in [
+        ("fp32", "/tmp/model.onnx"),
+        ("fp32", "../model.onnx"),
+        ("fp32", "sub/../../model.onnx"),
+        ("tokenizer", ""),
+        ("int8", "other/../model.int8.onnx"),
+    ] {
+        let mut value = fixture();
+        value["files"][member]["path"] = json!(bad);
+        let error = ModelConfig::from_value(&value)
+            .expect_err("a path that escapes the model directory is refused");
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert!(
+            error
+                .message()
+                .contains("must stay inside the model directory"),
+            "the message says what is wrong: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains(member),
+            "the message names the file role: {}",
+            error.message()
+        );
+    }
+
+    let mut value = fixture();
+    value["files"]["fp32"]["path"] = json!("sub/model.onnx");
+    let model = parse_value(&value);
+    let files = model.files.expect("the files are declared");
+    assert_eq!(
+        files.fp32.path, "sub/model.onnx",
+        "a subdirectory is allowed"
+    );
 }

@@ -70,10 +70,12 @@
 - **Livrables** : `crible eval` (modes dense et hybride) et la mesure pgvector, sur le même jeu, la même machine et dans des conditions comparables. Le rapport donne :
   - le rappel par périmètre ;
   - p50, p95 et p99 ;
-  - les requêtes gagnantes et perdantes.
+  - les requêtes gagnantes et perdantes ;
+  - la latence p50/p95 des requêtes **avec filtre d'intervalle** sur l'index réel de Legifacile, par rejeu de MES-14 sur cet index (mêmes cas : domaine plein, domaine réduit par une clause en bitmap), comparée à la cible de latence v1.
 - **Critères d'acceptation** :
   - les critères de rappel et de p95 de la v1 sont atteints ;
-  - sinon, une liste d'actions est soumise au propriétaire.
+  - sinon, une liste d'actions est soumise au propriétaire ;
+  - un ADR d'index de plage n'est ouvert que si cette p95 **de bout en bout** dépasse la cible (ADR-0046, qui prolonge ADR-0018).
 
 ### BRANCHER-MCP
 - **Objectif** : le MCP de Legifacile interroge Crible.

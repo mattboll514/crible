@@ -99,6 +99,18 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0043](0043-payload-d-un-resultat-dont-le-document-est-supprime.md) | Payload d'un résultat dont le document a été supprimé après le snapshot | Accepté | 2026-10-22 |
 | [ADR-0044](0044-regles-du-relecteur-verifications-executees.md) | Règles de `@relecteur` : faire passer les vérifications et ne rapporter que ce qui a été exécuté | Accepté | 2026-10-22 |
 | [ADR-0045](0045-reference-de-synth-small-calculee-exactement-independante-de-la-blas.md) | Référence de `synth-small` calculée exactement, indépendante de la bibliothèque BLAS | Accepté | 2026-10-22 |
+| [ADR-0046](0046-budget-des-filtres-d-intervalle-a-l-echelle-de-legifacile.md) | Budget des filtres d'intervalle à l'échelle de Legifacile | Accepté | 2026-10-22 |
+| [ADR-0047](0047-phase-de-mes-13-et-ordre-des-remedes-au-temps-de-demarrage.md) | Phase de MES-13 et ordre des remèdes au temps de démarrage | Accepté | 2026-10-22 |
+| [ADR-0048](0048-rejeu-de-mes-15-en-p3-et-compresseur-zstd-reutilise.md) | Rejeu de MES-15 en P3 et compresseur zstd réutilisé | Accepté | 2026-10-22 |
+| [ADR-0049](0049-dependances-du-groupe-export-de-tools-nommees-dans-docs-07.md) | Dépendances du groupe `export` de `tools/` nommées dans `docs/07` | Remplacé par ADR-0050 | 2026-10-23 |
+| [ADR-0050](0050-reference-mdenseon-sous-transformers-5-14-1-et-reexport-onnx.md) | Référence mDenseOn sous transformers 5.14.1 et ré-export de l'ONNX | Accepté | 2026-10-23 (proposition et acceptation) |
+| [ADR-0051](0051-cache-des-requetes-et-sessions-int8-et-fp32-de-l-encodeur.md) | Cache des requêtes et sessions INT8 et fp32 de l'encodeur | Accepté (décidé le 2026-10-24 ; point 3 remplacé par ADR-0052) | 2026-10-23 |
+| [ADR-0052](0052-requetes-encodees-en-fp32-et-seuil-de-recette-a-0-999.md) | Requêtes encodées en fp32 et seuil de recette à 0,999 | Accepté | 2026-10-24 (proposition et acceptation) |
+| [ADR-0053](0053-encodeur-dans-le-chemin-d-attache-arete-crible-store-vers-crible-encode.md) | Encodeur dans le chemin d'attache : arête `crible-store` → `crible-encode` | Accepté (précision 2 complétée par ADR-0054) | 2026-10-24 (proposition et acceptation) |
+| [ADR-0054](0054-chargement-differe-du-modele-a-l-attache-et-bornes-de-la-recette.md) | Chargement différé du modèle à l'attache et bornes de la recette | Accepté | 2026-10-24 (proposition et acceptation) |
+| [ADR-0055](0055-lot-en-ligne-fichier-d-entree-identite-empreinte-et-lot-interne.md) | Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne | Accepté (décision 4, nettoyage, remplacée par ADR-0056) | 2026-10-24 (proposition et acceptation) |
+| [ADR-0056](0056-verrou-de-presence-des-lots-en-ligne.md) | Verrou de présence des lots en ligne (remplace la décision 4 d'ADR-0055 sur le nettoyage) | Accepté | 2026-10-24 (proposition et acceptation) |
+| [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Accepté | 2026-10-24 (proposition, révision et acceptation) |
 
 ## Questions ouvertes
 
@@ -111,4 +123,9 @@ Chacune deviendra un ADR quand elle sera tranchée.
 | Q-03 | Champs multivalués (`keyword[]`) nécessaires pour Legifacile ? | `DEFINIR-INDEX-LEGIFACILE` (P9) ; à remonter plus tôt si besoin |
 | Q-04 | Gestion des élisions et des identifiants dans l'analyseur français | MES-11 (P5) |
 | Q-05 | Répéter un en-tête court sur chaque passage (côté producteur) | Mesure en P9 |
-| Q-06 | Seuil `acceptance_min_cosine` pour des vecteurs encodés sur MPS ou CUDA en fp16 | MES-04 (P2) |
+
+Questions tranchées :
+
+| # | Question | Tranchée par |
+|---|---|---|
+| Q-06 | Seuil `acceptance_min_cosine` pour des vecteurs encodés sur MPS ou CUDA en fp16 | ADR-0052 (2026-10-24) : `0,999`. La question est rouverte par un nouvel ADR si un producteur MPS ou CUDA échoue à la recette |

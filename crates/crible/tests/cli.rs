@@ -255,12 +255,158 @@ fn the_j1_demo_creates_attaches_searches_and_inspects() {
         );
     }
 
+    // `crible search --format text --k 5`: the readable report of the J2 demo
+    // carries the key, the score, the fields and a text excerpt. The default
+    // stays JSON, which the blocks above parse (`docs/05-api.md`).
+    let readable = crible_ok(&[
+        "search",
+        "--data",
+        data_arg,
+        "--index",
+        "synth-small",
+        "--vector-file",
+        vector_path.to_str().expect("UTF-8 path"),
+        "--k",
+        "5",
+        "--format",
+        "text",
+    ]);
+    assert!(
+        readable.starts_with(
+            "index 'synth-small': 9750 passages in the pool, generation 3, 5 result(s), "
+        ),
+        "the report starts with its summary: {readable}"
+    );
+    let numbered = readable
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(rank, _)| rank.parse::<usize>().is_ok())
+        })
+        .count();
+    assert_eq!(numbered, 5, "k = 5 must print five numbered results");
+    assert_eq!(
+        readable.matches("   fields: ").count(),
+        5,
+        "every result prints its fields: {readable}"
+    );
+    assert_eq!(
+        readable.matches("   text: ").count(),
+        5,
+        "every result prints a text excerpt: {readable}"
+    );
+
     // `crible inspect --data <dir>` lists every index.
     let all = crible_ok(&["inspect", "--data", data_arg]);
     assert!(
         all.contains("index synth-small"),
         "inspect must list the index: {all}"
     );
+}
+
+#[test]
+fn the_text_format_of_search_shows_key_score_fields_and_excerpt() {
+    // `--format text` is the readable report of the J2 demo. It is checked here
+    // on its own, after one batch, so a regression of the format fails one named
+    // test instead of the whole demo.
+    require_dataset();
+    let dataset = dataset_root();
+    let (_temp, data, models) = prepare_data();
+    let data_arg = data.to_str().expect("the data path is UTF-8");
+    crible_ok(&[
+        "index",
+        "create",
+        "--data",
+        data_arg,
+        "--config",
+        dataset.join("index.json").to_str().expect("UTF-8 path"),
+    ]);
+    crible_ok(&[
+        "attach",
+        "--data",
+        data_arg,
+        "--models",
+        models.to_str().expect("UTF-8 path"),
+        "--index",
+        "synth-small",
+        dataset.join("l1").to_str().expect("UTF-8 path"),
+    ]);
+
+    let query = first_json_line(&dataset.join("queries.jsonl"));
+    let vector_path = data.join("query.json");
+    fs::write(
+        &vector_path,
+        serde_json::to_string(&query["vector"]).expect("the vector serializes"),
+    )
+    .expect("the query vector is written");
+    let readable = crible_ok(&[
+        "search",
+        "--data",
+        data_arg,
+        "--index",
+        "synth-small",
+        "--vector-file",
+        vector_path.to_str().expect("UTF-8 path"),
+        "--k",
+        "2",
+        "--format",
+        "text",
+    ]);
+
+    let first_line = readable
+        .lines()
+        .next()
+        .expect("the report starts with its summary");
+    assert!(
+        first_line.starts_with("index 'synth-small': "),
+        "the summary names the index: {first_line}"
+    );
+    assert!(
+        first_line.contains("generation 1") && first_line.contains("2 result(s)"),
+        "the summary carries the generation and the result count: {first_line}"
+    );
+
+    let results = readable
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(rank, _)| rank == "1" || rank == "2")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2, "two numbered results: {readable}");
+    for result in &results {
+        let (_, rest) = result.split_once(". ").expect("a numbered result");
+        let (key, score) = rest
+            .split_once("  score ")
+            .expect("the result line carries the key and its score");
+        assert!(!key.is_empty(), "the key is printed: {result}");
+        let score = score
+            .strip_suffix(" (cosine)")
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("the score is a number and its type: {result}"));
+        assert!((0.0..=1.0).contains(&score), "a cosine score: {result}");
+    }
+    assert_eq!(
+        readable.matches("   fields: {").count(),
+        2,
+        "every result prints its fields: {readable}"
+    );
+    let excerpts = readable
+        .lines()
+        .filter_map(|line| line.strip_prefix("   text: "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        excerpts.len(),
+        2,
+        "every result prints an excerpt: {readable}"
+    );
+    for excerpt in excerpts {
+        assert!(!excerpt.is_empty(), "the excerpt is not empty: {readable}");
+        assert!(
+            excerpt.chars().count() <= 161,
+            "the excerpt is cut to 160 characters plus its ellipsis: {excerpt}"
+        );
+    }
 }
 
 #[test]

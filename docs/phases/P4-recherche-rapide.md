@@ -90,6 +90,22 @@
   - la cible est atteinte, ou bien le rapport propose un levier (scoring asymétrique) à faire valider.
 - **Invariants / mesures** : MES-01, MES-12.
 
+### INSERER-POOL-EN-ORDRE
+- **Objectif** : construire la bitmap de résultat d'une clause d'intervalle dans l'ordre croissant des iid, au lieu de l'insérer iid par iid.
+- **Dépend de** : EVALUER-FILTRES
+- **À lire** : `03-recherche.md` (filtres → pool, budget de latence) ; `mesures/MES-14-cout-filtres-intervalles.md` (§ 4.2 et § 5) ; ADR-0018 ; `crates/crible-search/src/pool.rs` (`scan_column`).
+- **Livrables** :
+  - dans `scan_column`, la construction de la bitmap de résultat en ordre croissant des iid : parcours croissant avec ajout en fin quand la colonne est lue dans l'ordre, ou construction triée puis conversion, au choix de l'implémentation ;
+  - aucune nouvelle structure, aucun changement de format, aucune dépendance nouvelle ;
+  - le rapport de MES-14 rejoué, avec les chiffres d'avant et d'après.
+- **Critères d'acceptation** :
+  - un test vérifie que la bitmap produite est **égale** à celle de l'implémentation actuelle, sur les cas de MES-14 (domaine plein, domaine réduit par `partie=corps` et par `categorie=cat-03`, plage à une et à deux bornes, aucun gardé, tous gardés) ;
+  - **INV-07** reste vert : filtres aléatoires en proptest, comparés à l'évaluation SQLite ;
+  - MES-14 est rejouée avec les mêmes fixtures (`fixture-1m`, `fixture-8m58`, mêmes distributions) et les mêmes cas ; le rapport donne le p50 et le p95 avant et après, et le coût par iid lu ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` passent.
+- **Invariants / mesures** : INV-07, MES-14.
+- **Hors périmètre** : les bitmaps par tranche (index de plage), écarté par ADR-0046 jusqu'à la mesure de P9 ; le parcours de la colonne lui-même (accès épars d'un domaine creux) ; le changement de `N` ou de `exact_threshold`.
+
 ### MESURER-LATENCE-DENSE
 - **Objectif** : MES-02, MES-03 et MES-09.
 - **Dépend de** : PLANIFIER-STRATEGIE

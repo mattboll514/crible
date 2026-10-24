@@ -38,6 +38,15 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 | Éval | `crible eval` | Rappel et latence sur des jeux de requêtes |
 | Python | `pytest` | `BatchWriter`, client HTTP |
 
+### Sauts de test
+
+Règle normative (ADR-0057) : **`#[ignore]` est le seul mécanisme de saut autorisé.** Un test marqué `#[ignore]` qui est lancé explicitement (`--include-ignored`) et privé de son prérequis **échoue**, et son message d'échec donne la commande qui produit ce prérequis. Un `return` anticipé, un `if !path.exists() { return; }` ou toute sortie silencieuse équivalente sont interdits. Un test non lancé n'est pas un saut : il n'apparaît pas dans le compte des tests exécutés.
+
+Deux conséquences pratiques :
+
+- un test qui saute silencieusement ne prouve rien et se lit pourtant comme vert : c'est le défaut corrigé dans `crates/crible/tests/recette_import.rs` par `AJOUTER-ORT-CI` ; les tests de `crates/crible-encode/tests/charger_modele.rs` et de `crates/crible-core/tests/model_config.rs` sont le modèle à suivre, puisqu'ils échouent déjà avec la commande d'export à lancer ;
+- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, dont les données dérivent de la production Legifacile (ADR-0032).
+
 ## Jeux de données
 
 | Jeu | Contenu | Où |
@@ -66,9 +75,9 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut | P5 |
 | MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`) | P5 |
 | MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
-| MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P3 |
+| MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
-| MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1 |
+| MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
 
 ## Cibles chiffrées
 

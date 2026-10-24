@@ -64,7 +64,7 @@ impl Prompts {
 /// One file of the model directory, identified by its content hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelFile {
-    /// Path relative to the model directory.
+    /// Path relative to the model directory, without a parent component.
     pub path: String,
     /// Lowercase hexadecimal blake3 digest of the file.
     pub blake3: String,
@@ -75,7 +75,7 @@ impl ModelFile {
         let object = json::object(value, path)?;
         json::reject_unknown_keys(object, path, &["path", "blake3"])?;
         let file = Self {
-            path: json::string_member(object, path, "path")?,
+            path: relative_path(&json::string_member(object, path, "path")?, path)?,
             blake3: json::string_member(object, path, "blake3")?,
         };
         if !valid_blake3(&file.blake3) {
@@ -85,6 +85,31 @@ impl ModelFile {
         }
         Ok(file)
     }
+}
+
+/// Checks that `text` names a file inside the model directory.
+///
+/// `model.json` is written by an exporter and may be copied from another
+/// machine. An absolute path or a `..` component would silently load a file
+/// outside the directory the operator named, so both are refused.
+fn relative_path(text: &str, path: &str) -> Result<String, CribleError> {
+    use std::path::Component;
+    let candidate = std::path::Path::new(text);
+    let escapes = text.is_empty()
+        || candidate.is_absolute()
+        || candidate.components().any(|component| {
+            matches!(
+                component,
+                Component::RootDir | Component::Prefix(_) | Component::ParentDir
+            )
+        });
+    if escapes {
+        return Err(json::invalid(format!(
+            "path at {path}.path must stay inside the model directory: '{text}' is empty, \
+             absolute, or carries a '..' component"
+        )));
+    }
+    Ok(text.to_owned())
 }
 
 /// Files composing an ONNX model directory.
@@ -135,10 +160,58 @@ fn valid_blake3(text: &str) -> bool {
     crate::batch::is_blake3_digest(text)
 }
 
+/// Versions of the libraries that produced the fp32 ONNX export.
+///
+/// `docs/04-donnees-et-ingestion.md` describes this object for diagnosis only:
+/// it stays out of the fingerprint (ADR-0028, ADR-0050), so changing one of
+/// these versions never invalidates an index or refuses a batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportVersions {
+    /// Version of `transformers` used by the export.
+    pub transformers: String,
+    /// Version of `torch` used by the export.
+    pub torch: String,
+    /// Version of `onnxruntime` used by the export.
+    pub onnxruntime: String,
+}
+
+impl ExportVersions {
+    fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let object = json::object(value, path)?;
+        json::reject_unknown_keys(object, path, &EXPORT_KEYS)?;
+        let versions = Self {
+            transformers: json::string_member(object, path, "transformers")?,
+            torch: json::string_member(object, path, "torch")?,
+            onnxruntime: json::string_member(object, path, "onnxruntime")?,
+        };
+        for (key, version) in [
+            ("transformers", &versions.transformers),
+            ("torch", &versions.torch),
+            ("onnxruntime", &versions.onnxruntime),
+        ] {
+            if version.is_empty() {
+                return Err(json::invalid(format!(
+                    "setting '{key}' must not be empty at {path}.{key}"
+                )));
+            }
+        }
+        Ok(versions)
+    }
+}
+
+// The object keeps the exact shape of `docs/04-donnees-et-ingestion.md`. The
+// parsing is strict like the rest of `model.json`: an unknown key is refused,
+// so a new version needs a design decision instead of slipping through. This
+// cannot change the fingerprint (ADR-0050), so it never causes
+// `incompatible_model`; a malformed object only refuses the model.json that
+// the design does not describe.
+const EXPORT_KEYS: [&str; 3] = ["transformers", "torch", "onnxruntime"];
+
 /// Configuration of the model of an index.
 ///
 /// The fingerprint covers the frozen part only: `hf_id`, `revision`, `dims`,
 /// `pooling`, `normalize`, `prompts`, and the `fp32` and `tokenizer` hashes.
+/// `export` and `max_tokens` stay out of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelConfig {
     /// Model name, also the name of its directory.
@@ -157,13 +230,15 @@ pub struct ModelConfig {
     pub normalize: bool,
     /// Maximum sequence length supported by the export.
     pub max_tokens: Option<u32>,
+    /// Versions of the libraries that produced the fp32 export.
+    pub export: Option<ExportVersions>,
     /// Prompts prefixed before encoding.
     pub prompts: Option<Prompts>,
     /// Files of an ONNX model directory.
     pub files: Option<ModelFiles>,
 }
 
-const MODEL_KEYS: [&str; 10] = [
+const MODEL_KEYS: [&str; 11] = [
     "name",
     "kind",
     "hf_id",
@@ -172,6 +247,7 @@ const MODEL_KEYS: [&str; 10] = [
     "pooling",
     "normalize",
     "max_tokens",
+    "export",
     "prompts",
     "files",
 ];
@@ -209,6 +285,10 @@ impl ModelConfig {
                 Some(value) => Some(json::u32_value(value, "$.max_tokens")?),
                 None => None,
             },
+            export: match object.get("export") {
+                Some(value) => Some(ExportVersions::from_value(value, "$.export")?),
+                None => None,
+            },
             prompts: match object.get("prompts") {
                 Some(value) => Some(Prompts::from_value(value, "$.prompts")?),
                 None => None,
@@ -230,6 +310,7 @@ impl ModelConfig {
             ("hf_id", self.hf_id.is_some()),
             ("revision", self.revision.is_some()),
             ("pooling", self.pooling.is_some()),
+            ("max_tokens", self.max_tokens.is_some()),
             ("prompts", self.prompts.is_some()),
             ("files", self.files.is_some()),
         ] {
@@ -238,6 +319,12 @@ impl ModelConfig {
                     "missing required member '{member}' at $; an onnx model needs it"
                 )));
             }
+        }
+        if self.max_tokens == Some(0) {
+            return Err(json::invalid(
+                "setting 'max_tokens' must be positive at $.max_tokens; an onnx model cannot \
+                 encode zero tokens",
+            ));
         }
         Ok(())
     }

@@ -1,0 +1,35 @@
+# Model artifact of the CI (ADR-0057).
+#
+# The `rust-onnx` job runs the 19 ignored ONNX Runtime tests against the real
+# mDenseOn export. The files are gitignored in Crible and the CI never
+# re-exports them: they are published once in the public Hugging Face model
+# repository below, pinned to a commit SHA, and every byte is checked against the
+# BLAKE3 digests of this manifest by `tools/fetch_model_artifact.py`.
+#
+# The commit below is the upload of 2026-10-24 by the owner. Changing a file of
+# the repository requires a new upload commit, a new sha here, and the matching
+# digests; the URL never falls back to a branch such as `main`.
+#
+# Only the files the 19 tests read are listed: the fp32 graph and the tokenizer
+# of `charger_modele.rs`, and `model.json` of `model_config.rs`. The INT8 graph
+# is published with the artifact, because `model.json` declares it, but no
+# ignored test loads it: the INT8 tests use the versioned fake model.
+#
+# Digests measured on 2026-10-24 against `data/models/mdenseon/`, the export of
+# ADR-0050 (`model.onnx` and `model.int8.onnx` also appear in `tools/README.md`,
+# "Révision et hash mesurés").
+
+repository = "mattboll/mdenseon-onnx"
+commit = "491bbcd6cb1b0a7a97995a5d767ab8f5270a7b84"
+
+[[files]]
+name = "model.onnx"
+blake3 = "7b6eb68099dbeac6826e282dd575aec766dfbe1bedac143bae094b12f82094a2"
+
+[[files]]
+name = "tokenizer.json"
+blake3 = "8a801317cfb1eb744734392dc0aeef36d6d39660a0a884f06a0338e9bb5357db"
+
+[[files]]
+name = "model.json"
+blake3 = "19667080a2d779857691186ad1c6199ec72aac0b1fe6fc0ed07f06b6116c737a"

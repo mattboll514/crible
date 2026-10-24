@@ -97,15 +97,37 @@
   - aucun fichier orphelin ne reste.
 - **Invariants** : INV-03, INV-04.
 
+### REUTILISER-COMPRESSEUR-ZSTD
+- **Objectif** : compresser les textes de passages avec un compresseur zstd réutilisé, au même niveau de compression, au lieu de construire un contexte par passage.
+- **Dépend de** : STOCKER-ENREGISTREMENTS-SQLITE
+- **À lire** : `02-architecture.md` (table `passages`, colonne `text` en zstd) ; `docs/mesures/MES-15-cout-commit-generation.md`, § 4 (tableau de la compression des textes) et § 6 (recommandation 3).
+- **Livrables** :
+  - `crible-store::records` : `encode_text` n'appelle plus `zstd::stream::encode_all` ; la compression passe par un compresseur zstd réutilisé (`zstd::bulk::Compressor`), au niveau `TEXT_COMPRESSION_LEVEL` inchangé ;
+  - le compresseur est créé une fois pour l'écriture d'un lot de passages, et non une fois par passage ;
+  - aucun changement de schéma, de `format_version` ni de nature de la trame stockée.
+- **Critères d'acceptation** :
+  - test d'aller-retour : le texte compressé puis décompressé est égal à l'original, y compris pour un texte vide et pour un texte long ;
+  - test de relecture : une trame produite par l'ancienne méthode (`zstd::stream::encode_all`) se décompresse sans changement ;
+  - les trames ne sont pas comparées octet pour octet : l'en-tête zstd peut porter la taille du contenu, et le critère porte sur la décompression ;
+  - le gain sur une attache de 2 000 passages est chiffré par MES-08, dans `MESURER-CYCLE-DE-VIE`.
+- **Invariants / mesures** : MES-08, MES-15.
+- **Hors périmètre** : changer `TEXT_COMPRESSION_LEVEL` ; changer le schéma, `format_version` ou la nature de la trame ; compresser autre chose que `passages.text` ; ajouter une dépendance ; réécrire les textes déjà stockés.
+
 ### MESURER-CYCLE-DE-VIE
-- **Objectif** : MES-07, MES-08 et MES-13.
+- **Objectif** : MES-07, MES-08, MES-13 et MES-15.
 - **Dépend de** : COMPACTER-INDEX, CREER-ET-RESTAURER-INSTANTANE
 - **À lire** : `docs/mesures/README.md`.
 - **Livrables** : les rapports de mesure sur l'échantillon Legifacile et sur `synth-large`, avec une extrapolation à l'échelle de Legifacile :
   - compaction ;
-  - attache d'un lot quotidien type de 1 000 à 3 000 passages ;
-  - temps de démarrage, en reconstruisant les bitmaps puis en chargeant le cache.
+  - attache d'un lot quotidien type de 1 000 à 3 000 passages, avec le gain du compresseur zstd réutilisé chiffré (ADR-0048) ;
+  - temps de démarrage, en reconstruisant les bitmaps puis en chargeant le cache, avec la part du décodage JSON dans ce temps et le nombre moyen de passages par document de l'échantillon Legifacile (ADR-0047) ;
+  - l'ordre des remèdes à appliquer si le démarrage dépasse 60 s : d'abord `DECODER-DOCUMENTS-UNE-FOIS`, puis `AJOUTER-CACHE-BITMAPS` seulement si le seuil est encore dépassé (ADR-0047) ;
+  - rejeu de MES-15 avec le même banc (`crates/crible-store/benches/commit_cost.rs`) et les mêmes points `N` et `S` que la campagne du 2026-10-21, comparé à cette campagne, pour chiffrer la dérivation incrémentale de la bitmap des vivants (ADR-0048).
 - **Critères d'acceptation** :
   - les protocoles sont reproductibles ;
-  - si le démarrage dépasse 60 s à l'échelle de Legifacile, un cache des bitmaps est proposé, sous forme de tâche `AJOUTER-CACHE-BITMAPS` à valider par le propriétaire.
-- **Invariants / mesures** : MES-07, MES-08, MES-13.
+  - le rapport donne la part du décodage JSON dans le démarrage et le nombre moyen de passages par document de l'échantillon Legifacile ;
+  - si le démarrage dépasse 60 s à l'échelle de Legifacile, la mesure propose **d'abord** une tâche `DECODER-DOCUMENTS-UNE-FOIS` : décoder le JSON de chaque document une seule fois pendant la reconstruction des structures de filtrage, sans changement de format ni invalidation, avec un test d'égalité des structures et un rejeu de MES-13 ; la tâche est à valider par le propriétaire ;
+  - la tâche `AJOUTER-CACHE-BITMAPS`, qui ajoute un format sur disque versionné et une invalidation, n'est proposée que si le démarrage dépasse encore 60 s après `DECODER-DOCUMENTS-UNE-FOIS`, et reste à valider par le propriétaire (ADR-0047) ;
+  - le rapport donne, aux points `N` et `S` de la campagne du 2026-10-21, le commit p50 du rejeu de MES-15 et son écart avec cette campagne, et il chiffre ainsi la dérivation incrémentale de la bitmap des vivants (ADR-0048) ;
+  - le rapport chiffre le gain de `REUTILISER-COMPRESSEUR-ZSTD` sur l'attache d'un lot quotidien type, par comparaison avec la compression mesurée par MES-15 (ADR-0048).
+- **Invariants / mesures** : MES-07, MES-08, MES-13, MES-15.

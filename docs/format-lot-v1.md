@@ -168,6 +168,50 @@ Règles vérifiables sans lire le Parquet :
 La correspondance exacte entre `counts` et le nombre de lignes réellement
 lues est le contrôle 6 de `04`, exécuté à l'attache (phase P1).
 
+### Lot interne du mode en ligne
+
+Le mode en ligne (ADR-0055) construit un **lot interne** qui suit ce format et
+le même chemin d'attache. Deux règles lui sont propres, pour qu'un rejeu du même
+contenu ne produise pas de `409 batch_conflict` :
+
+- le mode est toujours `upsert` ; `replace_all` est refusé en ligne avec
+  `invalid_request` ;
+- le manifeste est **déterministe** :
+
+| Champ | Valeur |
+|---|---|
+| `producer.name` | `crible-online` |
+| `producer.version` | `1` — version du format du lot en ligne, pas du binaire |
+| `producer.host` | `crible-online` |
+| `chunker` | `{ "name": "none", "version": "1" }` |
+| `template` | `{ "name": "none", "version": "1" }` |
+| `created_at` | `1970-01-01T00:00:00Z`, sentinelle documentée |
+
+`producer.version` est incrémenté seulement avec un changement de format du lot
+en ligne : la version du binaire, elle, change à chaque mise à jour de Crible et
+casserait l'idempotence (INV-10). `created_at` est une sentinelle parce
+qu'aucun contrôle ne lit sa valeur et que le mtime n'est pas stable d'une copie
+à l'autre.
+
+Le dossier du lot interne est écrit dans `<data>/tmp/online-<batch_id>/`, hors
+du dossier de l'index, et supprimé en succès comme en échec. Pour la CLI,
+`batch_id` vaut `online-<blake3 des octets du fichier>` ; la route HTTP le prend
+dans le corps de la requête. La colonne `doc_hash` est toujours remplie : elle
+vaut le `doc_hash` fourni, ou le blake3 du JSON canonique des passages (règle
+dans `05-api.md`).
+
+Le dossier `<data>/tmp/` est commun à tous les index d'une racine. Un dossier
+`online-*` n'est donc un résidu de crash que si son **verrou de présence**
+`<data>/tmp/online-<batch_id>.lock`, son voisin et dérivé de la même valeur, peut
+être pris (ADR-0056). L'ingestion prend ce verrou exclusif avant de créer le
+dossier du lot et le tient jusqu'après `attach` ; une seconde ingestion du même
+`batch_id` échoue en `overloaded` (503) sans rien créer. Le nettoyage
+n'interprète jamais l'absence de `.lock` comme la preuve d'un résidu : il ouvre
+le fichier en lecture-écriture avec création, tente le verrou, et ne supprime le
+dossier puis le verrou qu'en cas de succès. Toute autre erreur de verrou, comme
+sur un montage réseau qui ne partage pas les verrous, ne supprime rien et laisse
+le dossier en place.
+
 ## Colonnes Parquet
 
 Tous les fichiers sont au format Parquet. Les colonnes de schéma sont
@@ -276,7 +320,8 @@ rapport d'origine (INV-10). Le même `batch_id` avec un autre manifeste renvoie
 
 ## Références
 
-`04-donnees-et-ingestion.md` ; ADR-0005 (précision de référence figée) ;
-ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ; ADR-0039 (ordre des
-lignes dans un lot v1) ; ADR-0040 (unicité des documents et des parties dans un
-lot v1) ; `08-invariants-et-tests.md` (INV-03, INV-10, INV-11, INV-12).
+`04-donnees-et-ingestion.md` ; `05-api.md` (lot en ligne) ; ADR-0005 (précision
+de référence figée) ; ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ;
+ADR-0039 (ordre des lignes dans un lot v1) ; ADR-0040 (unicité des documents et
+des parties dans un lot v1) ; ADR-0055 (lot interne du mode en ligne) ;
+`08-invariants-et-tests.md` (INV-03, INV-10, INV-11, INV-12).
