@@ -53,6 +53,21 @@ enum Command {
         /// Batch directory holding `manifest.json` and its Parquet files.
         batch: PathBuf,
     },
+    /// Ingest a JSONL file of documents, encoding the passages that carry no
+    /// vector (ADR-0055).
+    Ingest {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Root models directory (`[paths] models` of `crible.toml`).
+        #[arg(long)]
+        models: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+        /// JSONL file holding one document per line (`docs/05-api.md`).
+        documents: PathBuf,
+    },
     /// Search an index with a provided vector or a text query.
     Search {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -121,6 +136,7 @@ fn main() -> ExitCode {
 
 /// Runs one command, mapping every engine error to the printed report.
 fn run(cli: Cli) -> Result<(), CribleError> {
+    init_logging();
     match cli.command {
         Command::Index { command } => match command {
             IndexCommand::Create { data, config } => commands::create_index(&data, &config),
@@ -131,6 +147,12 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             index,
             batch,
         } => commands::attach_batch(&data, &models, &index, &batch),
+        Command::Ingest {
+            data,
+            models,
+            index,
+            documents,
+        } => commands::ingest_documents(&data, &models, &index, &documents),
         Command::Search {
             data,
             index,
@@ -152,6 +174,22 @@ fn run(cli: Cli) -> Result<(), CribleError> {
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
     }
+}
+
+/// Installs the log subscriber of the binary: warnings and above, on stderr.
+///
+/// The journal never goes to stdout: a command prints its result there (JSON of
+/// `search`, report of `attach`), and a script parses it. The level is fixed,
+/// because raising it through `RUST_LOG` would need the `env-filter` feature of
+/// `tracing-subscriber`, which `docs/07` does not list; the warnings that
+/// matter are those of the online-batch cleanup (ADR-0056, decision 3).
+/// `try_init` rather than `init`: a second subscriber is not a reason to abort
+/// a command. No message carries a query text or a document value.
+fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
+        .try_init();
 }
 
 /// Prints a failure as `<code>: <message>` on stderr.

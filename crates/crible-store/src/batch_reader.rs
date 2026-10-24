@@ -706,7 +706,7 @@ fn io_cause<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a std:
 
 /// Arrow type of a declared field (`docs/format-lot-v1.md`, "Colonnes
 /// Parquet").
-fn parquet_type(field_type: FieldType) -> DataType {
+pub(crate) fn parquet_type(field_type: FieldType) -> DataType {
     match field_type {
         FieldType::Keyword => DataType::Utf8,
         FieldType::Integer => DataType::Int64,
@@ -725,7 +725,7 @@ fn component_width(precision: ReferencePrecision) -> usize {
 }
 
 /// Number of bytes of one stored vector.
-fn vector_width(dims: u32, precision: ReferencePrecision) -> usize {
+pub(crate) fn vector_width(dims: u32, precision: ReferencePrecision) -> usize {
     (dims as usize).saturating_mul(component_width(precision))
 }
 

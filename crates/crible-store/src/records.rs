@@ -1071,7 +1071,7 @@ pub(crate) fn from_sql_u32(value: i64, field: &str) -> Result<u32, CribleError> 
 
 /// Serializes fields as canonical JSON: keys sorted at every level, no space
 /// around separators (ADR-0019).
-fn canonical_json(fields: &Value) -> Result<String, CribleError> {
+pub(crate) fn canonical_json(fields: &Value) -> Result<String, CribleError> {
     serde_json::to_string(&canonical_value(fields)).map_err(|error| {
         CribleError::new(
             ErrorCode::InvalidRequest,

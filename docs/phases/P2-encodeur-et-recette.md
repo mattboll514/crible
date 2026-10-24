@@ -127,7 +127,7 @@
 ### ENCODER-DOCUMENTS-EN-LIGNE
 - **Objectif** : accepter des documents sans vecteurs.
 - **Dépend de** : RECETTE-IMPORT
-- **À lire** : `04-donnees-et-ingestion.md` (mode en ligne) ; `05-api.md` (lot en ligne).
+- **À lire** : `04-donnees-et-ingestion.md` (mode en ligne) ; `05-api.md` (lot en ligne) ; ADR-0055 (fichier JSONL, identité et manifeste du lot interne, `doc_hash`, emplacement du lot, `upsert` seul).
 - **Livrables** :
   - `crible-store::online` : à partir d'une liste de documents (format JSON de l'API), encodage fp32 des passages sans vecteur ;
   - la construction d'un lot interne, qui suit le même chemin d'attache ;

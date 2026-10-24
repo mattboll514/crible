@@ -35,6 +35,13 @@ jobs:
           uv run python reference_topk.py --dataset ../data/synth-small
       - name: Test
         run: cargo test --locked
+      - name: Test the Python client against the binary
+        working-directory: clients/python
+        env:
+          CRIBLE_BIN: ${{ github.workspace }}/target/debug/crible
+        run: |
+          uv sync
+          uv run pytest tests/test_online_batch.py
 
   python:
     name: Python
