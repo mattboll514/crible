@@ -1,6 +1,6 @@
 # ADR-0053 — Encodeur dans le chemin d'attache : arête `crible-store` → `crible-encode`
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24) — précision 2 complétée par ADR-0054 : « fourni par l'appelant » se lit aussi avec un chargeur différé, dont l'attache choisit le moment d'appel
 - **Date** : 2026-10-24 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : arête interne `crible-store` → `crible-encode` autorisée, unidirectionnelle, consignée dans `docs/07`.

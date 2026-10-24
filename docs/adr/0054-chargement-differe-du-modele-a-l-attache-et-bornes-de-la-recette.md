@@ -1,8 +1,9 @@
 # ADR-0054 — Chargement différé du modèle à l'attache et bornes de la recette
 
-- **Statut** : Proposé
-- **Date** : 2026-10-24
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-24 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : option (a) sur chacun des deux points, donc chargeur de modèle différé dont l'attache choisit le moment d'appel, et bornes `acceptance_sample ≥ 1` et `acceptance_min_cosine ∈ ]0, 1]` refusées en `invalid_request`.
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : relecture du tour 1 de la tâche `RECETTE-IMPORT` (phase P2, fiche `docs/phases/P2-encodeur-et-recette.md`), puis verdicts de `@architecte` du 2026-10-24 : `ECART` sur la forme de l'API (fourniture du modèle à `attach`), `ECART` sur `acceptance_sample = 0`, `NON-COUVERT` sur le domaine d'`acceptance_min_cosine`.
 - **Remplace** : —
 
