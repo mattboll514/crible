@@ -23,10 +23,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 
 use crible_core::error::ErrorCode;
-use crible_encode::{Model, ModelRegistry, Side};
+use crible_encode::{Model, ModelRegistry, Precision, Side};
 
 const DIMS: usize = 4;
 const FP32_NAME: &str = "model.onnx";
+const INT8_NAME: &str = "model.int8.onnx";
 const TOKENIZER_NAME: &str = "tokenizer.json";
 const REFERENCE_TEXTS: usize = 20;
 /// Tolerance of the acceptance criterion, on every component.
@@ -38,10 +39,12 @@ fn blake3_hex(bytes: &[u8]) -> String {
 
 /// Writes a model directory with the given file contents and returns its path.
 ///
-/// The `model.json` declares the blake3 of `fp32` and `tokenizer` as written,
-/// so the directory is consistent until a test changes one of them.
+/// The `model.json` declares the blake3 of `fp32`, `int8` (when given) and
+/// `tokenizer` as written, so the directory is consistent until a test changes
+/// one of them.
 fn write_model_directory(
     fp32_contents: &[u8],
+    int8_contents: Option<&[u8]>,
     tokenizer_contents: &[u8],
 ) -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir()
@@ -49,6 +52,18 @@ fn write_model_directory(
     let root = directory.path().to_path_buf();
     std::fs::write(root.join(FP32_NAME), fp32_contents)
         .unwrap_or_else(|error| panic!("model.onnx is written: {error}"));
+    let int8_declaration = match int8_contents {
+        Some(contents) => {
+            std::fs::write(root.join(INT8_NAME), contents)
+                .unwrap_or_else(|error| panic!("model.int8.onnx is written: {error}"));
+            format!(
+                r#",
+    "int8": {{ "path": "{INT8_NAME}", "blake3": "{}" }}"#,
+                blake3_hex(contents)
+            )
+        }
+        None => String::new(),
+    };
     std::fs::write(root.join(TOKENIZER_NAME), tokenizer_contents)
         .unwrap_or_else(|error| panic!("tokenizer.json is written: {error}"));
     let model_json = format!(
@@ -63,7 +78,7 @@ fn write_model_directory(
   "max_tokens": 8192,
   "prompts": {{ "query": "query: ", "document": "document: " }},
   "files": {{
-    "fp32": {{ "path": "{FP32_NAME}", "blake3": "{}" }},
+    "fp32": {{ "path": "{FP32_NAME}", "blake3": "{}" }}{int8_declaration},
     "tokenizer": {{ "path": "{TOKENIZER_NAME}", "blake3": "{}" }}
   }}
 }}"#,
@@ -79,7 +94,7 @@ fn write_model_directory(
 fn refuses_a_model_file_with_a_wrong_hash() {
     // Acceptance criterion: a modified file (wrong hash) is refused. The
     // refusal happens before ONNX Runtime is reached, so this test runs in CI.
-    let (_directory, root) = write_model_directory(b"the original graph", b"{}");
+    let (_directory, root) = write_model_directory(b"the original graph", None, b"{}");
     std::fs::write(root.join(FP32_NAME), b"a modified graph").expect("the graph is replaced");
 
     let error = Model::load(&root).expect_err("a modified model file is refused");
@@ -101,7 +116,7 @@ fn refuses_a_model_file_with_a_wrong_hash() {
 fn refuses_a_tokenizer_with_a_wrong_hash() {
     // The tokenizer is part of the fingerprint, so it is verified too: a
     // tokenizer swapped under a declared hash would encode other ids.
-    let (_directory, root) = write_model_directory(b"the original graph", b"{}");
+    let (_directory, root) = write_model_directory(b"the original graph", None, b"{}");
     std::fs::write(root.join(TOKENIZER_NAME), b"{\"other\":\"tokenizer\"}")
         .expect("the tokenizer is replaced");
 
@@ -111,6 +126,50 @@ fn refuses_a_tokenizer_with_a_wrong_hash() {
     assert!(
         error.message().contains(TOKENIZER_NAME),
         "the message names the file: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn refuses_an_int8_model_file_with_a_wrong_hash() {
+    // ADR-0051: the INT8 graph is hashed and verified exactly like the fp32
+    // one, before ONNX Runtime opens a session. The refusal happens before the
+    // runtime is reached, so this test runs in CI.
+    let (_directory, root) =
+        write_model_directory(b"the fp32 graph", Some(b"the int8 graph"), b"{}");
+    std::fs::write(root.join(INT8_NAME), b"a modified int8 graph")
+        .expect("the INT8 graph is replaced");
+
+    let error = Model::load_precision(&root, Precision::Int8)
+        .expect_err("a modified INT8 model file is refused");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains(INT8_NAME),
+        "the message names the file: {}",
+        error.message()
+    );
+    assert!(
+        error.message().contains("does not match its declared hash"),
+        "the message says what is wrong: {}",
+        error.message()
+    );
+}
+
+#[test]
+fn refuses_to_load_int8_when_the_model_declares_no_int8_file() {
+    // The fallback to fp32 belongs to `QueryEncoder`; the model itself refuses
+    // an INT8 request it cannot satisfy instead of silently serving another
+    // graph.
+    let (_directory, root) = write_model_directory(b"the fp32 graph", None, b"{}");
+
+    let error =
+        Model::load_precision(&root, Precision::Int8).expect_err("an absent INT8 graph is refused");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("declares no int8 file"),
+        "the message says what is missing: {}",
         error.message()
     );
 }

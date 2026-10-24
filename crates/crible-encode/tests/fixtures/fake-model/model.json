@@ -1,0 +1,28 @@
+{
+  "dims": 768,
+  "files": {
+    "fp32": {
+      "blake3": "e41d9ed8f454e872e4ad9f69c4552445bd468779bab375278396dd0ca5baf3f1",
+      "path": "model.onnx"
+    },
+    "int8": {
+      "blake3": "b8506f9dceba3f7710db37415b645d4326e5b0fdd8a7332fd1e4ad501892d7ad",
+      "path": "model.int8.onnx"
+    },
+    "tokenizer": {
+      "blake3": "c7d6d0e404cbb75721e534b25b267a68f07f60e427f4e3c39ed886e69959f0f6",
+      "path": "tokenizer.json"
+    }
+  },
+  "hf_id": "crible/fake-encoder",
+  "kind": "onnx",
+  "max_tokens": 32,
+  "name": "fake-model",
+  "normalize": true,
+  "pooling": "cls",
+  "prompts": {
+    "document": "document: ",
+    "query": "query: "
+  },
+  "revision": "fixture"
+}

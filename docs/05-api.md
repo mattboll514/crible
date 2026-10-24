@@ -239,3 +239,4 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 | File d'écriture par index | 16 jobs, puis `503` avec `Retry-After` |
 | Recherches concurrentes | 2 × le nombre de cœurs, puis `503` |
 | `timeout_ms` | 2 000 par défaut, 30 000 au plus |
+| Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |

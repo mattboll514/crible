@@ -86,8 +86,9 @@ Fichier `models/<name>/model.json` :
 - **`max_tokens`** : la longueur maximale réellement supportée par l'export ONNX, à vérifier dans `EXPORTER-MODELE-ONNX`.
 - **`export`** : versions de `transformers`, `torch` et `onnxruntime` qui ont produit le fichier fp32. Ce champ est **hors de l'empreinte** (ADR-0028, ADR-0050) : il sert au diagnostic, jamais à refuser un lot. La fidélité du modèle se mesure par la recette (contrôle 9, INV-12).
 - **Usage des précisions** :
-  - les **requêtes** sont encodées en INT8 (réglable : `fp32`) ;
+  - les **requêtes** sont encodées en INT8 (réglable par `[encoder].query_precision` : `int8` ou `fp32`, ADR-0051) ;
   - la **recette** et l'**encodage en ligne de documents** se font en fp32.
+  - Le registre de sessions est indexé par `(empreinte, précision)` et chaque session est chargée à son premier usage : le fichier INT8 hors empreinte ne peut donc pas se confondre avec le graphe fp32 du même modèle (ADR-0051).
 - **`kind: "external"`** : pour un projet qui apporte ses propres vecteurs. Le modèle n'a alors que `dims` et `normalize`, sans encodeur. Il n'y a pas de recette, et chaque requête doit fournir un `vector`.
 
 ## Modèle documents → passages

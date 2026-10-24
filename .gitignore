@@ -33,3 +33,10 @@
 # Fixture de test versionnée de CHARGER-MODELE : 20 × 768 vecteurs fp32,
 # 61 440 octets, ce n'est pas une donnée volumineuse.
 !crates/crible-encode/tests/fixtures/mdenseon/vectors.f32
+
+# Fixture de test versionnée d'ENCODER-REQUETES : deux graphes ONNX minuscules
+# (~4 Ko chacun) et leur tokenizer WordLevel, pour le critère de bout en bout de
+# `crible search --query` sur `synth-small`. `tools/fake_encoder.py` les
+# régénère.
+!crates/crible-encode/tests/fixtures/fake-model/model.onnx
+!crates/crible-encode/tests/fixtures/fake-model/model.int8.onnx

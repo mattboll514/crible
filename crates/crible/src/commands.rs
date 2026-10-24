@@ -30,13 +30,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::ids::Epoch;
-use crible_core::model::ModelConfig;
+use crible_core::model::{ModelConfig, ModelKind};
+use crible_encode::{DEFAULT_QUERY_CACHE_ENTRIES, ModelRegistry, Precision, QueryEncoder};
 use crible_search::dense::exact::ExactSearcher;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
@@ -118,32 +120,90 @@ pub fn attach_batch(
     Ok(())
 }
 
-/// `crible search --data <dir> --index <i> --vector-file <file> [--filter <json>] [--k 10]`.
+/// One `crible search` invocation.
+///
+/// The query comes either from a file of a provided vector (`--vector-file`) or
+/// from text (`--query`); the two are mutually exclusive and one is required.
+/// A text query needs `--models`, and an `onnx` encoder: the model of the index
+/// by default, or the one named by `--model`, which is what lets `synth-small`
+/// (an `external` index) be searched by text with a test encoder.
+#[derive(Clone, Copy)]
+pub struct SearchRequest<'a> {
+    /// Root data directory (`<data>/indexes/<index>`).
+    pub data: &'a Path,
+    /// Index name, as declared in its `index.json`.
+    pub index: &'a str,
+    /// Vector file, when the caller provides the vector.
+    pub vector_file: Option<&'a Path>,
+    /// Text query, encoded by the server.
+    pub query: Option<&'a str>,
+    /// Root models directory; required with `query`.
+    pub models: Option<&'a Path>,
+    /// Encoder to use for `query`; the model of the index when omitted.
+    pub model: Option<&'a str>,
+    /// Filter as a JSON object.
+    pub filter: Option<&'a str>,
+    /// Number of results, between 1 and 1000.
+    pub k: usize,
+}
+
+impl std::fmt::Debug for SearchRequest<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A query and a filter value must never reach a log (AGENTS.md,
+        // "Confidentialité"), so their presence is shown, never their text.
+        formatter
+            .debug_struct("SearchRequest")
+            .field("data", &self.data)
+            .field("index", &self.index)
+            .field("vector_file", &self.vector_file)
+            .field("query", &self.query.map(|_| "<redacted>"))
+            .field("models", &self.models)
+            .field("model", &self.model)
+            .field("filter", &self.filter.map(|_| "<redacted>"))
+            .field("k", &self.k)
+            .finish()
+    }
+}
+
+/// `crible search --data <dir> --index <i> (--vector-file <file> | --query <text>)`.
 ///
 /// The response follows the shape of `docs/05-api.md` ("Recherche : réponse"),
-/// with the fields P1 can fill: `results`, `pool_size`, `generation` and
-/// `took_ms`. The score is the cosine of the exact dense branch, hence
-/// `score_type: "cosine"`. `took_ms` is the total, from the entry of the
-/// command: it includes reading the index configuration, the vector and the
-/// filter, evaluating the pool, opening the readers and the scan itself.
-pub fn search(
-    data: &Path,
-    index: &str,
-    vector_path: &Path,
-    filter: Option<&str>,
-    k: usize,
-) -> Result<(), CribleError> {
+/// with the fields P1 and `ENCODER-REQUETES` can fill: `results`, `pool_size`,
+/// `generation`, `took_ms` and `truncated_query`. The score is the cosine of the
+/// exact dense branch, hence `score_type: "cosine"`. `took_ms` is the total,
+/// from the entry of the command: it includes reading the index configuration,
+/// the vector or the text encoding, the filter, evaluating the pool, opening
+/// the readers and the scan itself.
+///
+/// `truncated_query` is the wire name of the `truncated` flag of
+/// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
+/// mapping.
+pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let started = Instant::now();
-    if k == 0 || k > MAX_K {
+    if request.k == 0 || request.k > MAX_K {
         return Err(invalid_request(format!(
-            "k must be between 1 and {MAX_K}, got {k}"
+            "k must be between 1 and {MAX_K}, got {}",
+            request.k
         )));
     }
-    let name = path_component(index, "index name")?;
-    let (index_dir, config) = load_index(data, name)?;
+    let name = path_component(request.index, "index name")?;
+    let (index_dir, config) = load_index(request.data, name)?;
     let store = GenerationStore::open(&index_dir, &config.schema)?;
-    let vector = vector::load(vector_path)?;
-    let filter = match filter {
+    let (vector, truncated_query) = match (request.vector_file, request.query) {
+        (Some(path), None) => (vector::load(path)?, false),
+        (None, Some(text)) => encode_text_query(request.models, &config, request.model, text)?,
+        (Some(_), Some(_)) => {
+            return Err(invalid_request(
+                "--vector-file and --query are mutually exclusive; pass one of them",
+            ));
+        }
+        (None, None) => {
+            return Err(invalid_request(
+                "search needs --vector-file <file> or --query <text>",
+            ));
+        }
+    };
+    let filter = match request.filter {
         Some(raw) => {
             let filter = Filter::from_json_str(raw)?;
             filter.validate(&config.schema)?;
@@ -160,7 +220,7 @@ pub fn search(
     let segments = snapshot.segments().to_vec();
     let searcher =
         scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
-    let hits = scan.install(|| searcher.top_k(&vector, &pool, k))?;
+    let hits = scan.install(|| searcher.top_k(&vector, &pool, request.k))?;
     let took_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
     let results: Vec<Value> = hits
@@ -182,9 +242,49 @@ pub fn search(
         "pool_size": pool.len(),
         "generation": snapshot.generation().get(),
         "took_ms": took_ms,
+        "truncated_query": truncated_query,
     });
     println!("{}", pretty(&response)?);
     Ok(())
+}
+
+/// Encodes a text query with the encoder named by `model`, or with the model of
+/// the index.
+///
+/// The query cache and the INT8 default are those of `docs/03-recherche.md` and
+/// ADR-0051. The instance configuration of P6 will pass
+/// `[limits].query_cache_entries` and `[encoder].query_precision`; the CLI has
+/// no `crible.toml` loader yet, so it uses the documented defaults.
+fn encode_text_query(
+    models: Option<&Path>,
+    index: &IndexConfig,
+    model: Option<&str>,
+    text: &str,
+) -> Result<(Vec<f32>, bool), CribleError> {
+    let models = models.ok_or_else(|| {
+        invalid_request(
+            "--query needs --models <dir>, the [paths] models root of crible.toml holding \
+             <model>/model.json",
+        )
+    })?;
+    let name = model.unwrap_or(&index.model);
+    let directory = model_directory(models, name)?;
+    let config = load_model(models, name)?;
+    if config.kind != ModelKind::Onnx {
+        return Err(invalid_request(format!(
+            "index '{}' uses model '{}' of kind external, which has no encoder; --query needs an \
+             onnx model, pass --model <name>",
+            index.name, name
+        )));
+    }
+
+    let encoder = QueryEncoder::new(
+        &directory,
+        Arc::new(ModelRegistry::new()),
+        DEFAULT_QUERY_CACHE_ENTRIES,
+    );
+    let encoded = encoder.encode_query(text, Precision::Int8)?;
+    Ok((encoded.vector, encoded.truncated))
 }
 
 /// `crible inspect --data <dir> [--index <i>]`.
@@ -279,8 +379,7 @@ fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleE
 
 /// Reads the resolved model configuration of `model` under the models root.
 fn load_model(models: &Path, model: &str) -> Result<ModelConfig, CribleError> {
-    let model = path_component(model, "model name")?;
-    let path = models.join(model).join("model.json");
+    let path = model_directory(models, model)?.join("model.json");
     let raw = fs::read_to_string(&path).map_err(|error| {
         invalid_request(format!(
             "cannot read the model configuration of '{model}' at {}: {error}; pass \
@@ -290,6 +389,12 @@ fn load_model(models: &Path, model: &str) -> Result<ModelConfig, CribleError> {
         ))
     })?;
     ModelConfig::from_json_str(&raw)
+}
+
+/// Directory of one model under the models root.
+fn model_directory(models: &Path, model: &str) -> Result<PathBuf, CribleError> {
+    let model = path_component(model, "model name")?;
+    Ok(models.join(model))
 }
 
 /// Lists the index directories that carry a `CURRENT_EPOCH`, sorted by name.

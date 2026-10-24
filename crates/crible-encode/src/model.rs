@@ -3,9 +3,14 @@
 //! Loading of an ONNX encoder and encoding of texts with it.
 //!
 //! The model directory is the one of `docs/04-donnees-et-ingestion.md`: a
-//! `model.json` describing the model, an fp32 ONNX graph, and a tokenizer. The
-//! graph returns the last hidden state; Crible applies the prompt, the CLS
-//! pooling and the L2 normalization itself, as the export does not.
+//! `model.json` describing the model, an fp32 ONNX graph, an optional INT8 one,
+//! and a tokenizer. The graph returns the last hidden state; Crible applies the
+//! prompt, the CLS pooling and the L2 normalization itself, as the export does
+//! not.
+//!
+//! A [`Model`] holds **one** precision. The registry of [`crate::ModelRegistry`]
+//! keys sessions by `(fingerprint, precision)`, because the INT8 file is outside
+//! the fingerprint and both graphs of one model must stay distinct (ADR-0051).
 //!
 //! ONNX Runtime is loaded dynamically (`ort` with the `load-dynamic` feature):
 //! the library is named by `ORT_DYLIB_PATH`, never linked at build time.
@@ -28,19 +33,42 @@ pub enum Side {
     Document,
 }
 
-/// An ONNX encoder loaded from a model directory.
+/// Precision of an ONNX graph of the model.
 ///
-/// The fingerprint of the configuration keys the cached instance: the same
+/// Queries use [`Precision::Int8`] by default, and the acceptance check and the
+/// online document encoding use [`Precision::Fp32`] (`docs/04-donnees-et-ingestion.md`,
+/// ADR-0051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Precision {
+    /// Dynamically quantized graph, used for queries.
+    Int8,
+    /// Reference graph, used for the acceptance check and online documents.
+    Fp32,
+}
+
+/// A vector produced by an encoder, and whether its input was truncated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodedText {
+    /// Pooled and, when the configuration asks for it, normalized vector.
+    pub vector: Vec<f32>,
+    /// Whether the token count exceeded the limit and the tail was dropped.
+    pub truncated: bool,
+}
+
+/// An ONNX encoder loaded from a model directory, for one precision.
+///
+/// The registry keys the cached instance by `(fingerprint, precision)`: the same
 /// directory loaded twice, or two directories describing the same model, share
-/// one encoder through [`crate::ModelRegistry`].
+/// one encoder per precision through [`crate::ModelRegistry`] (ADR-0051).
 pub struct Model {
     config: ModelConfig,
+    precision: Precision,
     tokenizer: Tokenizer,
     session: Mutex<Session>,
 }
 
 impl Model {
-    /// Loads the model directory `directory`.
+    /// Loads the fp32 graph of the model directory `directory`.
     ///
     /// The `fp32` and `tokenizer` files declared by `model.json` are hashed and
     /// compared to the declared digests before anything else, so a modified
@@ -53,14 +81,36 @@ impl Model {
     ///   configuration asks for an encoder this module cannot build.
     /// - [`ErrorCode::Internal`] for an I/O failure or an ONNX Runtime failure.
     pub fn load(directory: impl AsRef<Path>) -> Result<Self, CribleError> {
+        Self::load_precision(directory, Precision::Fp32)
+    }
+
+    /// Loads the graph of `precision` from the model directory `directory`.
+    ///
+    /// The graph file of the requested precision and the tokenizer are hashed
+    /// and compared to the declared digests before ONNX Runtime opens a session,
+    /// so a modified INT8 file is refused exactly as a modified fp32 one
+    /// (ADR-0051).
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorCode::InvalidRequest`] when `model.json` is malformed, a
+    ///   declared file is missing or does not match its hash, the INT8 graph is
+    ///   requested but `model.json` declares none, or the configuration asks for
+    ///   an encoder this module cannot build.
+    /// - [`ErrorCode::Internal`] for an I/O failure or an ONNX Runtime failure.
+    pub fn load_precision(
+        directory: impl AsRef<Path>,
+        precision: Precision,
+    ) -> Result<Self, CribleError> {
         let directory = directory.as_ref();
         let config = read_config(directory)?;
-        Self::load_with_config(directory, config)
+        Self::load_with_config(directory, config, precision)
     }
 
     pub(crate) fn load_with_config(
         directory: &Path,
         config: ModelConfig,
+        precision: Precision,
     ) -> Result<Self, CribleError> {
         if config.kind != crible_core::model::ModelKind::Onnx {
             return Err(invalid(format!(
@@ -80,8 +130,20 @@ impl Model {
                 config.name
             ))
         })?;
-        let fp32_path = directory.join(&files.fp32.path);
-        verify_hash(&fp32_path, &files.fp32.blake3)?;
+        let (graph_path, graph_hash) = match precision {
+            Precision::Fp32 => (directory.join(&files.fp32.path), files.fp32.blake3.as_str()),
+            Precision::Int8 => {
+                let int8 = files.int8.as_ref().ok_or_else(|| {
+                    invalid(format!(
+                        "model '{}' declares no int8 file; model.json must list one under \
+                         files.int8 to load the INT8 graph",
+                        config.name
+                    ))
+                })?;
+                (directory.join(&int8.path), int8.blake3.as_str())
+            }
+        };
+        verify_hash(&graph_path, graph_hash)?;
         let tokenizer_path = directory.join(&files.tokenizer.path);
         verify_hash(&tokenizer_path, &files.tokenizer.blake3)?;
 
@@ -94,8 +156,9 @@ impl Model {
         // `tokenizer.json` carries the 8192-token truncation limit of the
         // Hugging Face revision. Crible never truncates silently (INV-11): the
         // limit is removed here, so an over-long input reaches ONNX Runtime
-        // instead of losing its tail. Counting and reporting it belongs to
-        // CONTROLER-LONGUEURS.
+        // instead of losing its tail. Queries are truncated explicitly by
+        // `encode_with_limit`, with a `truncated` flag (ADR-0051); documents are
+        // checked by `CONTROLER-LONGUEURS`.
         tokenizer.with_truncation(None).map_err(|error| {
             invalid(format!(
                 "cannot clear the truncation of the tokenizer {}: {error}",
@@ -105,16 +168,17 @@ impl Model {
 
         let environment = environment()?;
         let session = Session::builder(environment)
-            .and_then(|mut builder| builder.commit_from_file(&fp32_path))
+            .and_then(|mut builder| builder.commit_from_file(&graph_path))
             .map_err(|error| {
                 internal(format!(
                     "cannot load the ONNX graph {}: {error}",
-                    fp32_path.display()
+                    graph_path.display()
                 ))
             })?;
 
         Ok(Self {
             config,
+            precision,
             tokenizer,
             session: Mutex::new(session),
         })
@@ -124,6 +188,12 @@ impl Model {
     #[must_use]
     pub fn config(&self) -> &ModelConfig {
         &self.config
+    }
+
+    /// Precision of the loaded graph.
+    #[must_use]
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 
     /// Fingerprint of the configuration (ADR-0028).
@@ -138,10 +208,11 @@ impl Model {
         self.config.dims
     }
 
-    /// Encodes `text` and returns the pooled, normalized vector.
+    /// Encodes `text` without a token limit and returns the pooled, normalized
+    /// vector.
     ///
-    /// The prompt of `side` is prefixed to the text, exactly as
-    /// `tools/export_onnx.py` does when it builds the reference vectors.
+    /// Documents use this form: a passage that exceeds `max_tokens` must be
+    /// refused by the import check, never truncated silently (INV-11).
     ///
     /// # Errors
     ///
@@ -149,6 +220,33 @@ impl Model {
     /// [`ErrorCode::Internal`] when ONNX Runtime fails or returns a shape the
     /// configuration does not describe.
     pub fn encode(&self, side: Side, text: &str) -> Result<Vec<f32>, CribleError> {
+        self.encode_with_limit(side, text, None)
+            .map(|encoded| encoded.vector)
+    }
+
+    /// Encodes `text`, truncating it to `max_tokens` tokens when given.
+    ///
+    /// The prompt of `side` and the special tokens are part of the count: the
+    /// tokenizer loaded by [`Model::load`] has no truncation, so this method is
+    /// the only limit (ADR-0051). An input longer than `max_tokens` keeps its
+    /// first `max_tokens - 1` ids and its last id, then reports
+    /// `truncated: true`; the caller decides whether that is acceptable. The
+    /// last id is kept because a post-processed tokenizer ends the encoding with
+    /// its final special token (`</s>` for mDenseOn), which the exported graph
+    /// expects; a tokenizer without post-processing keeps its last content
+    /// token instead, as the fixture does.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] when the tokenizer fails or `max_tokens`
+    /// is zero, and [`ErrorCode::Internal`] when ONNX Runtime fails or returns a
+    /// shape the configuration does not describe.
+    pub fn encode_with_limit(
+        &self,
+        side: Side,
+        text: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<EncodedText, CribleError> {
         let prompts = self.config.prompts.as_ref().ok_or_else(|| {
             invalid(format!(
                 "model '{}' declares no prompts; an onnx model needs them",
@@ -168,16 +266,18 @@ impl Model {
                     "cannot tokenize an input of side {side:?}: {error}"
                 ))
             })?;
-        let length = encoding.get_ids().len();
+        let mut ids = encoding.get_ids().to_vec();
+        let mut mask = encoding.get_attention_mask().to_vec();
+        let truncated = match max_tokens {
+            Some(limit) => truncate(&mut ids, &mut mask, limit)?,
+            None => false,
+        };
+        let length = ids.len();
         if length == 0 {
             return Err(invalid("the tokenizer produced an empty input"));
         }
-        let ids: Vec<i64> = encoding.get_ids().iter().map(|id| i64::from(*id)).collect();
-        let mask: Vec<i64> = encoding
-            .get_attention_mask()
-            .iter()
-            .map(|bit| i64::from(*bit))
-            .collect();
+        let ids: Vec<i64> = ids.into_iter().map(i64::from).collect();
+        let mask: Vec<i64> = mask.into_iter().map(i64::from).collect();
         let shape = vec![
             1_i64,
             i64::try_from(length).map_err(|_| {
@@ -238,7 +338,7 @@ impl Model {
                 *component /= norm;
             }
         }
-        Ok(vector)
+        Ok(EncodedText { vector, truncated })
     }
 }
 
@@ -248,12 +348,43 @@ impl std::fmt::Debug for Model {
             .debug_struct("Model")
             .field("name", &self.config.name)
             .field("dims", &self.config.dims)
+            .field("precision", &self.precision)
             .field("fingerprint", &self.fingerprint())
             .finish_non_exhaustive()
     }
 }
 
+/// Truncates `ids` and `mask` to `limit` tokens, reporting whether they were
+/// longer.
+///
+/// Truncation keeps the first `limit - 1` tokens and the **last** one: a
+/// post-processed tokenizer ends its encoding with a special token, and dropping
+/// it would feed the graph an input it never saw during the export. The prompt
+/// and the special tokens are already in `ids`, so they count towards `limit`
+/// (ADR-0051).
+fn truncate(ids: &mut Vec<u32>, mask: &mut Vec<u32>, limit: u32) -> Result<bool, CribleError> {
+    if limit == 0 {
+        return Err(invalid(
+            "max_tokens is zero; an input cannot be encoded with no token",
+        ));
+    }
+    let limit = limit as usize;
+    let truncated = ids.len() > limit;
+    if truncated {
+        let last_id = ids.pop().unwrap_or_default();
+        let last_mask = mask.pop().unwrap_or_default();
+        ids.truncate(limit.saturating_sub(1));
+        ids.push(last_id);
+        mask.truncate(limit.saturating_sub(1));
+        mask.push(last_mask);
+    }
+    Ok(truncated)
+}
+
 /// Reads and parses `<directory>/model.json`.
+///
+/// The configuration loader of the server will need it; until then the registry
+/// and the query encoder are its only callers, inside this crate.
 pub(crate) fn read_config(directory: &Path) -> Result<ModelConfig, CribleError> {
     let path = model_json_path(directory);
     let raw = std::fs::read_to_string(&path).map_err(|error| {
@@ -375,4 +506,44 @@ fn invalid(message: impl Into<String>) -> CribleError {
 
 fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncates_ids_and_mask_at_the_limit() {
+        let mut ids = vec![101_u32, 1, 2, 3, 4, 102];
+        let mut mask = vec![1_u32; 6];
+        assert!(
+            truncate(&mut ids, &mut mask, 4).expect("a positive limit truncates"),
+            "six ids exceed a limit of four"
+        );
+        assert_eq!(
+            ids,
+            vec![101, 1, 2, 102],
+            "the first ids and the final special token are kept"
+        );
+        assert_eq!(mask.len(), 4, "the mask follows the ids");
+    }
+
+    #[test]
+    fn reports_no_truncation_at_or_below_the_limit() {
+        let mut ids = vec![101_u32, 1, 102];
+        let mut mask = vec![1_u32; 3];
+        assert!(
+            !truncate(&mut ids, &mut mask, 3).expect("a positive limit is accepted"),
+            "three ids fit a limit of three"
+        );
+        assert_eq!(ids.len(), 3, "an input at the limit is untouched");
+    }
+
+    #[test]
+    fn refuses_a_zero_limit() {
+        let mut ids = vec![101_u32];
+        let mut mask = vec![1_u32];
+        let error = truncate(&mut ids, &mut mask, 0).expect_err("a zero limit is refused");
+        assert!(error.message().contains("max_tokens is zero"));
+    }
 }
