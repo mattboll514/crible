@@ -39,7 +39,7 @@ use crible_core::filter::Filter;
 use crible_core::ids::Epoch;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_encode::{
-    DEFAULT_QUERY_CACHE_ENTRIES, ModelRegistry, Precision, QueryEncoder, TokenCounter,
+    DEFAULT_QUERY_CACHE_ENTRIES, Model, ModelRegistry, Precision, QueryEncoder, TokenCounter,
 };
 use crible_search::dense::exact::ExactSearcher;
 use crible_search::pool::Pool;
@@ -104,15 +104,32 @@ pub fn attach_batch(
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let model = load_model(models, &config.model)?;
+    let model_dir = model_directory(models, &config.model)?;
     // Control 8 of `docs/04` counts the tokens of every passage with the
     // tokenizer of an `onnx` model, without loading ONNX Runtime (INV-11). An
     // `external` model has no tokenizer and is out of that control.
     let token_counter = match model.kind {
         ModelKind::External => None,
-        ModelKind::Onnx => Some(TokenCounter::load(model_directory(models, &config.model)?)?),
+        ModelKind::Onnx => Some(TokenCounter::load(&model_dir)?),
+    };
+    // Control 9 of `docs/04` re-encodes a sample in fp32 (INV-12). The graph is
+    // loaded lazily, by this closure, at the point the attach reaches the
+    // check: a batch refused earlier (another model, a bad checksum, an
+    // over-long passage) never pays the ONNX Runtime session (ADR-0053).
+    let load_encoder = || Model::load_precision(&model_dir, Precision::Fp32);
+    let document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>> = match model.kind {
+        ModelKind::External => None,
+        ModelKind::Onnx => Some(&load_encoder),
     };
     let mut store = GenerationStore::open(&index_dir, &config.schema)?;
-    let report = attach(&mut store, batch, &config, &model, token_counter.as_ref())?;
+    let report = attach(
+        &mut store,
+        batch,
+        &config,
+        &model,
+        token_counter.as_ref(),
+        document_encoder,
+    )?;
     println!(
         "batch '{}' attached to index '{}': generation {} (added {}, replaced {}, \
          unchanged {}, metadata_updated {}, deleted {}, ignored {})",
@@ -126,6 +143,12 @@ pub fn attach_batch(
         report.deleted,
         report.ignored,
     );
+    if let Some(acceptance) = report.acceptance {
+        println!(
+            "  acceptance: {} passage(s) re-encoded, min cosine {:.6}, p1 {:.6}, p50 {:.6}",
+            acceptance.sample, acceptance.min_cosine, acceptance.p1, acceptance.p50
+        );
+    }
     Ok(())
 }
 

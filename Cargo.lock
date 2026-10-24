@@ -664,6 +664,7 @@ dependencies = [
  "crible-encode",
  "crible-search",
  "crible-store",
+ "half",
  "parquet",
  "rusqlite",
  "serde_json",

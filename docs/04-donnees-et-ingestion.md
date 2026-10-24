@@ -54,6 +54,15 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 
 Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**).
 
+Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0054) :
+
+| Réglage | Domaine | Défaut |
+|---|---|---|
+| `acceptance_sample` | `≥ 1` | `200` |
+| `acceptance_min_cosine` | `∈ ]0, 1]` | `0,999` (ADR-0052) |
+
+Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la configuration est invalide en elle-même, quelle que soit la tâche qui la lit, et c'est la validation de la configuration qui la refuse, pas l'attache. `ingest.*` reste réglable par `PATCH` : aucune clé n'est retirée, et la valeur par défaut ne change pas.
+
 ## Le modèle
 
 Fichier `models/<name>/model.json` :
@@ -184,9 +193,11 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
    - on tire un échantillon de `acceptance_sample` passages, avec une graine dérivée du `batch_id` ;
    - on les ré-encode en ONNX fp32, avec `prompt_document` ;
    - on calcule le cosinus avec les vecteurs du lot ;
-   - si le minimum est sous `acceptance_min_cosine` (0,999 : valeur fixée par ADR-0052, elle n'est plus provisoire), le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
+   - si le minimum est sous `acceptance_min_cosine` (0,999 : valeur fixée par ADR-0052, elle n'est plus provisoire ; domaine `]0, 1]`, ADR-0054), le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
 
    C'est la généralisation de la recette de Legifacile, qui a déjà détecté un écart de version de transformers (cosinus 0,988).
+
+   Un lot **sans aucun passage** — seulement des `deletions` — n'a rien à tirer au sort : son rapport porte `acceptance: null`, et c'est un fait du lot, pas un réglage (ADR-0054). `acceptance: null` n'a donc pas d'autre signification : `acceptance_sample` ne peut pas valoir `0`, et un lot qui contient des passages ne peut pas produire un rapport sans statistiques de recette.
 
 **Le rapport d'attache** donne six comptes **par document et mutuellement exclusifs** (ADR-0041), puis :
 

@@ -13,12 +13,15 @@
 //!
 //! # What each test pins
 //!
-//! | Test | Criterion or invariant |
-//! |---|---|
-//! | `inv_11_a_batch_with_one_overlong_passage_is_rejected_without_any_effect` | INV-11, first acceptance criterion: one over-long passage rejects the batch, and the index keeps its generation, its segments, its SQLite rows and no leftover temporary file |
-//! | `inv_11_the_limit_is_exact_and_counts_the_document_prompt` | INV-11 and control 8: exactly `max_tokens` tokens prompt included is accepted, `max_tokens + 1` is rejected, and the `document: ` prompt counts |
-//! | `inv_11_the_error_names_the_first_twenty_offending_keys_in_a_stable_order` | INV-11: a stable error code, at most twenty offending keys, in a deterministic order |
-//! | `inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage` | INV-11: the `truncation` declared by `tokenizer.json` is not trusted |
+//! | Test | Runs in CI? | Criterion or invariant |
+//! |---|---|---|
+//! | `inv_11_a_batch_with_one_overlong_passage_is_rejected_without_any_effect` | yes | INV-11, first acceptance criterion: one over-long passage rejects the batch, and a fresh index keeps its generation, its segments, its SQLite rows and no leftover temporary file |
+//! | `inv_11_a_batch_with_one_overlong_passage_is_rejected_after_an_accepted_batch` | `#[ignore]` | Same refusal on an index that already holds an accepted batch: nothing of that batch moves |
+//! | `inv_11_the_limit_is_exact_and_counts_the_document_prompt` | yes | INV-11 and control 8: `max_tokens` words are refused, so the `document: ` prompt counts |
+//! | `inv_11_a_batch_of_max_tokens_minus_one_is_accepted` | `#[ignore]` | INV-11 and control 8: exactly `max_tokens` tokens prompt included is accepted, `max_tokens + 1` is rejected |
+//! | `inv_11_the_error_names_the_first_twenty_offending_keys_in_a_stable_order` | yes | INV-11: a stable error code, at most twenty offending keys, in a deterministic order |
+//! | `inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage` | yes | INV-11: the `truncation` declared by `tokenizer.json` is not trusted |
+//! | `inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage_after_an_accepted_batch` | `#[ignore]` | Same, after the tokenizer accepted a short passage through control 9 |
 //!
 //! # Why the CLI
 //!
@@ -36,7 +39,13 @@
 //! Its WordLevel tokenizer has a `WhitespaceSplit` pre-tokenizer, no
 //! post-processor and no truncation, so the token count is exactly the number of
 //! whitespace-separated words, plus one for the prompt `document: `. Counting it
-//! needs the tokenizer only, never ONNX Runtime: these tests run in CI.
+//! needs the tokenizer only, never ONNX Runtime.
+//!
+//! Since `RECETTE-IMPORT`, a batch that an `onnx` model accepts also goes
+//! through control 9 (`INV-12`), which re-encodes a sample in fp32 and therefore
+//! needs ONNX Runtime. Every test split in two: the refusal variant, which stops
+//! before control 9, runs in CI; the variant that attaches an accepted batch is
+//! `#[ignore]`d and runs with `ORT_DYLIB_PATH` set.
 //!
 //! The fixture declares `max_tokens: 32` and 768 dimensions. The boundary of a
 //! passage is therefore 31 words of text (`31 + 1 = 32` tokens): 32 words of text
@@ -50,6 +59,9 @@
 //! because a token-counting implementation that trusted `tokenizer.json` would
 //! accept the over-long passage). They compile against the shipped CLI.
 
+mod common;
+
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -65,8 +77,10 @@ use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
+use common::{DIMS as COMMON_DIMS, fake_vector, fixture_directory, vocabulary};
+
 /// Dimensions of the fake encoder (`model.json` of the fixture).
-const DIMS: u32 = 768;
+const DIMS: u32 = COMMON_DIMS as u32;
 
 /// Index created by every test.
 const INDEX: &str = "longueurs";
@@ -78,11 +92,6 @@ const EPOCH: u32 = 1;
 const MODEL: &str = "fake-model";
 
 // --- Paths of the fixture ---
-
-/// Directory of the versioned fake model.
-fn fixture_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../crible-encode/tests/fixtures/fake-model")
-}
 
 /// Reads one member of a `model.json`.
 fn model_member(model_json: &Path, member: &str) -> Value {
@@ -310,11 +319,19 @@ fn passage_schema() -> SchemaRef {
     ]))
 }
 
-/// One normalized 768-dimensional vector in little-endian fp16: `[1, 0, …]`, so
-/// control 7 accepts it whatever the text.
-fn unit_vector() -> Vec<u8> {
-    let mut bytes = vec![0_u8; DIMS as usize * 2];
-    bytes[..2].copy_from_slice(&0x3C00_u16.to_le_bytes());
+/// The vector the fixture graph produces for the document side of `text`, in
+/// little-endian fp16.
+///
+/// The input is the `document: ` prompt followed by the text, which the fixture
+/// tokenizer splits on whitespace. An accepted batch must store this vector:
+/// control 9 (`RECETTE-IMPORT`) re-encodes the text and refuses a batch whose
+/// stored vectors do not match.
+fn stored_vector(vocabulary: &BTreeMap<String, u32>, text: &str) -> Vec<u8> {
+    let vector = fake_vector(vocabulary, text, true);
+    let mut bytes = Vec::with_capacity(DIMS as usize * 2);
+    for component in vector {
+        bytes.extend_from_slice(&half::f16::from_f32(component).to_le_bytes());
+    }
     bytes
 }
 
@@ -359,10 +376,11 @@ fn write_batch(
     let passage_ids: StringArray = passages.iter().map(|(id, _, _)| Some(*id)).collect();
     let ords = UInt32Array::from(passages.iter().map(|(_, ord, _)| *ord).collect::<Vec<_>>());
     let texts: StringArray = passages.iter().map(|(_, _, text)| Some(*text)).collect();
+    let vocabulary = vocabulary();
     let vectors = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
         passages
             .iter()
-            .map(|_| Some(unit_vector()))
+            .map(|(_, _, text)| Some(stored_vector(&vocabulary, text)))
             .collect::<Vec<_>>()
             .into_iter(),
         vector_width(),
@@ -653,8 +671,78 @@ fn collect_temporary(root: &Path, directory: &Path, found: &mut Vec<String>) {
 /// A batch whose single over-long passage exceeds `max_tokens` (prompt included)
 /// is refused, and the index keeps its generation, its segments, its SQLite
 /// rows and no leftover temporary file.
+///
+/// The index is fresh and control 8 runs before control 9, so the refusal needs
+/// no encoder and the test runs in CI. The sibling
+/// `inv_11_a_batch_with_one_overlong_passage_is_rejected_after_an_accepted_batch`
+/// repeats it after an accepted batch, which does need ONNX Runtime.
 #[test]
 fn inv_11_a_batch_with_one_overlong_passage_is_rejected_without_any_effect() {
+    let fixture = prepare(None);
+    let max = max_tokens(&fixture.models);
+    create_index(&fixture);
+
+    let before = db_state(&fixture);
+    assert_eq!(before.generation, 0, "a fresh index starts at generation 0");
+    assert_eq!(before.batches, 0, "a fresh index records no batch");
+    assert_eq!(before.passages, 0, "a fresh index holds no passage");
+    let files_before = index_files(&fixture);
+    assert_eq!(
+        segments_entries(&fixture),
+        Vec::<String>::new(),
+        "a fresh index has no segment"
+    );
+
+    // Two documents, one of them over-long: a single fault rejects the whole
+    // batch (control 8 of docs/04).
+    let short = words(2);
+    let overlong = words(max);
+    let refused = write_batch(
+        &fixture.root().join("batches"),
+        "trop-long",
+        &[("doc-sain", "hash-sain"), ("doc-long", "hash-long")],
+        &[
+            ("doc-sain", 0, short.as_str()),
+            ("doc-long", 0, overlong.as_str()),
+        ],
+    );
+    attach_refused_for_length(&fixture, &refused);
+
+    let after = db_state(&fixture);
+    assert_eq!(
+        after.generation, 0,
+        "a refused batch must not advance the generation (INV-11)"
+    );
+    assert_eq!(
+        after, before,
+        "a refused batch must leave records.sqlite exactly as it was: no row, no meta change"
+    );
+    assert_eq!(
+        index_files(&fixture),
+        files_before,
+        "a refused batch must leave every other file of the index untouched: CURRENT_EPOCH, \
+         manifests, segments"
+    );
+    assert_eq!(
+        segments_entries(&fixture),
+        Vec::<String>::new(),
+        "a refused batch must not create a segment"
+    );
+    assert_eq!(
+        temporary_entries(&fixture),
+        Vec::<String>::new(),
+        "a refused batch must leave no temporary file in the index (INV-11)"
+    );
+}
+
+/// The same refusal, after a batch the index accepted: the index keeps the
+/// generation, the segment and the rows of that batch.
+///
+/// The accepted batch goes through control 9, so the test needs ONNX Runtime
+/// (`INV-12`).
+#[test]
+#[ignore = "needs ONNX Runtime (ORT_DYLIB_PATH) for the accepted reference batch (control 9, INV-12); run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test controler_longueurs -- --ignored"]
+fn inv_11_a_batch_with_one_overlong_passage_is_rejected_after_an_accepted_batch() {
     let fixture = prepare(None);
     let max = max_tokens(&fixture.models);
     create_index(&fixture);
@@ -739,11 +827,56 @@ fn segments_entries(fixture: &Fixture) -> Vec<String> {
 
 // --- INV-11: the limit is exact and the prompt counts ---
 
+/// A passage of `max_tokens` words holds `max_tokens + 1` tokens once the
+/// `document: ` prompt is counted, so it is refused. A counter that forgot the
+/// prompt would accept it, which is what proves the limit counts the prompt.
+///
+/// The acceptance half — the same text with `max_tokens - 1` words — needs
+/// control 9 and lives in `inv_11_a_batch_of_max_tokens_minus_one_is_accepted`,
+/// which needs ONNX Runtime. This refusal runs in CI.
+#[test]
+fn inv_11_the_limit_is_exact_and_counts_the_document_prompt() {
+    let fixture = prepare(None);
+    let max = max_tokens(&fixture.models);
+    assert!(
+        max >= 2,
+        "the fixture max_tokens must leave room for a prompt"
+    );
+    create_index(&fixture);
+
+    // `max_tokens` words alone would fit; with the prompt they do not.
+    let one_too_many = words(max);
+    let over_limit = write_batch(
+        &fixture.root().join("batches"),
+        "un-token-de-trop",
+        &[("doc-trop", "hash-trop")],
+        &[("doc-trop", 0, one_too_many.as_str())],
+    );
+    let stderr = attach_refused_for_length(&fixture, &over_limit);
+    assert!(
+        stderr.contains("max_tokens") && stderr.contains("doc-trop#0"),
+        "the refusal must come from the length control and name the offending key: {stderr}"
+    );
+    assert_eq!(
+        db_state(&fixture).generation,
+        0,
+        "a refused batch must not advance the generation (INV-11)"
+    );
+    assert_eq!(
+        temporary_entries(&fixture),
+        Vec::<String>::new(),
+        "a refused batch must leave no temporary file in the index (INV-11)"
+    );
+}
+
 /// A passage of exactly `max_tokens` tokens, prompt included, is accepted; one
 /// token more is refused. The accepted text has `max_tokens - 1` words, so a
 /// counter that forgot the `document: ` prompt would accept the next batch.
+///
+/// The accepted attach runs control 9, so the test needs ONNX Runtime.
 #[test]
-fn inv_11_the_limit_is_exact_and_counts_the_document_prompt() {
+#[ignore = "needs ONNX Runtime (ORT_DYLIB_PATH) for the accepted batch (control 9, INV-12); run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test controler_longueurs -- --ignored"]
+fn inv_11_a_batch_of_max_tokens_minus_one_is_accepted() {
     let fixture = prepare(None);
     let max = max_tokens(&fixture.models);
     assert!(
@@ -854,8 +987,55 @@ fn inv_11_the_error_names_the_first_twenty_offending_keys_in_a_stable_order() {
 
 /// A tokenizer that declares a short `truncation` must not mask an over-long
 /// passage: the count is made on the whole input, prompt included.
+///
+/// The refusal stops before control 9, so this test runs in CI without ONNX
+/// Runtime. The sibling
+/// `inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage_after_an_accepted_batch`
+/// first accepts a short passage, which does need ONNX Runtime.
 #[test]
 fn inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage() {
+    let fixture = prepare(Some(4));
+    let max = max_tokens(&fixture.models);
+    create_index(&fixture);
+
+    // The real mDenseOn tokenizer declares `max_length: 8192`, and the fixture
+    // is made to declare 4. A counter that trusted it would see 4 tokens and
+    // accept this passage.
+    let overlong = words(max);
+    let refused = write_batch(
+        &fixture.root().join("batches"),
+        "trop-long",
+        &[("doc-long", "hash-long")],
+        &[("doc-long", 0, overlong.as_str())],
+    );
+    attach_refused_for_length(&fixture, &refused);
+    assert_eq!(
+        db_state(&fixture).generation,
+        0,
+        "the truncation declared by tokenizer.json must not mask an over-long passage \
+         (INV-11)"
+    );
+    assert_eq!(
+        segments_entries(&fixture),
+        Vec::<String>::new(),
+        "a refused batch must not create a segment"
+    );
+    assert_eq!(
+        temporary_entries(&fixture),
+        Vec::<String>::new(),
+        "a refused batch must leave no temporary file in the index (INV-11)"
+    );
+}
+
+/// The same declared truncation, after the tokenizer accepted a short passage:
+/// the model loads, the declared truncation breaks nothing, and the over-long
+/// passage is still refused.
+///
+/// The accepted batch goes through control 9, so the test needs ONNX Runtime.
+#[test]
+#[ignore = "needs ONNX Runtime (ORT_DYLIB_PATH) for the accepted reference batch (control 9, INV-12); run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test controler_longueurs -- --ignored"]
+fn inv_11_a_declared_tokenizer_truncation_does_not_hide_an_overlong_passage_after_an_accepted_batch()
+ {
     let fixture = prepare(Some(4));
     let max = max_tokens(&fixture.models);
     create_index(&fixture);
