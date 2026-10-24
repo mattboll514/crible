@@ -203,6 +203,10 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+ci = [
+    { name = "onnxruntime" },
+    { name = "tokenizers" },
+]
 dev = [
     { name = "pytest" },
 ]
@@ -225,6 +229,10 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+ci = [
+    { name = "onnxruntime", specifier = "==1.31.0" },
+    { name = "tokenizers", specifier = ">=0.22.2" },
+]
 dev = [{ name = "pytest", specifier = ">=8" }]
 export = [
     { name = "huggingface-hub", specifier = ">=0.36.2" },

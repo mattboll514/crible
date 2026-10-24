@@ -11,8 +11,10 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `reference_vectors.py` | Écrit les 20 textes et vecteurs de référence du test Rust de `CHARGER-MODELE`. |
 | `fake_encoder.py` | Génère le petit modèle ONNX factice versionné, utilisé par les tests Rust qui n'ont pas le modèle réel. |
 | `demo_j2_batches.py` | Construit les deux lots fautifs de la démo J2 (vecteurs sans prompt, passage trop long) à partir de l'échantillon Legifacile. |
+| `fetch_model_artifact.py` | Télécharge et vérifie l'artefact de modèle de la CI (ADR-0057), ou affiche la clé de cache. |
 | `tests/` | Tests pytest des outils. |
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
+| `bench/mes04/` | Campagne de mesure de la parité de l'encodeur (MES-04) : préparation des requêtes, référence PyTorch, comparaison ONNX et analyse. |
 | `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
 
 Les identifiants, les options et les clés JSON sont en anglais ; ce README est
@@ -47,6 +49,29 @@ embarque la grappe CUDA, soit plusieurs Go inutiles. `transformers` est
 **épinglé à `5.14.1`** (borne exacte, ADR-0050) : c'est la version sous laquelle
 ont été calculés les vecteurs de production de Legifacile. La relever demande
 une nouvelle mesure de fidélité (critère (ii) plus bas).
+
+### Groupe `ci` et artefact de modèle (ADR-0057)
+
+Le job CI `rust-onnx` exécute les tests Rust qui chargent ONNX Runtime, et le
+job `tools` lance les tests MES-04 qui demandent `tokenizers`. Les deux
+installent le groupe `ci`, qui contient `onnxruntime==1.31.0` et `tokenizers`,
+**sans** `torch` : c'est le runtime d'exécution, pas la chaîne d'export.
+
+```sh
+cd tools
+uv sync --group ci
+```
+
+`fetch_model_artifact.py` télécharge les fichiers du vrai modèle depuis le dépôt
+Hugging Face public épinglé dans `ci/model-artifact.toml`, vérifie leur blake3 et
+les place dans `data/models/mdenseon/`. Un fichier déjà présent (cache GitHub
+Actions) est vérifié comme un téléchargement neuf ; un écart échoue en nommant la
+clé de cache à purger. Aucun jeton n'est nécessaire.
+
+```sh
+uv run python fetch_model_artifact.py cache-key   # clé du cache Actions
+uv run python fetch_model_artifact.py             # télécharge et vérifie
+```
 
 ### ONNX Runtime sur Mac, pour les tests Rust
 

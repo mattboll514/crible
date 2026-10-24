@@ -26,6 +26,7 @@
 //! | `inv_12_the_acceptance_sample_is_deterministic_per_batch_id` | The sample is drawn from a seed derived from `batch_id`: the same `batch_id` samples the same passage, two `batch_id`s do not always sample the same one |
 //! | `inv_12_an_external_model_has_no_acceptance_check` | Fourth deliverable: an `external` model has no recipe, so a batch of arbitrary vectors is accepted and the report carries no acceptance statistics |
 //! | `inv_12_the_legifacile_sample_passes_the_acceptance_check` | First acceptance criterion on real data: the Legifacile sample (`data/legifacile-sample/`) with the real model (`data/models/mdenseon/`) passes the check |
+//! | `inv_12_the_legifacile_sample_test_fails_without_its_prerequisites` | ADR-0057: the sample test fails, with the command that builds its data, instead of returning silently when the gitignored data is absent |
 //! | `the_no_prompt_fixture_vector_falls_below_the_acceptance_threshold` | Premise of the refusal test: the vector of the fake model encoded without the prompt really is under 0.999 |
 //! | `the_determinism_fixture_vectors_stay_above_the_threshold_and_differ` | Premise of the determinism test: the sixteen perturbed vectors are distinct and still above 0.999 |
 //!
@@ -1322,6 +1323,82 @@ fn inv_12_an_external_model_has_no_acceptance_check() {
 
 // --- INV-12: the real sample passes the acceptance check ---
 
+/// Command that builds the gitignored data of the sample test.
+///
+/// The sample itself is exported with the owner, in read-only access to the
+/// production database (`data/legifacile-sample/README.md`, "Reproduire"); the
+/// model is the export of ADR-0050. An `#[ignore]` test launched explicitly
+/// without this data must fail with this command (docs/08, "Sauts de test").
+const LEGIFACILE_SAMPLE_COMMAND: &str = "cd \"$PROD_REPO\" && uv run --no-project --with \
+     \"$CRIBLE_PYTHON\" --with tokenizers --with lxml --with numpy python3 \
+     scripts/export_crible_sample.py --structure dole  (full procedure and the .env.prod \
+     variables: data/legifacile-sample/README.md, section \"Reproduire\", with the owner, \
+     production read-only), then:\n  cd tools && uv sync --group export && uv run python \
+     export_onnx.py --out ../data/models/mdenseon --overwrite";
+
+/// Paths of the Legifacile sample the ignored test reads.
+#[derive(Debug)]
+struct SamplePaths {
+    config: PathBuf,
+    batch: PathBuf,
+    models: PathBuf,
+}
+
+/// Returns the paths of the sample, or the missing file and the command.
+fn legifacile_sample_paths(root: &Path) -> Result<SamplePaths, String> {
+    let sample = root.join("data/legifacile-sample");
+    let paths = SamplePaths {
+        config: sample.join("configs/dole.json"),
+        batch: sample.join("batches/legifacile-sample-dole-v1"),
+        models: root.join("data/models"),
+    };
+    let manifest = paths.batch.join("manifest.json");
+    let model_json = paths.models.join("mdenseon/model.json");
+    for required in [&paths.config, &manifest, &model_json] {
+        if !required.is_file() {
+            return Err(format!(
+                "{} is missing, so inv_12_the_legifacile_sample_passes_the_acceptance_check \
+                 cannot run; build the gitignored data with:\n  {LEGIFACILE_SAMPLE_COMMAND}",
+                required.display()
+            ));
+        }
+    }
+    Ok(paths)
+}
+
+/// An `#[ignore]` test launched explicitly without its prerequisite fails.
+///
+/// This is the check the sample test calls: an empty repository root stands for
+/// a machine where the gitignored `data/` was never built, and the message must
+/// name the missing file and the command that produces it (docs/08, "Sauts de
+/// test"; ADR-0057). A `return` here would make the sample test pass without
+/// proving anything.
+#[test]
+fn inv_12_the_legifacile_sample_test_fails_without_its_prerequisites() {
+    let root = tempfile::tempdir()
+        .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
+
+    let error = legifacile_sample_paths(root.path())
+        .expect_err("an empty root holds no Legifacile sample, so the check must fail");
+
+    assert!(
+        error.contains("data/legifacile-sample/configs/dole.json"),
+        "the message must name the missing file: {error}"
+    );
+    assert!(
+        error.contains("data/legifacile-sample/README.md"),
+        "the message must say where the sample is produced: {error}"
+    );
+    assert!(
+        error.contains("export_crible_sample.py"),
+        "the message must give the command that exports the sample: {error}"
+    );
+    assert!(
+        error.contains("export_onnx.py"),
+        "the message must give the command that produces the model: {error}"
+    );
+}
+
 /// The Legifacile sample passes the acceptance check with the real model: the
 /// `dole` batch (the smallest of the six) is attached, and the report's
 /// `min_cosine` is at or above 0.999.
@@ -1330,31 +1407,17 @@ fn inv_12_an_external_model_has_no_acceptance_check() {
 /// p1 0.9999935 and median 0.9999983 on 600 passages of this sample with the
 /// re-exported fp32 graph, so the check has about 25 times the tolerance.
 ///
-/// The test skips when `data/legifacile-sample/` or `data/models/mdenseon/` is
-/// absent, as those directories are gitignored.
+/// The data is gitignored. When it is absent, the test **fails** with the
+/// command that builds it (ADR-0057, docs/08 "Sauts de test"): a `return` would
+/// turn a missing prerequisite into a green run that proves nothing.
 #[test]
 #[ignore = "needs data/legifacile-sample, data/models/mdenseon and ORT_DYLIB_PATH; run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test recette_import -- --ignored"]
 fn inv_12_the_legifacile_sample_passes_the_acceptance_check() {
     let root = repository_root();
-    let sample = root.join("data/legifacile-sample");
-    let config = sample.join("configs/dole.json");
-    let batch = sample.join("batches/legifacile-sample-dole-v1");
-    let models = root.join("data/models");
-    for required in [
-        config.clone(),
-        batch.join("manifest.json"),
-        models.join("mdenseon/model.json"),
-    ] {
-        if !required.is_file() {
-            eprintln!(
-                "skipping inv_12_the_legifacile_sample_passes_the_acceptance_check: {} is \
-                 missing (gitignored data, built by CONSTITUER-ECHANTILLON-LEGIFACILE and \
-                 REEXPORTER-MODELE-TRANSFORMERS-5)",
-                required.display()
-            );
-            return;
-        }
-    }
+    let paths = legifacile_sample_paths(&root).unwrap_or_else(|reason| panic!("{reason}"));
+    let config = paths.config;
+    let batch = paths.batch;
+    let models = paths.models;
 
     let fixture = prepare();
     let data = fixture.data_root("legifacile");

@@ -118,8 +118,16 @@ fn read_queries(path: &Path) -> Result<Vec<Query>, Box<dyn std::error::Error>> {
 /// Encodes every query in both precisions and writes the vectors.
 ///
 /// The two files are row-major little-endian `f32`, one row per query, in the
-/// order of the input file. The sidecar JSON carries the order and the
-/// truncation flags, so a reader never has to guess which row is which query.
+/// order of the input file. The sidecar JSON carries the order, the truncation
+/// flags and the precision actually served for each matrix (`precision_effective`,
+/// the same key as the latency mode), so a reader never has to guess which row is
+/// which query or which graph produced it.
+///
+/// The two modes write that key with different shapes on purpose: the vectors
+/// mode produces two matrices in one artifact, so `precision_effective` is an
+/// object keyed by `int8` and `fp32`; the latency mode measures one matrix and
+/// writes a string. The meaning is the same in both: the precision the encoder
+/// actually served, never the one that was requested.
 fn write_vectors(
     model: &Path,
     queries: &[Query],
@@ -133,6 +141,8 @@ fn write_vectors(
     let mut fp32 = Vec::with_capacity(queries.len());
     let mut truncated_int8 = Vec::with_capacity(queries.len());
     let mut truncated_fp32 = Vec::with_capacity(queries.len());
+    let mut effective_int8 = Precision::Int8;
+    let mut effective_fp32 = Precision::Fp32;
 
     for query in queries {
         let encoded = encoder.encode_query(&query.text, Precision::Int8)?;
@@ -144,12 +154,14 @@ fn write_vectors(
             )
             .into());
         }
+        effective_int8 = encoded.precision;
         truncated_int8.push(encoded.truncated);
         int8.push(encoded.vector);
         let encoded = encoder.encode_query(&query.text, Precision::Fp32)?;
         if encoded.precision != Precision::Fp32 {
             return Err("the encoder served another precision for a requested fp32 query".into());
         }
+        effective_fp32 = encoded.precision;
         truncated_fp32.push(encoded.truncated);
         fp32.push(encoded.vector);
     }
@@ -169,6 +181,10 @@ fn write_vectors(
         "ids": queries.iter().map(|query| query.id.as_str()).collect::<Vec<_>>(),
         "truncated_int8": truncated_int8,
         "truncated_fp32": truncated_fp32,
+        "precision_effective": {
+            "int8": precision_name(effective_int8),
+            "fp32": precision_name(effective_fp32),
+        },
         "cache_entries": stats.capacity,
         "cache_misses": stats.misses,
         "cache_hits": stats.hits,
