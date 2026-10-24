@@ -110,7 +110,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0054](0054-chargement-differe-du-modele-a-l-attache-et-bornes-de-la-recette.md) | Chargement différé du modèle à l'attache et bornes de la recette | Accepté | 2026-10-24 (proposition et acceptation) |
 | [ADR-0055](0055-lot-en-ligne-fichier-d-entree-identite-empreinte-et-lot-interne.md) | Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne | Accepté (décision 4, nettoyage, remplacée par ADR-0056) | 2026-10-24 (proposition et acceptation) |
 | [ADR-0056](0056-verrou-de-presence-des-lots-en-ligne.md) | Verrou de présence des lots en ligne (remplace la décision 4 d'ADR-0055 sur le nettoyage) | Accepté | 2026-10-24 (proposition et acceptation) |
-| [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Proposé | 2026-10-24 |
+| [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Accepté | 2026-10-24 (proposition, révision et acceptation) |
 
 ## Questions ouvertes
 

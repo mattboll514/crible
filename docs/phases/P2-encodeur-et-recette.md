@@ -7,7 +7,8 @@
 - un lot corrompu (mauvais prompt) est refusé par la recette, et le lot correct est accepté ;
 - un passage trop long est refusé ;
 - MES-04 et MES-05 sont consignées ;
-- le seuil de recette (Q-06) est validé par le propriétaire.
+- le seuil de recette (Q-06) est validé par le propriétaire ;
+- un run CI distant vert sur la branche de phase, job `rust-onnx` compris (ADR-0057).
 
 ---
 
@@ -144,3 +145,45 @@
   - `crible search --query "…"`, avec l'affichage clé, score, champs et un extrait de texte ;
   - `docs/jalons/J2-demo.md`, avec les commandes exactes sur l'échantillon Legifacile.
 - **Critères d'acceptation** : le scénario J2 passe tel qu'écrit.
+
+### AJOUTER-ORT-CI
+- **Objectif** : rendre la CI capable d'exécuter les 19 tests ONNX Runtime, sur le modèle factice et sur le vrai modèle mDenseOn, et rendre un saut de test silencieux impossible (ADR-0057).
+- **Dépend de** : NETTOYER-P2, CLI-RECHERCHE-TEXTE, RECETTE-IMPORT, CONTROLER-LONGUEURS, ENCODER-DOCUMENTS-EN-LIGNE
+- **À lire** : `adr/0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md` ; `07-stack-et-deploiement.md` (« CI (GitHub Actions) », « Côté Python », « Dépendances Rust » pour `load-dynamic`) ; `08-invariants-et-tests.md` (« Sauts de test », INV-11, INV-12) ; `.github/workflows/ci.yml` ; `tools/README.md` (« Révision et hash mesurés ») ; `docs/jalons/J2-rapport.md`, §7.
+- **Livrables** :
+  - `tools/pyproject.toml` : groupe `uv` `ci` contenant `onnxruntime==1.31.0` en version exacte, **sans** `torch`, installé par `uv sync --group ci` ; `tokenizers` s'y ajoute seulement s'il est la seule dépendance qui manque aux tests de `tools/bench/mes04/` ;
+  - `.github/workflows/ci.yml` : job `rust-onnx`, sur `ubuntu-latest`, déclenché sur push et pull request, avec un `timeout-minutes` explicite fixé large puis resserré après le premier run à froid ; `ORT_DYLIB_PATH` désigne la bibliothèque de la roue (`onnxruntime/capi/libonnxruntime.so.1.31.0`), jamais un chemin de poste de développement ; la feature `download-binaries` d'`ort` n'est pas utilisée ;
+  - le manifeste versionné de l'artefact (`ci/model-artifact.toml`) : dépôt Hugging Face, sha du commit HF épinglé, noms des fichiers, hash blake3 **complets** de chaque fichier téléchargé, `model.json` compris ;
+  - le téléchargement et la vérification : URL explicite `https://huggingface.co/mattboll/mdenseon-onnx/resolve/<sha du commit HF>/<fichier>`, sans jeton, cache GitHub Actions indexé sur les hash du manifeste et **jamais** source de confiance (le contenu restauré est vérifié comme un téléchargement neuf), fichiers placés dans `data/models/mdenseon/` ;
+  - le dossier d'envoi de l'artefact préparé dans `data/` (gitignoré) : `model.onnx`, `model.int8.onnx`, `tokenizer.json` et `model.json`, copies exactes de `data/models/mdenseon/`, plus `LICENSE` (texte d'Apache-2.0) et `README.md` (carte du modèle) ;
+  - la correction de `crates/crible/tests/recette_import.rs` : le `return` silencieux (vers les lignes 1333-1352) devient un échec dont le message donne la commande qui produit `data/legifacile-sample/` et `data/models/mdenseon/` ;
+  - les cinq corrections ci-dessous ;
+  - les durées du job `rust-onnx`, relevées **à froid** (sans cache) et **à cache chaud**, remises à l'orchestrateur pour `docs/suivi.md`.
+- **Critères d'acceptation** :
+  - sur un run **distant**, le job `rust-onnx` exécute la commande `cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check` et les 19 tests ignorés y passent ;
+  - le test de l'échantillon Legifacile est le **seul** exclu, par son nom, et son exclusion est justifiée ;
+  - le job Rust actuel reste inchangé et n'installe ni ONNX Runtime ni le groupe `ci` ;
+  - le manifeste fige le dépôt, le sha du commit HF et les blake3 complets, `model.json` compris ;
+  - un hash faux fait échouer le job en donnant le hash attendu et le hash obtenu ;
+  - un fichier absent, une URL en erreur (code non 2xx) ou une révision introuvable font échouer le job en donnant l'URL et le nom du fichier ;
+  - un cache restauré dont le contenu diverge échoue aussi, en donnant la clé de cache à purger ;
+  - aucun jeton Hugging Face n'apparaît dans le workflow ni dans le dépôt ; aucun `continue-on-error`, aucun `|| true`, aucun saut implicite ;
+  - un test `#[ignore]` lancé sans son prérequis échoue avec la commande qui le produit, et un test le prouve sur `recette_import.rs` ;
+  - les cinq corrections ci-dessous sont faites, chacune avec sa preuve (test, sortie ou diff) ;
+  - les durées à froid et à cache chaud sont relevées et remises à l'orchestrateur.
+- **Invariants / mesures** : INV-11 (aucune troncature silencieuse : les tests `inv_11_*` passent en CI avec ONNX Runtime), INV-12 (recette d'import : les tests `inv_12_*` passent en CI, sauf l'échantillon Legifacile, local).
+- **Étapes de publication de l'artefact** :
+  1. la tâche prépare dans `data/` (gitignoré) le dossier d'envoi décrit dans les livrables ;
+  2. le **propriétaire** crée le compte et le dépôt Hugging Face public `mattboll/mdenseon-onnx` (créé le 2026-10-24, encore vide), puis fait l'envoi lui-même avec son jeton (`hf upload`) ; **aucun agent ne publie à sa place** ;
+  3. la tâche relève le sha du commit HF obtenu, calcule les blake3 complets des fichiers téléchargés (`model.json` compris) et écrit le manifeste ;
+  4. la tâche relance le job sur le sha épinglé et note les durées.
+- **Les cinq corrections reprises par décision du propriétaire** :
+  - figer les scores de la démo J2 dans `docs/jalons/J2-demo.md`, en fp32 par défaut (ADR-0052), avec les valeurs mesurées (top-1 `JORFDOLE000047079143#0`, 0,623664 en fp32) ;
+  - citer `tools/bench/mes04/` dans le tableau des outils de `tools/README.md` ;
+  - faire tourner dans le job `tools` les tests de `tools/bench/mes04/` qui demandent `tokenizers` (`importorskip`), par le groupe `ci` si `tokenizers` y suffit et **sans torch** ; à défaut, rendre le saut explicite et le justifier ;
+  - écrire `precision_effective` aussi dans le JSON des vecteurs de `crates/crible-encode/examples/measure_queries.rs` ;
+  - `tools/export_onnx.py` : `min_cosine_required` est écrit deux fois (`run_parity` puis `export`), et le paramètre `revision` d'`export_fp32` n'est pas lu ; le consommer ou l'assumer explicitement.
+- **Clause d'arrêt** : si le dépôt Hugging Face ne peut pas être créé, si l'envoi ne peut pas être fait, si un hash ne correspond pas, ou si le graphe fp32 ne s'exécute pas sous Linux, la tâche **s'arrête** et remonte une `QUESTION-CONCEPTION`. Elle ne remplace pas le modèle par un autre, ne ré-exporte pas le modèle, ne déplace pas l'artefact vers un autre hébergement sans ADR, et ne désactive pas un test pour faire passer le job.
+- **Hors périmètre** : la route HTTP et le serveur (P6) ; un ré-export du modèle ; les campagnes MES-04 et MES-05 ; la publication de l'image de déploiement.
+
+**J2 n'est validé qu'après cette tâche et un run CI distant vert sur `phase/P2-encodeur-et-recette`.** Le jalon reste `PRET-POUR-VALIDATION` jusque-là.

@@ -1,8 +1,9 @@
 # ADR-0057 — ONNX Runtime et vrai modèle mDenseOn en intégration continue
 
-- **Statut** : Proposé
-- **Date** : 2026-10-24
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-24 (proposition, révision et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que révisé le même jour : l'artefact de modèle est hébergé dans un dépôt de modèle Hugging Face dédié au compte du propriétaire, `mattboll/mdenseon-onnx`, public.
 - **Proposé par** : agent greffier, sur demande du propriétaire, à la suite du rapport de jalon J2 (`docs/jalons/J2-rapport.md`, §7) et des décisions du propriétaire du 2026-10-24. Révisé le même jour, avant acceptation : le propriétaire a déplacé l'hébergement de l'artefact de modèle d'une Release GitHub vers un dépôt de modèle Hugging Face dédié.
 - **Remplace** : —
 
@@ -83,7 +84,7 @@ Le groupe `ci` peut aussi recevoir `tokenizers` si c'est la seule dépendance qu
 
 ### 2. Le vrai modèle vient d'un dépôt de modèle Hugging Face, épinglé par sha et vérifié par hash
 
-Un artefact **déjà exporté** est publié dans un dépôt de modèle Hugging Face **dédié et public**, `<compte>/mdenseon-onnx`, sous le compte du propriétaire. Le nom exact du compte est fixé dans le manifeste versionné, pas dans cet ADR : le dépôt est désigné par le rôle « dépôt de l'artefact de CI », et seul le manifeste en donne l'adresse.
+Un artefact **déjà exporté** est publié dans un dépôt de modèle Hugging Face **dédié et public**, `mattboll/mdenseon-onnx`, sous le compte du propriétaire (`mattboll`). L'adresse qui fait foi est celle du manifeste versionné, pas celle de cet ADR : le dépôt est désigné ici par son rôle, « dépôt de l'artefact de CI », et c'est le manifeste qui en donne l'adresse exacte et le sha épinglé. Ce compte est un fait connu au 2026-10-24 ; changer de dépôt ou de compte demande la mise à jour du manifeste, et un autre hébergement demande un nouvel ADR.
 
 Le dépôt contient :
 
@@ -99,7 +100,7 @@ Les quatre premiers fichiers sont des **copies exactes** de `data/models/mdenseo
 La CI télécharge par URL explicite, épinglée sur le **sha du commit Hugging Face**, jamais sur `main` :
 
 ```
-https://huggingface.co/<compte>/mdenseon-onnx/resolve/<sha du commit HF>/<fichier>
+https://huggingface.co/mattboll/mdenseon-onnx/resolve/<sha du commit HF>/<fichier>
 ```
 
 Le dépôt est public : aucun jeton n'est nécessaire, ni en CI ni dans le dépôt Crible. Seuls les fichiers dont les tests ont besoin sont téléchargés ; l'INT8 n'est téléchargé que si un test l'exige. Les 19 tests retenus n'en ont pas besoin : les trois tests du vrai modèle chargent le graphe fp32 et le tokenizer, et les tests d'INT8 utilisent le modèle factice.
@@ -264,7 +265,7 @@ Cette section décrit les modifications. **Aucune n'est appliquée par cet ADR**
 - `tools/README.md`, « Révision et hash mesurés » : révision `a5fdb000…`, hash fp32 `7b6eb680…`, INT8 `0534b4ee…`, tokenizer `8a801317…`, export Mac arm64 du 2026-10-23.
 - `.github/workflows/ci.yml` : jobs `rust`, `python`, `tools`.
 - `tools/pyproject.toml` : groupes `dev` et `export`, index `pytorch-cpu`.
-- Hugging Face, dépôt de modèle de l'artefact de CI : `<compte>/mdenseon-onnx`, public, désigné par son sha de commit dans le manifeste versionné ; contenu `model.onnx`, `model.int8.onnx`, `tokenizer.json`, `model.json`, `LICENSE`, `README.md`.
+- Hugging Face, dépôt de modèle de l'artefact de CI : `mattboll/mdenseon-onnx`, public, désigné par son sha de commit dans le manifeste versionné ; contenu `model.onnx`, `model.int8.onnx`, `tokenizer.json`, `model.json`, `LICENSE`, `README.md`.
 - `crates/crible-encode/tests/charger_modele.rs` : `loads_a_model_once_per_fingerprint`, `loads_a_model_once_when_callers_race`, `matches_the_python_fp32_vectors_within_1e_4` ; fixture `crates/crible-encode/tests/fixtures/mdenseon/`.
 - `crates/crible-core/tests/model_config.rs` : `real_model_json_with_export_is_accepted`.
 - `crates/crible/tests/recette_import.rs` : `inv_12_the_legifacile_sample_passes_the_acceptance_check`, `return` silencieux vers les lignes 1333-1352.

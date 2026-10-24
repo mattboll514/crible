@@ -82,6 +82,7 @@ Ce qui n'est **pas** décidé ici : la politique de mise à jour de `transformer
   - **la parité INT8** (MES-04) : elle se mesure après le ré-export, et le modèle INT8 reste hors de l'empreinte, donc une dérive INT8 ne serait vue que par MES-04 ;
   - **la sortie d'un `optimum-onnx` compatible transformers 5** : elle rendrait possible un retour, sans obligation ;
   - **`docs/04`, bullet `max_tokens`**, qui renvoie à `EXPORTER-MODELE-ONNX` : après acceptation, la vérification de `max_tokens` est faite par `REEXPORTER-MODELE-TRANSFORMERS-5`. Le renvoi peut rester, ou être nommé plus précisément lors d'une prochaine mise à jour de `docs/04` ; ce n'est pas corrigé par cet ADR.
+  - **Note ajoutée le 2026-10-24, après l'acceptation, avec l'accord du propriétaire (ADR-0057).** La CI exécute désormais l'artefact **déjà exporté** publié dans le dépôt de modèle Hugging Face, et non un ré-export : le job `rust-onnx` télécharge le graphe fp32 épinglé par un sha de commit Hugging Face et vérifie ses hash blake3 contre un manifeste versionné. Le champ `export` reste hors empreinte et les versions restent celles décrites ci-dessus. Toute modification d'un fichier de l'artefact ou de ses hash relève donc d'un **nouvel ADR** : ce n'est pas une mise à jour de manifeste.
 
 ### Modifications à appliquer après acceptation
 
