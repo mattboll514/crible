@@ -42,7 +42,7 @@ use crible_core::model::{ModelConfig, ModelKind};
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, Model, ModelRegistry, Precision, QueryEncoder, TokenCounter,
 };
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::{ExactSearcher, Hit};
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
@@ -66,6 +66,27 @@ const INITIAL_EPOCH: u32 = 1;
 
 /// Highest `k` accepted by a search (`docs/05-api.md`, "Recherche : requête").
 const MAX_K: usize = 1_000;
+
+/// Number of characters of a passage shown by the readable output of `search`.
+///
+/// The full text stays in the JSON response (`docs/05-api.md`, "Recherche :
+/// réponse"); the excerpt is a display choice, so a demo reads one line per
+/// passage instead of a page of body text.
+const EXCERPT_CHARS: usize = 160;
+
+/// Output format of `crible search`.
+///
+/// `json` is the default and the contract of `docs/05-api.md`: the CLI tests and
+/// the scripts parse it. `text` is a human-readable report for the J2 demo; it
+/// carries the same facts, with the passage text cut to [`EXCERPT_CHARS`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum SearchFormat {
+    /// JSON response of `docs/05-api.md`.
+    #[default]
+    Json,
+    /// Human-readable report: key, score, fields and a text excerpt.
+    Text,
+}
 
 /// `crible index create --data <dir> --config <json>`.
 pub fn create_index(data: &Path, config_path: &Path) -> Result<(), CribleError> {
@@ -249,6 +270,8 @@ pub struct SearchRequest<'a> {
     pub filter: Option<&'a str>,
     /// Number of results, between 1 and 1000.
     pub k: usize,
+    /// Output format.
+    pub format: SearchFormat,
 }
 
 impl std::fmt::Debug for SearchRequest<'_> {
@@ -265,6 +288,7 @@ impl std::fmt::Debug for SearchRequest<'_> {
             .field("model", &self.model)
             .field("filter", &self.filter.map(|_| "<redacted>"))
             .field("k", &self.k)
+            .field("format", &self.format)
             .finish()
     }
 }
@@ -282,6 +306,9 @@ impl std::fmt::Debug for SearchRequest<'_> {
 /// `truncated_query` is the wire name of the `truncated` flag of
 /// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
 /// mapping.
+///
+/// `--format json` (the default) prints that response; `--format text` prints
+/// the readable report of [`print_search_text`] instead, for the J2 demo.
 pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let started = Instant::now();
     if request.k == 0 || request.k > MAX_K {
@@ -327,29 +354,87 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let hits = scan.install(|| searcher.top_k(&vector, &pool, request.k))?;
     let took_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
-    let results: Vec<Value> = hits
-        .into_iter()
-        .map(|hit| {
-            json!({
-                "doc_id": hit.doc_id,
-                "passage": hit.ord,
-                "key": hit.key,
-                "score": hit.score,
-                "score_type": "cosine",
-                "fields": hit.fields,
-                "text": hit.text,
-            })
-        })
-        .collect();
-    let response = json!({
-        "results": results,
-        "pool_size": pool.len(),
-        "generation": snapshot.generation().get(),
-        "took_ms": took_ms,
-        "truncated_query": truncated_query,
-    });
-    println!("{}", pretty(&response)?);
+    match request.format {
+        SearchFormat::Json => {
+            let results: Vec<Value> = hits
+                .iter()
+                .map(|hit| {
+                    json!({
+                        "doc_id": hit.doc_id,
+                        "passage": hit.ord,
+                        "key": hit.key,
+                        "score": hit.score,
+                        "score_type": "cosine",
+                        "fields": hit.fields,
+                        "text": hit.text,
+                    })
+                })
+                .collect();
+            let response = json!({
+                "results": results,
+                "pool_size": pool.len(),
+                "generation": snapshot.generation().get(),
+                "took_ms": took_ms,
+                "truncated_query": truncated_query,
+            });
+            println!("{}", pretty(&response)?);
+        }
+        SearchFormat::Text => print_search_text(
+            name,
+            &hits,
+            pool.len(),
+            snapshot.generation().get(),
+            took_ms,
+            truncated_query,
+        )?,
+    }
     Ok(())
+}
+
+/// Prints the readable report of one search: key, score, fields and a text
+/// excerpt per result, then the counts of the JSON response.
+fn print_search_text(
+    index: &str,
+    hits: &[Hit],
+    pool_size: u32,
+    generation: u64,
+    took_ms: f64,
+    truncated_query: bool,
+) -> Result<(), CribleError> {
+    println!(
+        "index '{index}': {pool_size} passages in the pool, generation {generation}, \
+         {} result(s), {took_ms:.1} ms",
+        hits.len()
+    );
+    if truncated_query {
+        println!("note: the query was truncated to the max_tokens of the model");
+    }
+    for (position, hit) in hits.iter().enumerate() {
+        println!(
+            "{}. {}  score {:.6} (cosine)",
+            position + 1,
+            hit.key,
+            hit.score
+        );
+        println!("   fields: {}", compact(&hit.fields)?);
+        println!("   text: {}", excerpt(&hit.text, EXCERPT_CHARS));
+    }
+    Ok(())
+}
+
+/// Returns one line of at most `limit` characters, cut on a character boundary.
+///
+/// Whitespace and line breaks are folded into single spaces, so a passage of
+/// several paragraphs still takes one line. An ellipsis marks a cut text.
+fn excerpt(text: &str, limit: usize) -> String {
+    let flattened = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut characters = flattened.chars();
+    let head: String = characters.by_ref().take(limit).collect();
+    if characters.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 /// Encodes a text query with the encoder named by `model`, or with the model of
@@ -551,6 +636,12 @@ fn pretty(value: &Value) -> Result<String, CribleError> {
         .map_err(|error| internal(format!("cannot serialize the response as JSON: {error}")))
 }
 
+/// Serializes one JSON value on a single line, or reports the fault.
+fn compact(value: &Value) -> Result<String, CribleError> {
+    serde_json::to_string(value)
+        .map_err(|error| internal(format!("cannot serialize a value as JSON: {error}")))
+}
+
 /// Error raised when the request itself is malformed.
 fn invalid_request(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::InvalidRequest, message)
@@ -559,4 +650,48 @@ fn invalid_request(message: impl Into<String>) -> CribleError {
 /// Error raised when the process cannot carry out the request.
 fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXCERPT_CHARS, excerpt};
+
+    #[test]
+    fn excerpt_keeps_a_short_text_whole() {
+        assert_eq!(
+            excerpt("LOI n° 2024-42 du 26 janvier 2024", 160),
+            "LOI n° 2024-42 du 26 janvier 2024"
+        );
+    }
+
+    #[test]
+    fn excerpt_folds_whitespace_and_line_breaks() {
+        assert_eq!(
+            excerpt(
+                "LOI n° 2024-42\n\n  pour contrôler   l'immigration\tet améliorer l'intégration",
+                160
+            ),
+            "LOI n° 2024-42 pour contrôler l'immigration et améliorer l'intégration"
+        );
+    }
+
+    #[test]
+    fn excerpt_cuts_a_long_text_and_marks_the_cut() {
+        let text = "droit ".repeat(100);
+        let excerpt = excerpt(&text, 20);
+        assert_eq!(excerpt, "droit droit droit dr…");
+        assert_eq!(
+            excerpt.chars().count(),
+            21,
+            "20 characters plus the ellipsis"
+        );
+    }
+
+    #[test]
+    fn excerpt_cuts_on_a_character_boundary() {
+        let text = "é".repeat(EXCERPT_CHARS + 10);
+        let excerpt = excerpt(&text, EXCERPT_CHARS);
+        assert_eq!(excerpt.chars().count(), EXCERPT_CHARS + 1);
+        assert!(excerpt.ends_with('…'));
+    }
 }

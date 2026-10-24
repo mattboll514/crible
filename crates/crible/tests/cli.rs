@@ -255,6 +255,47 @@ fn the_j1_demo_creates_attaches_searches_and_inspects() {
         );
     }
 
+    // `crible search --format text --k 5`: the readable report of the J2 demo
+    // carries the key, the score, the fields and a text excerpt. The default
+    // stays JSON, which the blocks above parse (`docs/05-api.md`).
+    let readable = crible_ok(&[
+        "search",
+        "--data",
+        data_arg,
+        "--index",
+        "synth-small",
+        "--vector-file",
+        vector_path.to_str().expect("UTF-8 path"),
+        "--k",
+        "5",
+        "--format",
+        "text",
+    ]);
+    assert!(
+        readable.starts_with(
+            "index 'synth-small': 9750 passages in the pool, generation 3, 5 result(s), "
+        ),
+        "the report starts with its summary: {readable}"
+    );
+    let numbered = readable
+        .lines()
+        .filter(|line| {
+            line.split_once(". ")
+                .is_some_and(|(rank, _)| rank.parse::<usize>().is_ok())
+        })
+        .count();
+    assert_eq!(numbered, 5, "k = 5 must print five numbered results");
+    assert_eq!(
+        readable.matches("   fields: ").count(),
+        5,
+        "every result prints its fields: {readable}"
+    );
+    assert_eq!(
+        readable.matches("   text: ").count(),
+        5,
+        "every result prints a text excerpt: {readable}"
+    );
+
     // `crible inspect --data <dir>` lists every index.
     let all = crible_ok(&["inspect", "--data", data_arg]);
     assert!(
