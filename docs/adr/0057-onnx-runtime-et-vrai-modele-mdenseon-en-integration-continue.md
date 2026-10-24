@@ -3,7 +3,7 @@
 - **Statut** : Proposé
 - **Date** : 2026-10-24
 - **Décideurs** : propriétaire
-- **Proposé par** : agent greffier, sur demande du propriétaire, à la suite du rapport de jalon J2 (`docs/jalons/J2-rapport.md`, §7) et des décisions du propriétaire du 2026-10-24
+- **Proposé par** : agent greffier, sur demande du propriétaire, à la suite du rapport de jalon J2 (`docs/jalons/J2-rapport.md`, §7) et des décisions du propriétaire du 2026-10-24. Révisé le même jour, avant acceptation : le propriétaire a déplacé l'hébergement de l'artefact de modèle d'une Release GitHub vers un dépôt de modèle Hugging Face dédié.
 - **Remplace** : —
 
 ## Contexte
@@ -54,7 +54,7 @@ Les tests de `charger_modele.rs` et `model_config.rs` font l'inverse : ils paniq
 
 - **ONNX Runtime** : la roue pip `onnxruntime==1.31.0` fournit la bibliothèque Linux x86_64. C'est la version qui figure dans le champ `export` du `model.json` mesuré (ADR-0050) et celle qui a produit les hash de référence. Le binaire `ort` est compilé avec `load-dynamic` (`docs/07`, « Dépendances Rust »), donc la bibliothèque vient de l'extérieur et `ORT_DYLIB_PATH` doit la désigner.
 - **Modèle factice** : `crates/crible-encode/tests/fixtures/fake-model/` est versionné. Il ne demande ni téléchargement ni données de production.
-- **Vrai modèle exporté** : `model.onnx` fp32 (1,1 Gio), `model.int8.onnx` (293 Mio) et `tokenizer.json` existent dans `data/models/mdenseon/`, gitignoré. `tools/README.md`, « Révision et hash mesurés », donne les hash complets mesurés le 2026-10-23 sur Mac arm64 :
+- **Vrai modèle exporté** : `model.onnx` fp32 (1,1 Gio), `model.int8.onnx` (293 Mio), `tokenizer.json` et `model.json` existent dans `data/models/mdenseon/`, gitignoré. `tools/README.md`, « Révision et hash mesurés », donne les hash complets mesurés le 2026-10-23 sur Mac arm64 :
 
   ```
   model.onnx         blake3:7b6eb68099dbeac6826e282dd575aec766dfbe1bedac143bae094b12f82094a2
@@ -63,9 +63,9 @@ Les tests de `charger_modele.rs` et `model_config.rs` font l'inverse : ils paniq
   ```
 
   Révision épinglée : `a5fdb000f7a21da96c3bddde3a782ef777316df3` (`lightonai/mDenseOn`). Deux exports complets sur Mac, à versions égales, rendent les mêmes hash. La reproductibilité des hash **entre plateformes** n'a pas été mesurée ; elle n'est pas nécessaire ici, puisque la CI ne ré-exporte pas et reçoit l'artefact déjà exporté.
-- **Licence** : `lightonai/mDenseOn` est publié sous Apache-2.0, dépôt Hugging Face non restreint (vérifié le 2026-10-24 par l'API Hugging Face). Le dépôt `mattboll514/crible` est public, et Crible est lui-même sous Apache-2.0 (ADR-0015). La redistribution de l'artefact et de ses fichiers de licence est donc permise, à condition de conserver `LICENSE` et `NOTICE`.
-- **Accès réseau** : ADR-0032 ne vise que l'accès à la production Legifacile ; il ne dit rien d'un téléchargement d'artefact public en CI. Cette décision couvre ce cas : le job télécharge un asset public de GitHub, sans secret et sans donnée de production.
-- **Inconnues** : la durée du job à froid et à cache chaud sur `ubuntu-latest` ; le comportement numérique exact des noyaux ONNX Runtime Linux sur le test à 1e-4 ; la disponibilité de l'asset de release. La décision les traite par la mesure et par l'échec franc.
+- **Licence** : `lightonai/mDenseOn` déclare Apache-2.0 dans les métadonnées de sa carte de modèle, et son dépôt Hugging Face n'est pas restreint (vérifié le 2026-10-24 par l'API Hugging Face). Ce dépôt amont ne contient **ni `LICENSE` ni `NOTICE`** : la vérification du 2026-10-24 n'y trouve aucun de ces deux fichiers. La redistribution de l'artefact est donc permise, et la licence est portée par le dépôt qui héberge l'artefact : il contient un `LICENSE` au texte d'Apache-2.0. Aucun `NOTICE` n'est à reproduire, faute de source amont. Crible est lui-même sous Apache-2.0 (ADR-0015).
+- **Accès réseau** : ADR-0032 ne vise que l'accès à la production Legifacile ; il ne dit rien d'un téléchargement d'artefact public en CI. Cette décision couvre ce cas : le job télécharge des fichiers publics de `huggingface.co`, sans jeton et sans donnée de production.
+- **Inconnues** : la durée du job à froid et à cache chaud sur `ubuntu-latest` ; le comportement numérique exact des noyaux ONNX Runtime Linux sur le test à 1e-4 ; la disponibilité de `huggingface.co` et la stabilité du dépôt de modèle. La décision les traite par la mesure et par l'échec franc.
 
 ## Décision
 
@@ -81,28 +81,40 @@ La feature `download-binaries` d'`ort` n'est pas utilisée : elle est contraire 
 
 Le groupe `ci` peut aussi recevoir `tokenizers` si c'est la seule dépendance qui manque aux tests de `tools/bench/mes04/` (voir point 7). Il ne reçoit jamais `torch`.
 
-### 2. Le vrai modèle vient d'un asset de Release GitHub, vérifié par hash
+### 2. Le vrai modèle vient d'un dépôt de modèle Hugging Face, épinglé par sha et vérifié par hash
 
-Un artefact **déjà exporté** est publié en asset d'une Release du dépôt `mattboll514/crible`, sous un tag dédié que le projet traite comme immuable. Il contient :
+Un artefact **déjà exporté** est publié dans un dépôt de modèle Hugging Face **dédié et public**, `<compte>/mdenseon-onnx`, sous le compte du propriétaire. Le nom exact du compte est fixé dans le manifeste versionné, pas dans cet ADR : le dépôt est désigné par le rôle « dépôt de l'artefact de CI », et seul le manifeste en donne l'adresse.
+
+Le dépôt contient :
 
 - `model.onnx` (fp32, hash `7b6eb680…094a2`) ;
+- `model.int8.onnx` (hash `0534b4ee…941a5`), publié pour rester cohérent avec la déclaration `files.int8` du `model.json`, mais téléchargé seulement si un test l'exige ;
 - `tokenizer.json` (hash `8a801317…357db`) ;
 - `model.json` (celui de l'export, champ `export` compris) ;
-- `LICENSE` et `NOTICE` Apache-2.0 de `lightonai/mDenseOn`.
+- `LICENSE` : le texte d'Apache-2.0 ;
+- `README.md` : la carte du modèle, avec `base_model: lightonai/mDenseOn`, la révision amont épinglée `a5fdb000f7a21da96c3bddde3a782ef777316df3`, la licence `apache-2.0`, la mention de la modification (« export ONNX par `tools/export_onnx.py`, transformers 5.14.1, et quantification INT8 dynamique »), un lien vers le dépôt Crible, et les hash blake3 des fichiers.
 
-L'INT8 (`model.int8.onnx`) n'est publié que si un test l'exige. Les 19 tests retenus n'en ont pas besoin : les trois tests du vrai modèle chargent le graphe fp32 et le tokenizer, et les tests d'INT8 utilisent le modèle factice. Le `model.json` publié déclare néanmoins `files.int8` ; si un test ou une commande de la CI venait à charger l'INT8, la tâche publierait aussi le fichier, avec son hash `0534b4ee…941a5`, plutôt que de modifier `model.json` et son hash.
+Les quatre premiers fichiers sont des **copies exactes** de `data/models/mdenseon/`. `parity.json` n'est pas publié : il décrit la parité mesurée en local, pas un fichier dont la CI a besoin.
 
-Le manifeste de l'artefact est **versionné dans le dépôt** (par exemple `ci/model-artifact.toml`). Il fige l'URL de la Release, le nom des assets et les **hash blake3 complets** de chaque fichier, **`model.json` compris**. Le hash de `model.json` est relevé sur l'asset au moment de la publication : il ne peut pas être écrit avant. Placer ce hash dans `model.json` lui-même serait circulaire ; le manifeste, qui est un fichier distinct, évite la circularité.
+La CI télécharge par URL explicite, épinglée sur le **sha du commit Hugging Face**, jamais sur `main` :
+
+```
+https://huggingface.co/<compte>/mdenseon-onnx/resolve/<sha du commit HF>/<fichier>
+```
+
+Le dépôt est public : aucun jeton n'est nécessaire, ni en CI ni dans le dépôt Crible. Seuls les fichiers dont les tests ont besoin sont téléchargés ; l'INT8 n'est téléchargé que si un test l'exige. Les 19 tests retenus n'en ont pas besoin : les trois tests du vrai modèle chargent le graphe fp32 et le tokenizer, et les tests d'INT8 utilisent le modèle factice.
+
+Le manifeste de l'artefact est **versionné dans le dépôt** (par exemple `ci/model-artifact.toml`). Il fige le dépôt Hugging Face, le sha du commit HF, le nom des fichiers et les **hash blake3 complets** de chaque fichier téléchargé, **`model.json` compris**. Le hash de `model.json` est relevé sur le dépôt au moment de l'envoi : il ne peut pas être écrit avant. Placer ce hash dans `model.json` lui-même serait circulaire ; le manifeste, qui est un fichier distinct, évite la circularité.
 
 Le téléchargement et la vérification échouent franchement :
 
-- téléchargement impossible, code HTTP non 2xx, fichier absent : le job échoue avec l'URL et le nom de l'asset ;
+- téléchargement impossible, code HTTP non 2xx, fichier absent, dépôt ou révision introuvable : le job échoue avec l'URL et le nom du fichier ;
 - hash différent : le job échoue avec le hash attendu et le hash obtenu ;
 - aucun repli silencieux : pas de `continue-on-error`, pas de `|| true`, pas de « on saute le test ».
 
 Le cache GitHub Actions est indexé sur les hash du manifeste. Il n'est **jamais** une source de confiance : le contenu restauré est vérifié comme un téléchargement neuf ; un écart échoue avec la clé de cache à purger. Un cache manquant déclenche le téléchargement, qui est ensuite vérifié.
 
-La création de la Release et l'envoi de l'artefact sont faits par le **propriétaire**, ou par `@git` sur sa **confirmation explicite** : publier un asset est une action publique. Aucun secret nouveau n'est nécessaire pour le job de CI, le dépôt et la Release étant publics.
+La création du compte et du dépôt Hugging Face, et l'envoi des fichiers, sont faits par le **propriétaire**, avec son propre jeton (`hf upload`). Aucun agent ne publie à sa place, et aucun jeton n'entre en CI ni dans le dépôt Crible. Le sha du commit HF obtenu après l'envoi est reporté dans le manifeste par la tâche `AJOUTER-ORT-CI`.
 
 ### 3. Un job `rust-onnx` séparé
 
@@ -113,7 +125,7 @@ Le job, dans l'ordre :
 1. installe la toolchain Rust et `uv` ;
 2. génère `synth-small` avec `tools/`, comme le job Rust actuel ;
 3. installe le groupe `ci` (`uv sync --group ci`) et exporte `ORT_DYLIB_PATH` vers la bibliothèque de la roue ;
-4. restaure le cache, sinon télécharge l'artefact de Release, puis vérifie les hash du manifeste et place les fichiers dans `data/models/mdenseon/`, chemin attendu par les tests ;
+4. restaure le cache, sinon télécharge les fichiers depuis le dépôt Hugging Face épinglé par sha, puis vérifie les hash du manifeste et place les fichiers dans `data/models/mdenseon/`, chemin attendu par les tests ;
 5. exécute :
 
    ```
@@ -152,9 +164,10 @@ Une nouvelle tâche hors plan, **`AJOUTER-ORT-CI`**, est ajoutée à la fin de `
 - **Dépend de** : `NETTOYER-P2`, `CLI-RECHERCHE-TEXTE`, `RECETTE-IMPORT`, `CONTROLER-LONGUEURS`, `ENCODER-DOCUMENTS-EN-LIGNE`.
 - **À lire** : cet ADR ; `docs/07-stack-et-deploiement.md` (« CI (GitHub Actions) », « Côté Python ») ; `docs/08-invariants-et-tests.md` (« Stratégie de tests ») ; `.github/workflows/ci.yml` ; `tools/README.md` (« Révision et hash mesurés »).
 - **Objectif** : rendre la CI capable d'exécuter les 19 tests ONNX Runtime sur le modèle factice et le vrai modèle, et rendre le saut silencieux impossible.
-- **Livrables** : le groupe `ci` dans `tools/pyproject.toml` ; le job `rust-onnx` dans `.github/workflows/ci.yml` ; le manifeste versionné ; le téléchargement et la vérification des hash ; la correction de `recette_import.rs` ; la mesure des durées à froid et à cache chaud ; les petites corrections listées ci-dessous.
-- **Critères d'acceptation** : les 19 tests ignorés passent dans le job `rust-onnx` sur un run distant ; le test de l'échantillon Legifacile est le seul exclu, par son nom ; un hash faux fait échouer le job ; un fichier manquant fait échouer le test avec la commande qui le produit ; le job Rust actuel reste sans ONNX Runtime ; les cinq corrections listées ci-dessous sont faites ; les durées sont notées dans le suivi.
-- **Clause d'arrêt** : si la Release ne peut pas être créée, si un hash ne correspond pas, ou si le graphe fp32 ne s'exécute pas sous Linux, la tâche s'arrête et remonte une `QUESTION-CONCEPTION`. Elle ne remplace pas le modèle par un autre, ne ré-exporte pas et ne désactive pas un test pour faire passer le job.
+- **Livrables** : le groupe `ci` dans `tools/pyproject.toml` ; le job `rust-onnx` dans `.github/workflows/ci.yml` ; le manifeste versionné ; le téléchargement et la vérification des hash ; la préparation du dossier d'envoi de l'artefact ; la correction de `recette_import.rs` ; la mesure des durées à froid et à cache chaud ; les petites corrections listées ci-dessous.
+- **Étapes de publication de l'artefact** : la tâche prépare dans `data/` (gitignoré) un dossier contenant `model.onnx`, `model.int8.onnx`, `tokenizer.json` et `model.json`, copies exactes de `data/models/mdenseon/`, plus `LICENSE` (texte d'Apache-2.0) et `README.md` (carte du modèle : `base_model: lightonai/mDenseOn`, révision amont épinglée, licence `apache-2.0`, mention de la modification « export ONNX par `tools/export_onnx.py`, transformers 5.14.1, et quantification INT8 dynamique », lien vers le dépôt Crible, hash blake3) ; le **propriétaire** crée le compte et le dépôt Hugging Face, puis fait l'envoi lui-même avec son jeton (`hf upload`) ; la tâche écrit ensuite le manifeste avec le dépôt, le sha du commit HF obtenu et les blake3 complets.
+- **Critères d'acceptation** : les 19 tests ignorés passent dans le job `rust-onnx` sur un run distant ; le test de l'échantillon Legifacile est le seul exclu, par son nom ; le manifeste fige le dépôt, le sha du commit HF et les blake3 complets, `model.json` compris ; un hash faux fait échouer le job ; un fichier manquant fait échouer le test avec la commande qui le produit ; un dépôt ou une révision introuvable fait échouer le job ; le job Rust actuel reste sans ONNX Runtime ; aucun jeton Hugging Face n'apparaît dans la CI ni dans le dépôt ; les cinq corrections listées ci-dessous sont faites ; les durées sont notées dans le suivi.
+- **Clause d'arrêt** : si le dépôt Hugging Face ne peut pas être créé, si l'envoi ne peut pas être fait, si un hash ne correspond pas, ou si le graphe fp32 ne s'exécute pas sous Linux, la tâche s'arrête et remonte une `QUESTION-CONCEPTION`. Elle ne remplace pas le modèle par un autre, ne ré-exporte pas, ne déplace pas l'artefact vers un autre hébergement sans ADR, et ne désactive pas un test pour faire passer le job.
 - **Hors périmètre** : la route HTTP et le serveur (P6), un ré-export du modèle, les campagnes MES-04 et MES-05, la publication de l'image de déploiement.
 
 La fiche reprend aussi, par décision du propriétaire, ces corrections issues des idées de P2 :
@@ -175,33 +188,37 @@ La fiche reprend aussi, par décision du propriétaire, ces corrections issues d
   - le job Rust actuel reste rapide et sans torch : une panne de l'artefact ou d'ONNX Runtime ne bloque pas la suite de base ;
   - le saut silencieux de `recette_import.rs` est supprimé, et la règle vaut pour tous les tests futurs ;
   - `docs/07` cesse d'être incomplet : il nomme le groupe `ci` et le job `rust-onnx`, et distingue les jeux de données des artefacts de modèle ;
-  - l'artefact est protégé par des hash complets et un manifeste versionné : un asset remplacé ou corrompu ne peut pas passer pour le modèle mesuré ;
-  - aucun secret nouveau, aucun torch, aucune donnée de production, aucun modèle dans git (règle 14 d'`AGENTS.md`).
+  - l'artefact est protégé par un sha de commit Hugging Face et des hash complets dans un manifeste versionné : un fichier remplacé ou corrompu ne peut pas passer pour le modèle mesuré ;
+  - l'artefact est hébergé chez Hugging Face, lieu naturel d'un modèle, sans poids dans git ni dans une Release du dépôt de code, et chaque version y est un commit identifiable ;
+  - aucun secret nouveau en CI, aucun torch, aucune donnée de production, aucun modèle dans git (règle 14 d'`AGENTS.md`).
 
 - **Négatives / coûts** :
   - le job `rust-onnx` ajoute des minutes de CI à chaque push et chaque pull request ; le rapport J2 estimait environ 2 min de plus, la mesure réelle reste à faire ;
-  - un run à froid télécharge environ 1,1 Gio (fp32, tokenizer, `model.json`, licences), puis utilise le cache ; le cache consomme de l'espace et peut être purgé par GitHub ;
+  - un run à froid télécharge environ 1,1 Gio (fp32, tokenizer, `model.json`), puis utilise le cache ; le cache consomme de l'espace et peut être purgé par GitHub ;
   - trois chemins de modèle coexistent désormais : le vrai modèle local, le vrai modèle d'artefact en CI et le modèle factice ; une divergence entre eux est possible et doit être surveillée ;
-  - la Release et son asset sont des objets **mutables** chez GitHub : le manifeste et la vérification de hash sont la vraie protection, pas l'URL ;
+  - le dépôt Hugging Face et son compte sont **extérieurs au projet** : le propriétaire doit créer le compte et le dépôt, et faire l'envoi lui-même avec son jeton ; la CI dépend d'un compte personnel et d'un hébergeur tiers, même si le dépôt est public et lisible sans jeton ;
+  - le dépôt Hugging Face est un objet **mutable** : un fichier peut être remplacé, un commit supprimé, une branche réécrite ; l'épinglage par sha et la vérification des blake3 sont la vraie protection, pas l'URL ;
   - la roue `onnxruntime==1.31.0` est épinglée pour Linux x86_64 ; un changement de runner ou une mise à jour du runtime demande une décision ;
   - le test de course à huit threads peut être plus lent ou plus variable sur un runner CI partagé ;
-  - les fichiers `LICENSE` et `NOTICE` de mDenseOn doivent être conservés dans l'artefact et dans toute redistribution.
+  - le `LICENSE` Apache-2.0 est fourni par le dépôt de l'artefact, pas par l'amont ; il doit être conservé dans toute redistribution de l'artefact.
 
 - **À surveiller** :
   - la durée du job à froid et à cache chaud, notée dans le suivi : si le cache chaud dépasse nettement l'estimation du rapport J2, ou si le job approche son `timeout-minutes`, la décision est à revoir ;
   - un écart de parité à 1e-4 sur Linux : ce n'est pas un défaut du test, c'est un signal sur les noyaux ONNX Runtime Linux, à instruire avant de conclure (ADR-0050 et fiche `CHARGER-MODELE`) ;
-  - toute modification d'un asset de Release sans nouvel ADR : les hash du manifeste doivent changer, et un nouvel export relève d'ADR-0028 et ADR-0050, pas d'une simple mise à jour de manifeste ;
+  - toute modification d'un fichier du dépôt Hugging Face sans nouvel ADR : le sha du commit HF et les hash du manifeste doivent changer, et un nouvel export relève d'ADR-0028 et ADR-0050, pas d'une simple mise à jour de manifeste ;
   - le nom `inv_12_the_legifacile_sample_passes_the_acceptance_check` est un contrat : le renommer sans mettre à jour le `--skip` ferait exécuter le test local en CI, qui échouerait faute de données (échec bruyant, pas silencieux) ;
-  - le taux de succès du cache et la disponibilité de la Release ; une Release supprimée doit faire échouer le job, pas le rendre vert ;
+  - la disponibilité de `huggingface.co`, l'existence du dépôt et celle du commit épinglé ; une indisponibilité, une suppression ou une réécriture doit faire échouer le job, pas le rendre vert ; les blake3 restent le contrôle final ;
+  - le taux de succès du cache, qui dépend des hash du manifeste et non des URLs ;
   - la version d'`onnxruntime` dans le groupe `ci` et celle du champ `export` de `model.json` : elles doivent rester alignées ;
-  - la déclaration `files.int8` du `model.json` publié alors que l'INT8 n'est pas dans l'artefact : acceptable tant que seul le fp32 est chargé, ce que le défaut fp32 d'ADR-0052 garantit pour les requêtes ; tout test qui demandera l'INT8 devra publier le fichier.
+  - la déclaration `files.int8` du `model.json` publié alors que l'INT8 n'est pas téléchargé en CI : acceptable tant que seul le fp32 est chargé, ce que le défaut fp32 d'ADR-0052 garantit pour les requêtes ; tout test qui demandera l'INT8 devra le télécharger.
 
 ## Alternatives écartées
 
 | Alternative | Pourquoi écartée |
 |---|---|
 | **(a) Exporter le modèle en CI avec `tools/export_onnx.py`** | L'export demande torch, transformers et la chaîne complète, soit plusieurs gigaoctets et un temps sans rapport avec le test. La reproductibilité des hash **entre plateformes** n'a pas été mesurée : le job pourrait produire un graphe différent de celui qui a servi aux mesures, et échouer ou, pire, tester un autre modèle. Cela contredit ADR-0049 et ADR-0050, qui gardent l'export hors de la CI. |
-| **Télécharger le modèle depuis Hugging Face à chaque run** | Hugging Face héberge les poids source de mDenseOn, pas l'ONNX exporté par Crible, ni son `model.json`, ni ses hash. Il faudrait donc ré-exporter, avec les mêmes coûts et les mêmes risques que l'alternative (a). Une dépendance réseau à Hugging Face s'ajouterait à celle de GitHub. |
+| **Télécharger les poids source amont depuis Hugging Face à chaque run** | Le dépôt `lightonai/mDenseOn` héberge les poids source, pas l'ONNX exporté par Crible, ni son `model.json`, ni ses hash. Il faudrait donc ré-exporter, avec les mêmes coûts et les mêmes risques que l'alternative (a). |
+| **Release GitHub du dépôt Crible** | Envisagée d'abord, puis écartée par le propriétaire au profit de Hugging Face. Un modèle s'héberge naturellement dans un dépôt de modèle, versionné par commit : Hugging Face donne un sha stable à épingler, une carte de modèle et un `LICENSE` à côté des poids. Une Release mêle l'artefact de test au dépôt de code, se désigne par un tag qu'il faut traiter comme immuable par convention, et n'offre pas de versionnement natif du contenu. |
 | **Git LFS** | Le modèle entrerait dans git, ce que la règle 14 d'`AGENTS.md` interdit (« Rien de volumineux dans git »). Le clone et chaque CI paieraient le poids du LFS, et l'historique garderait des binaires lourds. |
 | **Image GHCR contenant le modèle** | L'image de déploiement n'a pas à porter un modèle de test, et le job de test n'a pas à tirer une image. Le modèle serait couplé à la version de l'image, avec une authentification de registre et un temps de tirage supérieurs au cache d'actions. Cela mélange la livraison (P8) et la vérification (P2). |
 | **Job nocturne ou déclenché à la demande** | Il couvre les mêmes tests, mais pas à la fusion : une régression peut entrer dans la branche de phase et n'être vue que le lendemain. La couverture à la fusion est précisément ce que le rapport J2 reproche au statu quo. |
@@ -217,7 +234,7 @@ Cette section décrit les modifications. **Aucune n'est appliquée par cet ADR**
 ### `docs/07-stack-et-deploiement.md`
 
 1. **« Côté Python »** : ajouter, après la phrase sur le groupe `export`, que le groupe `ci` contient `onnxruntime==1.31.0` pour le job `rust-onnx`, qu'il ne contient pas torch, qu'il s'installe avec `uv sync --group ci`, et que `ORT_DYLIB_PATH` désigne la bibliothèque de la roue. La phrase « donc la CI ne l'installe pas » reste vraie pour `export` ; elle est précisée pour `ci`.
-2. **« CI (GitHub Actions) »** : ajouter un point sur le job `rust-onnx` — déclencheurs push et pull request, `timeout-minutes`, installation du groupe `ci`, téléchargement de l'artefact de Release et vérification des hash, cache indexé sur les hash, commande `cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check`. Reformuler la phrase sur les « jeux de données lourds » pour distinguer les jeux de données, qui restent hors CI, de l'artefact de modèle déjà exporté, qui est téléchargé et mis en cache.
+2. **« CI (GitHub Actions) »** : ajouter un point sur le job `rust-onnx` — déclencheurs push et pull request, `timeout-minutes`, installation du groupe `ci`, téléchargement des fichiers depuis le dépôt de modèle Hugging Face épinglé par sha et vérification des hash, cache indexé sur les hash, commande `cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check`. Reformuler la phrase sur les « jeux de données lourds » pour distinguer les jeux de données, qui restent hors CI, de l'artefact de modèle déjà exporté, qui est téléchargé et mis en cache.
 
 ### `docs/08-invariants-et-tests.md`
 
@@ -247,9 +264,10 @@ Cette section décrit les modifications. **Aucune n'est appliquée par cet ADR**
 - `tools/README.md`, « Révision et hash mesurés » : révision `a5fdb000…`, hash fp32 `7b6eb680…`, INT8 `0534b4ee…`, tokenizer `8a801317…`, export Mac arm64 du 2026-10-23.
 - `.github/workflows/ci.yml` : jobs `rust`, `python`, `tools`.
 - `tools/pyproject.toml` : groupes `dev` et `export`, index `pytorch-cpu`.
+- Hugging Face, dépôt de modèle de l'artefact de CI : `<compte>/mdenseon-onnx`, public, désigné par son sha de commit dans le manifeste versionné ; contenu `model.onnx`, `model.int8.onnx`, `tokenizer.json`, `model.json`, `LICENSE`, `README.md`.
 - `crates/crible-encode/tests/charger_modele.rs` : `loads_a_model_once_per_fingerprint`, `loads_a_model_once_when_callers_race`, `matches_the_python_fp32_vectors_within_1e_4` ; fixture `crates/crible-encode/tests/fixtures/mdenseon/`.
 - `crates/crible-core/tests/model_config.rs` : `real_model_json_with_export_is_accepted`.
 - `crates/crible/tests/recette_import.rs` : `inv_12_the_legifacile_sample_passes_the_acceptance_check`, `return` silencieux vers les lignes 1333-1352.
 - ADR-0015 (licence Apache-2.0 de Crible) ; ADR-0028 (forme canonique de l'empreinte) ; ADR-0032 (accès à la production Legifacile, données de l'échantillon non publiées) ; ADR-0049 (groupe `export`, remplacé par ADR-0050) ; ADR-0050 (référence mDenseOn, révision, hash, champ `export`) ; ADR-0052 (requêtes fp32, seuil 0,999) ; ADR-0054 (chargement différé et bornes de la recette).
-- `lightonai/mDenseOn`, révision `a5fdb000f7a21da96c3bddde3a782ef777316df3`, licence Apache-2.0, dépôt Hugging Face non restreint (vérifié le 2026-10-24 par l'API Hugging Face).
+- `lightonai/mDenseOn`, révision `a5fdb000f7a21da96c3bddde3a782ef777316df3`, licence Apache-2.0 déclarée dans les métadonnées de la carte de modèle, dépôt Hugging Face non restreint, **sans `LICENSE` ni `NOTICE`** (vérifié le 2026-10-24 par l'API Hugging Face).
 - PyPI, `onnxruntime` 1.31.0, roue Linux x86_64.
