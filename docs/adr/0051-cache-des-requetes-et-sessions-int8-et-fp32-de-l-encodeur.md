@@ -1,6 +1,6 @@
 # ADR-0051 — Cache des requêtes et sessions INT8 et fp32 de l'encodeur
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24) — point 3 (défaut `int8` de `[encoder].query_precision`) remplacé par ADR-0052
 - **Date** : 2026-10-23 (proposition), 2026-10-24 (décision)
 - **Décideurs** : propriétaire
 - **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : les trois options recommandées sont retenues, y compris la session fp32 gardée jusqu'à l'arrêt de l'instance.

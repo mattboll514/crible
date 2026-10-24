@@ -5,7 +5,7 @@
 | # | Étape | Ce qu'elle fait | Clé de temps (debug + analytics) |
 |---|---|---|---|
 | 1 | Validation | Analyse la requête, valide le filtre contre le schéma | `validate` |
-| 2 | Encodage | Encode la requête en ONNX INT8, avec un cache LRU en RAM | `encode` |
+| 2 | Encodage | Encode la requête en ONNX fp32, avec un cache LRU en RAM | `encode` |
 | 3 | Pool | Calcule filtre ∧ vivants, sous forme de bitmap | `filter` |
 | 4 | Branche dense | Choisit une stratégie et sort ses candidats (voir plus bas) | `dense` |
 | 5 | Branche lexicale | BM25 tantivy limité au pool, en parallèle de l'étape 4 | `lexical` |
@@ -60,9 +60,9 @@ Réglages de précision :
 | `search.scan` (`binary` ou `none` = toujours exact) | réglable | `binary` |
 | `search.rescore_candidates` (N) | réglable | 1000, à confirmer par MES-01 |
 | `search.exact_threshold` | réglable | égal à N |
-| `query_precision` (`[encoder].query_precision` : `int8` ou `fp32`) | réglable | `int8` (ADR-0051) |
+| `query_precision` (`[encoder].query_precision` : `int8` ou `fp32`) | réglable | `fp32` (ADR-0052) |
 
-`query_precision` règle la précision d'encodage des requêtes. `fp32` charge la session fp32 de l'encodeur, qui coûte plus d'1 Go de RAM : c'est un réglage d'évaluation et de diagnostic, pas un mode de production (ADR-0051). Le cache LRU des requêtes est borné par `[limits].query_cache_entries`, 1 024 entrées par instance, et n'est jamais persisté.
+`query_precision` règle la précision d'encodage des requêtes. Le défaut est `fp32` : la session fp32 (plus d'1 Gio) est résidente dès la première requête, et la chaîne d'encodage est fidèle au modèle PyTorch à 1e-12 près (MES-04). `int8` reste une valeur acceptée, pour les comparaisons (MES-04), le repli et le diagnostic ; l'INT8 ne conserve que 79,2 % du top-10 exact du fp32, il n'est donc pas un mode de production (ADR-0052). Le cache LRU des requêtes est borné par `[limits].query_cache_entries`, 1 024 entrées par instance, et n'est jamais persisté.
 
 Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 1. augmenter N ;
@@ -132,7 +132,7 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 
 | Étape | Estimation | Mesure |
 |---|---|---|
-| Encodage de la requête (CPU, INT8) | 20 à 50 ms | MES-05 |
+| Encodage de la requête (CPU, fp32) | 20 à 50 ms (estimé pour l'INT8 ; fp32 : p50 21 ms, p95 ≈ 56 ms hors conteneur, dépassement du p95 assumé, ADR-0052) | MES-05 |
 | Filtre (bitmaps) | < 1 ms | MES-14 |
 | Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
 | Scan binaire : 8,6 M / pool de 1 M | 20 à 80 ms / quelques ms | MES-02 |

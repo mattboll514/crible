@@ -82,11 +82,11 @@ Fichier `models/<name>/model.json` :
 }
 ```
 
-- **Empreinte** : blake3 du JSON canonique de `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompts`, et des hash des fichiers `fp32` et `tokenizer`. Le fichier INT8 n'entre pas dans l'empreinte, car il ne sert qu'aux requêtes.
+- **Empreinte** : blake3 du JSON canonique de `hf_id`, `revision`, `dims`, `pooling`, `normalize`, `prompts`, et des hash des fichiers `fp32` et `tokenizer`. Le fichier INT8 n'entre pas dans l'empreinte, car il ne change pas les vecteurs de référence (ADR-0028) ; il sert aux comparaisons, au repli et au diagnostic (ADR-0052).
 - **`max_tokens`** : la longueur maximale réellement supportée par l'export ONNX, à vérifier dans `EXPORTER-MODELE-ONNX`.
 - **`export`** : versions de `transformers`, `torch` et `onnxruntime` qui ont produit le fichier fp32. Ce champ est **hors de l'empreinte** (ADR-0028, ADR-0050) : il sert au diagnostic, jamais à refuser un lot. La fidélité du modèle se mesure par la recette (contrôle 9, INV-12).
 - **Usage des précisions** :
-  - les **requêtes** sont encodées en INT8 (réglable par `[encoder].query_precision` : `int8` ou `fp32`, ADR-0051) ;
+  - les **requêtes** sont encodées en fp32 par défaut (réglable par `[encoder].query_precision` : `fp32` ou `int8`, ADR-0052) ; `int8` ne garde que 79,2 % du top-10 exact du fp32 (MES-04) et sert aux comparaisons, au repli et au diagnostic ;
   - la **recette** et l'**encodage en ligne de documents** se font en fp32.
   - Le registre de sessions est indexé par `(empreinte, précision)` et chaque session est chargée à son premier usage : le fichier INT8 hors empreinte ne peut donc pas se confondre avec le graphe fp32 du même modèle (ADR-0051).
 - **`kind: "external"`** : pour un projet qui apporte ses propres vecteurs. Le modèle n'a alors que `dims` et `normalize`, sans encodeur. Il n'y a pas de recette, et chaque requête doit fournir un `vector`.
@@ -184,7 +184,7 @@ La colonne `vector` est un `fixed_size_binary` de `dims × 2` octets en fp16 lit
    - on tire un échantillon de `acceptance_sample` passages, avec une graine dérivée du `batch_id` ;
    - on les ré-encode en ONNX fp32, avec `prompt_document` ;
    - on calcule le cosinus avec les vecteurs du lot ;
-   - si le minimum est sous `acceptance_min_cosine`, le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
+   - si le minimum est sous `acceptance_min_cosine` (0,999 : valeur fixée par ADR-0052, elle n'est plus provisoire), le lot est refusé : `422 acceptance_failed` (**INV-12**). Le rapport donne le minimum, le p1 et le p50.
 
    C'est la généralisation de la recette de Legifacile, qui a déjà détecté un écart de version de transformers (cosinus 0,988).
 

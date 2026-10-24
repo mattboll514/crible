@@ -1,8 +1,9 @@
 # ADR-0053 — Encodeur dans le chemin d'attache : arête `crible-store` → `crible-encode`
 
-- **Statut** : Proposé
-- **Date** : 2026-10-24
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-24 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : arête interne `crible-store` → `crible-encode` autorisée, unidirectionnelle, consignée dans `docs/07`.
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : tâche `CONTROLER-LONGUEURS` (phase P2, fiche `docs/phases/P2-encodeur-et-recette.md`), relecture du tour 1, puis verdict de `@architecte` du 2026-10-24 : conception `CONFORME`, mais **`ECART` de processus**.
 - **Remplace** : —
 

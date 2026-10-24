@@ -20,6 +20,8 @@ crible/
   data/                      # (gitignoré) données générées, fixtures volumineuses
 ```
 
+**Arêtes internes entre crates.** `crible-store` déclare une dépendance vers `crible-encode`, pour ses **types** seulement (compteur de tokens, encodeur) : le contrôle 8 (longueurs, INV-11), le contrôle 9 (recette fp32, INV-12) et l'encodage en ligne de documents s'exécutent ainsi dans `crible-store::attach` et `crible-store::online`, avec le modèle chargé et fourni par l'appelant (ADR-0053). L'arête est **unidirectionnelle** : `crible-encode` ne dépend jamais de `crible-store`. Toute autre arête interne qui engage la conception demande son ADR.
+
 ## Dépendances Rust
 
 Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la dernière version stable compatible au moment de la tâche.
@@ -86,7 +88,7 @@ sample_rate = 0.0
 ttl_days = 7
 
 [encoder]
-query_precision = "int8"      # "int8" | "fp32" : précision des requêtes (ADR-0051)
+query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-0052)
 
 [limits]
 writer_queue = 16
@@ -95,6 +97,8 @@ query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais pe
 ```
 
 Chaque clé peut être surchargée par une variable d'environnement, par exemple `CRIBLE_SERVER__BIND`.
+
+`crible-encode` ne règle ni `intra_op_num_threads` ni le niveau d'optimisation de la session ONNX Runtime : les **défauts de la bibliothèque** sont conservés, MES-05 ayant montré qu'ils sont les plus rapides dans les deux précisions (ADR-0052). Un réglage n'aurait de sens que pour brider la consommation, et se déciderait en conteneur, en P8.
 
 ## Docker
 
