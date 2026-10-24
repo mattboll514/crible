@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crible_core::batch::BatchMode;
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
@@ -44,11 +45,12 @@ use crible_encode::{
 use crible_search::dense::exact::ExactSearcher;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
-use crible_store::attach::attach;
+use crible_store::attach::{AttachReport, attach};
 use crible_store::generation::{
     CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, IndexState,
     write_index_config,
 };
+use crible_store::online;
 use serde_json::{Value, json};
 
 use crate::vector;
@@ -116,12 +118,14 @@ pub fn attach_batch(
     // loaded lazily, by this closure, at the point the attach reaches the
     // check: a batch refused earlier (another model, a bad checksum, an
     // over-long passage) never pays the ONNX Runtime session (ADR-0053).
-    let load_encoder = || Model::load_precision(&model_dir, Precision::Fp32);
-    let document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>> = match model.kind {
+    let load_encoder = || Model::load_precision(&model_dir, Precision::Fp32).map(Arc::new);
+    let document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>> = match model.kind {
         ModelKind::External => None,
         ModelKind::Onnx => Some(&load_encoder),
     };
-    let mut store = GenerationStore::open(&index_dir, &config.schema)?;
+    // Write opening: the leftover online batches of `<data>/tmp` are removed
+    // here, under the presence lock that protects a live lot (ADR-0056).
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
     let report = attach(
         &mut store,
         batch,
@@ -130,6 +134,59 @@ pub fn attach_batch(
         token_counter.as_ref(),
         document_encoder,
     )?;
+    print_report(name, &report);
+    Ok(())
+}
+
+/// `crible ingest --data <dir> --models <dir> --index <i> <documents.jsonl>`.
+///
+/// One JSON document per line, in the shape of the `documents` member of
+/// `docs/05-api.md`; the passages without a vector are encoded in fp32 by the
+/// model of the index (ADR-0055). The command writes the internal batch under
+/// `<data>/tmp`, applies it with `attach`, and prints the same report.
+pub fn ingest_documents(
+    data: &Path,
+    models: &Path,
+    index: &str,
+    documents: &Path,
+) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let model = load_model(models, &config.model)?;
+    let model_dir = model_directory(models, &config.model)?;
+    let token_counter = match model.kind {
+        ModelKind::External => None,
+        ModelKind::Onnx => Some(TokenCounter::load(&model_dir)?),
+    };
+    // Encoded in fp32, stored at the reference precision of the index: the
+    // session is loaded lazily, once, by the online ingestion, and handed to
+    // the acceptance check of the attach (ADR-0054, ADR-0055).
+    let load_encoder = || Model::load_precision(&model_dir, Precision::Fp32).map(Arc::new);
+    let document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>> = match model.kind {
+        ModelKind::External => None,
+        ModelKind::Onnx => Some(&load_encoder),
+    };
+    // Write opening: same cleanup as `attach`, and the ingestion then takes the
+    // presence lock of its own batch (ADR-0056).
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let report = online::ingest(
+        &mut store,
+        &online::OnlineIngest {
+            documents,
+            data_dir: data,
+            index_config: &config,
+            model_config: &model,
+            token_counter: token_counter.as_ref(),
+            document_encoder,
+            mode: BatchMode::Upsert,
+        },
+    )?;
+    print_report(name, &report);
+    Ok(())
+}
+
+/// Prints the report of one attach, as `crible attach` and `crible ingest` do.
+fn print_report(name: &str, report: &AttachReport) {
     println!(
         "batch '{}' attached to index '{}': generation {} (added {}, replaced {}, \
          unchanged {}, metadata_updated {}, deleted {}, ignored {})",
@@ -149,7 +206,22 @@ pub fn attach_batch(
             acceptance.sample, acceptance.min_cosine, acceptance.p1, acceptance.p50
         );
     }
-    Ok(())
+}
+
+/// Opens an index for a **write** command: the leftover online batches of
+/// `<data>/tmp` are removed first, under the presence lock that protects a live
+/// lot (ADR-0056, decision 4), then the store runs its recovery (INV-04).
+///
+/// A read command calls [`GenerationStore::open`] directly: `search` and
+/// `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
+/// index is ingesting.
+fn open_store_for_write(
+    data: &Path,
+    index_dir: &Path,
+    schema: &crible_core::config::Schema,
+) -> Result<GenerationStore, CribleError> {
+    online::remove_stale_batches(data)?;
+    GenerationStore::open(index_dir, schema)
 }
 
 /// One `crible search` invocation.
@@ -325,7 +397,8 @@ fn encode_text_query(
 /// (`docs/02-architecture.md`, "Reprise") and takes the SQLite write lock:
 /// `inspect` removes leftover `tmp-*` entries and segments SQLite does not
 /// reference, and rewrites a missing manifest. It therefore needs a writable
-/// mount, not a read-only one.
+/// mount, not a read-only one. It leaves the online batches of `<data>/tmp`
+/// alone: only a write opening cleans them (ADR-0056).
 pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     let names = match index {
         Some(name) => vec![path_component(name, "index name")?.to_owned()],

@@ -90,6 +90,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow::array::{
@@ -406,7 +407,10 @@ impl Plan {
 /// model (control 9 of `docs/04`, **INV-12**). The caller provides a loader and
 /// keeps the policy — which directory, which precision, which cache; `attach`
 /// only chooses *when* to call it, after controls 3 and 8 have accepted the
-/// batch and before the first write (ADR-0054). Loading it lazily is what spares
+/// batch and before the first write (ADR-0054). The loader returns an
+/// [`Arc<Model>`](Model) so that the online mode of ADR-0055 hands out the very
+/// graph it encoded with, instead of loading a second fp32 session for the
+/// acceptance check. Loading it lazily is what spares
 /// the ONNX Runtime session to a batch refused earlier, for another model or for
 /// any other control. `None` is the `external` model, which has nothing to
 /// re-encode with; an `onnx` model without a loader is a caller fault, reported
@@ -444,7 +448,7 @@ pub fn attach(
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
-    document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
 ) -> Result<AttachReport, CribleError> {
     let validation_started = Instant::now();
     let reader = BatchReader::open(batch_dir, index_config, model_config)?;
@@ -724,7 +728,7 @@ fn check_passage_lengths(
 fn check_acceptance(
     reader: &BatchReader,
     kind: ModelKind,
-    document_encoder: Option<&dyn Fn() -> Result<Model, CribleError>>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     ingest: &IngestConfig,
     precision: ReferencePrecision,
 ) -> Result<Option<AcceptanceReport>, CribleError> {
