@@ -85,9 +85,11 @@ Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `in
 }
 ```
 
-- Si `doc_hash` est absent, il vaut le blake3 du contenu des passages.
+- Si `doc_hash` est absent, il vaut le blake3 du **JSON canonique des passages** (ADR-0055) : pour chaque passage, `ord`, `text` et `fields`, clés triées, dans la forme canonique d'ADR-0019 ; le digest est rendu `blake3:<hex>` (ADR-0034, ADR-0041). Cette forme couvre le texte, les champs et le découpage, donc un `doc_hash` identique signifie bien que rien n'a changé. Le lot interne remplit toujours la colonne `doc_hash`, qui est non nullable.
 - Si un passage porte un `vector`, il est encodé en base64 (fp32 little-endian) ; sinon, le serveur encode le texte.
 - Limite : 10 000 passages par requête.
+- **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 passages le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé.
+- **Manifeste du lot interne** : déterministe, `producer` vaut `crible-online` ; ses valeurs sont fixées par ADR-0055 et décrites dans `04-donnees-et-ingestion.md` (mode en ligne) et `format-lot-v1.md` (lot interne du mode en ligne).
 
 ## Grammaire des filtres
 

@@ -1,8 +1,9 @@
 # ADR-0055 — Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne
 
-- **Statut** : Proposé
-- **Date** : 2026-10-24
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-24 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : option (a) sur les décisions 1, 2 et 4, option (b) sur la décision 3, donc fichier JSONL d'un document par ligne en `upsert`, `batch_id` = `online-<blake3 des octets du fichier>` et manifeste déterministe, `doc_hash` absent = blake3 du JSON canonique des passages, lot interne dans `<data>/tmp/online-<batch_id>/` avec `std::fs` et nettoyé par la reprise, `replace_all` refusé en ligne.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite d'une `QUESTION-CONCEPTION` de `@dev` sur la tâche ENCODER-DOCUMENTS-EN-LIGNE (phase P2), instruite par `@architecte` le 2026-10-24
 - **Remplace** : —
 

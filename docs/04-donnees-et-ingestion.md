@@ -220,11 +220,37 @@ Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'at
 
 ## Mode en ligne (sans producteur)
 
-`POST /v1/indexes/{index}/documents` accepte des documents avec leurs passages :
+`POST /v1/indexes/{index}/documents` accepte des documents avec leurs passages (ADR-0055) :
 - **sans vecteurs** : le serveur encode les passages lui-même en fp32 sur CPU. C'est lent, donc réservé aux petits volumes ;
 - **avec vecteurs** : mode « j'apporte mes vecteurs ».
 
 Le serveur construit ensuite un lot interne et suit exactement le même chemin qu'un lot produit ailleurs.
+
+**Document en ligne.** Un document porte `doc_id`, un `doc_hash` facultatif, ses `fields` et ses `passages` (`text`, `fields`, et un `vector` facultatif par passage). **Un seul type** décrit ce document : il sert au corps HTTP de la route et à la commande de la CLI, pour qu'aucun format parallèle ne soit maintenu.
+
+**Fichier d'entrée de `crible ingest`.** `crible ingest --data … --index … documents.jsonl` lit un objet document par ligne, au format ci-dessus. L'enveloppe est **implicite** : le mode vaut `upsert` et le fichier ne porte pas de suppressions ; une suppression passe par un lot déposé.
+
+**Lot interne.** Le lot est écrit dans `<data>/tmp/online-<batch_id>/`, **hors du dossier de l'index**, avec `std::fs`, et supprimé par un garde qui s'exécute en succès comme en échec. Il n'est jamais un dossier `tmp-*` du dossier de l'index : la reprise efface ces dossiers (INV-04), et une ouverture concurrente ferait disparaître le lot sous l'attache en cours.
+
+**Identité et manifeste.**
+
+- `batch_id` = `online-<blake3 des octets du fichier>` pour la CLI. L'identité vient du **contenu**, comme le digest d'ADR-0041 : rejouer le même fichier ne fait rien (INV-10). Deux fichiers d'octets différents qui portent les mêmes documents donnent deux lots, dont le second est entièrement `unchanged`. La route HTTP prend son `batch_id` dans le corps de la requête ; l'idempotence reste celle de la section « Sémantique d'attache ».
+- Le manifeste du lot interne est **déterministe**, pour qu'un rejeu ne produise pas de `409 batch_conflict` :
+
+| Champ | Valeur |
+|---|---|
+| `producer.name` | `crible-online` |
+| `producer.version` | `1` — version du **format du lot en ligne**, pas du binaire |
+| `producer.host` | `crible-online` |
+| `chunker` | `{ "name": "none", "version": "1" }` |
+| `template` | `{ "name": "none", "version": "1" }` |
+| `created_at` | `1970-01-01T00:00:00Z`, sentinelle documentée |
+
+`producer.version` porte la version du format, parce que la version du binaire change à chaque mise à jour de Crible : un rejeu après mise à jour produirait un autre manifeste, donc un `409`. Il doit être incrémenté **seulement** avec un changement de format du lot en ligne. `created_at` est une sentinelle parce qu'aucun contrôle ni rapport ne la lit, et que le mtime n'est pas stable d'une copie à l'autre.
+
+**Mode.** Le lot en ligne n'accepte que **`upsert`**, pour la CLI comme pour la route. `replace_all` est refusé en `invalid_request`, avec un message qui nomme le mode : 10 000 passages au plus par requête (`docs/05-api.md`) le rendent inutilisable, et `replace_all` reste le mode du lot déposé.
+
+**`doc_hash`.** Le `doc_hash` du lot interne est **toujours** rempli : le document le fournit, ou il vaut le blake3 du JSON canonique de ses passages (règle et forme dans `docs/05-api.md`, ADR-0055).
 
 ## Producteurs
 

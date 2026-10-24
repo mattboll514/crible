@@ -59,6 +59,7 @@ data/                                   # volume Docker nommé (mmap rapide)
   instance.json                         # format_version, created_at
   analytics.sqlite                      # analytics agrégées (toute l'instance)
   debug.sqlite                          # journal de debug (opt-in)
+  tmp/online-<batch_id>/                # lot interne du mode en ligne, supprimé par un garde (ADR-0055)
   indexes/<index>/
     index.json                          # config de l'index, figée + réglable
     CURRENT_EPOCH                       # époque courante (écrit tmp puis rename)
@@ -119,6 +120,7 @@ Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3,
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
 - Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`.
+- Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Ce nettoyage est sûr parce qu'un seul écrivain existe par index.
 - Comparer la charge utile du dernier commit tantivy (Gt) à G :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
