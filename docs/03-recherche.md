@@ -60,6 +60,9 @@ Réglages de précision :
 | `search.scan` (`binary` ou `none` = toujours exact) | réglable | `binary` |
 | `search.rescore_candidates` (N) | réglable | 1000, à confirmer par MES-01 |
 | `search.exact_threshold` | réglable | égal à N |
+| `query_precision` (`[encoder].query_precision` : `int8` ou `fp32`) | réglable | `int8` (ADR-0051) |
+
+`query_precision` règle la précision d'encodage des requêtes. `fp32` charge la session fp32 de l'encodeur, qui coûte plus d'1 Go de RAM : c'est un réglage d'évaluation et de diagnostic, pas un mode de production (ADR-0051). Le cache LRU des requêtes est borné par `[limits].query_cache_entries`, 1 024 entrées par instance, et n'est jamais persisté.
 
 Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 1. augmenter N ;

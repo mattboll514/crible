@@ -76,7 +76,7 @@
 ### ENCODER-REQUETES
 - **Objectif** : l'encodage rapide des requêtes.
 - **Dépend de** : CHARGER-MODELE
-- **À lire** : `03-recherche.md` (pipeline, étape 2) ; `05-api.md` (limites).
+- **À lire** : `03-recherche.md` (pipeline, étape 2, « Réglages de précision ») ; `04-donnees-et-ingestion.md` (usage des précisions) ; `05-api.md` (limites) ; `07-stack-et-deploiement.md` (`[encoder]`, `[limits]`) ; ADR-0051 (cache des requêtes, sessions INT8 et fp32).
 - **Livrables** :
   - `encode_query(text)` : INT8 par défaut, fp32 en option, avec le prompt `query: ` ;
   - la troncature à `max_tokens`, signalée par `truncated: true` ;

@@ -1,8 +1,9 @@
 # ADR-0051 — Cache des requêtes et sessions INT8 et fp32 de l'encodeur
 
-- **Statut** : Proposé
-- **Date** : 2026-10-23
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Date** : 2026-10-23 (proposition), 2026-10-24 (décision)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-24 par le propriétaire, tel que proposé : les trois options recommandées sont retenues, y compris la session fp32 gardée jusqu'à l'arrêt de l'instance.
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : `QUESTION-CONCEPTION` remontée par `@dev` sur la tâche `ENCODER-REQUETES` (phase P2, fiche `docs/phases/P2-encodeur-et-recette.md`), avant implémentation. Verdicts de `@architecte` le 2026-10-23 : `NON-COUVERT` pour les points 1 et 3, `ECART` pour le point 2.
 - **Remplace** : —
 

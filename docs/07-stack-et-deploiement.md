@@ -85,9 +85,13 @@ enabled = false
 sample_rate = 0.0
 ttl_days = 7
 
+[encoder]
+query_precision = "int8"      # "int8" | "fp32" : précision des requêtes (ADR-0051)
+
 [limits]
 writer_queue = 16
 default_timeout_ms = 2000
+query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
 
 Chaque clé peut être surchargée par une variable d'environnement, par exemple `CRIBLE_SERVER__BIND`.

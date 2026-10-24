@@ -177,11 +177,14 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 | Bitmaps (keyword, bool, vivants) | RAM | quelques Mo à ~50 Mo |
 | Colonnes de valeurs (nombres, dates) | RAM | ~34 Mo par champ date (`i32`) |
 | Modèle ONNX INT8 | RAM | ~0,3 Go |
+| Modèle ONNX fp32 | RAM, chargé au premier usage seulement (recette, encodage en ligne) | plus d'1 Go |
 | Vecteurs de référence fp16 | disque, mmap | 13,2 Go |
 | SQLite (texte zstd, champs) | disque | ~4 à 5 Go (estimation) |
 | tantivy | disque, mmap | à mesurer (MES-06) |
 
-Le minimum incompressible est d'environ 1,2 Go, plus ~34 Mo par champ date. Toute la RAM restante sert de cache au système. Un même modèle n'est chargé qu'une fois par instance : il est partagé par tous les index qui ont la même empreinte.
+Le minimum incompressible est d'environ 1,2 Go, plus ~34 Mo par champ date, à quoi s'ajoute le fp32 quand il est chargé. Toute la RAM restante sert de cache au système. Un même modèle n'est chargé qu'une fois par instance : il est partagé par tous les index qui ont la même empreinte.
+
+Les sessions de l'encodeur sont indexées par `(empreinte du modèle, précision)` et chargées **paresseusement**, chacune au premier usage de sa précision (ADR-0051). Une instance qui ne sert que des requêtes ne charge donc que l'INT8 ; la session fp32 n'apparaît qu'après une recette ou un encodage en ligne de documents, et elle est **gardée jusqu'à l'arrêt de l'instance**. Une instance qui a fait une recette a donc besoin de plus d'1 Go de plus que ce minimum.
 
 ## Évolutions prévues hors v1
 
