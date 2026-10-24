@@ -11,7 +11,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 |---|---|---|---|
 | J0 | P0 — Fondations | VALIDE 2026-10-21 | [J0-rapport.md](jalons/J0-rapport.md) |
 | J1 | P1 — Stockage, lots et recherche exacte | VALIDE 2026-10-22 | [J1-rapport.md](jalons/J1-rapport.md) |
-| J2 | P2 — Encodeur et recette | EN-ATTENTE | |
+| J2 | P2 — Encodeur et recette | PRET-POUR-VALIDATION | [J2-rapport.md](jalons/J2-rapport.md) |
 | J3 | P3 — Cycle de vie | EN-ATTENTE | |
 | J4 | P4 — Recherche rapide | EN-ATTENTE | |
 | J5 | P5 — Lexical et hybride | EN-ATTENTE | |
@@ -453,3 +453,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-24 | Section « Contenu de NETTOYER-P2 » rédigée par l'orchestrateur pour la session suivante, à la demande du propriétaire (mineurs des relectures de P2 classés par zone, décision ADR-0052 à appliquer, décisions à prendre, incidents d'agents) |
 | 2026-10-24 | NETTOYER-P2 démarrée (branche `tache/NETTOYER-P2`, base `7b24483`) ; aucun invariant, pas de passage par `@testeur` ; décisions de la partie 7 prises par le propriétaire au lancement (journal JSON, `RUST_LOG` en P6, notes « À surveiller » sur ADR-0055/0056, `dead_ratio` en P3) |
 | 2026-10-24 | NETTOYER-P2 terminée : ADR-0052 appliqué (requêtes en fp32 par défaut), journal JSON, mineurs de P2 traités en deux passages de `@dev` ; tests ONNX Runtime rejoués par l'orchestrateur (420 verts) ; relecture OK au 2e tour, garde-fou ADR-0037 sans écart ; toutes les tâches de P2 sont FAIT, prochaine étape `/jalon J2` |
+| 2026-10-24 | Rapport de jalon J2 écrit par `@jalon` (`docs/jalons/J2-rapport.md`), jalon passé à `PRET-POUR-VALIDATION` : 10 tâches de la fiche et NETTOYER-P2 `FAIT`, fmt et clippy verts, 400 tests Rust en CI et 420 avec ONNX Runtime, 65/66 tests `clients` et 242 `tools`, INV-10/INV-11/INV-12 verts, MES-04 et MES-05 consignées, démo J2 rejouée sans écart, ADR-0049 à ADR-0056 sans `Proposé` ; décision du propriétaire à prendre sur ONNX Runtime en CI (20 tests prouvés localement seulement) ; aucun run de CI sur la branche de phase |
