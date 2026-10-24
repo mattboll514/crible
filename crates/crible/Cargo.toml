@@ -20,6 +20,10 @@ crible-store = { path = "../crible-store" }
 serde_json.workspace = true
 
 [dev-dependencies]
+arrow.workspace = true
+blake3.workspace = true
+parquet.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true
 
 [lints]

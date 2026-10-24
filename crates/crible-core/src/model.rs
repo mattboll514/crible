@@ -310,6 +310,7 @@ impl ModelConfig {
             ("hf_id", self.hf_id.is_some()),
             ("revision", self.revision.is_some()),
             ("pooling", self.pooling.is_some()),
+            ("max_tokens", self.max_tokens.is_some()),
             ("prompts", self.prompts.is_some()),
             ("files", self.files.is_some()),
         ] {

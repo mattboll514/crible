@@ -657,11 +657,15 @@ dependencies = [
 name = "crible"
 version = "0.1.0"
 dependencies = [
+ "arrow",
+ "blake3",
  "clap",
  "crible-core",
  "crible-encode",
  "crible-search",
  "crible-store",
+ "parquet",
+ "rusqlite",
  "serde_json",
  "tempfile",
 ]
@@ -684,6 +688,7 @@ dependencies = [
  "blake3",
  "crible-core",
  "ort",
+ "rayon",
  "serde_json",
  "tempfile",
  "tokenizers",
@@ -715,6 +720,7 @@ dependencies = [
  "arrow",
  "blake3",
  "crible-core",
+ "crible-encode",
  "half",
  "memmap2",
  "parquet",

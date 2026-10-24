@@ -38,7 +38,9 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::ids::Epoch;
 use crible_core::model::{ModelConfig, ModelKind};
-use crible_encode::{DEFAULT_QUERY_CACHE_ENTRIES, ModelRegistry, Precision, QueryEncoder};
+use crible_encode::{
+    DEFAULT_QUERY_CACHE_ENTRIES, ModelRegistry, Precision, QueryEncoder, TokenCounter,
+};
 use crible_search::dense::exact::ExactSearcher;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
@@ -102,8 +104,15 @@ pub fn attach_batch(
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let model = load_model(models, &config.model)?;
+    // Control 8 of `docs/04` counts the tokens of every passage with the
+    // tokenizer of an `onnx` model, without loading ONNX Runtime (INV-11). An
+    // `external` model has no tokenizer and is out of that control.
+    let token_counter = match model.kind {
+        ModelKind::External => None,
+        ModelKind::Onnx => Some(TokenCounter::load(model_directory(models, &config.model)?)?),
+    };
     let mut store = GenerationStore::open(&index_dir, &config.schema)?;
-    let report = attach(&mut store, batch, &config, &model)?;
+    let report = attach(&mut store, batch, &config, &model, token_counter.as_ref())?;
     println!(
         "batch '{}' attached to index '{}': generation {} (added {}, replaced {}, \
          unchanged {}, metadata_updated {}, deleted {}, ignored {})",
