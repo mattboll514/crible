@@ -69,6 +69,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Wire name of a precision, as written in the JSON artifacts.
+fn precision_name(precision: Precision) -> &'static str {
+    match precision {
+        Precision::Int8 => "int8",
+        Precision::Fp32 => "fp32",
+    }
+}
+
 /// Returns the value following `name` on the command line.
 fn required(arguments: &[String], name: &str) -> Result<String, String> {
     let position = arguments
@@ -128,9 +136,20 @@ fn write_vectors(
 
     for query in queries {
         let encoded = encoder.encode_query(&query.text, Precision::Int8)?;
+        if encoded.precision != Precision::Int8 {
+            return Err(format!(
+                "the encoder served {} for a requested INT8 query; the model declares no INT8 \
+                 graph, so the comparison would mix two precisions",
+                precision_name(encoded.precision)
+            )
+            .into());
+        }
         truncated_int8.push(encoded.truncated);
         int8.push(encoded.vector);
         let encoded = encoder.encode_query(&query.text, Precision::Fp32)?;
+        if encoded.precision != Precision::Fp32 {
+            return Err("the encoder served another precision for a requested fp32 query".into());
+        }
         truncated_fp32.push(encoded.truncated);
         fp32.push(encoded.vector);
     }
@@ -201,8 +220,20 @@ fn write_latency(
     let encoder = QueryEncoder::new(model, registry, 0);
 
     let started = Instant::now();
-    encoder.encode_query(&queries[0].text, precision)?;
+    let first = encoder.encode_query(&queries[0].text, precision)?;
     let first_call_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    // A model that declares no INT8 graph falls back to fp32: timing another
+    // graph than the requested one would publish MES-05 rows under a wrong
+    // label. The MES-04 harness always uses a model that declares both.
+    if first.precision != precision {
+        return Err(format!(
+            "the encoder served {} for a requested {} query; refuse to measure another graph",
+            precision_name(first.precision),
+            precision_name(precision)
+        )
+        .into());
+    }
+    let precision_effective = first.precision;
 
     for index in 0..warmup {
         let query = &queries[index % queries.len()];
@@ -219,10 +250,8 @@ fn write_latency(
 
     let stats = encoder.cache_stats()?;
     let payload = serde_json::json!({
-        "precision": match precision {
-            Precision::Int8 => "int8",
-            Precision::Fp32 => "fp32",
-        },
+        "precision": precision_name(precision),
+        "precision_effective": precision_name(precision_effective),
         "model": model.display().to_string(),
         "queries": queries.len(),
         "warmup": warmup,

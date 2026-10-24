@@ -129,6 +129,12 @@ Top-10 exact de chaque précision sur les passages de la structure de la requêt
 | `titres` | 8 | 50 000 | 0,937042 | 0,951178 | 0,8375 | 0 | 0,8375 |
 | **Global** | **300** | **257 626** | **0,920358** | **0,949328** | **0,7920** | **31** | **0,8040** |
 
+> Note du 2026-10-24 (tâche `NETTOYER-P2`) : la ligne `decisions` agrège deux
+> corpus du jeu de requêtes, `juri_sommaires` (169 requêtes) et
+> `juri_texte_integral` (31 requêtes). Les deux cherchent dans la même structure
+> `decisions` et y partagent le même pool ; le tableau ne les sépare pas, et
+> leur moyenne commune est celle qui est reportée ici.
+
 Le rappel@10 moyen est de **0,792** : 20,8 % des passages du top-10 fp32
 disparaissent du top-10 INT8. Aucune structure n'atteint 0,90. Dans cette
 comparaison, le fp32 est sa propre référence, donc son rappel vaut 1,0 par
@@ -259,3 +265,45 @@ agrégats.
 - La déduplication par contenu n'existe pas dans le chemin de recherche ; elle
   n'a donc pas été appliquée. Si elle est ajoutée, MES-04 devra être rejouée :
   elle changerait les top-10 comparés.
+
+## Note datée du 2026-10-24 (tâche `NETTOYER-P2`)
+
+Cette section est ajoutée après la campagne, sans réécrire le corps du rapport.
+
+**Textes que la recommandation fp32 contredisait.** La conclusion de la
+campagne (§ 5) recommandait de passer `[encoder].query_precision` à `fp32`. Elle
+contredisait deux textes en vigueur ce jour-là, en plus de l'ADR-0051 cité
+dans le rapport :
+
+- **l'ADR-0002** (« Une instance par projet », conséquences) : son budget
+  mémoire annonçait « chaque instance charge son propre modèle (~0,3 Go en
+  INT8) ». Une instance qui sert des requêtes en `fp32` garde la session fp32
+  (plus d'1 Gio) dès la première requête, soit un minimum d'environ 2,0 Go au
+  lieu d'environ 1,2 Go ;
+- **l'étape 2 de `docs/03-recherche.md`** (« Le pipeline d'une requête »), qui
+  décrivait l'encodage de la requête en ONNX `int8`.
+
+Le propriétaire a tranché par l'ADR-0052 (accepté le 2026-10-24) : le défaut
+passe à `fp32`, et ces deux textes portent désormais une note datée ou la valeur
+`fp32`.
+
+**Contrôle croisé du chemin Rust, rejouable.** Le rapport annonçait, dans la
+section 1, un contrôle des cinq premières requêtes entre les vecteurs Rust et
+`onnxruntime` en Python, sans commande ni script. Le contrôle est maintenant
+porté par `tools/bench/mes04/compare_onnx.py`, testé hors ligne (huit tests) :
+
+```sh
+# depuis tools/, avec le groupe export installé et data/mes04 renseigné
+uv run python bench/mes04/compare_onnx.py --limit 5
+```
+
+Il relit `query-texts.jsonl`, `rust-vectors.json`, `vectors-int8.f32` et
+`vectors-fp32.f32`, encode les mêmes textes avec le prompt `query: ` du
+`model.json`, applique le pooling CLS et la normalisation du moteur, puis
+compare les cosinus. Rejoué le 2026-10-24 sur la campagne du même jour : cosinus
+minimum 0,9999999999999998 et maximum 1,0000000000000002, sur les cinq requêtes,
+en `int8` comme en `fp32`. L'écart de 3·10⁻⁸ annoncé dans la section 1 n'est pas
+reproduit : sa cause n'est pas établie. Un contrôle manuel qui calcule son
+cosinus en `float32` expliquerait aussi les valeurs légèrement supérieures à 1.
+Les deux chemins automatiques restent d'accord à 2·10⁻¹⁶ près. `run.sh` lance ce
+contrôle après `analyze.py`.

@@ -320,6 +320,12 @@ impl ModelConfig {
                 )));
             }
         }
+        if self.max_tokens == Some(0) {
+            return Err(json::invalid(
+                "setting 'max_tokens' must be positive at $.max_tokens; an onnx model cannot \
+                 encode zero tokens",
+            ));
+        }
         Ok(())
     }
 

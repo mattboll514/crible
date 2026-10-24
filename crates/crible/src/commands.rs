@@ -40,7 +40,8 @@ use crible_core::filter::Filter;
 use crible_core::ids::Epoch;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_encode::{
-    DEFAULT_QUERY_CACHE_ENTRIES, Model, ModelRegistry, Precision, QueryEncoder, TokenCounter,
+    DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
+    QueryEncoder, TokenCounter,
 };
 use crible_search::dense::exact::{ExactSearcher, Hit};
 use crible_search::pool::Pool;
@@ -130,10 +131,12 @@ pub fn attach_batch(
     let model_dir = model_directory(models, &config.model)?;
     // Control 8 of `docs/04` counts the tokens of every passage with the
     // tokenizer of an `onnx` model, without loading ONNX Runtime (INV-11). An
-    // `external` model has no tokenizer and is out of that control.
+    // `external` model has no tokenizer and is out of that control. The
+    // configuration was read once by `load_model`, so the counter reuses it
+    // instead of reading `model.json` again.
     let token_counter = match model.kind {
         ModelKind::External => None,
-        ModelKind::Onnx => Some(TokenCounter::load(&model_dir)?),
+        ModelKind::Onnx => Some(TokenCounter::load_with_config(&model_dir, &model)?),
     };
     // Control 9 of `docs/04` re-encodes a sample in fp32 (INV-12). The graph is
     // loaded lazily, by this closure, at the point the attach reaches the
@@ -177,7 +180,7 @@ pub fn ingest_documents(
     let model_dir = model_directory(models, &config.model)?;
     let token_counter = match model.kind {
         ModelKind::External => None,
-        ModelKind::Onnx => Some(TokenCounter::load(&model_dir)?),
+        ModelKind::Onnx => Some(TokenCounter::load_with_config(&model_dir, &model)?),
     };
     // Encoded in fp32, stored at the reference precision of the index: the
     // session is loaded lazily, once, by the online ingestion, and handed to
@@ -440,10 +443,11 @@ fn excerpt(text: &str, limit: usize) -> String {
 /// Encodes a text query with the encoder named by `model`, or with the model of
 /// the index.
 ///
-/// The query cache and the INT8 default are those of `docs/03-recherche.md` and
-/// ADR-0051. The instance configuration of P6 will pass
-/// `[limits].query_cache_entries` and `[encoder].query_precision`; the CLI has
-/// no `crible.toml` loader yet, so it uses the documented defaults.
+/// The query cache and the default precision are those of
+/// `docs/03-recherche.md` and ADR-0052 (`fp32`). The instance configuration of
+/// P6 will pass `[limits].query_cache_entries` and
+/// `[encoder].query_precision`; the CLI has no `crible.toml` loader yet, so it
+/// uses the documented defaults.
 fn encode_text_query(
     models: Option<&Path>,
     index: &IndexConfig,
@@ -472,7 +476,7 @@ fn encode_text_query(
         Arc::new(ModelRegistry::new()),
         DEFAULT_QUERY_CACHE_ENTRIES,
     );
-    let encoded = encoder.encode_query(text, Precision::Int8)?;
+    let encoded = encoder.encode_query(text, DEFAULT_QUERY_PRECISION)?;
     Ok((encoded.vector, encoded.truncated))
 }
 
@@ -654,7 +658,39 @@ fn internal(message: impl Into<String>) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{EXCERPT_CHARS, excerpt};
+    use super::{EXCERPT_CHARS, SearchFormat, SearchRequest, excerpt};
+    use std::path::Path;
+
+    #[test]
+    fn debug_never_prints_the_query_text_nor_a_filter_value() {
+        // A log line must not carry a query or a filter value (AGENTS.md,
+        // "Confidentialité"): the derived `Debug` is replaced by a masked one,
+        // which shows their presence only.
+        let request = SearchRequest {
+            data: Path::new("/data"),
+            index: "legifacile",
+            vector_file: None,
+            query: Some("responsabilité du fait des choses"),
+            models: None,
+            model: None,
+            filter: Some(r#"{"categorie": "SECRET-VALUE"}"#),
+            k: 10,
+            format: SearchFormat::Json,
+        };
+        let rendered = format!("{request:?}");
+        assert!(
+            !rendered.contains("responsabilité"),
+            "the query text must not be printed: {rendered}"
+        );
+        assert!(
+            !rendered.contains("SECRET-VALUE"),
+            "the filter value must not be printed: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "the presence of the query and the filter is shown: {rendered}"
+        );
+    }
 
     #[test]
     fn excerpt_keeps_a_short_text_whole() {

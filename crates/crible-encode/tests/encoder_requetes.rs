@@ -166,7 +166,11 @@ fn serves_the_second_identical_query_from_the_cache() {
     let first = encoder
         .encode_query("droit du contrat", Precision::Int8)
         .expect("the first query is encoded");
-    assert_eq!(first.precision, Precision::Int8, "INT8 is the default");
+    assert_eq!(
+        first.precision,
+        Precision::Int8,
+        "the encoder reports the requested precision"
+    );
     assert!(!first.truncated, "a short query is not truncated");
     assert_eq!(first.vector.len(), DIMS);
     // The fixture INT8 graph scales the pooled mean by two: its vector is
@@ -233,8 +237,12 @@ fn a_declared_but_missing_int8_file_is_an_integrity_error() {
 
 #[test]
 #[ignore = "needs ONNX Runtime (ORT_DYLIB_PATH); run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible-encode --test encoder_requetes -- --ignored"]
-fn counts_the_prompt_and_the_special_tokens_in_max_tokens() {
+fn counts_the_prompt_in_max_tokens() {
     // Acceptance criterion: truncation is signalled, and the prompt counts.
+    // The fixture tokenizer has no post-processor, so it emits no special
+    // token: the count here is the `query: ` id plus the body. The final-id
+    // rule of `truncate` is covered by its unit test, and the production
+    // tokenizer ends with `</s>`.
     // The fixture prompt `query: ` is one id (measured below), so a body of 31
     // words is exactly 32 ids and must not be truncated, while 32 words are 33
     // ids and must be. The vectors prove that the model received the first 31

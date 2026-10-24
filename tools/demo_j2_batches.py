@@ -51,8 +51,10 @@ import pyarrow.parquet as pq
 
 from crible.batch import BatchWriter
 
-#: Documents of the ``dole`` lot copied into the wrong-prompt batch.
-WRONG_PROMPT_DOCUMENTS = 10
+#: Upper bound on the documents of the wrong-prompt batch. It is a ceiling, not
+#: the count: the passage cap below is reached first, so the ``dole`` lot yields
+#: 5 documents and 20 passages.
+MAX_WRONG_PROMPT_DOCUMENTS = 10
 
 #: Passage cap of the wrong-prompt batch, so the acceptance check stays quick.
 WRONG_PROMPT_PASSAGES = 20
@@ -76,7 +78,7 @@ def select_documents(
     documents: list[dict[str, Any]],
     passages: list[dict[str, Any]],
     *,
-    max_documents: int = WRONG_PROMPT_DOCUMENTS,
+    max_documents: int = MAX_WRONG_PROMPT_DOCUMENTS,
     max_passages: int = WRONG_PROMPT_PASSAGES,
 ) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     """Returns the first documents, by ``doc_id``, with their passages.
@@ -211,10 +213,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     max_tokens = model["max_tokens"]
     document_prompt = model["prompts"]["document"]
-    # `export` (versions of ADR-0050) is part of the resolved model file but not
-    # of the `model` member of the manifest (`docs/format-lot-v1.md`), which
-    # `BatchWriter` derives from the keys it knows.
-    manifest_model = {key: value for key, value in model.items() if key != "export"}
 
     selected = select_documents(documents, passages)
     if not selected:
@@ -226,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out,
         WRONG_PROMPT_BATCH,
         "upsert",
-        manifest_model,
+        model,
         manifest["chunker"],
         manifest["template"],
         created_at=CREATED_AT,
@@ -266,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out,
         TOO_LONG_BATCH,
         "upsert",
-        manifest_model,
+        model,
         manifest["chunker"],
         manifest["template"],
         created_at=CREATED_AT,

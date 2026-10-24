@@ -511,6 +511,23 @@ fn onnx_model_without_max_tokens_is_rejected() {
 }
 
 #[test]
+fn onnx_model_with_zero_max_tokens_is_rejected() {
+    // The positivity control sits next to `dims`: zero is a present but unusable
+    // value, and both control 8 (INV-11) and the query truncation would refuse
+    // every input instead of reading a limit.
+    let mut value = fixture();
+    value["max_tokens"] = serde_json::json!(0);
+    let error = ModelConfig::from_value(&value).expect_err("max_tokens must be positive");
+
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("max_tokens"),
+        "the message names the setting: {}",
+        error.message()
+    );
+}
+
+#[test]
 fn external_model_needs_no_max_tokens() {
     // The type stays optional: the sole `onnx` kind carries a tokenizer and a
     // prompt, so it is the only one that must declare its supported length.

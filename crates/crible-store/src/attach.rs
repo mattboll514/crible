@@ -767,7 +767,7 @@ fn check_acceptance(
             ErrorCode::AcceptanceFailed,
             format!(
                 "batch '{batch_id}' is refused: the acceptance check re-encoded {} passage(s) in \
-                 fp32 and got min cosine {:.6}, below acceptance_min_cosine = {} (INV-12); p1 = \
+                 fp32 and got min cosine {:.6}, below acceptance_min_cosine = {:.6} (INV-12); p1 = \
                  {:.6}, p50 = {:.6}",
                 report.sample,
                 report.min_cosine,

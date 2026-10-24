@@ -130,6 +130,10 @@ _MODEL_KEYS = (
     "max_tokens",
     "prompts",
     "files",
+    # Versions of the libraries that produced the fp32 export (ADR-0050). The
+    # field is read from `model.json` and ignored, as the Rust `ModelConfig`
+    # does: it stays out of the manifest and out of the model fingerprint.
+    "export",
 )
 _CHUNKER_KEYS = ("name", "version", "params")
 _TEMPLATE_KEYS = ("name", "version")

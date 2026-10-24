@@ -11,7 +11,7 @@
 //! of one model stay distinct (ADR-0051).
 //!
 //! Sessions are loaded on first use of their precision, so an instance that
-//! only serves queries never loads the fp32 graph.
+//! only serves queries loads the fp32 graph only (ADR-0052).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,9 +38,10 @@ impl ModelRegistry {
 
     /// Returns the fp32 encoder of `directory`, loading it on first use.
     ///
-    /// This is the precision of the acceptance check and of the online document
-    /// encoding; queries go through [`Self::get_or_load_precision`] with
-    /// [`Precision::Int8`].
+    /// This is the precision of the acceptance check, of the online document
+    /// encoding, and the default of queries
+    /// ([`crate::DEFAULT_QUERY_PRECISION`], ADR-0052); an explicit INT8 query
+    /// goes through [`Self::get_or_load_precision`].
     ///
     /// # Errors
     ///

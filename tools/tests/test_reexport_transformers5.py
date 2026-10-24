@@ -538,6 +538,17 @@ def test_fidelity_refuses_a_sample_encoded_without_the_document_prompt(tmp_path)
         export_onnx.check_sample_provenance(tmp_path, export_onnx.DEFAULT_REVISION)
 
 
+def test_fidelity_refuses_a_sample_stored_in_another_precision(tmp_path):
+    """The module decodes fp16 only; a batch declaring fp32 would be misread."""
+    batch = _write_sample_batch(tmp_path, "alpha", _sample_rows("alpha", 2))
+    manifest = json.loads((batch / "manifest.json").read_text(encoding="utf-8"))
+    manifest["model"]["vector_dtype"] = "fp32"
+    (batch / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fp16"):
+        export_onnx.check_sample_provenance(tmp_path, export_onnx.DEFAULT_REVISION)
+
+
 @requires_model_and_sample
 def test_inv_12_vectors_encoded_without_the_document_prompt_are_refused():
     """The failure mode INV-12 guards against: the prompt left out.
@@ -651,7 +662,7 @@ def test_export_failure_of_the_exporter_is_reported_in_one_line(
     monkeypatch.setattr(export_onnx, "download_snapshot", lambda revision: snapshot)
     monkeypatch.setattr(export_onnx, "check_model_config", lambda snapshot: None)
 
-    def refusing_export(snapshot, target, revision):
+    def refusing_export(snapshot, target):
         raise error
 
     monkeypatch.setattr(export_onnx, "export_fp32", refusing_export)
@@ -678,7 +689,7 @@ def test_export_failure_of_the_quantizer_is_reported_in_one_line(
     monkeypatch.setattr(
         export_onnx,
         "export_fp32",
-        lambda snapshot, target, revision: Path(target).write_bytes(b"graph"),
+        lambda snapshot, target: Path(target).write_bytes(b"graph"),
     )
 
     def refusing_quantization(source, target):
@@ -695,6 +706,53 @@ def test_export_failure_of_the_quantizer_is_reported_in_one_line(
     assert not (out_dir / export_onnx.MODEL_JSON_PATH).exists()
 
 
+def test_a_failure_during_quantization_keeps_the_previous_export_intact(
+    tmp_path, monkeypatch, capsys
+):
+    """A failed overwrite leaves the whole previous export, manifest included.
+
+    The heavy files are staged and renamed only once the quantization
+    succeeded, so the old graph and the old ``model.json`` still agree
+    (``tools/README.md``, ``--overwrite``).
+    """
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / export_onnx.TOKENIZER_PATH).write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(export_onnx, "resolve_revision", lambda revision: "a" * 40)
+    monkeypatch.setattr(export_onnx, "download_snapshot", lambda revision: snapshot)
+    monkeypatch.setattr(export_onnx, "check_model_config", lambda snapshot: None)
+    monkeypatch.setattr(
+        export_onnx,
+        "export_fp32",
+        lambda snapshot, target: Path(target).write_bytes(b"new graph"),
+    )
+
+    def refusing_quantization(source, target):
+        raise RuntimeError("the graph holds an operator the quantizer refuses")
+
+    monkeypatch.setattr(export_onnx, "quantize_int8", refusing_quantization)
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    previous = {
+        export_onnx.FP32_PATH: b"old graph",
+        export_onnx.INT8_PATH: b"old int8",
+        export_onnx.TOKENIZER_PATH: b"old tokenizer",
+        export_onnx.MODEL_JSON_PATH: b'{"old": true}\n',
+        export_onnx.PARITY_PATH: b'{"old": true}\n',
+    }
+    for name, content in previous.items():
+        (out_dir / name).write_bytes(content)
+
+    assert export_onnx.main(["--out", str(out_dir), "--overwrite", "--skip-parity"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+
+    for name, content in previous.items():
+        assert (out_dir / name).read_bytes() == content, name
+    assert sorted(entry.name for entry in out_dir.iterdir()) == sorted(previous)
+
+
 @requires_export_deps
 def test_parity_below_the_requirement_stops_the_export(tmp_path, monkeypatch, capsys):
     """INV-12: a graph under the parity threshold never gets a ``model.json``."""
@@ -707,7 +765,7 @@ def test_parity_below_the_requirement_stops_the_export(tmp_path, monkeypatch, ca
     monkeypatch.setattr(
         export_onnx,
         "export_fp32",
-        lambda snapshot, target, revision: Path(target).write_bytes(b"graph"),
+        lambda snapshot, target: Path(target).write_bytes(b"graph"),
     )
     monkeypatch.setattr(
         export_onnx,
@@ -724,6 +782,7 @@ def test_parity_below_the_requirement_stops_the_export(tmp_path, monkeypatch, ca
             "texts": 100,
             "min_cosine": 0.998,
             "mean_cosine": 0.9995,
+            "min_cosine_required": export_onnx.MIN_PARITY_COSINE,
         },
     )
 
@@ -748,7 +807,7 @@ def test_export_writes_the_versions_and_the_parity_report(tmp_path, monkeypatch,
     monkeypatch.setattr(
         export_onnx,
         "export_fp32",
-        lambda snapshot, target, revision: Path(target).write_bytes(b"graph"),
+        lambda snapshot, target: Path(target).write_bytes(b"graph"),
     )
     monkeypatch.setattr(
         export_onnx,
@@ -765,6 +824,7 @@ def test_export_writes_the_versions_and_the_parity_report(tmp_path, monkeypatch,
             "texts": 100,
             "min_cosine": 0.99999,
             "mean_cosine": 0.999995,
+            "min_cosine_required": export_onnx.MIN_PARITY_COSINE,
         },
     )
 

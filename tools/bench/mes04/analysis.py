@@ -11,7 +11,7 @@ writes the raw JSON next to the report.
 the engine scores every live passage of the pool with the cosine of the query
 against those vectors. This module does the same in numpy: same vectors, same
 cosine, same tie order (score descending, then passage key ascending, the order
-of `ReferenceSearcher` and of `tools/reference_topk.py`). The engine has no
+of `ExactSearcher` in Rust and of `tools/reference_topk.py`). The engine has no
 deduplication in the search path (``docs/03-recherche.md`` describes
 ``dedup: "content"`` as an option, and `crible-search` does not implement it), so
 none is applied here either.
@@ -120,7 +120,15 @@ def load_passages(sample_dir: Path, structure: str) -> tuple[np.ndarray, np.ndar
         array = table.column("vector").combine_chunks()
         if array.null_count:
             raise ValueError(f"{path}: a passage has no vector")
-        raw = array.buffers()[1]
+        # `to_numpy` follows the offset and length of the array; reading
+        # `buffers()[1]` directly would take the whole buffer of a sliced array,
+        # offset included, and misalign every vector by a few bytes.
+        raw = b"".join(array.to_numpy(zero_copy_only=False))
+        if len(raw) != table.num_rows * DIMS * 2:
+            raise ValueError(
+                f"{path}: {len(raw)} vector bytes for {table.num_rows} passages "
+                f"of {DIMS} fp16 dimensions"
+            )
         matrix = np.frombuffer(raw, dtype="<f2").reshape(table.num_rows, DIMS)
         matrices.append(matrix.astype(np.float32))
         doc_ids = table.column("doc_id").to_pylist()

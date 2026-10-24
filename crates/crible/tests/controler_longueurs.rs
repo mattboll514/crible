@@ -52,12 +52,15 @@
 //! would be 33 tokens, too long. A batch whose text holds 32 words and is
 //! accepted would prove the prompt was not counted.
 //!
-//! # Expected state before the implementation
+//! # What the implementation does
 //!
-//! Control 8 does not exist yet, so every refusal asserted here is absent: the
-//! four tests fail because the attach succeeds (or, for the truncation test,
-//! because a token-counting implementation that trusted `tokenizer.json` would
-//! accept the over-long passage). They compile against the shipped CLI.
+//! Control 8 lives in `crible-store::attach`, after `reader.validate()` and
+//! before any write. It counts the tokens of every passage with the tokenizer of
+//! the `onnx` model, prompt and special tokens included, refuses an over-long
+//! batch with `invalid_request`, and names at most the first twenty keys in the
+//! order of the batch rows. The four CI tests pin the refusal, the exact limit,
+//! the key order and the declared-truncation case; the three `#[ignore]`d
+//! variants repeat them after an accepted batch, which also runs control 9.
 
 mod common;
 
