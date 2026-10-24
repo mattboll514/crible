@@ -228,9 +228,11 @@ Le serveur construit ensuite un lot interne et suit exactement le même chemin q
 
 **Document en ligne.** Un document porte `doc_id`, un `doc_hash` facultatif, ses `fields` et ses `passages` (`text`, `fields`, et un `vector` facultatif par passage). **Un seul type** décrit ce document : il sert au corps HTTP de la route et à la commande de la CLI, pour qu'aucun format parallèle ne soit maintenu.
 
-**Fichier d'entrée de `crible ingest`.** `crible ingest --data … --index … documents.jsonl` lit un objet document par ligne, au format ci-dessus. L'enveloppe est **implicite** : le mode vaut `upsert` et le fichier ne porte pas de suppressions ; une suppression passe par un lot déposé.
+**Fichier d'entrée de `crible ingest`.** `crible ingest --data … --models … --index … documents.jsonl` lit un objet document par ligne, au format ci-dessus. `--models` est obligatoire, comme pour `crible attach` : le modèle vit hors du volume de données. L'enveloppe est **implicite** : le mode vaut `upsert` et le fichier ne porte pas de suppressions ; une suppression passe par un lot déposé.
 
 **Lot interne.** Le lot est écrit dans `<data>/tmp/online-<batch_id>/`, **hors du dossier de l'index**, avec `std::fs`, et supprimé par un garde qui s'exécute en succès comme en échec. Il n'est jamais un dossier `tmp-*` du dossier de l'index : la reprise efface ces dossiers (INV-04), et une ouverture concurrente ferait disparaître le lot sous l'attache en cours.
+
+**Verrou de présence.** Un lot en ligne est vivant tant qu'un verrou exclusif est tenu sur `<data>/tmp/online-<batch_id>.lock` (ADR-0056). L'ingestion ouvre ce fichier en lecture-écriture avec création, y prend le verrou avec `try_lock` **avant** de créer le dossier du lot, et le tient jusqu'**après** `attach`. Si le verrou est déjà tenu, l'ingestion échoue en `overloaded` (503) sans rien créer, ni dossier ni ligne dans `batches` : le message nomme le fichier de verrou et invite à réessayer. Le garde supprime le dossier, puis le verrou. `<data>/tmp/` étant commun à tous les index d'une racine, la présence du verrou est la seule preuve qu'un lot n'est pas un résidu : sans verrou pris, le nettoyage ne supprime rien (ADR-0056).
 
 **Identité et manifeste.**
 

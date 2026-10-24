@@ -200,6 +200,18 @@ dans le corps de la requête. La colonne `doc_hash` est toujours remplie : elle
 vaut le `doc_hash` fourni, ou le blake3 du JSON canonique des passages (règle
 dans `05-api.md`).
 
+Le dossier `<data>/tmp/` est commun à tous les index d'une racine. Un dossier
+`online-*` n'est donc un résidu de crash que si son **verrou de présence**
+`<data>/tmp/online-<batch_id>.lock`, son voisin et dérivé de la même valeur, peut
+être pris (ADR-0056). L'ingestion prend ce verrou exclusif avant de créer le
+dossier du lot et le tient jusqu'après `attach` ; une seconde ingestion du même
+`batch_id` échoue en `overloaded` (503) sans rien créer. Le nettoyage
+n'interprète jamais l'absence de `.lock` comme la preuve d'un résidu : il ouvre
+le fichier en lecture-écriture avec création, tente le verrou, et ne supprime le
+dossier puis le verrou qu'en cas de succès. Toute autre erreur de verrou, comme
+sur un montage réseau qui ne partage pas les verrous, ne supprime rien et laisse
+le dossier en place.
+
 ## Colonnes Parquet
 
 Tous les fichiers sont au format Parquet. Les colonnes de schéma sont

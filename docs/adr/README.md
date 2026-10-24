@@ -108,7 +108,8 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0052](0052-requetes-encodees-en-fp32-et-seuil-de-recette-a-0-999.md) | Requêtes encodées en fp32 et seuil de recette à 0,999 | Accepté | 2026-10-24 (proposition et acceptation) |
 | [ADR-0053](0053-encodeur-dans-le-chemin-d-attache-arete-crible-store-vers-crible-encode.md) | Encodeur dans le chemin d'attache : arête `crible-store` → `crible-encode` | Accepté (précision 2 complétée par ADR-0054) | 2026-10-24 (proposition et acceptation) |
 | [ADR-0054](0054-chargement-differe-du-modele-a-l-attache-et-bornes-de-la-recette.md) | Chargement différé du modèle à l'attache et bornes de la recette | Accepté | 2026-10-24 (proposition et acceptation) |
-| [ADR-0055](0055-lot-en-ligne-fichier-d-entree-identite-empreinte-et-lot-interne.md) | Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne | Accepté | 2026-10-24 (proposition et acceptation) |
+| [ADR-0055](0055-lot-en-ligne-fichier-d-entree-identite-empreinte-et-lot-interne.md) | Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne | Accepté (décision 4, nettoyage, remplacée par ADR-0056) | 2026-10-24 (proposition et acceptation) |
+| [ADR-0056](0056-verrou-de-presence-des-lots-en-ligne.md) | Verrou de présence des lots en ligne (remplace la décision 4 d'ADR-0055 sur le nettoyage) | Accepté | 2026-10-24 (proposition et acceptation) |
 
 ## Questions ouvertes
 

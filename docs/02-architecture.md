@@ -59,7 +59,8 @@ data/                                   # volume Docker nommé (mmap rapide)
   instance.json                         # format_version, created_at
   analytics.sqlite                      # analytics agrégées (toute l'instance)
   debug.sqlite                          # journal de debug (opt-in)
-  tmp/online-<batch_id>/                # lot interne du mode en ligne, supprimé par un garde (ADR-0055)
+  tmp/online-<batch_id>/                # lot interne du mode en ligne, protégé par un verrou de présence, supprimé par un garde (ADR-0055, ADR-0056)
+  tmp/online-<batch_id>.lock            # verrou de présence du lot en ligne ; un lot est vivant tant qu'il est tenu (ADR-0056)
   indexes/<index>/
     index.json                          # config de l'index, figée + réglable
     CURRENT_EPOCH                       # époque courante (écrit tmp puis rename)
@@ -120,7 +121,7 @@ Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3,
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
 - Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`.
-- Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Ce nettoyage est sûr parce qu'un seul écrivain existe par index.
+- Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Un lot n'est résiduel que si son verrou de présence, `<data>/tmp/online-<batch_id>.lock`, peut être pris : le nettoyage ouvre ce fichier en lecture-écriture avec création, tente un verrou exclusif avec `try_lock`, et ne supprime le dossier puis le verrou qu'en cas de succès. Si le verrou est déjà tenu, un écrivain tient le lot et il est laissé en place. Toute autre erreur de verrou (système de fichiers sans verrou, montage réseau) ne supprime rien et est journalisée : la règle est asymétrique à dessein, car un résidu qui s'accumule est un coût alors qu'une suppression de lot vivant est une panne (ADR-0056). Ce nettoyage n'efface rien de plus large que `<data>/tmp/` et ne s'exécute qu'à l'ouverture en écriture.
 - Comparer la charge utile du dernier commit tantivy (Gt) à G :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
@@ -133,6 +134,7 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 ## Concurrence
 
 - **Un écrivain par index** : une tâche tokio avec une file bornée. Les écritures d'un index sont sérialisées ; les lectures ne sont jamais bloquées (**INV-02**).
+- **La portée de cette règle est l'index, pas la racine de données.** `<data>/tmp/` est commun à tous les index d'une racine : deux index distincts y ont chacun un écrivain légitime, et l'ingestion en ligne peut donc s'y dérouler en parallèle. Ce qui arbitre ces rencontres n'est pas la règle « un écrivain par index », mais le **verrou de présence** du lot en ligne (ADR-0056) : l'ingestion prend un verrou exclusif sur `<data>/tmp/online-<batch_id>.lock` avant de créer le dossier du lot et le tient jusqu'après `attach`. Si le verrou est déjà tenu, l'ingestion échoue en `overloaded` sans rien créer ; elle ne détruit ni ne bloque un lot qu'un autre processus tient.
 - **Chaque requête prend un `Arc<Snapshot>` au départ.** L'instantané contient les segments (fp16 en mmap, codes en RAM), les bitmaps, les colonnes de valeurs, le `Searcher` tantivy et la génération.
 - **Libération.** Un instantané est libéré quand son dernier lecteur se termine. Les fichiers d'une époque supprimée ne sont effacés qu'après.
 - **Payloads.** Les textes et champs des résultats viennent d'un pool de connexions SQLite en lecture (WAL).
