@@ -79,10 +79,14 @@
 //! # Fault injection
 //!
 //! With the `failpoints` feature only, the attach stops at
+//! `attach_validated` (step 1 of `docs/02`: validation, acceptance and the
+//! semantic table done, nothing written), `after_attach_segment` (step 2: the
+//! segment is renamed into `segments/<id>/`, no transaction open),
 //! `after_attach_documents` (document rows written, passages not yet) and at
 //! `after_attach_passages` (passage rows written, tombstones, `batches`, the
 //! `segments` row and `meta` not yet; the segment files were already renamed
-//! before the transaction). Stopping means panicking with a message
+//! before the transaction). Steps 3, 4, 5 and 6 stop at their own points of the
+//! commit protocol. Stopping means panicking with a message
 //! containing `CRIBLE_FAILPOINT`, exactly as
 //! [`GenerationStore::commit`](crate::generation::GenerationStore::commit)
 //! does, so the transaction rolls back (INV-03).
@@ -503,6 +507,9 @@ pub fn attach(
         Ok((plan, generation, meta.next_iid))
     })?;
     let validation = validation_started.elapsed();
+    // Step 1 of `docs/02`: validation, acceptance and the semantic table done,
+    // no state modified.
+    attach_failpoint("attach_validated");
 
     // Step 2 of `docs/02`: the segment is written and renamed before the
     // transaction opens.
@@ -521,6 +528,10 @@ pub fn attach(
         },
     )?;
     let segment_duration = segment_started.elapsed();
+    // End of step 2 of `docs/02`: the segment is renamed into `segments/<id>/`
+    // and no transaction is open. Until SQLite references it, recovery removes
+    // it as an unreferenced segment directory (INV-03, INV-04).
+    attach_failpoint("after_attach_segment");
 
     let committed =
         store.commit_with_rows(|transaction, committed_generation, committed_iid| {
