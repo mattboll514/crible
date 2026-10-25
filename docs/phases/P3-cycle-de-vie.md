@@ -60,7 +60,7 @@
 ### PATCHER-METADONNEES
 - **Objectif** : modifier les champs d'un document sans ré-encodage.
 - **Dépend de** : CONSTRUIRE-BITMAPS
-- **À lire** : `02-architecture.md` (générations, suppressions) ; `05-api.md` (`PATCH documents`).
+- **À lire** : `02-architecture.md` (générations, suppressions) ; `05-api.md` (`PATCH documents`) ; ADR-0060 (contrat du patch : entrée, fusion, `null`, erreurs, rapport, écritures du commit).
 - **Livrables** :
   - `crible-store::patch` : mise à jour de `documents.fields`, passage à G+1, mise à jour des bitmaps en copie sur écriture ;
   - validation contre le schéma ;

@@ -33,7 +33,7 @@ Format unique :
 | `unauthorized` | 401 | Clé absente ou inconnue |
 | `forbidden` | 403 | Rôle insuffisant |
 | `unknown_index` | 404 | Index inexistant |
-| `not_found` | 404 | Document, job ou lot introuvable |
+| `not_found` | 404 | Document, job ou lot introuvable ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) |
 | `immutable_setting` | 409 | Tentative de modifier un réglage figé |
 | `batch_conflict` | 409 | Même `batch_id`, manifeste différent |
 | `payload_too_large` | 413 | Corps au-delà des limites |
@@ -85,11 +85,31 @@ Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `in
 }
 ```
 
-- Si `doc_hash` est absent, il vaut le blake3 du **JSON canonique des passages** (ADR-0055) : pour chaque passage, `ord`, `text` et `fields`, clés triées, dans la forme canonique d'ADR-0019 ; le digest est rendu `blake3:<hex>` (ADR-0034, ADR-0041). Cette forme couvre le texte, les champs et le découpage, donc un `doc_hash` identique signifie bien que rien n'a changé. Le lot interne remplit toujours la colonne `doc_hash`, qui est non nullable.
+- Si `doc_hash` est absent, il vaut le blake3 du **JSON canonique des passages** (ADR-0055) : pour chaque passage, `ord`, `text` et `fields`, clés triées, dans la forme canonique d'ADR-0019 ; le digest est rendu `blake3:<hex>` (ADR-0034, ADR-0041). Cette forme couvre le texte, les champs et le découpage, donc un `doc_hash` identique signifie bien que rien n'a changé **dans les passages**. Les champs de **document** restent hors du hash : un patch de métadonnées ne change pas le `doc_hash` (ADR-0060). Le lot interne remplit toujours la colonne `doc_hash`, qui est non nullable.
 - Si un passage porte un `vector`, il est encodé en base64 (fp32 little-endian) ; sinon, le serveur encode le texte.
 - Limite : 10 000 passages par requête.
 - **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 passages le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé.
 - **Manifeste du lot interne** : déterministe, `producer` vaut `crible-online` ; ses valeurs sont fixées par ADR-0055 et décrites dans `04-donnees-et-ingestion.md` (mode en ligne) et `format-lot-v1.md` (lot interne du mode en ligne).
+
+### Patch de métadonnées
+
+`PATCH /v1/indexes/{index}/documents` met à jour les **champs d'un document** sans ré-encodage (ADR-0060).
+
+```json
+{ "documents": [ { "doc_id": "D1", "fields": { "juridiction": "cass" } } ] }
+```
+
+- **Fusion** : chaque clé de `fields` remplace la valeur du champ de même nom, les clés absentes gardent leur valeur. Un `fields: {}` est un no-op, compté `unchanged`.
+- **`null`** est une valeur posée ; il ne retire jamais la clé.
+- **Champs** : seuls les champs de document du schéma sont acceptés. Une clé inconnue, un champ de passage, `doc_id` ou `doc_hash` donnent `invalid_request`, avec un message qui nomme le champ, le niveau attendu (`document_fields`) et le chemin JSON — jamais la valeur. Un champ `filterable: false` ou `returned: false` accepte la valeur, qui reste invisible aux filtres ou au payload du document.
+- **Valeur mal typée** : `invalid_request`, avec le type attendu ; jamais `invalid_filter`, qui appartient à la grammaire des filtres.
+- **Document inconnu ou retiré** : `not_found`, et aucun document du corps n'est appliqué. Un patch ne crée jamais de document.
+- **Limites** : 32 Mo et 10 000 documents (voir « Limites par défaut »), sinon `payload_too_large`.
+- **Rapport** : `{ updated, unchanged, generation }`, par document. Il n'est pas persisté (voir « Jobs »).
+- **CLI** : `crible patch --data <dir> --index <nom> <fichier>.jsonl` lit le même objet, un par ligne, le fichier étant passé en argument positionnel, sans `--models` : un patch n'encode rien.
+- **Effet** : `doc_hash` inchangé, `updated_generation = G+1` sur les lignes patchées, aucun segment, aucune ligne `batches` ; aucune génération n'est créée si aucun document ne change (`docs/02`, ADR-0060).
+- **Non-durabilité** : une attache ultérieure du même document avec un `doc_hash` identique réécrit les champs de document et écrase la valeur patchée (`docs/04`).
+- Le patch passe la même file d'écriture que les autres écritures de l'index. Lancer `crible patch` sur un index servi par un serveur reste une règle d'exploitation : `busy_timeout` n'assure que la vivacité (ADR-0038), pas l'exclusion entre processus.
 
 ## Grammaire des filtres
 
@@ -226,8 +246,8 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 ```
 
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
-- `progress.done` et `progress.total` comptent les **passages** traités, comme `counts.passages` du manifeste ; ils ne se comparent pas aux comptes du rapport.
-- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune.
+- `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport.
+- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 
@@ -238,6 +258,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 | `k` | 1000 au plus |
 | Longueur de requête | `max_tokens` du modèle ; au-delà, la requête est tronquée et `truncated_query: true` |
 | Corps de requête (lot en ligne) | 32 Mo, 10 000 passages |
+| Corps d'un patch de métadonnées | 32 Mo, 10 000 documents (mêmes bornes pour le fichier de `crible patch`) |
 | File d'écriture par index | 16 jobs, puis `503` avec `Retry-After` |
 | Recherches concurrentes | 2 × le nombre de cœurs, puis `503` |
 | `timeout_ms` | 2 000 par défaut, 30 000 au plus |

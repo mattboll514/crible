@@ -98,6 +98,7 @@ Index SQLite : `passages(doc_id)`, `passages(dead_since_gen)`.
 
 - `batches.manifest_blake3` est le digest blake3 des octets de `manifest.json` tels que lus, sous la forme `blake3:<hex>`, `<hex>` en hexadécimal minuscule (ADR-0041). Il identifie le contenu du manifeste pour comparer deux tentatives du même `batch_id` ; ce n'est pas un contrôle d'intégrité.
 - Une ligne `documents` n'existe que pour un document vivant. Sa suppression appartient à la transaction du commit de génération, que le document soit nommé dans `deletions` ou absent d'un lot `replace_all` (ADR-0041). Un document ré-ajouté ensuite est un document neuf.
+- `documents.updated_generation` est la génération de la **dernière écriture de la ligne `documents`** : création par une attache, mise à jour de champs par une attache ou par un patch (ADR-0060). Elle sert à sélectionner les documents dont les champs ont changé, pour que leurs passages héritent des nouvelles valeurs lors de la construction des bitmaps. Le `doc_hash` d'un document patché ne change pas : les champs de document sont hors du hash (ADR-0055, `docs/04`).
 
 En v1, les champs sont stockés en JSON canonique (ADR-0019). Les bitmaps et les colonnes de valeurs en sont dérivées.
 
@@ -115,6 +116,15 @@ Attacher un lot (un seul écrivain par index) :
 6. **Construire le nouvel instantané de lecture** (bitmaps en copie sur écriture) et le publier (`ArcSwap`).
 
 Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3, 4 (suppressions), 5 et 6.
+
+**Patch de métadonnées (ADR-0060).** Une mise à jour de champs de document sans ré-encodage ne touche ni le texte, ni les vecteurs, ni les iid, ni le `doc_hash` :
+
+- l'étape 3 écrit la ligne `documents` de chaque document patché — `fields` et `updated_generation = G+1` — et `meta.generation = G+1`. Elle n'écrit ni `segments`, ni `batches`, ni `passages` ;
+- l'étape 4 n'a pas lieu : le texte ne change pas, donc tantivy n'est pas touché ;
+- l'étape 5 écrit `manifests/<G+1>.json`, qui reprend **les mêmes segments que G** : un patch ne crée aucun segment ;
+- l'étape 6 reconstruit les bitmaps et les colonnes de valeurs en copie sur écriture, puis publie l'instantané, comme pour toute génération (INV-02, INV-03).
+
+Une génération n'est créée que si au moins un document change réellement : un patch dont tous les documents sont inchangés laisse la génération à G, n'écrit aucun manifeste et ne publie aucun instantané.
 
 **Reprise au démarrage**, pour chaque index :
 

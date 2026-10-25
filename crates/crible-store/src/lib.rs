@@ -7,5 +7,6 @@ pub mod batch_reader;
 pub mod filters_index;
 pub mod generation;
 pub mod online;
+pub mod patch;
 pub mod records;
 pub mod segment;

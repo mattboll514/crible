@@ -69,6 +69,17 @@ enum Command {
         /// JSONL file holding one document per line (`docs/05-api.md`).
         documents: PathBuf,
     },
+    /// Update the fields of documents without re-encoding anything (ADR-0060).
+    Patch {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+        /// JSONL file holding one `{ "doc_id": …, "fields": { … } }` per line.
+        file: PathBuf,
+    },
     /// Search an index with a provided vector or a text query.
     Search {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -158,6 +169,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             index,
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
+        Command::Patch { data, index, file } => commands::patch_documents(&data, &index, &file),
         Command::Search {
             data,
             index,
