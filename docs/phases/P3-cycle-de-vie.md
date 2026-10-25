@@ -27,8 +27,8 @@
   - sur un diff et un message propres, il sort `0` ;
   - `.env.prod` absent ou illisible : code `2`, message explicite, aucune valeur, et `@git` s'arrête et rapporte le message exact ;
   - après exécution, le répertoire pointé par `TMPDIR` est vide, et le script ne crée aucun fichier : aucun `mktemp`, `tee`, redirection d'écriture ni `here-document` dans le fichier, vérifié à la relecture ;
-  - les valeurs entre guillemets de `.env.prod` sont reconnues sans les guillemets (`PROD_PGOPTIONS` du modèle), et la comparaison se fait en chaîne fixe (`grep -F`), jamais en expression régulière ;
-  - `@git` ne peut plus lire `.env.prod` par une autre commande : la forme autorisée du script est la seule ligne ajoutée à ses permissions, et `rm`, `git config` et la substitution de processus restent hors de portée ;
+  - les valeurs entre guillemets de `.env.prod` sont reconnues sans les guillemets (`PROD_PGOPTIONS` du modèle), et la comparaison se fait en chaîne fixe (motif `case` entre guillemets ou `grep -F`), jamais en expression régulière ;
+  - `@git` ne peut plus lire `.env.prod` par une autre commande : la forme autorisée du script est la seule **autorisation** ajoutée à ses permissions (voir la précision du 2026-10-25 d'ADR-0058 pour les règles de refus `*.env*`), et `rm`, `git config` et la substitution de processus restent hors de portée ;
   - aucun seuil de longueur n'est appliqué aux valeurs comparées : un faux positif arrête le commit et se rapporte (décision du propriétaire du 2026-10-25).
 - **Hors périmètre** : un hook `pre-commit` ou `commit-msg` (option (b) de l'ADR, écartée pour l'instant et réservée à un autre ADR) ; toute modification de `AGENTS.md`, de `CLAUDE.md` ou des documents `docs/01` à `docs/08` ; la lecture de `.env.prod` réel par un agent ; le contenu des fichiers binaires indexés, limite déjà notée par l'ADR et non fermée ici.
 

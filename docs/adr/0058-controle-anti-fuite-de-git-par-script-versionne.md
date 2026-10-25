@@ -47,6 +47,48 @@
 
 **Points laissés à la décision du propriétaire.** (i) Accepter qu'un `.env.prod` absent fasse échouer le commit (code `2`, arrêt) plutôt que de laisser passer sans contrôle : la proposition ci-dessus ferme la porte, au prix d'un `@git` inutilisable sur un clone sans `.env.prod`. (ii) Accepter ou non un seuil de longueur minimale des valeurs comparées : sans seuil, une valeur courte et banale (un mot d'un chemin, `on`) bloque un commit légitime ; avec seuil, une valeur courte n'est plus protégée. La proposition ne met **pas** de seuil et préfère le faux positif, qui s'arrête et se rapporte. (iii) Ajouter ou non le hook de l'option (b) en complément.
 
+## Précision du 2026-10-25 — règle de refus `*.env*` dans les permissions de `@git`
+
+Le propriétaire accepte **telle quelle** la règle de refus `*.env*` ajoutée aux permissions de `@git` par la tâche `DURCIR-CONTROLE-ANTI-FUITE`. Cette précision complète la décision 5 et le critère 7 de la mise en œuvre ; elle ne réécrit aucune décision.
+
+### La règle
+
+Dans `.opencode/agents/git.md`, deux règles de refus sont ajoutées :
+
+- en lecture de fichier, `read: { "*.env*": deny }` ;
+- en shell, `"*.env*": deny`, placé **après** les autorisations.
+
+Les deux autorisations du script — forme relative et forme absolue — sont placées **en dernier**. La règle met en œuvre la décision 5 et le critère 7 : `cat *`, `grep *`, `sed -n *`, `head *` et `tail *` restent autorisés à `@git` pour son usage ordinaire, et pourraient sinon lire `.env.prod`.
+
+### Comparaison en chaîne fixe
+
+La décision 3 demande une comparaison en chaîne fixe (`grep -F`), jamais en expression régulière. L'implémentation compare par un motif `case` entre guillemets : la propriété est tenue, rien de ce que contient la valeur n'est interprété. Le test le prouve : `fakehost-otherXexample` ne correspond pas à `fakehost.example`. Le texte de la décision 3 n'est pas modifié ; `grep -F` s'y lit comme l'exemple d'une comparaison fixe.
+
+### Ordre prouvé
+
+Dans opencode, c'est la **dernière règle correspondante** qui gagne. L'ordre a été vérifié par un passage réel de `@git` (session `ses_e8db59ebcffei41PGgt2rLaMNA`, 2026-10-25, index vide) :
+
+- `./.opencode/scripts/check_prod_leak.sh "probe .env message"` est autorisé, code `0` ; la forme absolue l'est aussi ;
+- l'outil de lecture est refusé sur `.env.prod.example`, en chemin relatif comme en chemin absolu ;
+- `head -1 .env.prod.example` est refusé en bash.
+
+### Deux effets assumés par le propriétaire
+
+1. `@git` ne peut plus lire ni indexer `.env.prod.example`. Quand une variable s'ajoute, le propriétaire commite le fichier lui-même.
+2. Toute commande qui contient `.env` est refusée, sauf l'appel au script, dont la règle vient en dernier : `git commit -m "… .env …"` est refusé. Un message de commit qui mentionne `.env` l'est donc aussi. `@git` s'arrête et rapporte. Les messages emploient une autre formulation (« prod env file »).
+
+### Pourquoi pas un motif plus étroit
+
+La relecture du tour 1 a proposé un motif plus étroit, par exemple `*.env.prod`. Il est écarté : il rouvrirait des contournements par la forme de la commande.
+
+### Limite connue
+
+Un refus fondé sur la chaîne de commande ne voit pas le développement des jokers du shell. Une commande qui désignerait le fichier par un motif sans écrire `.env` littéralement (`.en?.prod`, par exemple) n'est pas arrêtée par cette règle.
+
+Une recherche récursive ne nomme pas le fichier non plus : `grep -r PROD_ .` ou `rg --hidden PROD_ .` lisent `.env.prod` sans écrire `.env` dans la chaîne de commande, et la couche de permissions les laisse passer. C'est la même limite : la règle ne voit que les mots de la commande, pas les fichiers qu'elle atteint.
+
+La règle est une **défense en profondeur** : l'interdiction écrite de la décision 5 et le script, seul chemin sanctionné, restent la protection principale. Ces limites sont à surveiller dans les journaux.
+
 ## Conséquences
 
 - **Positives** :
@@ -106,4 +148,4 @@ Une tâche **hors plan**, en P3, qui suit le pipeline complet (`@git debut-tache
   4. `.env.prod` absent ou illisible : code `2`, message explicite, aucune valeur.
   5. Après exécution, le répertoire temporaire pointé par `TMPDIR` est vide, et le script ne crée aucun fichier (aucun `mktemp`, `tee`, redirection d'écriture ni `here-document` dans le fichier, vérifié à la relecture).
   6. Les valeurs entre guillemets de `.env.prod` sont reconnues sans les guillemets (`PROD_PGOPTIONS` du modèle).
-  7. `@git` ne peut plus lire `.env.prod` par une autre commande : la forme autorisée du script est la seule ligne ajoutée à ses permissions, et `rm`, `git config` et la substitution de processus restent hors de portée.
+  7. `@git` ne peut plus lire `.env.prod` par une autre commande : la forme autorisée du script est la seule **autorisation** ajoutée à ses permissions (les règles de refus `*.env*` sont décrites dans la précision du 2026-10-25), et `rm`, `git config` et la substitution de processus restent hors de portée.
