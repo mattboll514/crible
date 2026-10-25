@@ -128,6 +128,6 @@ jobs:
         working-directory: tools
         run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
       # No save step here: `.github/workflows/model-cache.yml` is the only writer of this cache (ADR-0059).
-      # The Legifacile sample test stays local too, excluded by name like the one above (ADR-0062).
+      # The Legifacile sample tests stay local, excluded by name one by one (ADR-0062, ADR-0063).
       - name: Test with ONNX Runtime
-        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction
+        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import
