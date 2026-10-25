@@ -404,6 +404,9 @@ fn write_new_epoch(
         let mut segment_id = String::new();
         let mut in_segment: u32 = 0;
         let mut new_iid: u32 = 0;
+        // One compressor for the whole new epoch: the compaction recopies every
+        // live passage, so it is one batch of written passages (ADR-0048).
+        let mut compressor = records::TextCompressor::new()?;
         for old_iid in order {
             if writer.is_none() {
                 let dims = vectors.dims().ok_or_else(|| {
@@ -451,7 +454,7 @@ fn write_new_epoch(
                 created_generation: passage.created_generation,
                 dead_since_gen: None,
             };
-            records::insert_passage(&transaction, &record)?;
+            records::insert_passage(&transaction, &record, &mut compressor)?;
             new_iid = new_iid.checked_add(1).ok_or_else(|| {
                 internal(
                     "the new epoch holds more passages than its identifiers can number".to_owned(),

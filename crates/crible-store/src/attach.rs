@@ -1138,6 +1138,8 @@ fn write_passage_rows(
     generation: Generation,
 ) -> Result<u32, CribleError> {
     let mut next_iid = iid_start;
+    // One compressor for the whole batch of passage rows (ADR-0048).
+    let mut compressor = records::TextCompressor::new()?;
 
     for chunk in reader.passages() {
         let chunk = chunk?;
@@ -1170,6 +1172,7 @@ fn write_passage_rows(
                     created_generation: generation,
                     dead_since_gen: None,
                 },
+                &mut compressor,
             )?;
         }
     }
