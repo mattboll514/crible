@@ -1,0 +1,633 @@
+{
+  "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+  "date": "2026-10-25",
+  "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+  "measure": "MES-13",
+  "points": [
+    {
+      "cache": "warm",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 8659196,
+        "live": 8208,
+        "total": 9075612
+      },
+      "generated_at": 1792954106,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles",
+      "label": "legifacile-articles",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 45734334,
+          "min_ns": 44505083,
+          "p50_ns": 44976042,
+          "p95_ns": 45734334,
+          "p99_ns": 45734334,
+          "phase": "sql_read",
+          "values_ns": [
+            44976042,
+            45734334,
+            45030792,
+            44588500,
+            44505083
+          ]
+        },
+        {
+          "max_ns": 83351458,
+          "min_ns": 82205625,
+          "p50_ns": 82372375,
+          "p95_ns": 83351458,
+          "p99_ns": 83351458,
+          "phase": "json_decode",
+          "values_ns": [
+            83351458,
+            82590917,
+            82205625,
+            82372375,
+            82336417
+          ]
+        },
+        {
+          "max_ns": 170936792,
+          "min_ns": 167083500,
+          "p50_ns": 168456292,
+          "p95_ns": 170936792,
+          "p99_ns": 170936792,
+          "phase": "build",
+          "values_ns": [
+            170936792,
+            170449833,
+            167545833,
+            167083500,
+            168456292
+          ]
+        },
+        {
+          "max_ns": 171822959,
+          "min_ns": 166672209,
+          "p50_ns": 168686208,
+          "p95_ns": 171822959,
+          "p99_ns": 171822959,
+          "phase": "open",
+          "values_ns": [
+            171822959,
+            171036125,
+            166672209,
+            168686208,
+            167419542
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 58847232,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 8659196,
+        "live": 8208,
+        "total": 9075612
+      },
+      "generated_at": 1792954107,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles",
+      "label": "legifacile-articles",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-sql_read",
+          "first_access_ns": 198437333,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-json_decode",
+          "first_access_ns": 219728167,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-build",
+          "first_access_ns": 304232584,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-open",
+          "first_access_ns": 333295125,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 58847232
+    },
+    {
+      "cache": "warm",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408192,
+        "keywords": 485929,
+        "live": 8208,
+        "total": 902329
+      },
+      "generated_at": 1792954108,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions",
+      "label": "legifacile-decisions",
+      "live_passages": 49998,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 35682042,
+          "min_ns": 35360709,
+          "p50_ns": 35437000,
+          "p95_ns": 35682042,
+          "p99_ns": 35682042,
+          "phase": "sql_read",
+          "values_ns": [
+            35394458,
+            35682042,
+            35517209,
+            35360709,
+            35437000
+          ]
+        },
+        {
+          "max_ns": 68057666,
+          "min_ns": 67105084,
+          "p50_ns": 67714125,
+          "p95_ns": 68057666,
+          "p99_ns": 68057666,
+          "phase": "json_decode",
+          "values_ns": [
+            68057666,
+            67105084,
+            67548041,
+            67714125,
+            67817417
+          ]
+        },
+        {
+          "max_ns": 87019167,
+          "min_ns": 85749417,
+          "p50_ns": 86270333,
+          "p95_ns": 87019167,
+          "p99_ns": 87019167,
+          "phase": "build",
+          "values_ns": [
+            86667500,
+            86154875,
+            87019167,
+            86270333,
+            85749417
+          ]
+        },
+        {
+          "max_ns": 86745334,
+          "min_ns": 86006458,
+          "p50_ns": 86367417,
+          "p95_ns": 86745334,
+          "p99_ns": 86745334,
+          "phase": "open",
+          "values_ns": [
+            86549584,
+            86006458,
+            86745334,
+            86201500,
+            86367417
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 62001152,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408192,
+        "keywords": 485929,
+        "live": 8208,
+        "total": 902329
+      },
+      "generated_at": 1792954109,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions",
+      "label": "legifacile-decisions",
+      "live_passages": 49998,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-sql_read",
+          "first_access_ns": 159368667,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-json_decode",
+          "first_access_ns": 176964166,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-build",
+          "first_access_ns": 192428125,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-open",
+          "first_access_ns": 216507458,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 62001152
+    },
+    {
+      "cache": "warm",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 1232563,
+        "live": 8208,
+        "total": 1648979
+      },
+      "generated_at": 1792954111,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf",
+      "label": "legifacile-jorf",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 37792333,
+          "min_ns": 37632334,
+          "p50_ns": 37755542,
+          "p95_ns": 37792333,
+          "p99_ns": 37792333,
+          "phase": "sql_read",
+          "values_ns": [
+            37755542,
+            37766334,
+            37647334,
+            37632334,
+            37792333
+          ]
+        },
+        {
+          "max_ns": 67704375,
+          "min_ns": 66865500,
+          "p50_ns": 67166291,
+          "p95_ns": 67704375,
+          "p99_ns": 67704375,
+          "phase": "json_decode",
+          "values_ns": [
+            67704375,
+            67213667,
+            67166291,
+            66865500,
+            67006417
+          ]
+        },
+        {
+          "max_ns": 97855333,
+          "min_ns": 96704292,
+          "p50_ns": 97312083,
+          "p95_ns": 97855333,
+          "p99_ns": 97855333,
+          "phase": "build",
+          "values_ns": [
+            97855333,
+            97090083,
+            96704292,
+            97513125,
+            97312083
+          ]
+        },
+        {
+          "max_ns": 98035750,
+          "min_ns": 97478125,
+          "p50_ns": 97814292,
+          "p95_ns": 98035750,
+          "p99_ns": 98035750,
+          "phase": "open",
+          "values_ns": [
+            97894584,
+            97814292,
+            97600208,
+            98035750,
+            97478125
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 55123968,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 1232563,
+        "live": 8208,
+        "total": 1648979
+      },
+      "generated_at": 1792954112,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf",
+      "label": "legifacile-jorf",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-sql_read",
+          "first_access_ns": 173268166,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-json_decode",
+          "first_access_ns": 186759042,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-build",
+          "first_access_ns": 245173000,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-open",
+          "first_access_ns": 225427250,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 55123968
+    },
+    {
+      "cache": "warm",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 174854,
+        "live": 8208,
+        "total": 591270
+      },
+      "generated_at": 1792954113,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres",
+      "label": "legifacile-titres",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 35263417,
+          "min_ns": 34465666,
+          "p50_ns": 34787542,
+          "p95_ns": 35263417,
+          "p99_ns": 35263417,
+          "phase": "sql_read",
+          "values_ns": [
+            35250625,
+            35263417,
+            34787542,
+            34741625,
+            34465666
+          ]
+        },
+        {
+          "max_ns": 59007958,
+          "min_ns": 58302833,
+          "p50_ns": 58711458,
+          "p95_ns": 59007958,
+          "p99_ns": 59007958,
+          "phase": "json_decode",
+          "values_ns": [
+            58711458,
+            58302833,
+            58920667,
+            59007958,
+            58501667
+          ]
+        },
+        {
+          "max_ns": 66578541,
+          "min_ns": 66012917,
+          "p50_ns": 66362375,
+          "p95_ns": 66578541,
+          "p99_ns": 66578541,
+          "phase": "build",
+          "values_ns": [
+            66362375,
+            66114458,
+            66578541,
+            66518166,
+            66012917
+          ]
+        },
+        {
+          "max_ns": 68378458,
+          "min_ns": 66073042,
+          "p50_ns": 66753083,
+          "p95_ns": 68378458,
+          "p99_ns": 68378458,
+          "phase": "open",
+          "values_ns": [
+            66753083,
+            68378458,
+            66942625,
+            66746709,
+            66073042
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 25600000,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 408208,
+        "keywords": 174854,
+        "live": 8208,
+        "total": 591270
+      },
+      "generated_at": 1792954114,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres",
+      "label": "legifacile-titres",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-sql_read",
+          "first_access_ns": 127884000,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-json_decode",
+          "first_access_ns": 141909166,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-build",
+          "first_access_ns": 173863542,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-open",
+          "first_access_ns": 150340666,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 25600000
+    },
+    {
+      "cache": "warm",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 0,
+        "keywords": 1137345,
+        "live": 8208,
+        "total": 1145553
+      },
+      "generated_at": 1792954115,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde",
+      "label": "legifacile-sarde",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "max_ns": 35896167,
+          "min_ns": 34987500,
+          "p50_ns": 35371916,
+          "p95_ns": 35896167,
+          "p99_ns": 35896167,
+          "phase": "sql_read",
+          "values_ns": [
+            35896167,
+            35693042,
+            35131000,
+            35371916,
+            34987500
+          ]
+        },
+        {
+          "max_ns": 46392792,
+          "min_ns": 45381625,
+          "p50_ns": 45801542,
+          "p95_ns": 46392792,
+          "p99_ns": 46392792,
+          "phase": "json_decode",
+          "values_ns": [
+            45801542,
+            46026625,
+            45381625,
+            46392792,
+            45489792
+          ]
+        },
+        {
+          "max_ns": 64933959,
+          "min_ns": 63924458,
+          "p50_ns": 64209917,
+          "p95_ns": 64933959,
+          "p99_ns": 64933959,
+          "phase": "build",
+          "values_ns": [
+            64497667,
+            64209917,
+            64164167,
+            64933959,
+            63924458
+          ]
+        },
+        {
+          "max_ns": 64913750,
+          "min_ns": 64326334,
+          "p50_ns": 64471458,
+          "p95_ns": 64913750,
+          "p99_ns": 64913750,
+          "phase": "open",
+          "values_ns": [
+            64913750,
+            64510125,
+            64358000,
+            64326334,
+            64471458
+          ]
+        }
+      ],
+      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde/epochs/1/records.sqlite",
+      "records_sqlite_bytes": 29069312,
+      "repeats": 5,
+      "warmup": 1
+    },
+    {
+      "cache": "cold (first access of a fresh clone; page cache not purged)",
+      "commit": "46c2dd1edc8fcac06df61ea560c86ecc915de1fc",
+      "date": "2026-10-25",
+      "filter_memory": {
+        "booleans": 0,
+        "columns": 0,
+        "keywords": 1137345,
+        "live": 8208,
+        "total": 1145553
+      },
+      "generated_at": 1792954116,
+      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde",
+      "label": "legifacile-sarde",
+      "live_passages": 50000,
+      "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+      "measure": "MES-13",
+      "phases": [
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-sql_read",
+          "first_access_ns": 132507584,
+          "phase": "sql_read"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-json_decode",
+          "first_access_ns": 132741750,
+          "phase": "json_decode"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-build",
+          "first_access_ns": 153848417,
+          "phase": "build"
+        },
+        {
+          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-open",
+          "first_access_ns": 153844916,
+          "phase": "open"
+        }
+      ],
+      "records_sqlite_bytes": 29069312
+    }
+  ]
+}

@@ -38,6 +38,13 @@ tempfile.workspace = true
 name = "commit_cost"
 harness = false
 
+# MES-07: the compaction bench times the whole compaction and replicates the
+# two per-passage reads it pays (`passage_by_iid`, vector read) plus the
+# segment checksum. Scenario matrix again, so `harness = false`.
+[[bench]]
+name = "compact_cost"
+harness = false
+
 # MES-13: the startup-cost bench rebuilds the filter structures from
 # `records.sqlite` and isolates the read, the JSON decode and the insertion.
 # Same harness choice as `commit_cost`: a scenario matrix, not a criterion

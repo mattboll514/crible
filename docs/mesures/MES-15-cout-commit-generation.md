@@ -386,3 +386,302 @@ chaque réplique. Les index et les copies de travail restent dans `data/mes15/`
 - La réplique de `segment::read_meta` et celle de `records::canonical_json` sont des
   copies : si ces fonctions changent, la décomposition peut dériver sans que le
   total bouge. Le « reste » du § 4 (de −2,4 % à +10,7 %) est là pour le montrer.
+
+## 10. Campagne du 2026-10-25 — rejeu après `CONSTRUIRE-BITMAPS` et `REUTILISER-COMPRESSEUR-ZSTD`
+
+Rejeu demandé par la fiche `MESURER-CYCLE-DE-VIE` (P3), pour chiffrer la dérivation
+incrémentale de la bitmap des vivants (ADR-0048) et le compresseur zstd réutilisé
+(ADR-0048). Même banc, mêmes points `N` et `S` que la campagne du 2026-10-21 (§ 1 à
+§ 3), mêmes index de base.
+
+- Tâche : `MESURER-CYCLE-DE-VIE` (phase P3), passage A. Le passage B (MES-07,
+  MES-08, `synth-large`) n'est pas dans cette campagne.
+- Références : `docs/08-invariants-et-tests.md` (MES-15), ADR-0048,
+  `docs/02-architecture.md` (« Générations et point de commit »),
+  `crates/crible-store/src/generation.rs` (`build_snapshot_after_commit`),
+  `crates/crible-store/src/filters_index.rs` (`FilterIndex::after_commit`),
+  `crates/crible-store/src/records.rs` (`TextCompressor`).
+- Commit : `46c2dd1edc8fcac06df61ea560c86ecc915de1fc` (branche
+  `tache/MESURER-CYCLE-DE-VIE`). **Aucun code de production n'a été modifié
+  pendant la campagne.** L'arbre de travail portait, au moment de la mesure, deux
+  changements de banc non commités, décrits au § 10.1. Le code de production mesuré
+  est donc celui de `46c2dd1` ; le banc mesuré est celui de `46c2dd1` plus ces deux
+  changements.
+- Machine : MacBook Apple M3 (8 cœurs : 4 performance, 4 efficacité), 24 Go de RAM
+  (25 769 803 776 octets), macOS 15.7.7 (24G720), APFS, 134 Go libres. Mesure
+  **native**, aucun conteneur. Le banc est un binaire de
+  `crates/crible-store/benches/`, compilé par `cargo bench` (profil `bench`,
+  optimisations actives).
+- Charge ambiante : la machine n'était **pas au repos**, comme le 2026-10-21. La
+  moyenne de charge est passée de 5,08 à 5,53 sur 8 cœurs entre le début et la fin
+  de la campagne (`data/mes15/replay-raw/conditions-start.txt` et
+  `conditions-end.txt`). Entre les deux, `mediaanalysisd` et `mds_stores` ont
+  occupé jusqu'à un cœur chacun par moments ; leur part n'a pas été isolée. Les
+  p95 et p99 restent à moins de 1 % des p50 sur les points à 8,58 M, et le second
+  tour
+  (§ 10.4) reproduit les p50 à 0,4 % : l'effet de cette charge sur les chiffres
+  comparés ici est faible, sans être mesuré. La campagne du 2026-10-21 avait une
+  charge plus forte (5,55 à 11,49), donc les deux campagnes sont dans le même
+  régime ou la précédente est plus pessimiste.
+- Jeu de données : les **sept index de base de la campagne du 2026-10-21**, dans
+  `data/mes15/` (gitignoré, 6,3 Go), inchangés. Leurs `records.sqlite` ont la même
+  somme de contrôle que dans le tableau du § 1 (préfixes vérifiés après la
+  campagne) : `a56f01fd…`, `795e6e29…`, `2679d0c3…` (deux fois), `f1ee86b3…`,
+  `04802183…`, `fb9836d4…`. Un seul ajout : chaque index a reçu un `index.json`
+  (§ 10.1), car `GenerationStore::open` refuse désormais un index qui ne déclare
+  pas son schéma (constat § 10 de MES-13). Aucune ligne, aucun segment et aucun
+  vecteur n'ont changé.
+- Configuration mesurée : identique au § 1 — commit type de 1 segment neuf de
+  2 000 passages (768 dims, fp16), 1 000 documents, 50 pierres tombales, 10
+  répétitions par point, `N` et `S` fixes à chaque répétition.
+
+### 10.1 Ce qui a changé dans le banc, et ce qui n'a pas changé
+
+Trois changements, tous dans le banc ou ses scripts, aucun dans le code de
+production :
+
+1. **`crates/crible-store/benches/commit_cost.rs`, réplique de la transaction** :
+   elle compresse maintenant les 2 000 textes avec **un seul**
+   `zstd::bulk::Compressor`, créé une fois par répétition, comme
+   `records::TextCompressor` (ADR-0048). Le niveau reste
+   `zstd::DEFAULT_COMPRESSION_LEVEL`, qui est la valeur de
+   `TEXT_COMPRESSION_LEVEL` ; la constante de production est `pub(crate)`, donc le
+   banc nomme le niveau qu'il reproduit. Avant, la réplique appelait
+   `zstd::stream::encode_all` par ligne, c'est-à-dire l'ancienne méthode.
+2. **Le point de contrôle `encode_reused_ns` est retiré.** Il mesurait les mêmes
+   textes avec un contexte réutilisé, pour borner la part évitable ; c'est
+   désormais ce que fait la production, donc la série ferait doublon avec
+   `transaction_encode_ns`. La fonction `reused_context_compression` et le champ
+   JSON sont supprimés ; le JSON du 2026-10-25 ne porte donc **pas**
+   `encode_reused_ns`.
+3. **`tools/bench/mes15/replay.sh` est ajouté** : il ne fait que `measure` sur les
+   sept index existants, écrit dans `data/mes15/replay-raw/` et fusionne. Il ne
+   prépare rien, pour ne pas reconstruire un état de référence dont la somme de
+   contrôle est connue. `tools/bench/mes15/run.sh` garde son rôle (campagne
+   complète avec préparation) ; son `ROOT` est corrigé de deux à trois niveaux
+   remontés, sinon il cherchait `tools/data/mes15` au lieu de `data/mes15`.
+
+Ce que le banc mesure par ailleurs ne change pas : la transaction répliquée garde
+le même SQL, les mêmes documents, les mêmes pierres tombales et le même `meta` ;
+le commit réel, la réplique des `segment.json`, celle du manifeste et le
+préchauffage sont intacts. Deux champs ne décrivent plus l'état courant et ne sont
+utilisés dans aucun chiffre de ce rapport :
+
+- `live_iids_ns` rejoue `RecordStore::live_iids`, que `build_snapshot_after_commit`
+  **n'appelle plus** ; c'est le contrôle du coût que la dérivation a retiré, pas un
+  terme du commit rejoué ;
+- `snapshot_bytes_computed` calcule encore `4 × N + 152 × S`, la formule de
+  l'ancien `Vec<Iid>` ; la bitmap réelle n'a pas cette taille. Le champ est laissé
+  tel quel pour ne pas changer la sortie du banc ; il n'entre dans aucune
+  conclusion.
+
+### 10.2 Protocole
+
+```sh
+# une fois, hors mesure de RSS : compiler le banc
+cargo bench -p crible-store --bench commit_cost --no-run
+
+# campagne complète du rejeu (7 points, 10 répétitions, cache chaud)
+sh tools/bench/mes15/replay.sh
+
+# second tour de répétabilité sur trois points
+for label in i-1000000-s10 i-8580000-s10 i-8580000-s1000; do
+    /usr/bin/time -l sh -c 'cd "$PWD" && exec cargo bench -p crible-store \
+        --bench commit_cost -- measure --index "$PWD/data/mes15/'"$label"'" \
+        --work "$PWD/data/mes15/replay-work" --repeats 10 \
+        --commit 46c2dd1 --machine "Apple M3 / 24 GB / macOS 15.7.7" \
+        --date 2026-10-25 \
+        --out "$PWD/data/mes15/replay-raw/round2-'"$label"'.json"' \
+        >/dev/null 2>"data/mes15/replay-raw/round2-$label.time"
+done
+```
+
+`replay.sh` fait la même chose dans une boucle, avec les chemins absolus et la
+fusion. Le protocole du § 2 s'applique sans changement : dix répétitions, chaque
+répétition part d'un clone APFS de l'index de base, préchauffage par lecture
+complète de `records.sqlite`, cache chaud, p50/p95/p99 par rang le plus proche. Le
+`.time` de chaque point donne le maximum de RSS du processus (`merge.py` l'ajoute
+en `process_max_rss_bytes`).
+
+### 10.3 Résultats
+
+Commit complet, 10 répétitions par point, cache chaud, en millisecondes. « Campagne »
+est le p50 du 2026-10-21 (§ 3) ; « écart » est `rejeu − campagne`.
+
+| N | S | p50 rejeu | p95 rejeu | p99 rejeu | p50 campagne | Écart | Écart relatif |
+|---|---|---|---|---|---|---|---|
+| 10 000 | 10 | **41,1** | 42,1 | 42,1 | 106,4 | −65,3 | −61,4 % |
+| 100 000 | 10 | **71,9** | 84,9 | 84,9 | 110,1 | −38,3 | −34,7 % |
+| 1 000 000 | 10 | **375,8** | 381,1 | 381,1 | 160,0 | +215,8 | **+134,9 %** |
+| 1 000 000 | 10 (vecteurs vides) | **375,3** | 390,6 | 390,6 | 154,3 | +221,0 | +143,2 % |
+| 1 000 000 | 1 000 | **401,4** | 432,0 | 432,0 | 195,4 | +205,9 | +105,4 % |
+| 8 580 000 | 10 | **3 085,1** | 3 103,0 | 3 103,0 | 598,3 | +2 486,7 | **+415,6 %** |
+| 8 580 000 | 1 000 | **3 108,1** | 3 122,9 | 3 122,9 | 641,3 | +2 466,8 | +384,6 % |
+
+Sur 10 échantillons, p95 et p99 valent le maximum : ces deux colonnes mesurent la
+queue de la campagne, pas une queue de production (convention du § 2). Le contrôle
+« vecteurs vides » donne le même résultat que son jumeau à 0,1 % près, comme le
+2026-10-21 : le commit ne lit toujours pas les octets de vecteurs.
+
+Décomposition, p50 en millisecondes sur la même répétition. « Reste » est
+`commit − corps − COMMIT SQLite − métadonnées de segments − manifeste` ; il porte la
+dérivation de la bitmap, la publication et l'écart entre la réplique et le code
+réel. La colonne `live_iids` est la **réplique de l'ancienne lecture**, que le
+commit n'exécute plus : elle n'est pas soustraite du reste.
+
+| N | S | Commit | Transaction (corps) | `COMMIT` SQLite | `live_iids` (ancien chemin, non appelé) | Métadonnées de segments | Manifeste | Reste |
+|---|---|---|---|---|---|---|---|---|
+| 10 000 | 10 | 41,1 | 13,4 | 1,42 | 0,9 | 0,37 | 7,49 | 18,4 |
+| 100 000 | 10 | 71,9 | 15,8 | 1,39 | 6,3 | 0,36 | 7,80 | 46,5 |
+| 1 000 000 | 10 | 375,8 | 16,1 | 1,34 | 59,0 | 0,34 | 8,00 | 350,0 |
+| 1 000 000 | 10 (vecteurs vides) | 375,3 | 16,2 | 1,36 | 59,2 | 0,33 | 7,55 | 349,8 |
+| 1 000 000 | 1 000 | 401,4 | 16,4 | 1,48 | 58,1 | 13,27 | 8,74 | 361,4 |
+| 8 580 000 | 10 | 3 085,1 | 17,1 | 1,43 | 496,5 | 0,36 | 7,49 | 3 058,7 |
+| 8 580 000 | 1 000 | 3 108,1 | 17,3 | 1,41 | 504,3 | 12,79 | 8,93 | 3 067,7 |
+
+Deux lectures immédiates :
+
+1. **Le compresseur zstd réutilisé tient sa promesse.** La compression des
+   2 000 textes passe de 67,2–89,9 ms (§ 4) à 6,9–7,0 ms, soit 60 à 83 ms de moins
+   par attache, ou 30 à 41 µs par passage. Le corps de la transaction passe de
+   77,6–100,4 ms à 16,1–17,3 ms, et ne dépend plus de `N` que par les insertions.
+2. **Le reste a changé de nature.** Il valait +11,4 à −15,1 ms dans la campagne
+   (§ 4) ; il vaut 350 ms à 1 M et 3 059 ms à 8,58 M. C'est ce terme qui explique
+   l'écart positif des gros points : la dérivation n'a pas seulement retiré une
+   lecture, elle a ajouté des requêtes.
+
+Le § 10.5 isole ces requêtes hors banc, sur une copie en lecture seule de l'index
+de 8,58 M.
+
+### 10.4 Répétabilité
+
+Second tour intégral, même banc, même jour, mêmes index, 10 répétitions :
+
+| Point | Campagne (p50) | Second tour (p50) | Écart |
+|---|---|---|---|
+| 1 000 000 / 10 | 375,8 ms | 377,4 ms | +0,4 % |
+| 8 580 000 / 10 | 3 085,1 ms | 3 094,4 ms | +0,3 % |
+| 8 580 000 / 1 000 | 3 108,1 ms | 3 116,5 ms | +0,3 % |
+
+Les deux tours se suivent à 0,4 % près, malgré la charge ambiante : les p50 du
+§ 10.3 sont reproductibles. Le second tour est dans le JSON brut avec `round: 2`.
+
+### 10.5 Le coût ajouté par `after_commit` : relevé hors banc
+
+`build_snapshot_after_commit` appelle `FilterIndex::after_commit`, qui exécute
+quatre requêtes sur les lignes que la génération a estampillées
+(`filters_index.rs`) :
+
+| Requête | Plan SQLite sur l'index de 8,58 M | p50 sans index | p50 avec index |
+|---|---|---|---|
+| passages créés (`WHERE p.created_generation = ?`) | `SCAN p` | 489,0 ms | 0,0 ms |
+| documents modifiés (`WHERE d.updated_generation = ?`) | `SCAN p` puis `SEARCH d` | **2 432,6 ms** | 0,0 ms |
+| pierres tombales (`WHERE dead_since_gen = ?`) | `SEARCH q USING INDEX passages_dead_since_gen` | 0,1 ms | 0,1 ms |
+| documents retirés | `SEARCH p USING COVERING INDEX passages_doc_id` | 0,1 ms | 0,1 ms |
+
+Protocole du relevé : cinq exécutions de chaque requête, en lecture seule, sur
+`data/mes15/i-8580000-s10/epochs/1/records.sqlite`, p50 par rang le plus proche ;
+puis les mêmes requêtes sur une copie de ce fichier où deux index ont été créés
+(`passages(created_generation)`, `documents(updated_generation)`, 6,4 s de
+construction). Les valeurs brutes sont dans
+`data/mes15/replay-raw/after-commit-scans.json` et
+`after-commit-scans-with-indexes.json`. Ce relevé **n'est pas** une mesure du banc
+et ne remplace pas le § 10.3 : il explique le « reste ».
+
+Le relevé tourne sur l'état de **base**, où la génération 2 n'existe pas encore :
+les deux requêtes rendent 0 ligne. Le balayage, lui, est le même que pendant le
+commit ; seule la jointure des lignes trouvées manque (2 000 passages, 1 000
+documents dans le commit mesuré). Le coût du balayage domine, et c'est lui que le
+tableau chiffre.
+
+Les deux premières requêtes totalisent **2,92 s** en p50, contre 3,06 s de reste à
+8,58 M / 10 : c'est l'essentiel du terme. Aucune des deux n'a d'index sur la
+colonne qu'elle filtre, et la seconde part d'un balayage complet de `passages`
+(2,88 Go) avant de rejoindre `documents`. `EXPLAIN QUERY PLAN` le dit sans
+ambiguïté :
+
+```text
+SELECT p.iid, p.fields, d.fields, p.dead_since_gen
+FROM passages p LEFT JOIN documents d ON d.doc_id = p.doc_id
+WHERE p.created_generation = 2 ORDER BY p.iid;
+|--SCAN p
+`--SEARCH d USING INDEX sqlite_autoindex_documents_1 (doc_id=?) LEFT-JOIN
+
+SELECT p.iid, d.fields FROM documents d JOIN passages p ON p.doc_id = d.doc_id
+WHERE d.updated_generation = 2 ORDER BY p.iid;
+|--SCAN p
+`--SEARCH d USING INDEX sqlite_autoindex_documents_1 (doc_id=?)
+```
+
+Une seule exécution de `created_passages` est sortie à 2 929 ms au lieu de 484–489
+(charge ambiante) ; le p50 n'en dépend pas, et la valeur est conservée dans le JSON
+brut.
+
+### 10.6 Conclusion du rejeu
+
+Ce que la mesure permet d'affirmer, aux points `N` et `S` de la campagne du
+2026-10-21, pour le même commit type :
+
+1. **La dérivation incrémentale de la bitmap des vivants a retiré la lecture de
+   `live_iids` du commit** : 517,8 ms (S = 10) et 534,2 ms (S = 1 000) à 8,58 M dans
+   la campagne ; la réplique de cette lecture coûte toujours 496,5 et 504,3 ms, mais
+   le commit ne l'appelle plus. À 10 k et 100 k, le retrait vaut 0,9 et 6,3 ms.
+2. **Telle qu'elle est implémentée, elle ajoute cependant deux balayages complets
+   de `passages` par commit**, mesurés à 2,92 s en p50 à 8,58 M (§ 10.5). Le commit
+   complet passe donc de 598,3 à 3 085,1 ms à 8,58 M / 10 (+415,6 %) et de 160,0 à
+   375,8 ms à 1 M / 10 (+134,9 %). À 10 k et 100 k, le solde reste négatif
+   (−61,4 % et −34,7 %), porté par le compresseur zstd.
+3. **Le compresseur zstd réutilisé est le gain net de la campagne** : 60 à 83 ms
+   par attache de 2 000 passages, à tous les points, sans dépendre de `N`.
+4. **La dérivation n'est pas en cause dans son principe, mais dans ses requêtes** :
+   avec les deux index de diagnostic, les mêmes requêtes tombent sous 0,01 ms
+   (§ 10.5). Le coût vient du plan d'exécution, pas de la copie sur écriture des
+   structures.
+
+Ce que la mesure ne permet pas d'affirmer :
+
+- Rien sur le commit d'une attache réelle de MES-08 : la recette, l'écriture du
+  segment (relevée à part), le lexical et la lecture du lot restent hors du commit.
+- Rien sur le coût d'ajouter les deux index en production : le relevé du § 10.5 les
+  crée sur une copie, sans mesurer le temps d'écriture d'un index sur un index en
+  service, ni l'effet sur la taille de `records.sqlite` (le fichier de diagnostic
+  n'a pas été conservé). Ce serait un changement de schéma SQLite, donc une
+  décision à part.
+- Rien sur un froid contrôlé : le protocole reste celui du § 2, cache chaud.
+- Rien sur les points intermédiaires entre 100 k et 1 M : la marche se situe dans
+  cet intervalle, non mesuré.
+
+**Comparaison au budget.** Il n'existe toujours aucune cible chiffrée pour MES-15
+dans `docs/08`. Le seul budget écrit reste `wait_timeout_ms` (60 s, `docs/05`) : à
+3,09 s, le commit consomme 5,2 % de ce budget à 8,58 M, contre 1,0 % avant. La
+contrainte réelle reste la sérialisation de l'écrivain unique, pas le délai du
+client.
+
+**Recommandations, à valider par le propriétaire** (aucune n'a été appliquée) :
+
+1. **Traiter le coût ajouté par `after_commit` avant toute autre optimisation du
+   commit.** Deux voies, à trancher par le propriétaire :
+   - ajouter les index `passages(created_generation)` et
+     `documents(updated_generation)` — le relevé du § 10.5 les chiffre à moins de
+     0,01 ms par requête, mais c'est un changement de schéma SQLite, donc un
+     format sur disque à versionner et à tester ;
+   - ou dériver les passages créés de la plage d'iid du changement
+     (`next_iid` avant le commit) et les documents modifiés du changement lui-même,
+     sans requête sur `updated_generation` ; c'est un changement de code, avec le
+     test d'égalité `after_commit` / `from_records` qui existe déjà.
+   Dans les deux cas, rejouer MES-15 : c'est le seul moyen de savoir si le commit
+   revient sous les 598,3 ms du 2026-10-21.
+2. **Ne pas citer les 517,8 ms comme un gain acquis.** Le chiffre du rejeu est
+   3 085,1 ms à 8,58 M / 10. Tant que le § 10.5 n'est pas traité, la dérivation
+   coûte plus qu'elle ne rapporte à l'échelle de Legifacile.
+3. **Aucun seuil** n'est proposé : ni `N`, ni `exact_threshold` ne dépendent de ce
+   rejeu.
+
+### 10.7 Données brutes
+
+`docs/mesures/MES-15-cout-commit-generation.2026-10-25.json` : les dix points (sept
+du rejeu, trois du second tour), 10 répétitions chacun, toutes les valeurs brutes
+par répétition pour le commit et chaque réplique, le maximum de RSS du processus
+par point. Le relevé hors banc est dans `data/mes15/replay-raw/` :
+`after-commit-scans.json`, `after-commit-scans-with-indexes.json`, les `.time` et
+les JSON de point. Les index de base restent dans `data/mes15/` (6,3 Go).

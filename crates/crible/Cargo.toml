@@ -28,6 +28,14 @@ half.workspace = true
 parquet.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+zstd.workspace = true
+
+# MES-08: the attach bench times a real `attach` on a clone of the index and
+# reads the five stage durations of its report (`docs/04`). Scenario matrix,
+# not a criterion function, so `harness = false`.
+[[bench]]
+name = "attach_cost"
+harness = false
 
 [lints]
 workspace = true

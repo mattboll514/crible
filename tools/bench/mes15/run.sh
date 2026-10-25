@@ -23,7 +23,7 @@
 # the report is produced by `merge.py`.
 set -eu
 
-ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 DATA="$ROOT/data/mes15"
 RAW="$DATA/raw"
 REPEATS=10
