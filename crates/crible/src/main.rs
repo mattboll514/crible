@@ -79,6 +79,22 @@ enum Command {
         #[arg(long)]
         index: String,
     },
+    /// Export the live data of an index as a portable `replace_all` batch.
+    Export {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Root models directory (`[paths] models` of `crible.toml`).
+        #[arg(long)]
+        models: PathBuf,
+        /// Root exchange directory (`[paths] exchange` of `crible.toml`); the
+        /// batch is written under its `outbox/`.
+        #[arg(long)]
+        exchange: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+    },
     /// Update the fields of documents without re-encoding anything (ADR-0060).
     Patch {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -180,6 +196,12 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
         Command::Compact { data, index } => commands::compact_index(&data, &index),
+        Command::Export {
+            data,
+            models,
+            exchange,
+            index,
+        } => commands::export_index(&data, &models, &exchange, &index),
         Command::Patch { data, index, file } => commands::patch_documents(&data, &index, &file),
         Command::Search {
             data,

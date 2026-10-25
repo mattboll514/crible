@@ -282,6 +282,38 @@ pub fn compact_index(data: &Path, index: &str) -> Result<(), CribleError> {
     Ok(())
 }
 
+/// `crible export --data <dir> --models <dir> --exchange <dir> --index <i>`.
+///
+/// Writes a `replace_all` batch of the live data of the published generation
+/// into `<exchange>/outbox/<index>-g<G>/` (`docs/04`, "Export, instantanés,
+/// restauration"). The export reads the published snapshot through its own
+/// read-only connection, so it never suspends the writer. The model
+/// configuration is read because the manifest of the batch declares it, with
+/// `dims` and `normalize`, which the index configuration does not carry.
+pub fn export_index(
+    data: &Path,
+    models: &Path,
+    exchange: &Path,
+    index: &str,
+) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let model = load_model(models, &config.model)?;
+    // Read opening, like `search` and `inspect`: no cleanup of `<data>/tmp`,
+    // and the store's recovery only repairs what a crash left behind.
+    let store = GenerationStore::open(&index_dir, &config.schema)?;
+    let report = crible_store::export::export(&store, &config, &model, exchange)?;
+    println!(
+        "index '{}' exported to {}: generation {}, {} document(s), {} passage(s)",
+        name,
+        report.directory.display(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+    );
+    Ok(())
+}
+
 /// Prints the report of one attach, as `crible attach` and `crible ingest` do.
 fn print_report(name: &str, report: &AttachReport) {
     println!(
@@ -634,6 +666,11 @@ fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleE
         )
     })?;
     let config = IndexConfig::from_json_str(&raw)?;
+    // The export writes under `<exchange>/outbox/<index name>-g<G>/`, so the
+    // name an index directory holds must be one path component, exactly as the
+    // name the caller asks for (`export.rs` therefore keeps no copy of this
+    // check).
+    path_component(&config.name, "index name")?;
     if config.name != name {
         return Err(invalid_request(format!(
             "index directory '{}' holds a configuration for index '{}'",
