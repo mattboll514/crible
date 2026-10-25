@@ -277,7 +277,10 @@ impl RecordStore {
 
     /// Inserts or replaces one passage, and commits before returning.
     pub fn write_passage(&mut self, record: &PassageRecord) -> Result<(), CribleError> {
-        let text = encode_text(&record.text)?;
+        // One passage is its own batch, so the compressor is built for it and
+        // dropped at once; batched writes share one across the whole batch.
+        let mut compressor = TextCompressor::new()?;
+        let text = compressor.encode(&record.text)?;
         let fields = canonical_json(&record.fields)?;
         let dead_since_gen = record
             .dead_since_gen
@@ -837,11 +840,15 @@ pub(crate) fn insert_document(
 /// (`docs/02-architecture.md`, "Identifiants"), so reusing one is a bug and the
 /// `INSERT` fails on the primary key, which rolls the whole generation back
 /// (INV-03).
+///
+/// `compressor` is the batch compressor of the caller (ADR-0048): one instance
+/// compresses every passage of the batch, never one per passage.
 pub(crate) fn insert_passage(
     transaction: &Transaction<'_>,
     record: &PassageRecord,
+    compressor: &mut TextCompressor,
 ) -> Result<(), CribleError> {
-    let text = encode_text(&record.text)?;
+    let text = compressor.encode(&record.text)?;
     let fields = canonical_json(&record.fields)?;
     let dead_since_gen = record
         .dead_since_gen
@@ -1305,14 +1312,41 @@ fn canonical_value(value: &Value) -> Value {
     }
 }
 
-/// Compresses a passage text into a zstd frame.
-fn encode_text(text: &str) -> Result<Vec<u8>, CribleError> {
-    zstd::stream::encode_all(text.as_bytes(), TEXT_COMPRESSION_LEVEL).map_err(|error| {
-        CribleError::new(
-            ErrorCode::Internal,
-            format!("cannot compress a passage text: {error}"),
-        )
-    })
+/// Reusable zstd compressor for the `passages.text` frames (ADR-0048).
+///
+/// `zstd::stream::encode_all` builds a zstd context on every call, which costs
+/// 34 to 45 µs per passage (MES-15, § 4: 67 to 90 ms for a 2 000-passage
+/// attach). One compressor therefore serves a whole batch of written
+/// passages, and is rebuilt only when a new batch starts.
+///
+/// Nothing else changes: the level stays [`TEXT_COMPRESSION_LEVEL`], the column
+/// still holds one plain zstd frame, and [`decode_text`] keeps reading the
+/// frames the previous method wrote.
+pub(crate) struct TextCompressor {
+    compressor: zstd::bulk::Compressor<'static>,
+}
+
+impl TextCompressor {
+    /// Builds the compressor for one batch of written passages.
+    pub(crate) fn new() -> Result<Self, CribleError> {
+        let compressor = zstd::bulk::Compressor::new(TEXT_COMPRESSION_LEVEL).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("cannot create the passage text compressor: {error}"),
+            )
+        })?;
+        Ok(Self { compressor })
+    }
+
+    /// Compresses one passage text into a zstd frame.
+    pub(crate) fn encode(&mut self, text: &str) -> Result<Vec<u8>, CribleError> {
+        self.compressor.compress(text.as_bytes()).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("cannot compress a passage text: {error}"),
+            )
+        })
+    }
 }
 
 /// Decompresses a `passages.text` frame back to UTF-8.
@@ -1537,6 +1571,66 @@ mod tests {
                 error.code(),
                 ErrorCode::Internal,
                 "SQLite code {code} is not a lock contention"
+            );
+        }
+    }
+
+    /// Texts of every shape a passage can carry: empty, short, non-ASCII, and
+    /// long enough to span several zstd blocks (ADR-0048).
+    fn sample_texts() -> Vec<String> {
+        vec![
+            String::new(),
+            "Le présent arrêté entre en vigueur le lendemain de sa publication.".to_owned(),
+            "Article 1er — « le maire » ; élève, œuvre, naïf.".to_owned(),
+            "Un texte de passage représentatif. ".repeat(8_000),
+        ]
+    }
+
+    #[test]
+    fn text_compressor_round_trips_empty_and_long_texts() {
+        let mut compressor = TextCompressor::new().expect("the compressor is created");
+        for text in sample_texts() {
+            let frame = compressor
+                .encode(&text)
+                .expect("the passage text is compressed");
+            assert_eq!(
+                decode_text(&frame).expect("the frame decodes"),
+                text,
+                "a {} byte text must survive compression and decompression",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn text_compressor_serves_a_whole_batch_of_passages() {
+        // One compressor carries every passage of a batch (ADR-0048), so it must
+        // not leak state from one text to the next, nor from one empty text to a
+        // long one.
+        let texts = sample_texts();
+        let mut compressor = TextCompressor::new().expect("the compressor is created");
+        let mut frames = Vec::new();
+        for text in &texts {
+            frames.push(compressor.encode(text).expect("the text is compressed"));
+        }
+        for (frame, text) in frames.iter().zip(&texts) {
+            assert_eq!(decode_text(frame).expect("the frame decodes"), *text);
+        }
+    }
+
+    #[test]
+    fn frames_written_by_encode_all_still_decode() {
+        // Text already stored was compressed one context per passage with
+        // `zstd::stream::encode_all`; no migration rewrites it (ADR-0048). The
+        // criterion is decompression, never byte equality: a zstd header may
+        // carry the content size.
+        for text in sample_texts() {
+            let legacy = zstd::stream::encode_all(text.as_bytes(), TEXT_COMPRESSION_LEVEL)
+                .expect("the legacy frame is written");
+            assert_eq!(
+                decode_text(&legacy).expect("a legacy frame decodes"),
+                text,
+                "a frame of the previous method must keep decoding"
             );
         }
     }

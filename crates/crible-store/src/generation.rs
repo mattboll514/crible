@@ -914,6 +914,8 @@ fn write_generation_change(
     } = change;
 
     let mut next_iid = next_iid;
+    // One compressor for the passages of this generation change (ADR-0048).
+    let mut compressor = records::TextCompressor::new()?;
     for segment in segments {
         check_generation_matches(
             "segment",
@@ -939,7 +941,7 @@ fn write_generation_change(
             passage.created_generation,
             generation,
         )?;
-        records::insert_passage(transaction, passage)?;
+        records::insert_passage(transaction, passage, &mut compressor)?;
         next_iid = next_iid.max(passage.iid.get().checked_add(1).ok_or_else(|| {
             CribleError::new(
                 ErrorCode::Internal,
