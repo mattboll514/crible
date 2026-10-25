@@ -1,8 +1,12 @@
 # ADR-0058 — Contrôle anti-fuite de `@git` par un script versionné, sans fichier temporaire
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé. Les trois points laissés à sa main sont tranchés ainsi :
+  - (i) un `.env.prod` absent ou illisible donne le code `2` et l'arrêt, jamais un passage en silence ;
+  - (ii) aucun seuil de longueur n'est appliqué aux valeurs comparées : un faux positif arrête le commit et se rapporte ;
+  - (iii) le hook `pre-commit` de l'option (b) n'est **pas** retenu pour l'instant ; c'est un complément possible, à décider par un autre ADR.
 - **Proposé par** : orchestrateur, sur demande du propriétaire (hors tâche, branche `phase/P3-cycle-de-vie`)
 - **Remplace** : —
 

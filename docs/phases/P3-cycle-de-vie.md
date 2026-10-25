@@ -12,6 +12,26 @@
 
 ---
 
+### DURCIR-CONTROLE-ANTI-FUITE
+- **Objectif** : remplacer le contrôle anti-fuite de `@git` par un script versionné qui ne lit `.env.prod` qu'en mémoire, couvre le diff indexé et le message de commit, et n'affiche que le nom des variables trouvées (ADR-0058). Une fuite de valeur devient alors impossible sans contournement délibéré, et aucune valeur n'a besoin de toucher le disque.
+- **Dépend de** : aucune tâche de P3. La tâche s'appuie sur l'outillage en place depuis P0, tous `FAIT` : dépôt git initialisé, `.env.prod` et `.env.prod.example`, `AGENTS.md`, `.opencode/agents/git.md`. Elle est la première de P3 et ne touche ni le moteur, ni `docs/01` à `docs/08`.
+- **À lire** : `adr/0058-controle-anti-fuite-de-git-par-script-versionne.md` (décisions 1 à 6, critères de la mise en œuvre) ; `adr/0032-acces-a-la-production.md` (accès à la production, valeurs hors git et hors toute sortie) ; `adr/0026-permissions-et-mode-auto.md` et `adr/0037-permissions-de-lecture-du-relecteur.md` (forme des listes de permissions) ; `.opencode/agents/git.md` (« Contrôles avant chaque commit », liste de permissions) ; `.env.prod.example` (noms des variables, format `^PROD_[A-Z_]+=`) ; `09-plan-de-developpement.md` (section Git, pipeline d'une tâche).
+- **Livrables** :
+  - `.opencode/scripts/check_prod_leak.sh` : shell POSIX, bit exécutable, codes de sortie `0` (rien trouvé), `1` (valeur trouvée, avec la liste des noms) et `2` (contrôle impossible) de la décision 4 de l'ADR. Il lit `.env.prod` en mémoire, ne crée aucun fichier (`mktemp`, `tee`, redirection d'écriture, substitution de processus et `here-document` exclus), n'active jamais `set -x`, et n'imprime jamais une valeur, ni la ligne du diff qui a correspondu.
+  - Son test, par exemple `.opencode/scripts/tests/check_prod_leak_test.sh` : dépôt git factice dans un répertoire temporaire, `.env.prod` factice avec des valeurs inventées. Aucune valeur réelle de `.env.prod` n'entre dans le test.
+  - `.opencode/agents/git.md` : permission du seul script (`./.opencode/scripts/check_prod_leak.sh*` et son chemin absolu, formes exactes validées à l'implémentation, puisque opencode compare la chaîne de commande) ; section « Contrôles avant chaque commit » réécrite autour de l'appel au script, la ligne `grep -F -f <(…)` supprimée ; interdictions explicites de la décision 5 (lire `.env.prod` autrement que par ce script, écrire une valeur ou un fragment de valeur dans un fichier, chercher un contournement, recomposer le contrôle à la main ou utiliser `--no-verify` quand le script échoue, est refusé ou renvoie `2`). Aucun autre changement dans ce fichier.
+  - Les résultats des contrôles remis à l'orchestrateur pour `docs/suivi.md`, ainsi que le retrait de la vérification `ls` des consignes qui la portent : `docs/suivi.md` reste tenu par l'orchestrateur.
+- **Critères d'acceptation** :
+  - sur un `.env.prod` factice et un diff indexé contenant une de ses valeurs, le script sort `1`, n'affiche que le nom de la variable, et la chaîne factice est absente de la sortie (vérifié par recherche de cette chaîne dans la sortie) ;
+  - même chose pour un message de commit passé **en argument**, sans diff fautif ;
+  - sur un diff et un message propres, il sort `0` ;
+  - `.env.prod` absent ou illisible : code `2`, message explicite, aucune valeur, et `@git` s'arrête et rapporte le message exact ;
+  - après exécution, le répertoire pointé par `TMPDIR` est vide, et le script ne crée aucun fichier : aucun `mktemp`, `tee`, redirection d'écriture ni `here-document` dans le fichier, vérifié à la relecture ;
+  - les valeurs entre guillemets de `.env.prod` sont reconnues sans les guillemets (`PROD_PGOPTIONS` du modèle), et la comparaison se fait en chaîne fixe (`grep -F`), jamais en expression régulière ;
+  - `@git` ne peut plus lire `.env.prod` par une autre commande : la forme autorisée du script est la seule ligne ajoutée à ses permissions, et `rm`, `git config` et la substitution de processus restent hors de portée ;
+  - aucun seuil de longueur n'est appliqué aux valeurs comparées : un faux positif arrête le commit et se rapporte (décision du propriétaire du 2026-10-25).
+- **Hors périmètre** : un hook `pre-commit` ou `commit-msg` (option (b) de l'ADR, écartée pour l'instant et réservée à un autre ADR) ; toute modification de `AGENTS.md`, de `CLAUDE.md` ou des documents `docs/01` à `docs/08` ; la lecture de `.env.prod` réel par un agent ; le contenu des fichiers binaires indexés, limite déjà notée par l'ADR et non fermée ici.
+
 ### PATCHER-METADONNEES
 - **Objectif** : modifier les champs d'un document sans ré-encodage.
 - **Dépend de** : CONSTRUIRE-BITMAPS
