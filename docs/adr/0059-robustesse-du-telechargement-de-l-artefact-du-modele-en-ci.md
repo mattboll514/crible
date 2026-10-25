@@ -1,10 +1,18 @@
 # ADR-0059 — Robustesse du téléchargement de l'artefact du modèle en CI
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé : les options 1 et 3 sont retenues. Les valeurs sont celles du point 1, sans changement :
+  - (i) **4 essais** par fichier, pour **3 reprises**, avec des attentes de **5 s, 15 s et 45 s** ;
+  - (ii) `Retry-After` respecté jusqu'à **60 s**, et échec immédiat au-delà, la valeur nommée dans le message ;
+  - (iii) **échéance globale de 600 s** pour le téléchargement, sous le `timeout-minutes: 20` du job inchangé ;
+  - (iv) le workflow `.github/workflows/model-cache.yml` est retenu, avec le cron des **lundis et jeudis** (`17 3 * * 1,4`), le `push` filtré par `paths` (`ci/model-artifact.toml` et le fichier du workflow) et `workflow_dispatch` ; il est le **seul écrivain** du cache ;
+  - (v) `ci.yml` ne fait plus que **restaurer** le cache : l'étape `Save the model artifact` est retirée, rien d'autre ne change ;
+  - (vi) l'option 2 (**`HF_TOKEN`**) reste **écartée et gardée en réserve** : elle ne sera rouverte que par un nouvel ADR, si des 429 apparaissent malgré les quatre essais, puisqu'elle contredit la phrase sans jeton d'ADR-0057.
+- **Mise en œuvre** : elle revient à la tâche hors plan `DURCIR-ARTEFACT-MODELE-EN-CI` (§6) — le code, `tools/tests/`, `.github/workflows/model-cache.yml`, la suppression de l'étape d'enregistrement dans `ci.yml` et la phrase de `docs/07`. L'acceptation ne fait que tracer la décision.
 - **Proposé par** : agent greffier, sur demande du propriétaire, hors tâche (branche `phase/P3-cycle-de-vie`).
-- **Remplace** : — (complète ADR-0057, qui reste en vigueur)
+- **Remplace** : — (complète ADR-0057, qui reste en vigueur et `Accepté` tel quel)
 
 ## Contexte
 

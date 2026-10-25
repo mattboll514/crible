@@ -110,9 +110,9 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0054](0054-chargement-differe-du-modele-a-l-attache-et-bornes-de-la-recette.md) | Chargement différé du modèle à l'attache et bornes de la recette | Accepté | 2026-10-24 (proposition et acceptation) |
 | [ADR-0055](0055-lot-en-ligne-fichier-d-entree-identite-empreinte-et-lot-interne.md) | Lot en ligne : fichier d'entrée, identité, empreinte des documents et lot interne | Accepté (décision 4, nettoyage, remplacée par ADR-0056) | 2026-10-24 (proposition et acceptation) |
 | [ADR-0056](0056-verrou-de-presence-des-lots-en-ligne.md) | Verrou de présence des lots en ligne (remplace la décision 4 d'ADR-0055 sur le nettoyage) | Accepté | 2026-10-24 (proposition et acceptation) |
-| [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Accepté | 2026-10-24 (proposition, révision et acceptation) |
+| [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Accepté (complété par ADR-0059, sans modification du corps) | 2026-10-24 (proposition, révision et acceptation) |
 | [ADR-0058](0058-controle-anti-fuite-de-git-par-script-versionne.md) | Contrôle anti-fuite de `@git` par un script versionné, sans fichier temporaire | Accepté (`.env.prod` absent = code 2 et arrêt ; pas de seuil de longueur ; pas de hook `pre-commit` pour l'instant) | 2026-10-25 (proposition et acceptation) |
-| [ADR-0059](0059-robustesse-du-telechargement-de-l-artefact-du-modele-en-ci.md) | Robustesse du téléchargement de l'artefact du modèle en CI (complète ADR-0057) | Proposé | 2026-10-25 |
+| [ADR-0059](0059-robustesse-du-telechargement-de-l-artefact-du-modele-en-ci.md) | Robustesse du téléchargement de l'artefact du modèle en CI (complète ADR-0057) | Accepté (options 1 et 3 ; 4 essais, attentes 5/15/45 s, `Retry-After` ≤ 60 s, échéance 600 s ; workflow `model-cache.yml` seul écrivain du cache, `ci.yml` en restauration seule ; `HF_TOKEN` en réserve) | 2026-10-25 (proposition et acceptation) |
 
 ## Questions ouvertes
 

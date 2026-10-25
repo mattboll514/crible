@@ -32,6 +32,31 @@
   - aucun seuil de longueur n'est appliqué aux valeurs comparées : un faux positif arrête le commit et se rapporte (décision du propriétaire du 2026-10-25).
 - **Hors périmètre** : un hook `pre-commit` ou `commit-msg` (option (b) de l'ADR, écartée pour l'instant et réservée à un autre ADR) ; toute modification de `AGENTS.md`, de `CLAUDE.md` ou des documents `docs/01` à `docs/08` ; la lecture de `.env.prod` réel par un agent ; le contenu des fichiers binaires indexés, limite déjà notée par l'ADR et non fermée ici.
 
+### DURCIR-ARTEFACT-MODELE-EN-CI
+- **Objectif** : rendre le téléchargement de l'artefact du modèle tolérant à une erreur passagère, sans jamais tolérer un contenu faux, sans sortir du `timeout-minutes` du job, et faire qu'une panne prolongée de Hugging Face ne bloque plus la CI tant que le cache de `main` est chaud (ADR-0059).
+- **Dépend de** : `AJOUTER-ORT-CI` (`FAIT`)
+- **À lire** : `adr/0059-robustesse-du-telechargement-de-l-artefact-du-modele-en-ci.md` (décisions 1 à 6, critères de la mise en œuvre) ; `adr/0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md` (artefact épinglé par sha, vérifié par blake3, cache jamais source de confiance, aucun jeton en CI) ; `tools/fetch_model_artifact.py` ; `tools/tests/test_fetch_model_artifact.py` ; `.github/workflows/ci.yml`, job `rust-onnx` ; `docs/07-stack-et-deploiement.md`, « CI (GitHub Actions) ».
+- **Livrables** :
+  - `tools/fetch_model_artifact.py` : les constantes du point 1 de l'ADR (4 essais, attentes 5, 15 et 45 s, `Retry-After` borné à 60 s, échéance globale de 600 s), l'attente et l'horloge injectables, la classification du point 2 (reprise sur `URLError`, `TimeoutError`, autres `OSError` de lecture, `IncompleteRead`, HTTP 429 et 5xx ; aucune reprise sur 4xx autre que 429, hash faux, manifeste invalide ni cache divergent), l'échéance globale, un message d'échec qui nomme les essais effectués. Commentaires et docstrings mis à jour, en anglais.
+  - `tools/tests/test_fetch_model_artifact.py` : les tests du point 3, sans réseau et sans attente réelle (faux sommeil qui enregistre les délais demandés).
+  - `.github/workflows/model-cache.yml` : le workflow du point 4, avec les trois déclencheurs (`schedule` au cron `17 3 * * 1,4`, `push` filtré par `paths` sur `ci/model-artifact.toml` et sur le fichier du workflow, `workflow_dispatch`), un seul job sans test, `actions/cache/save@v4` seulement si `cache-hit != 'true'`. C'est le seul écrivain du cache.
+  - `.github/workflows/ci.yml` : suppression de l'étape `Save the model artifact`, rien d'autre. Un commentaire d'une ligne dit que le workflow de cache est le seul écrivain, pour que la suppression ne soit pas reprise plus tard par inadvertance.
+  - `docs/07-stack-et-deploiement.md`, « CI (GitHub Actions) » : une phrase sur les reprises et l'échéance globale dans le point du job `rust-onnx`, et un point court sur le workflow qui tient chaud le cache de `main` — déclencheurs, rythme, aucun test lancé, et le fait qu'il est le seul à enregistrer le cache.
+  - Les résultats des contrôles et la durée du run distant remis à l'orchestrateur pour `docs/suivi.md`, qui reste tenu par lui : ligne de la tâche, durée du run, et le constat sur `main` fait au moment de `/valider J3`.
+- **Critères d'acceptation** :
+  - quatre essais au plus par fichier, avec les attentes 5, 15 et 45 s, mesurées par un faux sommeil ;
+  - `Retry-After` respecté jusqu'à 60 s, et dépassement refusé immédiatement, la valeur présente dans le message ;
+  - une seule tentative sur 404, 403 et hash faux ;
+  - échec à l'échéance globale, avec le nom du fichier en cours dans le message ;
+  - succès à la deuxième tentative : fichier écrit et vérifié, aucun `.part` laissé derrière ; aucun `.part` laissé derrière dans tous les cas ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` et `uv run pytest` verts dans `tools/`, sans réseau ;
+  - un run distant vert sur la branche de tâche, avec le job `rust-onnx` à 420 passés, 0 échoué et 1 filtré, et la durée du job notée ;
+  - une exécution verte du workflow de cache, déclenchée par le `push` du commit qui ajoute le fichier (filtre `paths`), dont le journal montre la clé calculée, le téléchargement, la vérification des blake3 et l'enregistrement ; un second `push` touchant le fichier montre une restauration, sans téléchargement. `workflow_dispatch` ne peut pas servir ici : il n'existe qu'une fois le fichier sur `main` ;
+  - **après la fusion de la phase seulement** : le cache de `main` est constaté chaud par l'orchestrateur au moment de `/valider J3` (premier passage planifié, `workflow_dispatch` sur `main`, ou le `push` de fusion s'il touche le manifeste), puis noté dans le suivi. Ce constat n'est pas un critère de la tâche : il dépend d'une fusion que le propriétaire seul autorise.
+- **Invariants / mesures** : aucun invariant. `docs/08` n'en définit pas pour la CI, et les critères ci-dessus sont des tests ordinaires (ADR-0059, §6) ; aucune mesure MES.
+- **Clause d'arrêt** : si la politique ne peut pas être bornée sous `timeout-minutes: 20`, si un test ne peut pas être écrit sans réseau, si une cause passagère se révèle indiscernable d'un contenu faux, ou si le `push` filtré par `paths` refusait de déclencher le workflow sur une branche de tâche, s'arrêter et remonter une `QUESTION-CONCEPTION`.
+- **Hors périmètre** : l'option 2 et tout jeton (`HF_TOKEN` reste en réserve, à rouvrir par un nouvel ADR) ; les autres jobs et les autres étapes de `ci.yml` ; les gardes `if:` sur `ci.yml` ; le manifeste, le commit épinglé et les hash ; le nettoyage des caches de branches, qui reste une opération du propriétaire ; une mesure MES.
+
 ### PATCHER-METADONNEES
 - **Objectif** : modifier les champs d'un document sans ré-encodage.
 - **Dépend de** : CONSTRUIRE-BITMAPS
