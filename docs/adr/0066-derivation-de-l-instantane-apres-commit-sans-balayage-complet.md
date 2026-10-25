@@ -1,8 +1,9 @@
 # ADR-0066 — Dérivation de l'instantané après commit sans balayage complet
 
-- **Statut** : Proposé
-- **Date** : 2026-10-26
+- **Statut** : Accepté (décision du propriétaire le 2026-10-26)
+- **Date** : 2026-10-26 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-26 par le propriétaire, tel que proposé : décision 1 retenue (remède (b), `after_commit` reçoit le delta écrit par la transaction), décision 2 en recours seulement (les deux index SQLite ne sont pas ajoutés maintenant), décision 3 retenue (tâche hors plan `BORNER-COUT-DU-COMMIT` en P3, avant `NETTOYER-P3` et le rapport J3), décision 4 retenue (les chiffres du 2026-10-25 restent, le rejeu ajoute une section datée à MES-15 et à MES-08). Aucun changement de schéma, de `format_version` ni des index de `docs/02` ; INV-15 n'est pas en cause, l'ordre du commit est inchangé (INV-02, INV-03).
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite de la tâche `MESURER-CYCLE-DE-VIE` (phase P3) et du verdict `NON-COUVERT` de `@architecte` du 2026-10-25
 - **Remplace** : —
 
