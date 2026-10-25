@@ -52,6 +52,7 @@ use crible_store::generation::{
     write_index_config,
 };
 use crible_store::online;
+use crible_store::patch::{self, PatchSource};
 use serde_json::{Value, json};
 
 use crate::vector;
@@ -206,6 +207,37 @@ pub fn ingest_documents(
         },
     )?;
     print_report(name, &report);
+    Ok(())
+}
+
+/// `crible patch --data <dir> --index <i> <fichier>.jsonl`.
+///
+/// Reads a JSONL patch and applies it, as ADR-0060 defines it: the fields of
+/// each named document are merged, `doc_hash` does not change, one generation
+/// G+1 is committed when at least one document changes, and no generation is
+/// created otherwise. No model is loaded and no passage is encoded, so the
+/// command takes no `--models`.
+///
+/// The file is parsed before the writer opens: a file above the bounds of
+/// ADR-0060, or one that is not a list of `{doc_id, fields}`, is refused without
+/// touching the index. The JSONL file is a positional argument, as the batch
+/// directory of `crible attach` is; `--data` keeps its meaning of data root.
+pub fn patch_documents(data: &Path, index: &str, file: &Path) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let patches = patch::read_file(file)?;
+    // Write opening: same recovery and same cleanup of the stale online batches
+    // as `attach` and `ingest`.
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let report = patch::apply(&mut store, &config.schema, PatchSource::File, &patches)?;
+    println!(
+        "{}",
+        compact(&json!({
+            "updated": report.updated,
+            "unchanged": report.unchanged,
+            "generation": report.generation.get(),
+        }))?
+    );
     Ok(())
 }
 
