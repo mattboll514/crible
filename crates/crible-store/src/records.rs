@@ -138,6 +138,28 @@ pub(crate) struct StoredBatch {
     pub report: String,
 }
 
+/// One whole row of `batches`, as a compaction copies it into the next epoch.
+///
+/// A compaction keeps the history of the applied batches, so the idempotence
+/// check of a later attach still finds the batches of the previous epochs
+/// (INV-10). The row is copied verbatim, `applied_at` included, because the
+/// column names a fact that no compaction may rewrite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredBatchRow {
+    /// Identifier of the batch, its primary key.
+    pub batch_id: String,
+    /// Generation that applied it.
+    pub generation: Generation,
+    /// Wall clock of the original apply, in RFC 3339 UTC.
+    pub applied_at: String,
+    /// Digest of the bytes of its `manifest.json`.
+    pub manifest_blake3: String,
+    /// The `manifest.json` of the batch, as it was read.
+    pub manifest: String,
+    /// Report of the original attach, as JSON.
+    pub report: String,
+}
+
 /// One row of `passages`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageRecord {
@@ -492,6 +514,185 @@ pub(crate) fn batch_by_id(
         })
     })
     .transpose()
+}
+
+/// Reads every row of `batches`, in ascending `batch_id`, the way a compaction
+/// copies the history of the applied batches into the next epoch (INV-10).
+pub(crate) fn all_batches(connection: &Connection) -> Result<Vec<StoredBatchRow>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT batch_id, generation, applied_at, manifest_blake3, manifest, report
+             FROM batches ORDER BY batch_id",
+        )
+        .map_err(|error| database_error("prepare the batches query", &error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| database_error("query the batches", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the batches", &error))?;
+    rows.into_iter()
+        .map(|row| {
+            let (batch_id, generation, applied_at, manifest_blake3, manifest, report) = row;
+            Ok(StoredBatchRow {
+                batch_id,
+                generation: Generation::new(from_sql_u64(generation, "generation")?),
+                applied_at,
+                manifest_blake3,
+                manifest,
+                report,
+            })
+        })
+        .collect()
+}
+
+/// Copies one `batches` row verbatim into the transaction of an epoch.
+///
+/// Unlike [`insert_batch`], which stamps the wall clock of the apply, this keeps
+/// the `applied_at` of the original row: a compaction moves the history, it does
+/// not rewrite it.
+pub(crate) fn insert_batch_row(
+    transaction: &Transaction<'_>,
+    row: &StoredBatchRow,
+) -> Result<(), CribleError> {
+    transaction
+        .execute(
+            "INSERT INTO batches (batch_id, generation, applied_at, manifest_blake3, manifest, report)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                row.batch_id.as_str(),
+                to_sql_u64(row.generation.get(), "generation")?,
+                row.applied_at.as_str(),
+                row.manifest_blake3.as_str(),
+                row.manifest.as_str(),
+                row.report.as_str(),
+            ],
+        )
+        .map_err(|error| database_error("copy a batch row into the commit transaction", &error))?;
+    Ok(())
+}
+
+/// Reads every row of `documents`, in ascending `doc_id`, the way a compaction
+/// copies the living documents into the next epoch.
+pub(crate) fn all_documents(connection: &Connection) -> Result<Vec<DocumentRecord>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT doc_id, doc_hash, fields, updated_generation
+             FROM documents ORDER BY doc_id",
+        )
+        .map_err(|error| database_error("prepare the documents query", &error))?;
+    let rows = statement
+        .query_map([], document_row)
+        .map_err(|error| database_error("query the documents", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the documents", &error))?;
+    rows.into_iter().map(document_from_row).collect()
+}
+
+/// Identity of one live passage, with the fields a compaction orders it by.
+///
+/// `docs/02-architecture.md` (compaction, step 2) sorts the live passages by
+/// (`cluster_by`, `doc_id`, `ord`): a clustered field may be declared at document
+/// level or at passage level. Only the passage fields are read here, and only
+/// when a clustered field lives at passage level; the document fields come from
+/// the document rows the compaction already reads once per document, because
+/// materialising them once per passage would duplicate every document on the
+/// heap. The text stays unread until the passage is copied.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LiveIdentity {
+    /// Internal identifier in the epoch the row comes from.
+    pub iid: Iid,
+    /// External identifier of the document this passage belongs to.
+    pub doc_id: String,
+    /// Position of the passage in its document.
+    pub ord: u32,
+    /// Passage fields, parsed from their canonical JSON, or `None` when the
+    /// caller reads no passage-level field.
+    pub passage_fields: Option<Value>,
+}
+
+/// Reads one identity per live passage of the epoch.
+///
+/// `reads_passage_fields` selects the `fields` column of `passages`: a compaction
+/// that clusters on document fields only, or on nothing, does not read it, so no
+/// JSON value is built for the passages it does not need.
+pub(crate) fn live_identities(
+    connection: &Connection,
+    reads_passage_fields: bool,
+) -> Result<Vec<LiveIdentity>, CribleError> {
+    let sql = if reads_passage_fields {
+        "SELECT iid, doc_id, ord, fields
+         FROM passages
+         WHERE dead_since_gen IS NULL
+         ORDER BY iid"
+    } else {
+        "SELECT iid, doc_id, ord, NULL
+         FROM passages
+         WHERE dead_since_gen IS NULL
+         ORDER BY iid"
+    };
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| database_error("prepare the live passages query", &error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error("query the live passages", &error))?;
+    let mut identities = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error("read a live passage", &error))?
+    {
+        let iid = Iid::new(from_sql_u32(
+            row.get(0)
+                .map_err(|error| database_error("read an iid", &error))?,
+            "iid",
+        )?);
+        let doc_id = row
+            .get::<_, String>(1)
+            .map_err(|error| database_error("read a doc_id", &error))?;
+        let ord = from_sql_u32(
+            row.get(2)
+                .map_err(|error| database_error("read an ord", &error))?,
+            "ord",
+        )?;
+        let passage_fields = match row
+            .get::<_, Option<String>>(3)
+            .map_err(|error| database_error("read the passage fields", &error))?
+        {
+            Some(raw) => Some(parse_fields(&raw)?),
+            None => None,
+        };
+        identities.push(LiveIdentity {
+            iid,
+            doc_id,
+            ord,
+            passage_fields,
+        });
+    }
+    Ok(identities)
+}
+
+/// Number of rows of `passages` that carry a tombstone.
+///
+/// A compacted epoch must hold none of them: the compaction copies the live
+/// passages only, so a non-zero count is a verification failure (INV-14).
+pub(crate) fn tombstoned_passages(connection: &Connection) -> Result<u64, CribleError> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM passages WHERE dead_since_gen IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error("count the tombstoned passages", &error))?;
+    from_sql_u64(count, "tombstoned passages count")
 }
 
 /// Records one applied batch in the transaction of its generation (INV-10).
@@ -1287,7 +1488,7 @@ fn passage_from_row(row: PassageColumns) -> Result<PassageRecord, CribleError> {
 }
 
 /// Parses the canonical JSON stored in a `fields` column.
-fn parse_fields(fields: &str) -> Result<Value, CribleError> {
+pub(crate) fn parse_fields(fields: &str) -> Result<Value, CribleError> {
     serde_json::from_str(fields).map_err(|error| {
         CribleError::new(
             ErrorCode::Internal,

@@ -69,6 +69,16 @@ enum Command {
         /// JSONL file holding one document per line (`docs/05-api.md`).
         documents: PathBuf,
     },
+    /// Compact an index into the next epoch, without its dead passages
+    /// (ADR-0006, ADR-0017).
+    Compact {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+    },
     /// Update the fields of documents without re-encoding anything (ADR-0060).
     Patch {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -169,6 +179,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             index,
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
+        Command::Compact { data, index } => commands::compact_index(&data, &index),
         Command::Patch { data, index, file } => commands::patch_documents(&data, &index, &file),
         Command::Search {
             data,

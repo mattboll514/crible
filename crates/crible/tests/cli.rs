@@ -410,6 +410,87 @@ fn the_text_format_of_search_shows_key_score_fields_and_excerpt() {
 }
 
 #[test]
+fn compact_rewrites_the_index_into_the_next_epoch_without_its_dead_passages() {
+    // `crible compact` is the manual compaction of ADR-0006 and ADR-0017: the
+    // index moves to epoch E+1, keeps its live passages and its generation
+    // history, and drops the tombstones. A second run rewrites an index that
+    // holds no dead passage: the epoch moves again and nothing is removed.
+    require_dataset();
+    let dataset = dataset_root();
+    let (_temp, data, models) = prepare_data();
+    let data_arg = data.to_str().expect("the data path is UTF-8");
+    let models_arg = models.to_str().expect("the models path is UTF-8");
+    crible_ok(&[
+        "index",
+        "create",
+        "--data",
+        data_arg,
+        "--config",
+        dataset.join("index.json").to_str().expect("UTF-8 path"),
+    ]);
+    for batch in ["l1", "l2"] {
+        crible_ok(&[
+            "attach",
+            "--data",
+            data_arg,
+            "--models",
+            models_arg,
+            "--index",
+            "synth-small",
+            dataset.join(batch).to_str().expect("UTF-8 path"),
+        ]);
+    }
+
+    let before = crible_ok(&["inspect", "--data", data_arg, "--index", "synth-small"]);
+    let (live_before, dead_before) = passage_counts(&before);
+    assert!(
+        dead_before > 0,
+        "two batches must leave tombstones to compact: {before}"
+    );
+
+    let compacted = crible_ok(&["compact", "--data", data_arg, "--index", "synth-small"]);
+    assert!(
+        compacted.contains("epoch 1 -> 2"),
+        "the compaction must name the epochs it moves: {compacted}"
+    );
+    assert!(
+        compacted.contains("generation 3"),
+        "the compaction must publish generation G+1: {compacted}"
+    );
+    assert!(
+        compacted.contains(&format!("{live_before} live passages")),
+        "the compaction must keep every live passage: {compacted}"
+    );
+    assert!(
+        compacted.contains(&format!("{dead_before} removed")),
+        "the compaction must remove every tombstone: {compacted}"
+    );
+
+    let after = crible_ok(&["inspect", "--data", data_arg, "--index", "synth-small"]);
+    for expected in ["epoch: 2", "generation: 3", "segments: 1"] {
+        assert!(
+            after.contains(expected),
+            "the compacted index must report {expected:?}: {after}"
+        );
+    }
+    assert!(
+        after.contains(&format!("  passages: {live_before} live, 0 dead")),
+        "the compacted index must hold only live passages: {after}"
+    );
+
+    let again = crible_ok(&["compact", "--data", data_arg, "--index", "synth-small"]);
+    assert!(
+        again.contains("epoch 2 -> 3") && again.contains("0 removed"),
+        "a second compaction moves the epoch and removes nothing: {again}"
+    );
+    let twice = crible_ok(&["inspect", "--data", data_arg, "--index", "synth-small"]);
+    assert!(
+        twice.contains(&format!("  passages: {live_before} live, 0 dead")),
+        "a second compaction must keep the same live set: {twice}"
+    );
+}
+
+#[test]
 fn a_refused_creation_reports_its_code_and_leaves_the_index_intact() {
     require_dataset();
     let dataset = dataset_root();
@@ -535,6 +616,30 @@ fn a_malformed_request_reports_its_code_with_a_message() {
         stderr.contains("cannot read the vector file missing.npy"),
         "the message must name the vector file: {stderr}"
     );
+}
+
+/// Reads the live and dead passage counts of an `inspect` report.
+fn passage_counts(inspect: &str) -> (u64, u64) {
+    let line = inspect
+        .lines()
+        .find(|line| line.trim_start().starts_with("passages: "))
+        .unwrap_or_else(|| panic!("inspect must report the passages: {inspect}"));
+    let rest = line
+        .trim()
+        .strip_prefix("passages: ")
+        .unwrap_or_else(|| panic!("the line starts with the label: {line}"));
+    let (live, dead) = rest
+        .split_once(" live, ")
+        .unwrap_or_else(|| panic!("the line carries the live count: {line}"));
+    let live = live
+        .parse()
+        .unwrap_or_else(|error| panic!("the live count is a number: {error}"));
+    let dead = dead
+        .strip_suffix(" dead")
+        .unwrap_or_else(|| panic!("the line carries the dead count: {line}"))
+        .parse()
+        .unwrap_or_else(|error| panic!("the dead count is a number: {error}"));
+    (live, dead)
 }
 
 /// Reads the first line of a JSON-lines file.

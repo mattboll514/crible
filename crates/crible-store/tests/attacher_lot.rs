@@ -19,6 +19,7 @@
 //! |---|---|
 //! | `attaching_l1_then_l2_then_l3_gives_the_expected_counts` | "L1, L2 puis L3 donnent les comptes attendus", plus the three rules of the semantic table the batches exercise |
 //! | `inv_10_replaying_an_applied_batch_changes_nothing` | INV-10, first bullet of "Idempotence" |
+//! | `inv_10_a_compaction_keeps_the_batches_history_so_a_replay_changes_nothing` | INV-10 and the `batches` history of a compacted epoch |
 //! | `inv_10_same_batch_id_with_another_manifest_is_a_batch_conflict` | INV-10, `409 batch_conflict` |
 //! | `inv_03_failed_attach_leaves_the_records_database_untouched` | INV-03, atomicity of an attach |
 //! | `no_sqlite_write_follows_the_commit_point` | ADR-0016 and ADR-0042: the report is final at the commit point |
@@ -472,7 +473,6 @@ fn document_fields(records: &Path, doc_id: &str) -> Option<String> {
 }
 
 /// The `batches.report` JSON of one applied batch.
-#[cfg(feature = "failpoints")]
 fn stored_report(records: &Path, batch_id: &str) -> String {
     let connection = open_records(records);
     connection
@@ -1078,8 +1078,81 @@ fn inv_10_replaying_an_applied_batch_changes_nothing() {
     );
 }
 
-// --- Test 3: INV-10, conflict of manifest ---
+/// A compaction copies the `batches` history verbatim, so a lot applied before
+/// the compaction still replays as a no-op after it.
+///
+/// INV-10 (idempotence) and step 3 of the compaction in
+/// `docs/02-architecture.md`: the new `records.sqlite` keeps the history, with the
+/// `applied_at` of each row. Re-attaching the same `batch_id` therefore matches the
+/// stored digest, writes nothing, returns the report of the original attach, and
+/// creates no generation.
+#[test]
+fn inv_10_a_compaction_keeps_the_batches_history_so_a_replay_changes_nothing() {
+    let _serial = common::SerialGuard::acquire();
+    let index = mini_index();
+    let model = mini_model();
+    let (_temp, index_dir) = common::temp_index();
+    let mut store = common::create_store_with(&index_dir, &index.schema);
+    let batch_root = tempfile::tempdir().expect("a temporary directory");
 
+    let batch = write_mini_batch(
+        batch_root.path(),
+        MiniBatch {
+            batch_id: "applied",
+            mode: "upsert",
+            documents: &[("doc-a", "hash-a"), ("doc-b", "hash-b")],
+            passages: &[("doc-a", 0, "a0"), ("doc-a", 1, "a1"), ("doc-b", 0, "b0")],
+            deletions: &[],
+        },
+    );
+    let first = attach_batch(&mut store, &batch, &index, &model);
+    assert_eq!(first.added, 2, "the first attach creates both documents");
+    let report_before = stored_report(&common::records_path(&index_dir), "applied");
+
+    let compaction = crible_store::compact::compact(&mut store, &index)
+        .unwrap_or_else(|error| panic!("the fixture compaction must succeed: {error}"));
+    assert_eq!(
+        compaction.to_epoch.get(),
+        2,
+        "the compaction must move the index to the next epoch"
+    );
+
+    // The replaced epoch is gone: the history is read in the new one.
+    let records = index_dir
+        .join("epochs")
+        .join(compaction.to_epoch.get().to_string())
+        .join("records.sqlite");
+    assert_eq!(
+        stored_report(&records, "applied"),
+        report_before,
+        "the compaction must copy the report of the applied batch verbatim (INV-10)"
+    );
+    let compacted = db_state(&records);
+    assert_eq!(
+        compacted.batches_rows, 1,
+        "the new epoch must keep one `batches` row per applied batch"
+    );
+
+    let replay = attach_batch(&mut store, &batch, &index, &model);
+
+    assert_eq!(
+        counters(&replay),
+        counters(&first),
+        "a replay returns the report of the original attach, not a new generation"
+    );
+    assert_eq!(
+        store.generation().get(),
+        2,
+        "the replay must not create a generation after the compaction"
+    );
+    assert_eq!(
+        db_state(&records),
+        compacted,
+        "a replay writes nothing: no row, no meta change, not even applied_at"
+    );
+}
+
+// --- Test 3: INV-10, conflict of manifest ---
 /// The same `batch_id` with another manifest is a `batch_conflict`, and the
 /// reference state is untouched.
 #[test]
