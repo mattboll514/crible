@@ -116,6 +116,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0060](0060-contrat-du-patch-de-metadonnees-des-documents.md) | Contrat du patch de métadonnées des documents | Accepté (toutes les options (a) : refus atomique `not_found`, noms réservés refusés par la règle du champ inconnu, champs non filtrables ou non rendus acceptés, 32 Mo et 10 000 entrées, rapport non persisté, aucune génération pour un patch sans effet) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0061](0061-manifeste-d-un-lot-exporte.md) | Manifeste d'un lot exporté | Accepté (toutes les options (a) sur les décisions 1 et 3 à 5, option (i) sur la décision 2 ; `format_version` reste 1) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0062](0062-second-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md) | Second test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (option (1a) : second `--skip` explicite ; option (2ii) : pas de borne par défaut sur la durée, durée relevée à J3) | 2026-10-25 (proposition et acceptation) |
+| [ADR-0063](0063-troisieme-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md) | Troisième test local de l'échantillon Legifacile, exclu de la CI par son nom | Proposé | 2026-10-25 |
 
 ## Questions ouvertes
 
