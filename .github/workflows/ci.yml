@@ -127,11 +127,6 @@ jobs:
       - name: Fetch and verify the model artifact
         working-directory: tools
         run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
-      - name: Save the model artifact
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: data/models/mdenseon
-          key: ${{ runner.os }}-${{ steps.artifact.outputs.key }}
+      # No save step here: `.github/workflows/model-cache.yml` is the only writer of this cache (ADR-0059).
       - name: Test with ONNX Runtime
         run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check
