@@ -60,7 +60,7 @@ const TEMPORARY_PREFIX: &str = "tmp-";
 ///
 /// `segment.json` does not repeat the precision: exactly one of `vectors.f16`
 /// and `vectors.f32` is present in the segment directory.
-fn vector_file_name(precision: ReferencePrecision) -> &'static str {
+pub(crate) fn vector_file_name(precision: ReferencePrecision) -> &'static str {
     match precision {
         ReferencePrecision::Fp16 => "vectors.f16",
         ReferencePrecision::Fp32 => "vectors.f32",

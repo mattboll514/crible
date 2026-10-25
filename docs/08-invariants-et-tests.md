@@ -20,7 +20,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 | INV-12 | Un lot incompatible avec le modèle de l'index est refusé | Lot avec un mauvais prompt ou un modèle différent : `acceptance_failed` ou `incompatible_model` |
 | INV-13 | Les analytics ne contiennent ni texte de requête, ni valeur de filtre, ni hash, ni id de résultat | Recherche des textes et valeurs utilisés dans le fichier `analytics.sqlite` |
 | INV-14 | Rien de ce qui a coûté du GPU n'est détruit sans copie valide | La compaction garde l'époque E jusqu'à la bascule ; un échec de compaction laisse E intacte |
-| INV-15 | Tout format sur disque est little-endian explicite et versionné | Relecture d'un segment écrit avec des valeurs connues ; refus d'une version inconnue |
+| INV-15 | Tout format sur disque est little-endian explicite et versionné | Relecture d'un segment écrit avec des valeurs connues ; refus d'une version inconnue, `snapshot.json` d'un instantané compris (ADR-0064) |
 | INV-16 | Un réglage figé ne se modifie pas par l'API | `PATCH` → `409 immutable_setting` |
 | INV-17 | L'écriture des analytics ou du journal ne bloque jamais une requête | File saturée artificiellement : latence de recherche inchangée, pertes comptées |
 

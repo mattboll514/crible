@@ -28,7 +28,7 @@ Format unique :
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente ou inconnue |
 | `forbidden` | 403 | Rôle insuffisant |
@@ -41,7 +41,7 @@ Format unique :
 | `acceptance_failed` | 422 | Recette refusée |
 | `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) (`Retry-After`) |
 | `timeout` | 504 | Requête trop longue |
-| `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) |
+| `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) ; panne disque pendant un instantané ou une restauration (ADR-0065) |
 
 Ces codes servent aussi de catégories d'erreurs dans les analytics.
 
@@ -63,7 +63,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/search` | read | Recherche multi-index |
 | `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction → job |
 | `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` → job |
-| `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` → job |
+| `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` → job ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065) |
 | `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, générations cohérentes) |

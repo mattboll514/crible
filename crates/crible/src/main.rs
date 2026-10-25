@@ -79,6 +79,30 @@ enum Command {
         #[arg(long)]
         index: String,
     },
+    /// Take a coherent snapshot of an epoch into the exchange root (ADR-0064,
+    /// ADR-0065). Offline: stop the server first.
+    Snapshot {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Root exchange directory (`[paths] exchange` of `crible.toml`); the
+        /// snapshot is written under its `snapshots/`.
+        #[arg(long)]
+        exchange: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+    },
+    /// Restore a snapshot into the index it names, as a new epoch (ADR-0065).
+    /// Offline: stop the server first.
+    Restore {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Snapshot directory, holding `snapshot.json` and the copy.
+        #[arg(long)]
+        snapshot: PathBuf,
+    },
     /// Export the live data of an index as a portable `replace_all` batch.
     Export {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -196,6 +220,12 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
         Command::Compact { data, index } => commands::compact_index(&data, &index),
+        Command::Snapshot {
+            data,
+            exchange,
+            index,
+        } => commands::snapshot_index(&data, &exchange, &index),
+        Command::Restore { data, snapshot } => commands::restore_index(&data, &snapshot),
         Command::Export {
             data,
             models,

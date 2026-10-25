@@ -297,11 +297,11 @@ Un patch passe la même file d'écriture que les autres écritures de l'index. F
 
 | | Export | Instantané |
 |---|---|---|
-| Contenu | Lot `replace_all` des données vivantes à la génération G | Copie cohérente de l'époque : `VACUUM INTO` de SQLite, segments, tantivy, `index.json`, manifeste |
+| Contenu | Lot `replace_all` des données vivantes à la génération G | Copie cohérente de l'époque : `VACUUM INTO` de SQLite, `segment.json` et `vectors.f16`/`f32` de chaque segment, `index.json`, `manifests/<G>.json`, `lexical/` s'il existe ; un `snapshot.json` atteste la copie (ADR-0064) |
 | Destination | `exchange/outbox/<index>-g<G>/`, en parties d'au plus 1 M passages | `exchange/snapshots/<index>-e<E>-g<G>/` |
-| Restauration | Attacher le lot dans un index **vide, de même nom et de même configuration** que l'index source (ADR-0061) | CLI : installé comme nouvelle époque, puis `CURRENT_EPOCH` |
+| Restauration | Attacher le lot dans un index **vide, de même nom et de même configuration** que l'index source (ADR-0061) | CLI, hors ligne : installé comme nouvelle époque E+1, génération laissée à G, puis `CURRENT_EPOCH` (ADR-0065) |
 | Avantage | Portable, indépendant de la version de Crible, lisible avec DuckDB | Restauration rapide, sans reconstruction |
-| Pendant l'opération | L'écrivain continue | L'écrivain est suspendu le temps de la copie |
+| Pendant l'opération | L'écrivain continue | L'écrivain est suspendu le temps de la copie ; en CLI, la prise est hors ligne, le serveur étant arrêté (ADR-0065) |
 
 Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, section « Lot d'export ») et porte les règles suivantes (ADR-0061) :
 
@@ -312,6 +312,36 @@ Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, s
 - Un dossier `exchange/outbox/<index>-g<G>/` déjà présent est refusé : l'export n'écrase jamais un export existant, qu'une attache peut être en train de lire. Le refus est rendu en `invalid_request` (400).
 - L'export écrit sous un dossier temporaire `exchange/outbox/.tmp-<batch_id>-<pid>-<n>-<nanos>` puis le renomme. Une panne laisse donc un résidu `.tmp-*` que ni la reprise (`02-architecture.md`) ni une commande ne supprime : il se nettoie à la main.
 - Une course de génération (l'index commite entre l'instantané et la première lecture) relance l'export sur un instantané neuf, au plus trois fois, puis rend `overloaded` (503). Ce nombre de tentatives est une mitigation interne, hors contrat.
+
+### Règles de l'instantané (ADR-0064, ADR-0065)
+
+`crible snapshot --data <dir> --exchange <dir> --index <nom>` n'encode rien et ne prend donc pas `--models`.
+
+- **Contenu copié** : le résultat de `VACUUM INTO` de `records.sqlite`, posé à la racine de l'époque sous le nom `records.sqlite` ; pour chaque segment de l'époque, `segment.json` et `vectors.f16` ou `vectors.f32` ; `index.json` ; `manifests/<G>.json` ; `lexical/` s'il existe. Le `VACUUM INTO` rend un fichier unique et cohérent, sans `-wal` ni `-shm` : la copie n'a pas à embarquer les fichiers annexes de WAL.
+- **Exclusions** : `codes.bin`, `cache/` et les autres fichiers dérivés, reconstructibles (`02-architecture.md`), ainsi que `CURRENT_EPOCH`, que la restauration pose elle-même. `codes.bin` est dérivé des vecteurs : le copier ajouterait des octets sans rien rendre possible. `CURRENT_EPOCH`, lui, nomme l'époque de la **source** ; l'installer ferait pointer l'index cible vers une époque qui peut déjà exister chez lui.
+- **« Le manifeste » de la fiche** désigne `manifests/<G>.json` de l'époque copiée. Seul le manifeste de la génération G est copié ; ceux des générations antérieures restent l'histoire de l'index.
+- **`snapshot.json`** : un JSON versionné (`format_version: 1`, INV-15), **sans horodatage**, écrit **après** la copie, par fichier temporaire, fsync, renommage puis fsync du dossier. Il porte le nom de l'index, l'époque source E, la génération G et, pour **chaque fichier copié** sauf lui-même, son chemin relatif, sa taille en octets et son blake3 sous la forme `blake3:<hex>`, la liste étant triée par chemin. Il **atteste une copie** : il ne décrit pas une génération et ne remplace ni `manifests/<G>.json`, ni `meta.generation`, qui restent dérivés de SQLite (ADR-0016). Sa présence à la racine est le signal que la copie est allée au bout.
+- **Refus à la restauration** : la restauration refuse en `invalid_request`, sans rien écrire, un instantané sans `snapshot.json`, dont le `format_version` est inconnu, auquel il manque un fichier listé, dont un fichier listé a une taille ou un blake3 différents, ou qui contient un fichier **non listé**. Le refus d'un fichier en trop est strict : une note ajoutée à la main, ou un `.DS_Store` déposé par macOS, rend l'instantané inutilisable.
+- **Destination occupée** : un dossier `exchange/snapshots/<index>-e<E>-g<G>/` déjà présent est refusé en `invalid_request` (400), avec le dossier nommé ; un instantané n'écrase jamais un instantané existant, qu'une restauration ou un opérateur peut être en train de lire. C'est la règle de l'export (ADR-0061).
+- **Transit** : l'instantané s'écrit sous `exchange/snapshots/.tmp-<index>-e<E>-g<G>-<pid>-<n>-<nanos>/`, puis le dossier est renommé ; le nom temporaire garantit que deux prises simultanées n'écrivent jamais au même endroit. Une panne laisse un résidu `.tmp-*` que ni la reprise ni une commande ne supprime : il se nettoie à la main, comme celui de l'export.
+- **Hors ligne en P3** : l'opérateur arrête le serveur, comme pour `crible restore`. Le cœur de la commande prend `&mut GenerationStore`, ce qui suspend l'écrivain au sens d'ADR-0017 — les écritures sont retenues, les lectures continuent — quand il tourne dans le serveur ; un processus ne peut pas suspendre l'écrivain d'un autre, et aucun verrou inter-processus n'est ajouté : c'est la règle d'exploitation déjà écrite pour `crible patch`, `busy_timeout` n'assurant que la vivacité (ADR-0038). La future route `POST /v1/indexes/{index}/snapshots` (P6) réutilisera le même cœur.
+- **Rapport** : destination, époque E, génération G, nombre de documents, nombre de passages, octets copiés.
+
+### Règles de la restauration (ADR-0065)
+
+`crible restore --data <dir> --snapshot <dir>` est **hors ligne**. Aucune des deux commandes de sauvegarde ne prend `--models`, et aucune ne charge le modèle : aucune recette n'a lieu.
+
+1. **Contrôler l'instantané** : les cinq refus ci-dessus, avant toute écriture.
+2. **Contrôler la cible** : le nom de l'index cible est celui de `snapshot.json`, la commande n'a pas d'option `--index`. Un index **absent** est créé depuis l'`index.json` de l'instantané, avec l'époque initiale d'une création et la génération G de l'instantané. Un index **existant** doit porter un `index.json` **identique** ; sinon la restauration est refusée en `invalid_request`, avec un message qui nomme le réglage divergent. Une cible à une génération **supérieure** à G est acceptée : c'est le retour arrière voulu.
+3. **Écrire l'époque E+1** : la copie va dans `epochs/tmp-<E+1>/`, puis fsync et renommage vers `epochs/<E+1>/` — le protocole de la compaction. Un dossier de transit ou une époque E+1 qu'un résidu occuperait est supprimé avant l'écriture ; `meta.epoch` de la base copiée et `manifests/<G>.json` reçoivent le numéro E+1.
+4. **Basculer** : `CURRENT_EPOCH ← E+1` en dernier. Une panne avant cette écriture laisse l'index cible intact (INV-03, INV-04).
+
+- **Génération inchangée** : la restauration laisse la génération à **G** ; elle ne l'incrémente pas, et c'est ce qui satisfait « une restauration redonne la génération ». L'époque est copiée en entier, donc les iid sont conservés et restent denses : aucun renumérotage, et les résultats sont identiques sans reconstruction. Les `segment.json` ne sont pas réécrits : leur `generation` et leur `batch_id` disent la provenance du segment, comme pour une compaction.
+- **Époque remplacée conservée** : elle reste sur disque, le rapport la nomme, et elle se supprime **à la main**. Dès qu'une écriture a suivi la prise, elle contient des passages qu'aucune copie valide ne porte : `reclaim_epochs` la détruirait, ce qui violerait INV-14. Le disque croît donc si personne ne nettoie.
+- **Couple (époque, génération) non monotone** : une restauration change l'époque sans changer la génération. Tout code ou outil qui suppose que les deux avancent ensemble doit être relu.
+- **Historique `batches`** : l'époque restaurée porte l'historique de l'instantané. Les lots attachés entre G et la génération remplacée ne sont plus dans l'état vivant — ils restent dans l'époque remplacée — et INV-10 ne les couvre plus : les rattacher les appliquerait de nouveau au lieu de ne rien faire.
+- **Rapport** : nom de l'index, époque remplacée (ou « aucune »), nouvelle époque, génération, nombre de documents, nombre de passages.
+- **Codes** : `invalid_request` (400) pour un instantané absent, incomplet ou altéré, une destination occupée ou une configuration divergente ; `internal` (500) pour une panne disque.
 
 ## Le découpage : qui fait quoi
 

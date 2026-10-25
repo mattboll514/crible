@@ -314,6 +314,71 @@ pub fn export_index(
     Ok(())
 }
 
+/// `crible snapshot --data <dir> --exchange <dir> --index <i>`.
+///
+/// Takes a coherent copy of the current epoch into
+/// `<exchange>/snapshots/<index>-e<E>-g<G>/` (`docs/04`, "Règles de
+/// l'instantané"; ADR-0064, ADR-0065). The command is **offline**: the operator
+/// stops the server first, because a process cannot suspend the writer of
+/// another. Inside this process, the write opening holds the single writer, so
+/// no commit can run while the copy is taken.
+///
+/// The command encodes nothing and takes no `--models`: neither the copy nor the
+/// restore loads the model (ADR-0065, decision 6).
+pub fn snapshot_index(data: &Path, exchange: &Path, index: &str) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let report = crible_store::snapshot::create(&mut store, &config, exchange)?;
+    println!(
+        "index '{}' snapshot to {}: epoch {}, generation {}, {} document(s), {} passage(s), \
+         {} bytes",
+        report.index,
+        report.directory.display(),
+        report.epoch.get(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+        report.bytes,
+    );
+    Ok(())
+}
+
+/// `crible restore --data <dir> --snapshot <dir>`.
+///
+/// Installs a snapshot as the epoch `E+1` of the index it names, the generation
+/// left at the snapshot's G, then switches `CURRENT_EPOCH` (`docs/04`, "Règles
+/// de la restauration"; ADR-0065). The command is offline, encodes nothing and
+/// takes no `--models`. The replaced epoch is **kept** on disk and named in the
+/// report: it may hold passages no valid copy carries (INV-14), so only the
+/// operator removes it.
+pub fn restore_index(data: &Path, snapshot: &Path) -> Result<(), CribleError> {
+    // A restore writes into one index, like the other write commands, so the
+    // stale online batches of `<data>/tmp` follow the same rule (ADR-0056).
+    online::remove_stale_batches(data)?;
+    let report = crible_store::snapshot::restore(data, snapshot)?;
+    let replaced = match (report.replaced_epoch, report.replaced_generation) {
+        (Some(epoch), Some(generation)) => format!(
+            "replaced epoch {} (generation {})",
+            epoch.get(),
+            generation.get()
+        ),
+        _ => "no epoch replaced".to_owned(),
+    };
+    println!(
+        "index '{}' restored from {}: {}, new epoch {}, generation {}, {} document(s), \
+         {} passage(s)",
+        report.index,
+        snapshot.display(),
+        replaced,
+        report.epoch.get(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+    );
+    Ok(())
+}
+
 /// Prints the report of one attach, as `crible attach` and `crible ingest` do.
 fn print_report(name: &str, report: &AttachReport) {
     println!(

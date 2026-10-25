@@ -12,3 +12,4 @@ pub mod online;
 pub mod patch;
 pub mod records;
 pub mod segment;
+pub mod snapshot;
