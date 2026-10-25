@@ -226,7 +226,7 @@ Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'at
 
 Le serveur construit ensuite un lot interne et suit exactement le même chemin qu'un lot produit ailleurs.
 
-**Document en ligne.** Un document porte `doc_id`, un `doc_hash` facultatif, ses `fields` et ses `passages` (`text`, `fields`, et un `vector` facultatif par passage). **Un seul type** décrit ce document : il sert au corps HTTP de la route et à la commande de la CLI, pour qu'aucun format parallèle ne soit maintenu.
+**Document en ligne.** Un document porte `doc_id`, un `doc_hash` facultatif, ses `fields` et ses `passages` (`text`, `fields`, et un `vector` facultatif par passage). **Un seul type** décrit ce document : il sert au corps HTTP de la route et à la commande de la CLI, pour qu'aucun format parallèle ne soit maintenu. La règle vaut **par forme d'entrée** : l'entrée d'un patch de métadonnées est un second type, plus petit (`doc_id` et `fields` seulement), partagé de la même façon par la CLI et la route, et un patch ne porte jamais de `passages` (ADR-0060).
 
 **Fichier d'entrée de `crible ingest`.** `crible ingest --data … --models … --index … documents.jsonl` lit un objet document par ligne, au format ci-dessus. `--models` est obligatoire, comme pour `crible attach` : le modèle vit hors du volume de données. L'enveloppe est **implicite** : le mode vaut `upsert` et le fichier ne porte pas de suppressions ; une suppression passe par un lot déposé.
 
@@ -253,6 +253,33 @@ Le serveur construit ensuite un lot interne et suit exactement le même chemin q
 **Mode.** Le lot en ligne n'accepte que **`upsert`**, pour la CLI comme pour la route. `replace_all` est refusé en `invalid_request`, avec un message qui nomme le mode : 10 000 passages au plus par requête (`docs/05-api.md`) le rendent inutilisable, et `replace_all` reste le mode du lot déposé.
 
 **`doc_hash`.** Le `doc_hash` du lot interne est **toujours** rempli : le document le fournit, ou il vaut le blake3 du JSON canonique de ses passages (règle et forme dans `docs/05-api.md`, ADR-0055).
+
+## Patch de métadonnées
+
+Un patch modifie les **champs d'un document** sans ré-encodage : il ne touche ni le texte, ni les vecteurs, ni les iid, ni le lexical, et il ne change pas le `doc_hash` (ADR-0060). Les champs de document sont hors du hash (ADR-0055) ; un patch ne peut donc pas se confondre avec un remplacement de passages.
+
+**Entrée.** Une entrée de patch est un objet `{ "doc_id": …, "fields": { … } }`. Un seul type décrit cette entrée, et il sert aux deux chemins (ADR-0060) :
+
+- `crible patch --data <fichier>.jsonl --index <nom>` lit un objet par ligne. Le fichier est du JSONL, et il n'y a pas de `--models` : un patch n'encode rien ;
+- `PATCH /v1/indexes/{index}/documents` reçoit `{ "documents": [ … ] }`, dont chaque élément a exactement la forme ci-dessus.
+
+**Règles.**
+
+- **Fusion** : chaque clé de `fields` remplace la valeur du champ de même nom ; une clé absente garde sa valeur. Un `fields: {}` est un no-op, compté `unchanged`. La comparaison se fait sur le JSON canonique des champs (ADR-0019).
+- **`null`** est une **valeur posée**, jamais un retrait : il n'existe aucun moyen de retirer une clé de `fields` par un patch (ADR-0035).
+- **Champs acceptés** : seuls les champs déclarés dans `document_fields`. Une clé inconnue, un champ de passage, `doc_id` ou `doc_hash` sont refusés en `invalid_request`, avec un message qui nomme le champ, le niveau attendu, le chemin JSON et, pour un fichier, le numéro de ligne ; la valeur n'apparaît jamais dans le message (ADR-0030, ADR-0060).
+- Un champ `filterable: false` ou `returned: false` **accepte** un patch : la valeur est stockée, elle ne participe simplement ni aux filtres ni au payload du document. Un champ ajouté par un `PATCH` de configuration est nullable, donc le patch peut y poser `null`.
+- **Valeur mal typée** : refus en `invalid_request`, avant toute écriture, avec le type attendu dans le message ; jamais `invalid_filter`, qui appartient à la grammaire des filtres.
+- **Document inconnu ou retiré** : refus **atomique** en `not_found`. Aucun document du fichier n'est appliqué, et le message nomme le `doc_id` fautif et son numéro de ligne. Le moteur ne distingue pas un `doc_id` jamais vu d'un `doc_id` retiré, puisque la ligne `documents` est supprimée au commit (ADR-0041). Un patch ne **crée** jamais de document : la création exige des passages.
+- Un `doc_id` dupliqué dans le fichier est refusé en `invalid_request`.
+- **Limites** : 32 Mo et 10 000 entrées, pour le corps HTTP comme pour le fichier de la CLI, refus en `payload_too_large`.
+- **Atomicité** : le fichier passe entièrement ou pas du tout (**INV-03**).
+
+**Effet et rapport.** Le patch écrit `documents` et `meta.generation` dans la transaction du commit de génération, pose `updated_generation = G+1` sur chaque ligne patchée, et laisse `doc_hash` inchangé (ADR-0060, `docs/02`). Il n'écrit ni segment, ni ligne `batches`. Le rapport donne `{ updated, unchanged, generation }`, par document : `generation` est celle qui est visible après l'appel. Un patch sans effet ne crée aucune génération, ne laisse aucun manifeste, et rend `updated: 0` avec la génération courante. Le rapport n'est pas persisté : la CLI le rend sur sa sortie standard, et le job le porte en mémoire pour sa durée de vie (ADR-0060).
+
+**Un patch n'est pas durable.** Une attache ultérieure du même document avec un `doc_hash` identique réécrit les champs de document s'ils diffèrent (`:169`) : la valeur patchée est alors écrasée sans erreur. C'est la conséquence acceptée du fait que les champs de document ne font pas partie du `doc_hash`.
+
+Un patch passe la même file d'écriture que les autres écritures de l'index. Faire tourner `crible patch` sur un index servi par un serveur reste une règle d'exploitation : `busy_timeout` n'assure que la vivacité (ADR-0038), pas l'exclusion entre deux processus.
 
 ## Producteurs
 

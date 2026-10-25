@@ -1,8 +1,9 @@
 # ADR-0060 — Contrat du patch de métadonnées des documents
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé, avec toutes les options (a) : entrée JSONL `{doc_id, fields}` et corps HTTP de même forme, fusion par champ, `null` valeur posée, refus atomique `not_found` d'un `doc_id` inconnu ou retiré, noms réservés refusés par la règle du champ inconnu et champs non filtrables ou non rendus acceptés, 32 Mo et 10 000 entrées en `payload_too_large`, rapport `{updated, unchanged, generation}` non persisté, `doc_hash` inchangé et `updated_generation = G+1`, aucune génération pour un patch sans effet.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à la suite d'une `QUESTION-CONCEPTION` de `@dev` pendant la tâche PATCHER-METADONNEES (phase P3), instruite par `@architecte` le 2026-10-25
 - **Remplace** : —
 
@@ -41,7 +42,7 @@ Un patch n'est **pas durable** face à une republication du même document. `doc
 
 ### Découpage de cet ADR
 
-Neuf décisions **séparables**. Chacune peut être rejetée sans les autres ; l'option recommandée est nommée (a) et les alternatives sont listées avec la raison de leur écart. Cinq points sont explicitement laissés au choix du propriétaire : décision 4 (document inconnu), décision 5 (noms réservés et champs non filtrables ou non rendus), décision 7 (limite de taille), décision 8 (lieu de persistance du rapport) et décision 9 (patch sans effet).
+Neuf décisions **séparables**. Les cinq points laissés au choix du propriétaire ont tous retenu l'option (a) ; les alternatives restent décrites, marquées comme écartées, dans chaque décision et dans « Alternatives écartées ».
 
 Sont **hors** de cet ADR, et relèvent de l'implémentation : le nom des types Rust, le découpage des modules, la forme exacte des messages au-delà de ce qui est imposé ci-dessous, les options de la CLI autres que les deux chemins d'entrée, et l'ordre des étapes internes.
 
@@ -49,7 +50,7 @@ Sont **hors** de cet ADR, et relèvent de l'implémentation : le nom des types R
 
 ### Décision 1 — forme de l'entrée, commune à la CLI et à HTTP (NON-COUVERT)
 
-**Option (a) recommandée.** L'entrée d'un patch est une **liste de documents à patcher**, et son élément a une seule forme pour les deux chemins :
+**Décision : option (a).** L'entrée d'un patch est une **liste de documents à patcher**, et son élément a une seule forme pour les deux chemins :
 
 ```json
 { "doc_id": "LEGIARTI000006419280", "fields": { "juridiction": "cass" } }
@@ -63,7 +64,7 @@ Sont **hors** de cet ADR, et relèvent de l'implémentation : le nom des types R
 
 ### Décision 2 — fusion par champ, et `fields` vide (NON-COUVERT)
 
-**Option (a) recommandée.** Le patch **fusionne** : chaque clé présente dans `fields` remplace la valeur du champ de même nom, les clés absentes gardent leur valeur. Un `fields: {}` est un **no-op** : le document est compté `unchanged`, aucune écriture.
+**Décision : option (a).** Le patch **fusionne** : chaque clé présente dans `fields` remplace la valeur du champ de même nom, les clés absentes gardent leur valeur. Un `fields: {}` est un **no-op** : le document est compté `unchanged`, aucune écriture.
 
 Indices convergents : `docs/05-api.md:58` dit « mettre à jour des métadonnées », `docs/02-architecture.md:152` décrit le cas « Métadonnée seule » comme « mise à jour **du champ** et des bitmaps » (au singulier), et ADR-0031 a posé pour `PATCH /v1/indexes/{index}` qu'un `PATCH` refuse une clé inconnue au lieu de remplacer l'objet entier.
 
@@ -71,7 +72,7 @@ Précision : la comparaison qui distingue `updated` de `unchanged` porte sur le 
 
 ### Décision 3 — `null` est une valeur posée, jamais un retrait (NON-COUVERT, une seule option cohérente)
 
-**Option (a) recommandée.** `"champ": null` **pose la valeur null** sur le champ. Il n'existe aucun moyen de retirer une clé de `fields` par un patch.
+**Décision : option (a).** `"champ": null` **pose la valeur null** sur le champ. Il n'existe aucun moyen de retirer une clé de `fields` par un patch.
 
 - `docs/04-donnees-et-ingestion.md:40` : « Tous les champs acceptent null. » Un null est donc une valeur du domaine, au même titre qu'un `keyword`.
 - ADR-0035 a **refusé** l'option C, qui distinguait un champ absent d'un null explicite, et a fixé `exists: false` = « absent ou null » (`docs/05-api.md:107`). Un retrait de clé par `null` réintroduirait cette distinction, invisible aux filtres mais visible dans `GET /documents` : une asymétrie nouvelle entre les deux chemins de lecture.
@@ -82,46 +83,42 @@ Précision : la comparaison qui distingue `updated` de `unchanged` porte sur le 
 Le comportement n'est tranché par aucune source. Deux points sont en revanche déjà fixés et ne sont pas des options :
 
 - **atomicité** : le fichier s'applique **entièrement ou pas du tout**. `docs/02-architecture.md:106` n'admet de génération que pour « chaque changement visible », INV-03 exige qu'une génération soit visible entièrement ou pas du tout (`docs/08-invariants-et-tests.md:11`), et la fiche exige « sans aucun effet » sur une entrée refusée (`docs/phases/P3-cycle-de-vie.md:71`). Un refus partiel n'existe pas ;
-- **code** : si le patch refuse, il refuse en `not_found`, code déjà réservé au « Document, job ou lot introuvable » (`docs/05-api.md:36`).
+- **code** : le refus se fait en `not_found`, code déjà réservé au « Document, job ou lot introuvable » (`docs/05-api.md:36`).
 
 Ne peut pas être distingué : « jamais existé » et « retiré ». ADR-0041 supprime la ligne `documents` au commit de génération, donc le moteur ne garde aucune trace du second cas. Une option « refuser seulement un document retiré » est **indisponible**.
 
-**Options :**
+**Décision : option (a).** Un `doc_id` inconnu ou retiré fait **refuser le fichier entier** en `not_found`, et aucun document n'est appliqué. Le message nomme le `doc_id` fautif et son numéro de ligne.
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | Refus atomique `not_found` : aucun document du fichier n'est appliqué, et le message nomme le `doc_id` fautif et son numéro de ligne. | **Recommandée.** Un patch est une opération ciblée, écrite à la main ou par un script qui nomme des `doc_id` précis, contrairement à un lot `upsert` qui décrit un état. Un `doc_id` inconnu y est presque toujours une faute de frappe, un index différent de celui qu'on croit, ou une intention périmée après suppression. Ignorer en silence laisserait l'appelant croire que la métadonnée est posée, et le rapport ne le lui dirait qu'en creux (`ignored`). Le coût d'un refus est un aller-retour : l'appelant retire la ligne et rejoue, ce qui est justement l'occasion de constater que le document a disparu. |
-| (b) | Ignorer le `doc_id` inconnu, le compter `ignored` dans le rapport, appliquer le reste. Symétrie avec `docs/04-donnees-et-ingestion.md:173` (« Suppression d'un `doc_id` inconnu → ignorée, comptée dans le rapport »). | Défendable, et c'est la symétrie que le propriétaire peut préférer. Un fichier rejoué sur un index qui a changé depuis (des documents supprimés par une nuit d'attache) ne bute alors pas sur une ligne morte, et un rapport `ignored: 3` le signale. Coût : une erreur de producteur (mauvais index, mauvais `doc_id`) passe tant que le compte n'est pas lu, et le rapport gagne une clé de plus (voir décision 8). Le précédent de `docs/04:173` porte sur une **suppression** dans un lot qui décrit un état, pas sur un patch ciblé ; c'est pourquoi (a) reste recommandée. |
+Motif : un patch est une opération ciblée, écrite à la main ou par un script qui nomme des `doc_id` précis, contrairement à un lot `upsert` qui décrit un état. Un `doc_id` inconnu y est presque toujours une faute de frappe, un index différent de celui qu'on croit, ou une intention périmée après suppression. Ignorer en silence laisserait l'appelant croire que la métadonnée est posée, et le rapport ne le lui dirait qu'en creux. Le coût d'un refus est un aller-retour : l'appelant retire la ligne et rejoue, ce qui est justement l'occasion de constater que le document a disparu.
+
+Alternative écartée : **ignorer** le `doc_id` inconnu, le compter `ignored` dans le rapport et appliquer le reste, par symétrie avec `docs/04-donnees-et-ingestion.md:173` (« Suppression d'un `doc_id` inconnu → ignorée, comptée dans le rapport »). Un fichier rejoué sur un index qui a changé depuis ne buterait alors pas sur une ligne morte, et un rapport `ignored: 3` le signalerait. Mais une erreur de producteur (mauvais index, mauvais `doc_id`) passerait tant que le compte n'est pas lu, et le précédent de `:173` porte sur une **suppression** dans un lot qui décrit un état, pas sur un patch ciblé.
 
 Précisions communes : un `doc_id` dupliqué dans le fichier est refusé en `invalid_request` (même règle qu'ADR-0040 pour un lot, appliquée au fichier), pour que le résultat ne dépende pas de l'ordre des lignes. Le message nomme le `doc_id` — id externe, donc admissible hors du moteur (INV-01) — et **jamais** une valeur de champ.
 
 ### Décision 5 — champ de passage, champ inconnu, nom réservé, `filterable: false` / `returned: false` (choix du propriétaire pour les deux derniers)
 
-**Option (a) recommandée, une seule règle.** Toute clé de `fields` qui n'est pas un **champ de document déclaré au schéma** est refusée en `invalid_request` (400), avec un message qui nomme le champ, le **niveau attendu** (`document_fields`), le **chemin JSON** (`$.documents[0].fields.<nom>` ou `$[ligne].fields.<nom>`) et, pour un fichier, le **numéro de ligne**. La valeur n'apparaît jamais dans le message.
+**Décision : option (a), une seule règle.** Toute clé de `fields` qui n'est pas un **champ de document déclaré au schéma** est refusée en `invalid_request` (400), avec un message qui nomme le champ, le **niveau attendu** (`document_fields`), le **chemin JSON** (`$.documents[0].fields.<nom>` ou `$[ligne].fields.<nom>`) et, pour un fichier, le **numéro de ligne**. La valeur n'apparaît jamais dans le message.
 
 - Un **champ de passage** n'est pas un champ de document : ADR-0030 pose qu'un nom désigne un seul niveau, et `docs/04:42` refuse déjà une faute de schéma en `invalid_request` avec un message qui nomme le champ et les niveaux. Refuser ici évite qu'un patch de document prétende modifier une métadonnée héritée par tous les passages.
 - `docs/05-api.md:72` ne couvre que `PATCH /v1/indexes/{index}` ; la règle est **étendue** au patch de documents, ce qui est le point de cet ADR. `invalid_filter` n'est pas employé : il renvoie l'appelant à la grammaire des filtres (`docs/05-api.md:32`).
 
-**Noms réservés (`doc_id`, `doc_hash`) — choix du propriétaire.** Aucune source ne les nomme.
+**Noms réservés (`doc_id`, `doc_hash`) — décision : option (a).** Ils sont refusés en `invalid_request` par la règle unique ci-dessus, avec un message qui dit « nom réservé ».
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | Refus en `invalid_request`, par la règle unique ci-dessus, avec un message qui dit « nom réservé » pour `doc_id` et `doc_hash`. | **Recommandée.** Aucune règle supplémentaire : ces deux noms ne sont pas des champs du schéma, donc la règle unique les attrape déjà. Le message précise seulement le motif, ce qui coûte une phrase et évite un diagnostic à l'appelant. |
-| (b) | Accepter et ignorer silencieusement. | Un `doc_id` dans `fields` laisserait croire à un renommage de document, qui n'existe pas : le patch écrirait un champ fantôme, invisible partout. C'est exactement ce qu'ADR-0031 a refusé pour la configuration. |
-| (c) | Code d'erreur dédié, par exemple `reserved_field`. | Un code de plus dans `docs/05` et dans les analytics pour un cas que la règle unique couvre. |
+Aucune règle supplémentaire n'est nécessaire : ces deux noms ne sont pas des champs du schéma, donc la règle unique les attrape déjà. Le message précise seulement le motif, ce qui coûte une phrase et évite un diagnostic à l'appelant.
 
-**Champs `filterable: false` ou `returned: false` — choix du propriétaire.** Aucune source ne tranche.
+Alternatives écartées : **accepter et ignorer silencieusement** — un `doc_id` dans `fields` laisserait croire à un renommage de document, qui n'existe pas, et le patch écrirait un champ fantôme, invisible partout ; c'est exactement ce qu'ADR-0031 a refusé pour la configuration. **Code d'erreur dédié**, par exemple `reserved_field` — un code de plus dans `docs/05` et dans les analytics pour un cas que la règle unique couvre.
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | **Accepter** le patch : la valeur est stockée, elle ne participe simplement ni aux filtres (`docs/05-api.md:117` : un champ `filterable: false` donne `invalid_filter`) ni au payload d'un document si `returned: false`. | **Recommandée.** C'est le comportement de l'attache, qui n'interdit pas de fournir une valeur pour un champ non filtrable : un patch qui refuserait divergerait du seul autre chemin d'écriture. Et `filterable` et `returned` sont **réglables** (`docs/04:51`, les bitmaps sont reconstruites) : refuser obligerait à patcher la configuration avant la donnée, alors que la donnée est légitime. |
-| (b) | Refuser en `invalid_request`. | Bloque une écriture légitime, et impose un ordre d'opérations qui n'est écrit nulle part. |
+**Champs `filterable: false` ou `returned: false` — décision : option (a), accepter.** La valeur est stockée ; elle ne participe simplement ni aux filtres (`docs/05-api.md:117` : un champ `filterable: false` donne `invalid_filter`) ni au payload d'un document si `returned: false`.
 
-À écrire, une phrase suffit : un champ `returned: false` patché reste invisible dans `GET /documents`, et un champ `filterable: false` patché n'est pas filtrable. Un champ **ajouté par un `PATCH` de configuration** est nullable (`docs/04:52`) : le patch peut donc y poser `null` (décision 3) comme une vraie valeur.
+C'est le comportement de l'attache, qui n'interdit pas de fournir une valeur pour un champ non filtrable : un patch qui refuserait divergerait du seul autre chemin d'écriture. Et `filterable` et `returned` sont **réglables** (`docs/04:51`, les bitmaps sont reconstruites) : refuser obligerait à patcher la configuration avant la donnée, alors que la donnée est légitime.
+
+Alternative écartée : **refuser en `invalid_request`** — bloque une écriture légitime et impose un ordre d'opérations qui n'est écrit nulle part.
+
+Une phrase suffit, et elle est écrite dans `docs/04` et `docs/05` : un champ `returned: false` patché reste invisible dans `GET /documents`, et un champ `filterable: false` patché n'est pas filtrable. Un champ **ajouté par un `PATCH` de configuration** est nullable (`docs/04:52`) : le patch peut donc y poser `null` (décision 3) comme une vraie valeur.
 
 ### Décision 6 — valeur mal typée (NON-COUVERT, ambiguïté réelle)
 
-**Option (a) recommandée.** Une valeur qui ne correspond pas au type du champ est refusée en **`invalid_request`** (400), avec un message qui nomme le champ et le **type attendu**, et **jamais la valeur**.
+**Décision : option (a).** Une valeur qui ne correspond pas au type du champ est refusée en **`invalid_request`** (400), avec un message qui nomme le champ et le **type attendu**, et **jamais la valeur**.
 
 - `docs/05-api.md:31` : `invalid_request` = « Corps invalide, paramètre hors bornes ». Un champ de document n'est pas un filtre.
 - `docs/05-api.md:32` donne « valeur mal typée » à `invalid_filter`, mais **dans la grammaire des filtres**. Employer ce code renverrait l'appelant à une grammaire qu'il n'utilise pas.
@@ -134,11 +131,11 @@ Le contrôle suit le type déclaré (`keyword`, `integer`, `float`, `date` au fo
 
 Aucune source ne plafonne un patch. `docs/05-api.md:240` ne plafonne que le corps du lot en ligne : 32 Mo et 10 000 passages. Un patch n'a pas de passage à compter.
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | **32 Mo et 10 000 entrées**, refus en `payload_too_large` (413), **mêmes bornes pour le fichier de la CLI** que pour le corps HTTP. | **Recommandée.** Les deux chemins partagent une forme d'entrée (décision 1) : leur appliquer deux bornes créerait un fichier accepté par la CLI et refusé par la route, ou l'inverse. Les valeurs reprennent celles du lot en ligne, l'unité passant de passage à document, et un patch de 10 000 documents est déjà une opération d'exploitation, pas un geste courant. Le contrôle se fait **avant** toute écriture, et pour la CLI **avant** de charger l'ensemble du fichier. |
-| (b) | 32 Mo seulement, sans compter les entrées. | Un fichier de plusieurs millions de lignes courtes passerait sous 32 Mo et ferait un patch de plusieurs minutes sans borne de travail ; le compteur d'entrées est le garde-fou utile. |
-| (c) | Aucune borne propre, la limite générale du corps suffit. | La limite de `docs/05` est celle du lot en ligne ; s'en remettre à elle laisserait le patch sans plafond documenté, alors que `payload_too_large` existe et que P6 devra brancher la route sur une valeur écrite. |
+**Décision : option (a), 32 Mo et 10 000 entrées**, refus en `payload_too_large` (413), **mêmes bornes pour le fichier de la CLI** que pour le corps HTTP.
+
+Les deux chemins partagent une forme d'entrée (décision 1) : leur appliquer deux bornes créerait un fichier accepté par la CLI et refusé par la route, ou l'inverse. Les valeurs reprennent celles du lot en ligne, l'unité passant de passage à document, et un patch de 10 000 documents est déjà une opération d'exploitation, pas un geste courant. Le contrôle se fait **avant** toute écriture, et pour la CLI **avant** de charger l'ensemble du fichier.
+
+Alternatives écartées : **32 Mo seulement, sans compter les entrées** — un fichier de plusieurs millions de lignes courtes passerait sous 32 Mo et ferait un patch de plusieurs minutes sans borne de travail, alors que le compteur d'entrées est le garde-fou utile. **Aucune borne propre, la limite générale du corps** — la limite de `docs/05` est celle du lot en ligne ; s'en remettre à elle laisserait le patch sans plafond documenté, alors que `payload_too_large` existe et que P6 devra brancher la route sur une valeur écrite.
 
 ### Décision 8 — rapport, unité, `progress` et lieu de persistance (choix du propriétaire pour la persistance)
 
@@ -148,22 +145,21 @@ Aucune source ne plafonne un patch. `docs/05-api.md:240` ne plafonne que le corp
 - `unchanged` : document dont les champs, en JSON canonique, sont identiques — y compris un `fields: {}` ;
 - `generation` : la génération visible **après** l'appel (`G+1` si au moins un document change, `G` sinon, décision 9) ;
 - l'unité est le **document**, seul cas possible : un patch ne peut ni ajouter, ni remplacer, ni supprimer un document, donc les six comptes d'ADR-0041 se réduisent à deux. Aucune clé de passage n'apparaît.
-- si la décision 4 retient l'option (a), il n'y a **pas** de clé `ignored` ; si elle retient l'option (b), le rapport gagne `ignored` et les trois clés restent mutuellement exclusives.
+- il n'y a **pas** de clé `ignored` : le refus d'un `doc_id` inconnu est atomique (décision 4).
 
-**`progress`.** `docs/05-api.md:229` dit que `progress.done` et `progress.total` comptent les **passages** traités. C'est inapplicable à un patch, qui n'a aucun passage : la phrase doit devenir « les passages pour `attach_batch` et `online_batch`, les **documents** pour `patch_documents` ». `progress.step` garde son rôle.
+**`progress`.** `docs/05-api.md:229` disait que `progress.done` et `progress.total` comptent les **passages** traités. C'est inapplicable à un patch, qui n'a aucun passage : la phrase se lit désormais « les passages pour `attach_batch` et `online_batch`, les **documents** pour `patch_documents` ». `progress.step` garde son rôle.
 
-**Lieu de persistance — choix du propriétaire.** Le rapport d'attache est persisté dans `batches.report` (`docs/02-architecture.md:92`, `docs/05-api.md:230`). Un patch n'a **pas** de ligne `batches` : pas de `batch_id`, pas de `manifest_blake3`, donc pas d'idempotence de rejeu par identité. Le rapport n'a donc aucun emplacement désigné.
+**Lieu de persistance — décision : option (a), rien n'est persisté.** Le rapport d'attache est persisté dans `batches.report` (`docs/02-architecture.md:92`, `docs/05-api.md:230`). Un patch n'a **pas** de ligne `batches` : pas de `batch_id`, pas de `manifest_blake3`, donc pas d'idempotence de rejeu par identité. Il n'a donc aucun emplacement de persistance.
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | **Rien n'est persisté.** En P3, la CLI rend le rapport sur sa sortie standard. En P6, le job porte `result.report` en mémoire, pour la durée de vie du job ; `docs/05-api.md:230` se lit alors « rapport persisté de l'attache » au sens strict. | **Recommandée.** En P3 il n'existe que la CLI : une persistance n'aurait aucun lecteur. En P6, un rapport de patch est un compte de documents sans valeur d'archive, et la conception ne définit aucune table de jobs. Ajouter une table ou une ligne `batches` pour un rapport que personne ne relit serait un schéma de plus à maintenir et à compacter. Le rejeu est de toute façon sans effet par le contenu (décision 9), sans identité à mémoriser. |
-| (b) | Écrire une ligne `batches` avec un `batch_id` synthétique. | `batches` porte l'idempotence d'attache (INV-10) : y écrire une opération qui n'attache rien brouille la lecture de la table, et le `manifest_blake3` n'aurait pas de sens. |
-| (c) | Nouvelle table SQLite, par exemple `patches`. | Un changement de schéma pour un rapport sans lecteur ; il demanderait son propre ADR et une migration d'époque. |
-| (d) | Fichier JSON dans le dossier de l'index. | Un fichier de plus à nettoyer et à versionner dans l'époque, sans lien avec la génération : la reprise devrait le connaître, et rien ne le lirait. |
+En P3, la CLI rend le rapport sur sa sortie standard. En P6, le job porte `result.report` en mémoire, pour la durée de vie du job ; `docs/05-api.md:230` se lit alors « rapport persisté de l'attache » au sens strict.
+
+Motif : en P3 il n'existe que la CLI, et une persistance n'aurait aucun lecteur. En P6, un rapport de patch est un compte de documents sans valeur d'archive, et la conception ne définit aucune table de jobs. Ajouter une table ou une ligne `batches` pour un rapport que personne ne relit serait un schéma de plus à maintenir et à compacter. Le rejeu est de toute façon sans effet par le contenu (décision 9), sans identité à mémoriser.
+
+Alternatives écartées : **écrire une ligne `batches` avec un `batch_id` synthétique** — `batches` porte l'idempotence d'attache (INV-10), y écrire une opération qui n'attache rien brouille la lecture de la table, et le `manifest_blake3` n'aurait pas de sens. **Nouvelle table SQLite, par exemple `patches`** — un changement de schéma pour un rapport sans lecteur, qui demanderait son propre ADR et une migration d'époque. **Fichier JSON dans le dossier de l'index** — un fichier de plus à nettoyer et à versionner dans l'époque, sans lien avec la génération : la reprise devrait le connaître, et rien ne le lirait.
 
 ### Décision 9 — ce que le commit écrit : identité, `updated_generation`, manifeste, patch sans effet (choix du propriétaire pour le dernier point)
 
-**Option (a) recommandée pour chaque point.**
+**Décision retenue sur chaque point.**
 
 - **`doc_hash` inchangé** : un patch de champs de document ne modifie pas `doc_hash` (voir le fait corrigé ci-dessus ; ADR-0055 décision 3, `docs/04:107`, `docs/04:209`).
 - **`updated_generation = G+1` est posé sur chaque ligne `documents` patchée.** La colonne est nommée une seule fois dans la conception (`docs/02-architecture.md:94`) et n'est **jamais définie**. Elle l'est ici : **génération de la dernière écriture de la ligne `documents`**. Ce n'est pas un détail : le rafraîchissement des champs hérités par les passages sélectionne les documents sur cette colonne (`crates/crible-store/src/filters_index.rs:1064-1075`, `WHERE d.updated_generation = ?1`). Si le patch ne la pose pas, les bitmaps ne bougent pas et le premier critère de la fiche échoue.
@@ -171,12 +167,11 @@ Aucune source ne plafonne un patch. `docs/05-api.md:240` ne plafonne que le corp
 - **Après le commit** : étape 5, le manifeste `G+1`, qui reprend **les mêmes segments que G** — aucun nouveau segment, aucune écriture de segment ; puis étape 6, bitmaps en copie sur écriture et publication de l'instantané (`docs/02-architecture.md:114-115`, INV-02, INV-03). L'étape 4 (tantivy) n'a pas lieu : le texte ne change pas. La forme `segments` du manifeste est celle de `docs/02-architecture.md:85` ; un patch n'y ajoute rien.
 - **Aucun nouveau segment, aucun iid, aucun vecteur** : les critères de la fiche sont satisfaits par construction.
 
-**Patch sans effet — choix du propriétaire.** `docs/02-architecture.md:106` dit « chaque changement **visible** crée une génération G+1 ». Un fichier entièrement `unchanged` ne change rien de visible, mais la lettre de « chaque changement » ne dit pas si l'écriture compte.
+**Patch sans effet — décision : option (a), aucune génération nouvelle.** Si aucun document ne change, `meta.generation` reste `G`, aucun manifeste n'est écrit, aucun instantané n'est publié ; le rapport donne `updated: 0` et `generation: G`.
 
-| | Option | Recommandation |
-|---|---|---|
-| (a) | **Aucune génération nouvelle** : si aucun document ne change, `meta.generation` reste `G`, aucun manifeste n'est écrit, aucun instantané n'est publié ; le rapport donne `updated: 0` et `generation: G`. | **Recommandée.** Rien n'est visiblement changé, donc rien ne justifie une génération : une génération de contenu identique ferait croître `manifests/` et forcerait un nouvel instantané pour rien, et rendrait un rejeu de fichier non idempotent **en effet** alors que le patch n'a pas d'identité de rejeu (décision 8). Coût : la génération seule ne dit pas si l'appel a été appliqué ; `updated: 0` le dit, et c'est le rôle du rapport. |
-| (b) | Toujours `G+1`, même sans aucun changement. | Une trace de l'appel dans la génération, au prix d'un manifeste, d'un instantané et de bitmaps recopiés pour un contenu identique ; un fichier rejoué en boucle ferait croître l'historique sans fin. |
+Motif : rien n'est visiblement changé, donc rien ne justifie une génération. Une génération de contenu identique ferait croître `manifests/` et forcerait un nouvel instantané pour rien, et rendrait un rejeu de fichier non idempotent **en effet** alors que le patch n'a pas d'identité de rejeu (décision 8). Coût accepté : la génération seule ne dit pas si l'appel a été appliqué ; `updated: 0` le dit, et c'est le rôle du rapport.
+
+Alternative écartée : **toujours `G+1`, même sans aucun changement** — une trace de l'appel dans la génération, au prix d'un manifeste, d'un instantané et de bitmaps recopiés pour un contenu identique ; un fichier rejoué en boucle ferait croître l'historique sans fin.
 
 ## Conséquences
 
@@ -188,10 +183,10 @@ Aucune source ne plafonne un patch. `docs/05-api.md:240` ne plafonne que le corp
   - les refus sont atomiques et diagnostiquables : le message nomme le champ, son niveau, son chemin JSON et, pour un fichier, la ligne.
 - **Négatives / coûts** :
   - **un patch n'est pas durable** : une attache ultérieure du même document avec un `doc_hash` identique écrase les champs patchés (`docs/04:169`). Un producteur qui republie régulièrement rétablit ses valeurs ; c'est accepté, et c'est le prix de « les champs de document ne font pas partie du `doc_hash` » ;
-  - un `doc_id` inconnu fait échouer tout le fichier, si la décision 4 retient (a) : un fichier rejoué sur un index où des documents ont été supprimés doit être filtré avant rejeu ;
+  - un `doc_id` inconnu fait échouer tout le fichier : un fichier rejoué sur un index où des documents ont été supprimés doit être filtré avant rejeu ;
   - un patch sans effet ne laisse aucune trace dans la génération : seul le rapport (sortie standard de la CLI, ou `result.report` du job) atteste l'appel ;
-  - `docs/05-api.md:229` doit être reformulée, `docs/05-api.md:88` restreinte aux passages, et `docs/04:229` précisée : trois textes de conception à corriger ensemble, sinon l'écart reparaît sous une autre forme ;
-  - `docs/07:15` doit lister `patch` — et déjà `ingest`, absent depuis P2.
+  - `docs/05-api.md:229` a été reformulée, `docs/05-api.md:88` restreinte aux passages, et `docs/04:229` précisée : trois textes de conception à corriger ensemble, sinon l'écart reparaît sous une autre forme ;
+  - `docs/07:15` liste désormais `patch` — et `ingest`, absent depuis P2.
 - **À surveiller** :
   - **l'écrasement par une attache ultérieure** : si un producteur se plaint qu'une valeur patchée disparaît après une republication, la question n'est pas le patch mais le contenu du `doc_hash` (ADR-0055 décision 3), donc un nouvel ADR ;
   - **la dérive de payload déjà admise** : `docs/02-architecture.md:141` accepte qu'un résultat rende des champs de document plus récents que la génération du snapshot ; un patch en est une cause de plus, et INV-03 ne porte pas sur les payloads (ADR-0043) ;
@@ -201,7 +196,7 @@ Aucune source ne plafonne un patch. `docs/05-api.md:240` ne plafonne que le corp
 
 ## Application
 
-Rien n'est modifié avant l'acceptation. Après acceptation seulement, et dans un commit qui cite `ADR-0060` :
+Appliqué le 2026-10-25, dans un commit qui cite `ADR-0060` :
 
 | Fichier | Modification |
 |---|---|
@@ -212,9 +207,9 @@ Rien n'est modifié avant l'acceptation. Après acceptation seulement, et dans u
 | `docs/suivi.md` | ligne « Écarts à la conception » citant `ADR-0060`, **à ajouter par l'orchestrateur** |
 | `docs/08-invariants-et-tests.md` | rien d'obligatoire : INV-03 (atomicité) et INV-07 (JSON → bitmaps) couvrent déjà l'effet d'un patch |
 
-La fiche `PATCHER-METADONNEES` garde son périmètre ; seule sa section « À lire » gagnerait `ADR-0060`. Aucune dépendance nouvelle.
+La fiche `PATCHER-METADONNEES` garde son périmètre ; seule sa section « À lire » gagne `ADR-0060`. Aucune dépendance nouvelle.
 
-**PATCHER-METADONNEES reste bloquée jusqu'à la décision.** Aucun des neuf points ne se tranche par une lecture de la conception actuelle.
+**PATCHER-METADONNEES reprend à l'acceptation.** Les neuf points étaient bloquants ; aucun ne se tranchait par une lecture de la conception.
 
 ## Alternatives écartées
 
