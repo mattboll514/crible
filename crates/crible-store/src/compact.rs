@@ -617,7 +617,7 @@ fn rebuild_lexical(_epoch_dir: &Path) -> Result<(), CribleError> {
 }
 
 /// The epoch that follows `epoch`, refusing an exhausted counter.
-fn next_epoch(epoch: Epoch) -> Result<Epoch, CribleError> {
+pub(crate) fn next_epoch(epoch: Epoch) -> Result<Epoch, CribleError> {
     epoch.get().checked_add(1).map(Epoch::new).ok_or_else(|| {
         internal(format!(
             "the epoch counter is exhausted: no epoch can follow {}",
@@ -886,7 +886,7 @@ fn ordered_bits(value: f64) -> u64 {
 }
 
 /// Removes a directory tree, and accepts its absence.
-fn remove_directory(path: &Path) -> Result<(), CribleError> {
+pub(crate) fn remove_directory(path: &Path) -> Result<(), CribleError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
