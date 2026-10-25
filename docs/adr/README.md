@@ -117,8 +117,8 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0061](0061-manifeste-d-un-lot-exporte.md) | Manifeste d'un lot exporté | Accepté (toutes les options (a) sur les décisions 1 et 3 à 5, option (i) sur la décision 2 ; `format_version` reste 1) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0062](0062-second-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md) | Second test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (option (1a) : second `--skip` explicite ; option (2ii) : pas de borne par défaut sur la durée, durée relevée à J3 ; complété par ADR-0063, sans modification du corps) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0063](0063-troisieme-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md) | Troisième test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (option (1a) : troisième `--skip` explicite ; option (2ii) : pas de borne par défaut sur la durée, durée relevée à J3 ; acceptation anticipée du propriétaire, à confirmer au point de fin de l'enchaînement de P3) | 2026-10-25 (proposition et acceptation) |
-| [ADR-0064](0064-format-et-contenu-d-un-instantane.md) | Format et contenu d'un instantané (`snapshot.json`) | Proposé | 2026-10-25 |
-| [ADR-0065](0065-instantane-hors-ligne-epoque-de-restauration-et-retention.md) | Instantané hors ligne, époque de restauration, cible et rétention | Proposé | 2026-10-25 |
+| [ADR-0064](0064-format-et-contenu-d-un-instantane.md) | Format et contenu d'un instantané (`snapshot.json`) | Accepté (les quatre décisions telles quelles ; acceptation anticipée du propriétaire, à confirmer au point de fin de l'enchaînement de P3) | 2026-10-25 (proposition et acceptation) |
+| [ADR-0065](0065-instantane-hors-ligne-epoque-de-restauration-et-retention.md) | Instantané hors ligne, époque de restauration, cible et rétention | Accepté (les six décisions telles quelles ; acceptation anticipée du propriétaire, à confirmer au point de fin de l'enchaînement de P3) | 2026-10-25 (proposition et acceptation) |
 
 ## Questions ouvertes
 

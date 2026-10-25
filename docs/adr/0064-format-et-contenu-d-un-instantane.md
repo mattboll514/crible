@@ -1,8 +1,9 @@
 # ADR-0064 — Format et contenu d'un instantané (`snapshot.json`)
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25 ; acceptation anticipée du propriétaire, à confirmer au point de fin de l'enchaînement de P3)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé, lors d'une acceptation anticipée de sa part, à confirmer au point de fin de l'enchaînement de P3. Les quatre décisions sont retenues telles quelles : `snapshot.json` versionné (`format_version: 1`) qui atteste la copie (1), « le manifeste » = `manifests/<G>.json` et seul G copié (2), destination occupée refusée et écriture sous dossier temporaire (3), contenu copié et exclusions (4). `format_version` vaut 1 ; INV-15 est satisfait sans dépendance nouvelle, `blake3` étant déjà au stack. Les modifications à appliquer sont celles de la section « Documents à modifier après acceptation ».
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `CREER-ET-RESTAURER-INSTANTANE` (phase P3), à la suite d'une `QUESTION-CONCEPTION` de `@dev` avant implémentation et des verdicts de `@architecte` du 2026-10-25
 - **Remplace** : —
 
@@ -43,9 +44,11 @@ L'export (ADR-0061) a fixé deux formes que cet ADR reprend : un dossier de dest
 
 `snapshot.json` n'est **pas** un manifeste au sens d'ADR-0016 : il atteste une copie de fichiers, il ne décrit pas une génération. Le manifeste de génération reste dérivé de SQLite et fait autorité par SQLite seul.
 
-## Décisions proposées
+## Décisions
 
-Aucune décision n'est prise ici : les quatre points sont soumis au propriétaire, avec la recommandation de `@architecte`. Ils sont **séparables** : en rejeter un laisse les trois autres tenir, et la tâche reprend sur le périmètre accepté.
+**Les quatre décisions ci-dessous sont acceptées telles quelles : `snapshot.json` versionné qui atteste la copie, « le manifeste » égal à `manifests/<G>.json`, destination occupée refusée avec écriture sous dossier temporaire, contenu copié et exclusions telles que listées.**
+
+Les quatre points étaient **séparables** : en rejeter un laissait les trois autres tenir, et la tâche reprenait sur le périmètre accepté. Chacun porte la recommandation de `@architecte`.
 
 ### 1. Un `snapshot.json` versionné qui atteste la copie (B1)
 

@@ -1,8 +1,9 @@
 # ADR-0065 — Instantané hors ligne, époque de restauration, cible et rétention
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25 ; acceptation anticipée du propriétaire, à confirmer au point de fin de l'enchaînement de P3)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé, lors d'une acceptation anticipée de sa part, à confirmer au point de fin de l'enchaînement de P3. Les six décisions sont retenues telles quelles : `crible snapshot` hors ligne en P3 (1), restauration installée comme époque E+1, génération laissée à G (2), index cible créé s'il est absent et contrôlé par son `index.json` s'il existe, retour arrière permis (3), époque remplacée conservée sur disque (4), protocole d'écriture de l'époque inchangé et `epochs/tmp-*` laissés hors du nettoyage de la reprise (5), forme des commandes, rapport et codes d'erreur (6). Les modifications à appliquer sont celles de la section « Documents à modifier après acceptation ».
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `CREER-ET-RESTAURER-INSTANTANE` (phase P3), à la suite d'une `QUESTION-CONCEPTION` de `@dev` avant implémentation et des verdicts de `@architecte` du 2026-10-25
 - **Remplace** : —
 
@@ -51,9 +52,11 @@ Ses critères sont « une restauration redonne la génération et des résultats
 - **Une restauration n'encode rien** : aucune recette, aucun modèle. L'encodeur est chargé paresseusement au premier usage (ADR-0051), et `docs/04:303` annonce justement une restauration « sans reconstruction ».
 - **Les iid sont renumérotés à chaque compaction** (`docs/02:52`), pas à chaque copie : une époque copiée en entier garde ses iid, qui restent denses et cohérents avec ses segments et sa base.
 
-## Décisions proposées
+## Décisions
 
-Aucune décision n'est prise ici : les six points sont soumis au propriétaire, avec la recommandation de `@architecte`.
+**Les six décisions ci-dessous sont acceptées telles quelles : instantané hors ligne en P3, restauration en époque E+1 à génération inchangée, index cible créé ou contrôlé, époque remplacée conservée, protocole d'écriture de l'époque inchangé, forme des commandes, rapport et codes d'erreur.**
+
+Les six points ont été soumis au propriétaire, chacun avec la recommandation de `@architecte`.
 
 ### 1. En P3, `crible snapshot` est hors ligne (B3, écart)
 
