@@ -260,7 +260,7 @@ Un patch modifie les **champs d'un document** sans ré-encodage : il ne touche n
 
 **Entrée.** Une entrée de patch est un objet `{ "doc_id": …, "fields": { … } }`. Un seul type décrit cette entrée, et il sert aux deux chemins (ADR-0060) :
 
-- `crible patch --data <fichier>.jsonl --index <nom>` lit un objet par ligne. Le fichier est du JSONL, et il n'y a pas de `--models` : un patch n'encode rien ;
+- `crible patch --data <dir> --index <nom> <fichier>.jsonl` lit un objet par ligne, le fichier étant passé en argument positionnel. Le fichier est du JSONL, et il n'y a pas de `--models` : un patch n'encode rien ;
 - `PATCH /v1/indexes/{index}/documents` reçoit `{ "documents": [ … ] }`, dont chaque élément a exactement la forme ci-dessus.
 
 **Règles.**
