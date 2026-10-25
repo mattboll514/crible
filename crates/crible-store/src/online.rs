@@ -1250,7 +1250,7 @@ impl<'a> InternalBatch<'a> {
 
 /// Arrow fields of the `documents` file: the reserved columns, then the document
 /// fields of the schema in its own order.
-fn document_fields(schema: &Schema) -> Vec<Field> {
+pub(crate) fn document_fields(schema: &Schema) -> Vec<Field> {
     let mut fields = vec![
         Field::new("doc_id", DataType::Utf8, false),
         Field::new("doc_hash", DataType::Utf8, false),
@@ -1269,7 +1269,7 @@ fn document_fields(schema: &Schema) -> Vec<Field> {
 /// value stays null, a value of another JSON type than the declared one is
 /// refused with [`ErrorCode::InvalidRequest`]. The message never carries the
 /// value.
-fn field_columns(
+pub(crate) fn field_columns(
     schema: &Schema,
     level: FieldLevel,
     keys: &[&str],
@@ -1373,7 +1373,7 @@ fn type_error(key: &str, name: &str, expected: &str) -> CribleError {
 
 /// Converts one encoded vector to the reference precision of the index, in
 /// little-endian bytes.
-fn store_vector(vector: &[f32], precision: ReferencePrecision) -> Vec<u8> {
+pub(crate) fn store_vector(vector: &[f32], precision: ReferencePrecision) -> Vec<u8> {
     match precision {
         ReferencePrecision::Fp16 => vector
             .iter()
@@ -1497,7 +1497,7 @@ fn write_manifest(
 }
 
 /// Hashes a file with blake3, streaming it.
-fn hash_file(path: &Path) -> Result<String, CribleError> {
+pub(crate) fn hash_file(path: &Path) -> Result<String, CribleError> {
     let mut file = File::open(path).map_err(|error| io_error("read a batch file", path, &error))?;
     let mut hasher = blake3::Hasher::new();
     let mut buffer = vec![0_u8; 64 * 1024];

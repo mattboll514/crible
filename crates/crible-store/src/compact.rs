@@ -641,20 +641,21 @@ fn compaction_batch_id(from_epoch: Epoch, to_epoch: Epoch) -> String {
     format!("compaction-e{}-e{}", from_epoch.get(), to_epoch.get())
 }
 
-/// Reads the vectors of the segments of the source epoch, opening each segment
-/// the first time a passage of it is copied.
+/// Reads the vectors of the segments of one epoch, opening each segment the
+/// first time a passage of it is read.
 ///
 /// Opening a segment verifies its checksum, which reads the whole vector file
 /// once: the compaction re-reads the source vectors it copies, and that cost is
-/// the one `MES-07` measures.
-struct EpochVectors<'a> {
+/// the one `MES-07` measures. [`crate::export`] reads the same segments of its
+/// snapshot, so the two share this reader.
+pub(crate) struct EpochVectors<'a> {
     segments_dir: PathBuf,
     metas: &'a [SegmentMeta],
     readers: Vec<Option<SegmentReader>>,
 }
 
 impl<'a> EpochVectors<'a> {
-    fn new(segments_dir: PathBuf, metas: &'a [SegmentMeta]) -> Self {
+    pub(crate) fn new(segments_dir: PathBuf, metas: &'a [SegmentMeta]) -> Self {
         Self {
             segments_dir,
             metas,
@@ -669,7 +670,7 @@ impl<'a> EpochVectors<'a> {
     }
 
     /// Reference vector of `iid`, decoded from the segment that covers it.
-    fn vector(&mut self, iid: Iid) -> Result<Vec<f32>, CribleError> {
+    pub(crate) fn vector(&mut self, iid: Iid) -> Result<Vec<f32>, CribleError> {
         let index = self
             .metas
             .iter()
@@ -891,7 +892,7 @@ fn remove_directory(path: &Path) -> Result<(), CribleError> {
 }
 
 /// fsyncs a file, so the rename of its directory cannot outlive its bytes.
-fn sync_file(path: &Path) -> Result<(), CribleError> {
+pub(crate) fn sync_file(path: &Path) -> Result<(), CribleError> {
     File::open(path)
         .and_then(|file| file.sync_all())
         .map_err(|error| io_error("fsync the file", path, &error))

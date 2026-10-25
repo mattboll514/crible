@@ -1098,7 +1098,7 @@ fn open_writable(path: &Path) -> Result<Connection, CribleError> {
 
 /// Opens a database for reading only. The pool never writes, so no caller can
 /// bypass the single writer of the index.
-fn open_read_only(path: &Path) -> Result<Connection, CribleError> {
+pub(crate) fn open_read_only(path: &Path) -> Result<Connection, CribleError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| database_error("open the records database for reading", &error))?;
     configure_busy_timeout(&connection)?;

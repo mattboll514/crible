@@ -114,6 +114,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0058](0058-controle-anti-fuite-de-git-par-script-versionne.md) | Contrôle anti-fuite de `@git` par un script versionné, sans fichier temporaire | Accepté (`.env.prod` absent = code 2 et arrêt ; pas de seuil de longueur ; pas de hook `pre-commit` pour l'instant ; refus `*.env*` accepté tel quel, précision du 2026-10-25) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0059](0059-robustesse-du-telechargement-de-l-artefact-du-modele-en-ci.md) | Robustesse du téléchargement de l'artefact du modèle en CI (complète ADR-0057) | Accepté (options 1 et 3 ; 4 essais, attentes 5/15/45 s, `Retry-After` ≤ 60 s, échéance 600 s ; workflow `model-cache.yml` seul écrivain du cache, `ci.yml` en restauration seule ; `HF_TOKEN` en réserve) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0060](0060-contrat-du-patch-de-metadonnees-des-documents.md) | Contrat du patch de métadonnées des documents | Accepté (toutes les options (a) : refus atomique `not_found`, noms réservés refusés par la règle du champ inconnu, champs non filtrables ou non rendus acceptés, 32 Mo et 10 000 entrées, rapport non persisté, aucune génération pour un patch sans effet) | 2026-10-25 (proposition et acceptation) |
+| [ADR-0061](0061-manifeste-d-un-lot-exporte.md) | Manifeste d'un lot exporté | Accepté (toutes les options (a) sur les décisions 1 et 3 à 5, option (i) sur la décision 2 ; `format_version` reste 1) | 2026-10-25 (proposition et acceptation) |
 
 ## Questions ouvertes
 
