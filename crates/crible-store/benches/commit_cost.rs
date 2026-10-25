@@ -20,8 +20,12 @@
 //! same on-disk state:
 //!
 //! - the transaction is replayed with the very SQL of `records.rs`, on a copy of
-//!   the index (the real commit is then measured on another copy);
-//! - the live-iid read is replayed with the query of `RecordStore::live_iids`;
+//!   the index (the real commit is then measured on another copy); the texts are
+//!   compressed with one reused zstd context, as `records::TextCompressor` does
+//!   (ADR-0048);
+//! - the live-iid read is replayed with the query of `RecordStore::live_iids`,
+//!   which the commit of generation G+1 no longer calls: the replica is the
+//!   control of the cost that `FilterIndex::after_commit` removed (ADR-0048);
 //! - the `segment.json` read is replayed with the logic of `segment::read_meta`
 //!   (that function is `pub(crate)`, so the bench cannot call it);
 //! - the manifest write is replayed with the atomic write of `generation.rs`.
@@ -647,7 +651,6 @@ fn measure_point(
     let mut segment_write_ns = Vec::with_capacity(options.repeats);
     let mut rss_bytes = Vec::with_capacity(options.repeats);
     let mut warm_up_ns = Vec::with_capacity(options.repeats);
-    let mut encode_reused_ns = Vec::with_capacity(options.repeats);
     let mut clone_kinds = Vec::with_capacity(options.repeats);
     let mut live_after = 0usize;
     let mut segments_after = 0usize;
@@ -730,10 +733,6 @@ fn measure_point(
                 .checked_add(1)
                 .ok_or_else(|| fail("the generation counter is exhausted"))?,
         );
-        // Control point: the same texts compressed with one reused zstd context,
-        // which bounds the avoidable part of the transaction.
-        encode_reused_ns.push(reused_context_compression(&texts)?);
-
         let (change, write_ns) =
             build_change(&commit_epoch, generation, next_iid, &texts, &deletions)?;
         segment_write_ns.push(write_ns);
@@ -804,7 +803,6 @@ fn measure_point(
         "segment_write_ns": stats(&segment_write_ns),
         "rss_bytes": stats(&rss_bytes),
         "warm_up_ns": stats(&warm_up_ns),
-        "encode_reused_ns": stats(&encode_reused_ns),
         "base_records_bytes": file_bytes(&base_epoch.join("records.sqlite")),
         "snapshot_bytes_computed": u64::from(n) * 4 + u64::from(s) * 152,
     }))
@@ -879,7 +877,7 @@ fn build_change(
 }
 
 /// Texts of the passages of the measured attach, one per passage: the exact
-/// string `commit` compresses, and the input of the reused-context control.
+/// string `commit` compresses.
 fn new_passage_texts(count: u32) -> Result<Vec<String>, Box<dyn Error>> {
     let mut texts = Vec::with_capacity(usize::try_from(count)?);
     for position in 0..count {
@@ -889,20 +887,6 @@ fn new_passage_texts(count: u32) -> Result<Vec<String>, Box<dyn Error>> {
         ));
     }
     Ok(texts)
-}
-
-/// Compresses the same texts with **one** zstd context, as a control point:
-/// `records::encode_text` calls `encode_all`, which builds a context per row.
-/// This measurement bounds the part of the transaction that a reused context
-/// would remove; it changes no production code.
-fn reused_context_compression(texts: &[String]) -> Result<u64, Box<dyn Error>> {
-    let mut compressor = zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)?;
-    let started = Instant::now();
-    for text in texts {
-        let frame = compressor.compress(text.as_bytes())?;
-        std::hint::black_box(frame);
-    }
-    Ok(duration_ns(started.elapsed()))
 }
 
 /// `count` distinct live iids of the base index, spread over its range.
@@ -1079,6 +1063,10 @@ fn replica_transaction(
 ) -> Result<ReplicaTransaction, Box<dyn Error>> {
     let mut connection = Connection::open_with_flags(records, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.busy_timeout(Duration::from_millis(1_000))?;
+    // One zstd context for the whole batch, as `records::TextCompressor` does
+    // (ADR-0048). `TEXT_COMPRESSION_LEVEL` is `zstd::DEFAULT_COMPRESSION_LEVEL`
+    // and is `pub(crate)`, so the bench names the level it mirrors.
+    let mut compressor = zstd::bulk::Compressor::new(zstd::DEFAULT_COMPRESSION_LEVEL)?;
     let started = Instant::now();
     let transaction = connection.transaction()?;
     let mut passage_encode_ns = 0u64;
@@ -1116,7 +1104,7 @@ fn replica_transaction(
             let iid = next_iid + position;
             let text = &texts[usize::try_from(position)?];
             let encoded = Instant::now();
-            let frame = zstd::stream::encode_all(text.as_bytes(), zstd::DEFAULT_COMPRESSION_LEVEL)?;
+            let frame = compressor.compress(text.as_bytes())?;
             let fields = canonical_json(&json!({"partie": "corps", "rang": position % 7}))?;
             passage_encode_ns += duration_ns(encoded.elapsed());
             let inserted = Instant::now();

@@ -1,0 +1,737 @@
+{
+  "campaign": {
+    "measure": "MES-08",
+    "commit": "46c2dd1",
+    "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+    "date": "2026-10-25",
+    "repeats": 5
+  },
+  "indexes": [
+    {
+      "batches": [
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/articles/daily-articles-1000",
+          "batch_id": "daily-articles-1000",
+          "compress_new_ms": 5.8396669999999995,
+          "compress_old_ms": 38.547833,
+          "documents": 905,
+          "manifest_ms": {
+            "max": 7,
+            "min": 6,
+            "p50": 6,
+            "p95": 7,
+            "p99": 7,
+            "values": [
+              6,
+              7,
+              7,
+              6,
+              6
+            ]
+          },
+          "passages": 1000,
+          "points": [
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 45890,
+              "live_before": 44890,
+              "manifest_ms": 6.354,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 21.766000000000002,
+              "snapshot_ms": 855.832,
+              "total_ms": 47972.475417,
+              "transaction_ms": 18.325,
+              "unchanged": 0,
+              "validation_ms": 47066.166000000005
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 45890,
+              "live_before": 44890,
+              "manifest_ms": 7.327,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 19.074,
+              "snapshot_ms": 745.088,
+              "total_ms": 50211.6775,
+              "transaction_ms": 18.599,
+              "unchanged": 0,
+              "validation_ms": 49417.450000000004
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 45890,
+              "live_before": 44890,
+              "manifest_ms": 7.3229999999999995,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 17.241,
+              "snapshot_ms": 816.96,
+              "total_ms": 52332.936875,
+              "transaction_ms": 18.3,
+              "unchanged": 0,
+              "validation_ms": 51468.954
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 45890,
+              "live_before": 44890,
+              "manifest_ms": 6.295,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 18.571,
+              "snapshot_ms": 823.0880000000001,
+              "total_ms": 53161.835042,
+              "transaction_ms": 19.665,
+              "unchanged": 0,
+              "validation_ms": 52290.102
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 45890,
+              "live_before": 44890,
+              "manifest_ms": 6.348000000000001,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 19.142,
+              "snapshot_ms": 825.647,
+              "total_ms": 53668.427792,
+              "transaction_ms": 19.552,
+              "unchanged": 0,
+              "validation_ms": 52794.952000000005
+            }
+          ],
+          "segment_ms": {
+            "max": 22,
+            "min": 17,
+            "p50": 19,
+            "p95": 22,
+            "p99": 22,
+            "values": [
+              22,
+              19,
+              17,
+              19,
+              19
+            ]
+          },
+          "snapshot_ms": {
+            "max": 856,
+            "min": 745,
+            "p50": 823,
+            "p95": 856,
+            "p99": 856,
+            "values": [
+              856,
+              745,
+              817,
+              823,
+              826
+            ]
+          },
+          "text_bytes_mean": 1132.33,
+          "total_ms": {
+            "max": 53668,
+            "min": 47972,
+            "p50": 52333,
+            "p95": 53668,
+            "p99": 53668,
+            "values": [
+              47972,
+              50212,
+              52333,
+              53162,
+              53668
+            ]
+          },
+          "transaction_ms": {
+            "max": 20,
+            "min": 18,
+            "p50": 19,
+            "p95": 20,
+            "p99": 20,
+            "values": [
+              18,
+              19,
+              18,
+              20,
+              20
+            ]
+          },
+          "validation_ms": {
+            "max": 52795,
+            "min": 47066,
+            "p50": 51469,
+            "p95": 52795,
+            "p99": 52795,
+            "values": [
+              47066,
+              49417,
+              51469,
+              52290,
+              52795
+            ]
+          }
+        },
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/articles/daily-articles-3000",
+          "batch_id": "daily-articles-3000",
+          "compress_new_ms": 22.430458,
+          "compress_old_ms": 130.80841700000002,
+          "documents": 2517,
+          "manifest_ms": {
+            "max": 8,
+            "min": 6,
+            "p50": 7,
+            "p95": 8,
+            "p99": 8,
+            "values": [
+              7,
+              7,
+              8,
+              6,
+              8
+            ]
+          },
+          "passages": 3002,
+          "points": [
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 47892,
+              "live_before": 44890,
+              "manifest_ms": 7.35,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 34.576,
+              "snapshot_ms": 2268.0319999999997,
+              "total_ms": 67398.76175,
+              "transaction_ms": 58.141,
+              "unchanged": 0,
+              "validation_ms": 65026.793999999994
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 47892,
+              "live_before": 44890,
+              "manifest_ms": 7.305,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 32.135,
+              "snapshot_ms": 2344.762,
+              "total_ms": 67733.83183299999,
+              "transaction_ms": 57.105999999999995,
+              "unchanged": 0,
+              "validation_ms": 65286.951
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 47892,
+              "live_before": 44890,
+              "manifest_ms": 8.44,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 33.549,
+              "snapshot_ms": 2439.3940000000002,
+              "total_ms": 68467.025417,
+              "transaction_ms": 57.664,
+              "unchanged": 0,
+              "validation_ms": 65922.674
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 47892,
+              "live_before": 44890,
+              "manifest_ms": 6.345,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 34.314,
+              "snapshot_ms": 2514.1650000000004,
+              "total_ms": 68923.155417,
+              "transaction_ms": 56.802,
+              "unchanged": 0,
+              "validation_ms": 66307.56700000001
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 47892,
+              "live_before": 44890,
+              "manifest_ms": 8.383,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 36.534,
+              "snapshot_ms": 2817.444,
+              "total_ms": 70560.671917,
+              "transaction_ms": 57.5,
+              "unchanged": 0,
+              "validation_ms": 67635.642
+            }
+          ],
+          "segment_ms": {
+            "max": 37,
+            "min": 32,
+            "p50": 34,
+            "p95": 37,
+            "p99": 37,
+            "values": [
+              35,
+              32,
+              34,
+              34,
+              37
+            ]
+          },
+          "snapshot_ms": {
+            "max": 2817,
+            "min": 2268,
+            "p50": 2439,
+            "p95": 2817,
+            "p99": 2817,
+            "values": [
+              2268,
+              2345,
+              2439,
+              2514,
+              2817
+            ]
+          },
+          "text_bytes_mean": 1220.7081945369753,
+          "total_ms": {
+            "max": 70561,
+            "min": 67399,
+            "p50": 68467,
+            "p95": 70561,
+            "p99": 70561,
+            "values": [
+              67399,
+              67734,
+              68467,
+              68923,
+              70561
+            ]
+          },
+          "transaction_ms": {
+            "max": 58,
+            "min": 57,
+            "p50": 58,
+            "p95": 58,
+            "p99": 58,
+            "values": [
+              58,
+              57,
+              58,
+              57,
+              58
+            ]
+          },
+          "validation_ms": {
+            "max": 67636,
+            "min": 65027,
+            "p50": 65923,
+            "p95": 67636,
+            "p99": 67636,
+            "values": [
+              65027,
+              65287,
+              65923,
+              66308,
+              67636
+            ]
+          }
+        }
+      ],
+      "commit": "46c2dd1",
+      "date": "2026-10-25",
+      "index": "/Users/mattboll/MattCorp/crible/data/mes07/indexes/articles",
+      "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+      "measure": "MES-08",
+      "model": "mdenseon",
+      "model_kind": "Onnx",
+      "repeats": 5,
+      "process_max_rss_bytes": 3016671232
+    },
+    {
+      "batches": [
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/synth-large/daily-synth-1000",
+          "batch_id": "daily-synth-1000",
+          "compress_new_ms": 6.073959,
+          "compress_old_ms": 43.374792,
+          "documents": 905,
+          "manifest_ms": {
+            "max": 8,
+            "min": 6,
+            "p50": 7,
+            "p95": 8,
+            "p99": 8,
+            "values": [
+              8,
+              8,
+              6,
+              7,
+              6
+            ]
+          },
+          "passages": 1000,
+          "points": [
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 8.312999999999999,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 19.412,
+              "snapshot_ms": 3199.177,
+              "total_ms": 3252.070917,
+              "transaction_ms": 18.117,
+              "unchanged": 0,
+              "validation_ms": 6.933
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 8.35,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 19.2,
+              "snapshot_ms": 3208.234,
+              "total_ms": 3260.8486660000003,
+              "transaction_ms": 17.938,
+              "unchanged": 0,
+              "validation_ms": 7.032
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 5.922000000000001,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 20.235,
+              "snapshot_ms": 3202.721,
+              "total_ms": 3254.179708,
+              "transaction_ms": 18.291,
+              "unchanged": 0,
+              "validation_ms": 6.911
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 6.624,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 35.348,
+              "snapshot_ms": 3211.5840000000003,
+              "total_ms": 3278.633125,
+              "transaction_ms": 18.073,
+              "unchanged": 0,
+              "validation_ms": 6.890000000000001
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 6.388,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 17.965,
+              "snapshot_ms": 3207.1369999999997,
+              "total_ms": 3257.37175,
+              "transaction_ms": 18.509999999999998,
+              "unchanged": 0,
+              "validation_ms": 7.2589999999999995
+            }
+          ],
+          "segment_ms": {
+            "max": 35,
+            "min": 18,
+            "p50": 19,
+            "p95": 35,
+            "p99": 35,
+            "values": [
+              19,
+              19,
+              20,
+              35,
+              18
+            ]
+          },
+          "snapshot_ms": {
+            "max": 3212,
+            "min": 3199,
+            "p50": 3207,
+            "p95": 3212,
+            "p99": 3212,
+            "values": [
+              3199,
+              3208,
+              3203,
+              3212,
+              3207
+            ]
+          },
+          "text_bytes_mean": 1132.33,
+          "total_ms": {
+            "max": 3279,
+            "min": 3252,
+            "p50": 3257,
+            "p95": 3279,
+            "p99": 3279,
+            "values": [
+              3252,
+              3261,
+              3254,
+              3279,
+              3257
+            ]
+          },
+          "transaction_ms": {
+            "max": 19,
+            "min": 18,
+            "p50": 18,
+            "p95": 19,
+            "p99": 19,
+            "values": [
+              18,
+              18,
+              18,
+              18,
+              19
+            ]
+          },
+          "validation_ms": {
+            "max": 7,
+            "min": 7,
+            "p50": 7,
+            "p95": 7,
+            "p99": 7,
+            "values": [
+              7,
+              7,
+              7,
+              7,
+              7
+            ]
+          }
+        },
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/synth-large/daily-synth-3000",
+          "batch_id": "daily-synth-3000",
+          "compress_new_ms": 19.256417000000003,
+          "compress_old_ms": 135.41120800000002,
+          "documents": 2517,
+          "manifest_ms": {
+            "max": 6,
+            "min": 6,
+            "p50": 6,
+            "p95": 6,
+            "p99": 6,
+            "values": [
+              6,
+              6,
+              6,
+              6,
+              6
+            ]
+          },
+          "passages": 3002,
+          "points": [
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.332,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 29.950999999999997,
+              "snapshot_ms": 3210.655,
+              "total_ms": 3320.152208,
+              "transaction_ms": 53.716,
+              "unchanged": 0,
+              "validation_ms": 19.264
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.3309999999999995,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 31.933000000000003,
+              "snapshot_ms": 3219.6099999999997,
+              "total_ms": 3333.285375,
+              "transaction_ms": 54.804,
+              "unchanged": 0,
+              "validation_ms": 19.398
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.33,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 58.311,
+              "snapshot_ms": 3219.359,
+              "total_ms": 3358.9181249999997,
+              "transaction_ms": 55.162000000000006,
+              "unchanged": 0,
+              "validation_ms": 19.07
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.281,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 33.323,
+              "snapshot_ms": 3206.4680000000003,
+              "total_ms": 3321.23525,
+              "transaction_ms": 54.923,
+              "unchanged": 0,
+              "validation_ms": 20.035
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.283,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 33.052,
+              "snapshot_ms": 3219.195,
+              "total_ms": 3333.2561250000003,
+              "transaction_ms": 55.34,
+              "unchanged": 0,
+              "validation_ms": 19.182000000000002
+            }
+          ],
+          "segment_ms": {
+            "max": 58,
+            "min": 30,
+            "p50": 33,
+            "p95": 58,
+            "p99": 58,
+            "values": [
+              30,
+              32,
+              58,
+              33,
+              33
+            ]
+          },
+          "snapshot_ms": {
+            "max": 3220,
+            "min": 3206,
+            "p50": 3219,
+            "p95": 3220,
+            "p99": 3220,
+            "values": [
+              3211,
+              3220,
+              3219,
+              3206,
+              3219
+            ]
+          },
+          "text_bytes_mean": 1220.7081945369753,
+          "total_ms": {
+            "max": 3359,
+            "min": 3320,
+            "p50": 3333,
+            "p95": 3359,
+            "p99": 3359,
+            "values": [
+              3320,
+              3333,
+              3359,
+              3321,
+              3333
+            ]
+          },
+          "transaction_ms": {
+            "max": 55,
+            "min": 54,
+            "p50": 55,
+            "p95": 55,
+            "p99": 55,
+            "values": [
+              54,
+              55,
+              55,
+              55,
+              55
+            ]
+          },
+          "validation_ms": {
+            "max": 20,
+            "min": 19,
+            "p50": 19,
+            "p95": 20,
+            "p99": 20,
+            "values": [
+              19,
+              19,
+              19,
+              20,
+              19
+            ]
+          }
+        }
+      ],
+      "commit": "46c2dd1",
+      "date": "2026-10-25",
+      "index": "/Users/mattboll/MattCorp/crible/data/synth-large/indexes/synth-large",
+      "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+      "measure": "MES-08",
+      "model": "synthetic-external",
+      "model_kind": "External",
+      "repeats": 5,
+      "process_max_rss_bytes": 619790336
+    }
+  ]
+}

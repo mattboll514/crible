@@ -1,0 +1,481 @@
+{
+  "campaign": {
+    "measure": "MES-07",
+    "commit": "46c2dd1",
+    "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+    "date": "2026-10-25",
+    "repeats": 5
+  },
+  "indexes": [
+    {
+      "commit": "46c2dd1",
+      "compaction_ms": {
+        "max": 2563,
+        "min": 2079,
+        "p50": 2214,
+        "p95": 2563,
+        "p99": 2563,
+        "values": [
+          2214,
+          2079,
+          2159,
+          2340,
+          2563
+        ]
+      },
+      "compress_new_ms": {
+        "max": 3,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "p99": 3,
+        "values": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ]
+      },
+      "compress_old_ms": {
+        "max": 20,
+        "min": 18,
+        "p50": 19,
+        "p95": 20,
+        "p99": 20,
+        "values": [
+          18,
+          19,
+          20,
+          20,
+          18
+        ]
+      },
+      "date": "2026-10-25",
+      "index": "/Users/mattboll/MattCorp/crible/data/mes07/indexes/articles",
+      "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+      "measure": "MES-07",
+      "passage_read_ms": {
+        "max": 2126,
+        "min": 507,
+        "p50": 651,
+        "p95": 2126,
+        "p99": 2126,
+        "values": [
+          507,
+          741,
+          524,
+          651,
+          2126
+        ]
+      },
+      "points": [
+        {
+          "compaction_ms": 2213.943083,
+          "compress_new_ms": 2.966042,
+          "compress_old_ms": 18.168334,
+          "compress_sample": 463,
+          "dead_passages": 5110,
+          "dead_ratio": 0.1022,
+          "generation": 3,
+          "live_after": 44890,
+          "live_passages": 44890,
+          "new_epoch_bytes": 120851956,
+          "new_segments": 1,
+          "passage_read": {
+            "count": 44890,
+            "ms": 506.725458
+          },
+          "removed_passages": 5110,
+          "repetition": 0,
+          "segment_open": {
+            "count": 1,
+            "ms": 46.975291000000006
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 44890,
+            "ms": 94.965542
+          }
+        },
+        {
+          "compaction_ms": 2078.631583,
+          "compress_new_ms": 2.9220829999999998,
+          "compress_old_ms": 19.463125,
+          "compress_sample": 463,
+          "dead_passages": 5110,
+          "dead_ratio": 0.1022,
+          "generation": 3,
+          "live_after": 44890,
+          "live_passages": 44890,
+          "new_epoch_bytes": 120851956,
+          "new_segments": 1,
+          "passage_read": {
+            "count": 44890,
+            "ms": 740.724333
+          },
+          "removed_passages": 5110,
+          "repetition": 1,
+          "segment_open": {
+            "count": 1,
+            "ms": 48.166458000000006
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 44890,
+            "ms": 97.793541
+          }
+        },
+        {
+          "compaction_ms": 2159.057083,
+          "compress_new_ms": 2.942542,
+          "compress_old_ms": 19.756667,
+          "compress_sample": 463,
+          "dead_passages": 5110,
+          "dead_ratio": 0.1022,
+          "generation": 3,
+          "live_after": 44890,
+          "live_passages": 44890,
+          "new_epoch_bytes": 120851956,
+          "new_segments": 1,
+          "passage_read": {
+            "count": 44890,
+            "ms": 523.582334
+          },
+          "removed_passages": 5110,
+          "repetition": 2,
+          "segment_open": {
+            "count": 1,
+            "ms": 48.072790999999995
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 44890,
+            "ms": 96.489958
+          }
+        },
+        {
+          "compaction_ms": 2340.2378329999997,
+          "compress_new_ms": 3.121417,
+          "compress_old_ms": 19.734291000000002,
+          "compress_sample": 463,
+          "dead_passages": 5110,
+          "dead_ratio": 0.1022,
+          "generation": 3,
+          "live_after": 44890,
+          "live_passages": 44890,
+          "new_epoch_bytes": 120851956,
+          "new_segments": 1,
+          "passage_read": {
+            "count": 44890,
+            "ms": 651.1872079999999
+          },
+          "removed_passages": 5110,
+          "repetition": 3,
+          "segment_open": {
+            "count": 1,
+            "ms": 47.666167
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 44890,
+            "ms": 94.76650000000001
+          }
+        },
+        {
+          "compaction_ms": 2563.18575,
+          "compress_new_ms": 2.914209,
+          "compress_old_ms": 18.300834,
+          "compress_sample": 463,
+          "dead_passages": 5110,
+          "dead_ratio": 0.1022,
+          "generation": 3,
+          "live_after": 44890,
+          "live_passages": 44890,
+          "new_epoch_bytes": 120851956,
+          "new_segments": 1,
+          "passage_read": {
+            "count": 44890,
+            "ms": 2125.635084
+          },
+          "removed_passages": 5110,
+          "repetition": 4,
+          "segment_open": {
+            "count": 1,
+            "ms": 47.65075
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 44890,
+            "ms": 95.07837500000001
+          }
+        }
+      ],
+      "repeats": 5,
+      "segment_open_ms": {
+        "max": 48,
+        "min": 47,
+        "p50": 48,
+        "p95": 48,
+        "p99": 48,
+        "values": [
+          47,
+          48,
+          48,
+          48,
+          48
+        ]
+      },
+      "vector_read_ms": {
+        "max": 98,
+        "min": 95,
+        "p50": 95,
+        "p95": 98,
+        "p99": 98,
+        "values": [
+          95,
+          98,
+          96,
+          95,
+          95
+        ]
+      },
+      "process_max_rss_bytes": 208453632
+    },
+    {
+      "commit": "46c2dd1",
+      "compaction_ms": {
+        "max": 398867,
+        "min": 366184,
+        "p50": 377924,
+        "p95": 398867,
+        "p99": 398867,
+        "values": [
+          373635,
+          398867,
+          386475,
+          366184,
+          377924
+        ]
+      },
+      "compress_new_ms": {
+        "max": 3,
+        "min": 3,
+        "p50": 3,
+        "p95": 3,
+        "p99": 3,
+        "values": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ]
+      },
+      "compress_old_ms": {
+        "max": 662,
+        "min": 117,
+        "p50": 120,
+        "p95": 662,
+        "p99": 662,
+        "values": [
+          662,
+          117,
+          662,
+          120,
+          117
+        ]
+      },
+      "date": "2026-10-25",
+      "index": "/Users/mattboll/MattCorp/crible/data/synth-large/indexes/synth-large",
+      "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+      "measure": "MES-07",
+      "passage_read_ms": {
+        "max": 63982,
+        "min": 35893,
+        "p50": 36115,
+        "p95": 63982,
+        "p99": 63982,
+        "values": [
+          35893,
+          63982,
+          36115,
+          35944,
+          37049
+        ]
+      },
+      "points": [
+        {
+          "compaction_ms": 373634.895709,
+          "compress_new_ms": 3.347792,
+          "compress_old_ms": 662.3619160000001,
+          "compress_sample": 20000,
+          "dead_passages": 860000,
+          "dead_ratio": 0.1,
+          "generation": 3,
+          "live_after": 7740000,
+          "live_passages": 7740000,
+          "new_epoch_bytes": 15253970556,
+          "new_segments": 8,
+          "passage_read": {
+            "count": 7740000,
+            "ms": 35892.526541
+          },
+          "removed_passages": 860000,
+          "repetition": 0,
+          "segment_open": {
+            "count": 1,
+            "ms": 7946.148333
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 7740000,
+            "ms": 16985.421250000003
+          }
+        },
+        {
+          "compaction_ms": 398866.757667,
+          "compress_new_ms": 3.374292,
+          "compress_old_ms": 116.53704099999999,
+          "compress_sample": 20000,
+          "dead_passages": 860000,
+          "dead_ratio": 0.1,
+          "generation": 3,
+          "live_after": 7740000,
+          "live_passages": 7740000,
+          "new_epoch_bytes": 15253970556,
+          "new_segments": 8,
+          "passage_read": {
+            "count": 7740000,
+            "ms": 63981.568957999996
+          },
+          "removed_passages": 860000,
+          "repetition": 1,
+          "segment_open": {
+            "count": 1,
+            "ms": 7977.621917
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 7740000,
+            "ms": 16940.109417
+          }
+        },
+        {
+          "compaction_ms": 386475.22650000005,
+          "compress_new_ms": 3.39525,
+          "compress_old_ms": 662.450917,
+          "compress_sample": 20000,
+          "dead_passages": 860000,
+          "dead_ratio": 0.1,
+          "generation": 3,
+          "live_after": 7740000,
+          "live_passages": 7740000,
+          "new_epoch_bytes": 15253970556,
+          "new_segments": 8,
+          "passage_read": {
+            "count": 7740000,
+            "ms": 36114.620666
+          },
+          "removed_passages": 860000,
+          "repetition": 2,
+          "segment_open": {
+            "count": 1,
+            "ms": 7974.44725
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 7740000,
+            "ms": 16407.233209
+          }
+        },
+        {
+          "compaction_ms": 366184.023125,
+          "compress_new_ms": 3.312625,
+          "compress_old_ms": 120.432333,
+          "compress_sample": 20000,
+          "dead_passages": 860000,
+          "dead_ratio": 0.1,
+          "generation": 3,
+          "live_after": 7740000,
+          "live_passages": 7740000,
+          "new_epoch_bytes": 15253970556,
+          "new_segments": 8,
+          "passage_read": {
+            "count": 7740000,
+            "ms": 35944.330291
+          },
+          "removed_passages": 860000,
+          "repetition": 3,
+          "segment_open": {
+            "count": 1,
+            "ms": 7983.172667
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 7740000,
+            "ms": 16743.517209
+          }
+        },
+        {
+          "compaction_ms": 377924.48949999997,
+          "compress_new_ms": 3.39475,
+          "compress_old_ms": 116.72820899999999,
+          "compress_sample": 20000,
+          "dead_passages": 860000,
+          "dead_ratio": 0.1,
+          "generation": 3,
+          "live_after": 7740000,
+          "live_passages": 7740000,
+          "new_epoch_bytes": 15253970556,
+          "new_segments": 8,
+          "passage_read": {
+            "count": 7740000,
+            "ms": 37049.432291000005
+          },
+          "removed_passages": 860000,
+          "repetition": 4,
+          "segment_open": {
+            "count": 1,
+            "ms": 7975.742042
+          },
+          "source_segments": 1,
+          "vector_read": {
+            "count": 7740000,
+            "ms": 16796.247625
+          }
+        }
+      ],
+      "repeats": 5,
+      "segment_open_ms": {
+        "max": 7983,
+        "min": 7946,
+        "p50": 7976,
+        "p95": 7983,
+        "p99": 7983,
+        "values": [
+          7946,
+          7978,
+          7974,
+          7983,
+          7976
+        ]
+      },
+      "vector_read_ms": {
+        "max": 16985,
+        "min": 16407,
+        "p50": 16796,
+        "p95": 16985,
+        "p99": 16985,
+        "values": [
+          16985,
+          16940,
+          16407,
+          16744,
+          16796
+        ]
+      },
+      "process_max_rss_bytes": 14961983488
+    }
+  ]
+}
