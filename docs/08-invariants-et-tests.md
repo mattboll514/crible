@@ -45,7 +45,7 @@ Règle normative (ADR-0057) : **`#[ignore]` est le seul mécanisme de saut autor
 Deux conséquences pratiques :
 
 - un test qui saute silencieusement ne prouve rien et se lit pourtant comme vert : c'est le défaut corrigé dans `crates/crible/tests/recette_import.rs` par `AJOUTER-ORT-CI` ; les tests de `crates/crible-encode/tests/charger_modele.rs` et de `crates/crible-core/tests/model_config.rs` sont le modèle à suivre, puisqu'ils échouent déjà avec la commande d'export à lancer ;
-- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check` et de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction`, dont les données dérivent de la production Legifacile (ADR-0032) et dont le second demande en plus ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062).
+- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` et de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`, dont les données dérivent de la production Legifacile (ADR-0032) et dont les deux derniers demandent en plus ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062, ADR-0063).
 
 ## Jeux de données
 
