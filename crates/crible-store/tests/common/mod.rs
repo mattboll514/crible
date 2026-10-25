@@ -446,7 +446,7 @@ impl SerialGuard {
 /// the binary.
 #[cfg(feature = "failpoints")]
 pub struct FailpointGuard {
-    _serial: SerialGuard,
+    _serial: Option<SerialGuard>,
 }
 
 #[cfg(feature = "failpoints")]
@@ -457,11 +457,31 @@ impl FailpointGuard {
     /// Arms `step` for the current thread of the test binary.
     pub fn arm(step: &str) -> Self {
         let serial = SerialGuard::acquire();
-        // SAFETY: `SerialGuard` serialises every test of this binary that
-        // reads or writes `CRIBLE_FAILPOINT`, and no other thread of the
+        Self::set_armed(step);
+        Self {
+            _serial: Some(serial),
+        }
+    }
+
+    /// Arms `step` for a test that holds `serial` for its whole body.
+    ///
+    /// A test that disarms the failpoint and then runs the store again (the
+    /// retry of a compaction) must keep the other tests of the binary out of
+    /// `CRIBLE_FAILPOINT` until its last store call: the guard alone stops
+    /// serialising as soon as it is dropped, which would let a concurrent test
+    /// arm another step under the retry. Such a test therefore takes a
+    /// [`SerialGuard`] itself and passes it here.
+    pub fn arm_holding(_serial: &SerialGuard, step: &str) -> Self {
+        Self::set_armed(step);
+        Self { _serial: None }
+    }
+
+    /// Writes the armed step where the store reads it.
+    fn set_armed(step: &str) {
+        // SAFETY: every test of this binary that reads or writes
+        // `CRIBLE_FAILPOINT` holds a `SerialGuard`, and no other thread of the
         // process calls `std::env` concurrently.
         unsafe { std::env::set_var(Self::ENV, step) };
-        Self { _serial: serial }
     }
 
     /// Name of the armed step, for assertion messages.
@@ -473,7 +493,8 @@ impl FailpointGuard {
 #[cfg(feature = "failpoints")]
 impl Drop for FailpointGuard {
     fn drop(&mut self) {
-        // SAFETY: see `FailpointGuard::arm`; the lock is still held here.
+        // SAFETY: see `FailpointGuard::set_armed`; the caller still holds the
+        // serial guard of the binary when this one borrows it.
         unsafe { std::env::remove_var(Self::ENV) };
     }
 }

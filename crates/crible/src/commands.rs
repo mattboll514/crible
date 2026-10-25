@@ -241,6 +241,47 @@ pub fn patch_documents(data: &Path, index: &str, file: &Path) -> Result<(), Crib
     Ok(())
 }
 
+/// `crible compact --data <dir> --index <i>`.
+///
+/// Compacts an index into the next epoch without its dead passages
+/// (`docs/02-architecture.md`, "Suppressions, pierres tombales et compaction";
+/// ADR-0006, ADR-0017). The command ignores the `dead_ratio` of the
+/// configuration that triggers an automatic compaction: the operator asks for
+/// it, so an index that holds no dead passage is rewritten and renumbered too.
+///
+/// The report gives the state before the compaction, so a log keeps the dead
+/// ratio that justified it, then what the compaction moved.
+pub fn compact_index(data: &Path, index: &str) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    // Write opening: same recovery and same cleanup of the stale online batches
+    // as the other write commands; the compaction suspends the writer, which is
+    // this exclusive `&mut`, and the readers keep their snapshots (ADR-0017).
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let before = store.state()?;
+    println!(
+        "index '{}': epoch {}, generation {}, {} live and {} dead passages (dead ratio {:.4})",
+        name,
+        before.epoch.get(),
+        before.generation.get(),
+        before.live_passages,
+        before.dead_passages,
+        before.dead_ratio(),
+    );
+    let report = crible_store::compact::compact(&mut store, &config)?;
+    println!(
+        "index '{}' compacted: epoch {} -> {}, generation {}, {} live passages, \
+         {} removed",
+        name,
+        report.from_epoch.get(),
+        report.to_epoch.get(),
+        report.generation.get(),
+        report.live_passages,
+        report.removed_passages,
+    );
+    Ok(())
+}
+
 /// Prints the report of one attach, as `crible attach` and `crible ingest` do.
 fn print_report(name: &str, report: &AttachReport) {
     println!(

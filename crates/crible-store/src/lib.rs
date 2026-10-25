@@ -4,6 +4,7 @@
 
 pub mod attach;
 pub mod batch_reader;
+pub mod compact;
 pub mod filters_index;
 pub mod generation;
 pub mod online;

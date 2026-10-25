@@ -71,7 +71,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -197,22 +197,22 @@ fn existing_index_error(index_dir: &Path, occupied: &OccupiedIndex) -> CribleErr
 }
 
 /// Name of the directory holding the epochs of an index.
-const EPOCHS_DIR_NAME: &str = "epochs";
+pub(crate) const EPOCHS_DIR_NAME: &str = "epochs";
 
 /// Name of the reference database inside an epoch directory.
-const RECORDS_FILE_NAME: &str = "records.sqlite";
+pub(crate) const RECORDS_FILE_NAME: &str = "records.sqlite";
 
 /// Name of the segments directory inside an epoch directory.
-const SEGMENTS_DIR_NAME: &str = "segments";
+pub(crate) const SEGMENTS_DIR_NAME: &str = "segments";
 
 /// Name of the derived manifests directory inside an epoch directory.
-const MANIFESTS_DIR_NAME: &str = "manifests";
+pub(crate) const MANIFESTS_DIR_NAME: &str = "manifests";
 
 /// Prefix of a directory or file built before its rename into place.
 ///
 /// The same prefix as the one [`SegmentWriter`](crate::segment::SegmentWriter)
 /// uses: recovery removes every `tmp-*` entry of `segments/` and `manifests/`.
-const TEMPORARY_PREFIX: &str = "tmp-";
+pub(crate) const TEMPORARY_PREFIX: &str = "tmp-";
 
 /// Environment variable naming the step at which `commit` must stop.
 #[cfg(feature = "failpoints")]
@@ -242,6 +242,9 @@ pub struct Snapshot {
     generation: Generation,
     segments: Vec<SegmentMeta>,
     filters: FilterIndex,
+    /// Keep-alive of the epoch the snapshot reads: its strong count is what the
+    /// reclaim of [`crate::compact::reclaim_epochs`] looks at (INV-14).
+    lease: Arc<EpochLease>,
 }
 
 impl Snapshot {
@@ -249,6 +252,16 @@ impl Snapshot {
     #[must_use]
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    /// Epoch holding the reference state and the payloads of this snapshot.
+    ///
+    /// The payload step reads `records.sqlite` in this epoch (ADR-0043, point
+    /// 4), and the compaction never deletes an epoch a live snapshot holds
+    /// (INV-14).
+    #[must_use]
+    pub fn epoch(&self) -> Epoch {
+        self.lease.epoch
     }
 
     /// Segments the generation references, in ascending `iid_start` order, then
@@ -304,12 +317,16 @@ impl Snapshot {
 /// read `CRIBLE_FAILPOINT` expect the panic.
 #[cfg(feature = "failpoints")]
 #[allow(clippy::panic)]
-fn stop_at_failpoint(step: &str) {
+pub(crate) fn stop_at_failpoint(step: &str) {
     let armed = std::env::var(FAILPOINT_ENV).unwrap_or_default();
     if armed == step {
         panic!("CRIBLE_FAILPOINT={step}: simulated crash at this step of the commit protocol");
     }
 }
+
+/// Does nothing: a normal build carries neither the environment read nor a call.
+#[cfg(not(feature = "failpoints"))]
+pub(crate) fn stop_at_failpoint(_step: &str) {}
 
 /// Reaches one step of an attach, inside the transaction of its generation.
 ///
@@ -390,9 +407,25 @@ pub(crate) fn generation_after(generation: Generation) -> Result<Generation, Cri
 /// can bypass the commit point of ADR-0016.
 pub struct GenerationStore {
     index_dir: PathBuf,
-    epoch: Epoch,
     records: RecordStore,
     snapshot: ArcSwap<Snapshot>,
+    lease: Arc<EpochLease>,
+    retained: Mutex<Vec<Weak<EpochLease>>>,
+}
+
+/// Marks one epoch as held by the store and by every snapshot of it.
+///
+/// A snapshot clones the `Arc`, so the strong count of the lease is the number
+/// of live views of that epoch in this process. The store keeps the strong
+/// reference of its current epoch, and only a [`Weak`] of every epoch it left
+/// behind: an epoch no snapshot holds any more can therefore be deleted
+/// (INV-14, ADR-0043 point 4).
+///
+/// The epoch number lives here and nowhere else on the store: the store reads it
+/// through its lease, so a publication cannot leave the two out of step.
+#[derive(Debug)]
+pub(crate) struct EpochLease {
+    epoch: Epoch,
 }
 
 impl GenerationStore {
@@ -444,7 +477,8 @@ impl GenerationStore {
         let mut records = RecordStore::create(&epoch_dir.join(RECORDS_FILE_NAME))?;
         records.set_epoch(epoch)?;
 
-        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         write_manifest(&epoch_dir, epoch, &snapshot)?;
 
         // fsync the directories bottom-up before the pointer that makes them
@@ -464,9 +498,10 @@ impl GenerationStore {
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
-            epoch,
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lease,
+            retained: Mutex::new(Vec::new()),
         })
     }
 
@@ -510,21 +545,23 @@ impl GenerationStore {
         }
 
         recover(&records, index_dir, &epoch_dir)?;
-        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
-            epoch,
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lease,
+            retained: Mutex::new(Vec::new()),
         })
     }
 
     /// Epoch of the index, as `CURRENT_EPOCH` names it.
     #[must_use]
     pub fn epoch(&self) -> Epoch {
-        self.epoch
+        self.lease.epoch
     }
 
     /// Generation currently published.
@@ -590,7 +627,7 @@ impl GenerationStore {
     where
         F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<u32, CribleError>,
     {
-        let epoch_dir = epoch_directory(&self.index_dir, self.epoch);
+        let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
 
         let transaction_started = Instant::now();
         let transaction = self.records.begin()?;
@@ -609,12 +646,17 @@ impl GenerationStore {
 
         let snapshot_started = Instant::now();
         let previous = self.snapshot.load_full();
-        let snapshot =
-            build_snapshot_after_commit(&self.records, &epoch_dir, &previous, generation)?;
+        let snapshot = build_snapshot_after_commit(
+            &self.records,
+            &epoch_dir,
+            &previous,
+            generation,
+            Arc::clone(&self.lease),
+        )?;
         let snapshot_time = snapshot_started.elapsed();
 
         let manifest_started = Instant::now();
-        write_manifest(&epoch_dir, self.epoch, &snapshot)?;
+        write_manifest(&epoch_dir, self.lease.epoch, &snapshot)?;
         let manifest_time = manifest_started.elapsed();
         failpoint!("after_manifest");
 
@@ -656,7 +698,7 @@ impl GenerationStore {
     /// Directory of the current epoch: `<index>/epochs/<epoch>`.
     #[must_use]
     pub fn epoch_directory(&self) -> PathBuf {
-        epoch_directory(&self.index_dir, self.epoch)
+        epoch_directory(&self.index_dir, self.lease.epoch)
     }
 
     /// Path of the reference database of the current epoch.
@@ -673,6 +715,72 @@ impl GenerationStore {
     #[must_use]
     pub fn segments_directory(&self) -> PathBuf {
         segments_directory(&self.epoch_directory())
+    }
+
+    /// Root directory of the index: `<index>`.
+    pub(crate) fn index_dir(&self) -> &Path {
+        &self.index_dir
+    }
+
+    /// Borrows the reference state of the current epoch.
+    ///
+    /// The compaction reads the live passages through this connection, which is
+    /// the single writer of the index, so no commit can change the rows under
+    /// it.
+    pub(crate) fn records(&self) -> &RecordStore {
+        &self.records
+    }
+
+    /// Epochs an earlier snapshot of this store still holds.
+    ///
+    /// The store only keeps a [`Weak`] reference of every epoch it left behind,
+    /// so an epoch disappears from this list as soon as its last snapshot is
+    /// dropped: [`crate::compact::reclaim_epochs`] can then delete it (INV-14,
+    /// ADR-0043 point 4).
+    pub(crate) fn held_epochs(&self) -> Vec<Epoch> {
+        let mut retained = self.retained.lock().unwrap_or_else(PoisonError::into_inner);
+        retained.retain(|lease| lease.strong_count() > 0);
+        retained
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(|lease| lease.epoch)
+            .collect()
+    }
+
+    /// Publishes `epoch` as the current epoch of the index, after the switch of
+    /// `CURRENT_EPOCH` by a compaction.
+    ///
+    /// The caller passes the reference state it has just opened at the new
+    /// epoch, whose `meta` carries the generation the compaction committed. The
+    /// snapshot is rebuilt from that state, its manifest is written, then the
+    /// store switches to it and releases its strong reference on the previous
+    /// epoch, which only the snapshots the readers still hold keep alive
+    /// (INV-14).
+    ///
+    /// An error before the publication leaves the store on its previous epoch,
+    /// although `CURRENT_EPOCH` already names the new one: the next
+    /// [`GenerationStore::open`] publishes the committed epoch (INV-04).
+    pub(crate) fn adopt_epoch(
+        &mut self,
+        epoch: Epoch,
+        records: RecordStore,
+        schema: &Schema,
+    ) -> Result<(), CribleError> {
+        let epoch_dir = epoch_directory(&self.index_dir, epoch);
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
+        write_manifest(&epoch_dir, epoch, &snapshot)?;
+
+        let previous = std::mem::replace(&mut self.lease, lease);
+        self.retained
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&previous));
+        drop(previous);
+
+        self.records = records;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
     }
 
     /// State of the published generation, as `crible inspect` and the index
@@ -692,7 +800,7 @@ impl GenerationStore {
             )
         })?;
         Ok(IndexState {
-            epoch: self.epoch,
+            epoch: self.lease.epoch,
             generation: snapshot.generation(),
             documents: counts.documents,
             live_passages,
@@ -849,19 +957,22 @@ fn write_generation_change(
 }
 
 /// Directory of one epoch: `<index>/epochs/<epoch>`.
-fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
-    index_dir
-        .join(EPOCHS_DIR_NAME)
-        .join(epoch.get().to_string())
+pub(crate) fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    epochs_directory(index_dir).join(epoch.get().to_string())
+}
+
+/// Directory holding every epoch of an index: `<index>/epochs`.
+pub(crate) fn epochs_directory(index_dir: &Path) -> PathBuf {
+    index_dir.join(EPOCHS_DIR_NAME)
 }
 
 /// Directory of the segments of an epoch.
-fn segments_directory(epoch_dir: &Path) -> PathBuf {
+pub(crate) fn segments_directory(epoch_dir: &Path) -> PathBuf {
     epoch_dir.join(SEGMENTS_DIR_NAME)
 }
 
 /// Directory of the derived manifests of an epoch.
-fn manifests_directory(epoch_dir: &Path) -> PathBuf {
+pub(crate) fn manifests_directory(epoch_dir: &Path) -> PathBuf {
     epoch_dir.join(MANIFESTS_DIR_NAME)
 }
 
@@ -877,7 +988,11 @@ fn manifest_path(epoch_dir: &Path, generation: Generation) -> PathBuf {
 /// layout is carried by the `epochs/<epoch>/` structure and by the format
 /// versions of the files inside it, not by this pointer, which has to stay
 /// readable by an operator with `cat`.
-fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
+///
+/// A compaction reads it too: the epoch the store holds must be the one on disk
+/// before it writes, switches or reclaims anything (see
+/// [`crate::compact::compact`]).
+pub(crate) fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
     let path = index_dir.join(CURRENT_EPOCH_FILE_NAME);
     let raw = fs::read_to_string(&path).map_err(|error| {
         CribleError::new(
@@ -904,7 +1019,7 @@ fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
 
 /// Writes `CURRENT_EPOCH` atomically: temporary file, fsync, rename, fsync of
 /// the index directory.
-fn write_current_epoch(index_dir: &Path, epoch: Epoch) -> Result<(), CribleError> {
+pub(crate) fn write_current_epoch(index_dir: &Path, epoch: Epoch) -> Result<(), CribleError> {
     let bytes = format!("{}\n", epoch.get());
     write_atomically(&index_dir.join(CURRENT_EPOCH_FILE_NAME), bytes.as_bytes())
 }
@@ -1072,11 +1187,13 @@ fn build_snapshot(
     records: &RecordStore,
     epoch_dir: &Path,
     schema: &Schema,
+    lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     Ok(Snapshot {
         generation: records.meta()?.generation,
         segments: segments_of(records, epoch_dir)?,
         filters: FilterIndex::from_records(records.connection(), schema)?,
+        lease,
     })
 }
 
@@ -1098,6 +1215,7 @@ fn build_snapshot_after_commit(
     epoch_dir: &Path,
     previous: &Snapshot,
     generation: Generation,
+    lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
         previous
@@ -1110,6 +1228,7 @@ fn build_snapshot_after_commit(
         generation,
         segments: segments_of(records, epoch_dir)?,
         filters,
+        lease,
     })
 }
 
