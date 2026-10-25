@@ -112,6 +112,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0056](0056-verrou-de-presence-des-lots-en-ligne.md) | Verrou de présence des lots en ligne (remplace la décision 4 d'ADR-0055 sur le nettoyage) | Accepté | 2026-10-24 (proposition et acceptation) |
 | [ADR-0057](0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md) | ONNX Runtime et vrai modèle mDenseOn en intégration continue | Accepté | 2026-10-24 (proposition, révision et acceptation) |
 | [ADR-0058](0058-controle-anti-fuite-de-git-par-script-versionne.md) | Contrôle anti-fuite de `@git` par un script versionné, sans fichier temporaire | Proposé | 2026-10-25 |
+| [ADR-0059](0059-robustesse-du-telechargement-de-l-artefact-du-modele-en-ci.md) | Robustesse du téléchargement de l'artefact du modèle en CI (complète ADR-0057) | Proposé | 2026-10-25 |
 
 ## Questions ouvertes
 
