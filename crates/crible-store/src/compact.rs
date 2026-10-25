@@ -59,13 +59,17 @@
 //! # Fault injection
 //!
 //! With the `failpoints` cargo feature, and only with it, the compaction stops
-//! at `CRIBLE_FAILPOINT=before_epoch_switch` (E+1 written and verified,
-//! `CURRENT_EPOCH` still naming E) or `CRIBLE_FAILPOINT=after_epoch_switch`
-//! (`CURRENT_EPOCH` naming E+1, nothing published, E still on disk). Stopping
-//! means panicking with a message containing `CRIBLE_FAILPOINT`, exactly as the
-//! commit protocol does. [`compact_with_observer`] is the other test hook: it
-//! calls back at each step, so a test holds the compaction at a known point
-//! without sleeping.
+//! at `CRIBLE_FAILPOINT=compaction_writer_suspended` (step 1: the writer is
+//! suspended, nothing read yet), `compaction_passages_read` (step 2: the live
+//! passages are read and ordered, nothing written), `compaction_epoch_written`
+//! (step 3: E+1 renamed into `epochs/<E+1>`, not verified),
+//! `before_epoch_switch` (step 4 done: E+1 verified, `CURRENT_EPOCH` still
+//! naming E), `after_epoch_switch` (step 5: `CURRENT_EPOCH` naming E+1, nothing
+//! published, E still on disk) and `after_compaction_publish` (step 6: the
+//! snapshot of E+1 published, E not reclaimed). Stopping means panicking with a
+//! message containing `CRIBLE_FAILPOINT`, exactly as the commit protocol does.
+//! [`compact_with_observer`] is the other test hook: it calls back at each step,
+//! so a test holds the compaction at a known point without sleeping.
 
 use crible_core::config::{FieldLevel, FieldType, IndexConfig};
 use crible_core::error::{CribleError, ErrorCode};
@@ -256,6 +260,8 @@ where
     let state = store.state()?;
     let removed_passages = state.dead_passages;
     observer(CompactStep::WriterSuspended);
+    // Step 1 of `docs/02`: the writer is suspended, nothing has been read yet.
+    stop_at_failpoint("compaction_writer_suspended");
 
     let source = store.snapshot();
     if source.epoch() != from_epoch {
@@ -285,6 +291,10 @@ where
         )
     })?;
 
+    // End of step 2 of `docs/02`: the live passages are read and ordered, and
+    // the renumbering is known, before anything is written or removed.
+    stop_at_failpoint("compaction_passages_read");
+
     // Step 3: E+1 is built under a temporary name, then renamed into place.
     let target = epoch_directory(&index_dir, to_epoch);
     if target == epoch_directory(&index_dir, from_epoch) {
@@ -310,6 +320,9 @@ where
     )?;
     rename_staging_into_place(&staging, &target, &index_dir)?;
     observer(CompactStep::EpochWritten);
+    // End of step 3 of `docs/02`: E+1 is renamed into `epochs/<E+1>`, its
+    // contents are not verified yet and `CURRENT_EPOCH` still names E.
+    stop_at_failpoint("compaction_epoch_written");
     // The copy of E is done, so the compaction releases its own snapshot of E
     // here, before the reclaim of step 6. Keeping it would make its lease count
     // as a live view of E, and `reclaim_epochs` would never delete E in this
@@ -337,6 +350,9 @@ where
     // Step 6: publish, then reclaim E.
     store.adopt_epoch(to_epoch, records, schema)?;
     observer(CompactStep::Published);
+    // Step 6 of `docs/02`: the snapshot of E+1 is published, E is still on disk
+    // and recovery leaves it there (ADR-0065); `reclaim_epochs` removes it.
+    stop_at_failpoint("after_compaction_publish");
     if let Err(error) = reclaim_epochs(store) {
         // The new epoch is live and whole: a leftover old epoch is a cost on
         // disk, not a corruption, so the compaction does not fail for it.
