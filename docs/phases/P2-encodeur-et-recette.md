@@ -171,6 +171,7 @@
   - un test `#[ignore]` lancé sans son prérequis échoue avec la commande qui le produit, et un test le prouve sur `recette_import.rs` ;
   - les cinq corrections ci-dessous sont faites, chacune avec sa preuve (test, sortie ou diff) ;
   - les durées à froid et à cache chaud sont relevées et remises à l'orchestrateur.
+- **Note du 2026-10-25, après acceptation d'ADR-0062** : les critères ci-dessus décrivent l'état à la clôture d'`AJOUTER-ORT-CI` et ne sont pas réécrits. Depuis `ADR-0062`, la CI exclut **deux** tests de l'échantillon Legifacile, nommés un par un : `inv_12_the_legifacile_sample_passes_the_acceptance_check` et `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction`. La phrase « les 19 tests ignorés » et celle du « seul exclu » valent donc pour la date de clôture, pas après ; `ADR-0062` fait foi pour ces décomptes.
 - **Invariants / mesures** : INV-11 (aucune troncature silencieuse : les tests `inv_11_*` passent en CI avec ONNX Runtime), INV-12 (recette d'import : les tests `inv_12_*` passent en CI, sauf l'échantillon Legifacile, local).
 - **Étapes de publication de l'artefact** :
   1. la tâche prépare dans `data/` (gitignoré) le dossier d'envoi décrit dans les livrables ;

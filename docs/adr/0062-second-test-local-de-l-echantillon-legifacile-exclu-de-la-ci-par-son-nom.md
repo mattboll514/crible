@@ -1,8 +1,9 @@
 # ADR-0062 — Second test local de l'échantillon Legifacile, exclu de la CI par son nom
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé. La décision 1 est l'option **(1a)**, un **second `--skip` explicite** nommant `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` ; la décision 2 est l'option **(2ii)**, **aucune borne par défaut sur la durée**, la durée étant relevée à J3 et notée dans le suivi. Les modifications à appliquer sont celles de la section « Modifications à appliquer après acceptation », points 1 à 8 ; le point 5 (borne et MES-16) n'est pas retenu.
 - **Proposé par** : agent greffier, sur demande du propriétaire, à la suite de la relecture du 1er tour de la tâche `VERIFIER-EQUIVALENCE-COMPACTION` (phase P3, branche `tache/VERIFIER-EQUIVALENCE-COMPACTION`). Point bloquant relevé par `@relecteur` ; verdict de `@architecte` : **ECART sur la lettre, CONFORME sur le principe**.
 - **Remplace** : — (complète ADR-0057, qui reste en vigueur et `Accepté` ; son corps n'est pas modifié, comme pour ADR-0059, qui le complète déjà)
 
