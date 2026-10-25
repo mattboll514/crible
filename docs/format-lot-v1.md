@@ -212,6 +212,47 @@ dossier puis le verrou qu'en cas de succès. Toute autre erreur de verrou, comme
 sur un montage réseau qui ne partage pas les verrous, ne supprime rien et laisse
 le dossier en place.
 
+### Lot d'export
+
+`crible export` (et `POST /v1/indexes/{index}/exports`) écrit un lot
+`replace_all` des données vivantes de l'index à la génération G, dans
+`exchange/outbox/<index>-g<G>/`, en parties d'au plus un million de passages,
+sans aucun iid (ADR-0061). C'est un lot de ce format, `format_version` 1, avec
+les valeurs de manifeste suivantes :
+
+| Champ | Valeur |
+|---|---|
+| `batch_id` | `<index>-g<G>`, identique au nom du dossier |
+| `producer.name` | `crible` |
+| `producer.version` | `CARGO_PKG_VERSION` — version du binaire qui a écrit le lot |
+| `producer.host` | `crible-export` |
+| `chunker` | `{ "name": "none", "version": "1" }` |
+| `template` | `{ "name": "none", "version": "1" }` |
+| `created_at` | date RFC 3339 de l'export |
+| `index` | nom de l'index source |
+
+`none`/`1` veut dire ici « aucun découpage ni recomposition par le producteur de
+ce lot » : l'export recopie des entrées encodeur déjà stockées et n'a pas de
+producteur qui découpe. Le manifeste décrit donc le lot exporté, pas l'histoire
+des documents ; la provenance du découpage d'origine reste dans l'index source
+(`batches.manifest`, `segments.batch_id`) et n'est pas transportée. C'est une
+perte assumée de l'export, et elle ne change ni INV-08, ni la recette, ni
+INV-10 : aucun contrôle ne lit `chunker` ni `template`.
+
+Contrairement au lot du mode en ligne, le manifeste d'export **n'a pas à être
+déterministe** : `created_at` et `producer.version` changent d'un export à
+l'autre. Deux exports de la même génération sont donc deux lots distincts ; les
+attacher tous deux au même index cible donne `409 batch_conflict`.
+Ré-attacher **le même dossier** reste un no-op (INV-10) : même `batch_id`, même
+manifeste.
+
+`index` vaut le nom de l'index source, et l'attache exige ce nom : la
+restauration se fait dans un index vide de même nom et de même configuration.
+Un dossier de destination déjà présent n'est jamais écrasé ; l'export le refuse
+en `invalid_request`. L'écriture passe par un dossier temporaire
+`exchange/outbox/.tmp-*`, dont une panne peut laisser un résidu que rien ne
+supprime automatiquement.
+
 ## Colonnes Parquet
 
 Tous les fichiers sont au format Parquet. Les colonnes de schéma sont
@@ -323,5 +364,6 @@ rapport d'origine (INV-10). Le même `batch_id` avec un autre manifeste renvoie
 `04-donnees-et-ingestion.md` ; `05-api.md` (lot en ligne) ; ADR-0005 (précision
 de référence figée) ; ADR-0012 (format de lot public) ; ADR-0027 (`serde_json`) ;
 ADR-0039 (ordre des lignes dans un lot v1) ; ADR-0040 (unicité des documents et
-des parties dans un lot v1) ; ADR-0055 (lot interne du mode en ligne) ;
+des parties dans un lot v1) ; ADR-0055 (lot interne du mode en ligne) ; ADR-0061 (manifeste d'un lot
+exporté) ;
 `08-invariants-et-tests.md` (INV-03, INV-10, INV-11, INV-12).

@@ -299,9 +299,19 @@ Un patch passe la même file d'écriture que les autres écritures de l'index. F
 |---|---|---|
 | Contenu | Lot `replace_all` des données vivantes à la génération G | Copie cohérente de l'époque : `VACUUM INTO` de SQLite, segments, tantivy, `index.json`, manifeste |
 | Destination | `exchange/outbox/<index>-g<G>/`, en parties d'au plus 1 M passages | `exchange/snapshots/<index>-e<E>-g<G>/` |
-| Restauration | Attacher le lot dans un index vide | CLI : installé comme nouvelle époque, puis `CURRENT_EPOCH` |
+| Restauration | Attacher le lot dans un index **vide, de même nom et de même configuration** que l'index source (ADR-0061) | CLI : installé comme nouvelle époque, puis `CURRENT_EPOCH` |
 | Avantage | Portable, indépendant de la version de Crible, lisible avec DuckDB | Restauration rapide, sans reconstruction |
 | Pendant l'opération | L'écrivain continue | L'écrivain est suspendu le temps de la copie |
+
+Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, section « Lot d'export ») et porte les règles suivantes (ADR-0061) :
+
+- `chunker` et `template` valent `{ "name": "none", "version": "1" }` : l'export ne découpe ni ne recompose rien, il recopie des entrées encodeur déjà stockées. La provenance du découpage d'origine n'est pas transportée ; elle reste dans l'index source (`batches.manifest`, `segments.batch_id`).
+- `producer.version` est la version du binaire Crible qui a écrit le lot (`CARGO_PKG_VERSION`), et `producer.name` vaut `crible` avec `producer.host` à `crible-export`.
+- `created_at` est la date réelle de l'export, lue dans SQLite. Le manifeste d'export **n'a pas à être déterministe** : deux exports de la même génération sont deux lots distincts, et les attacher tous deux au même index cible donne `409 batch_conflict`.
+- `index` vaut le nom de l'index source ; c'est aussi le nom attendu à l'attache, d'où la restauration dans un index de même nom.
+- Un dossier `exchange/outbox/<index>-g<G>/` déjà présent est refusé : l'export n'écrase jamais un export existant, qu'une attache peut être en train de lire. Le refus est rendu en `invalid_request` (400).
+- L'export écrit sous un dossier temporaire `exchange/outbox/.tmp-<batch_id>-<pid>-<n>-<nanos>` puis le renomme. Une panne laisse donc un résidu `.tmp-*` que ni la reprise (`02-architecture.md`) ni une commande ne supprime : il se nettoie à la main.
+- Une course de génération (l'index commite entre l'instantané et la première lecture) relance l'export sur un instantané neuf, au plus trois fois, puis rend `overloaded` (503). Ce nombre de tentatives est une mitigation interne, hors contrat.
 
 ## Le découpage : qui fait quoi
 

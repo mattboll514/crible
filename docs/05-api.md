@@ -28,7 +28,7 @@ Format unique :
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente ou inconnue |
 | `forbidden` | 403 | Rôle insuffisant |
@@ -39,7 +39,7 @@ Format unique :
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
-| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056) (`Retry-After`) |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) (`Retry-After`) |
 | `timeout` | 504 | Requête trop longue |
 | `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) |
 

@@ -1,8 +1,9 @@
 # ADR-0061 — Manifeste d'un lot exporté
 
-- **Statut** : Proposé
-- **Date** : 2026-10-25
+- **Statut** : Accepté (décision du propriétaire le 2026-10-25)
+- **Date** : 2026-10-25 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-25 par le propriétaire, tel que proposé : décision 1 option (a) `chunker`/`template` à `none`/`1` au sens du lot en ligne, décision 2 option (i) horodatage de l'export et refus d'écraser un dossier existant, décision 3 option (a) `index` garde le nom de l'index source, décision 4 option (a) `producer.version` = `CARGO_PKG_VERSION`, décision 5 option (a) cause de course de génération ajoutée à `overloaded`. `format_version` reste 1 ; INV-08, la recette et INV-10 sont inchangés.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche EXPORTER-LOT (phase P3), après la relecture du tour 1 et le verdict `NON-COUVERT` de `@architecte`
 - **Remplace** : —
 
