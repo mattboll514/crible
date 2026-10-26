@@ -9,7 +9,7 @@
 
 ## Erratum du 2026-10-26
 
-Le nom du test écrit au point 3 de la section « Modifications à appliquer après acceptation » était mal orthographié, et il est corrigé, sans qu'aucune décision ne change. La correction de cette coquille a été acceptée par anticipation par le propriétaire le 2026-10-26, à confirmer au point de fin de NETTOYER-P3.
+Le nom du test écrit au point 3 de la section « Modifications à appliquer après acceptation » était mal orthographié, et il est corrigé, sans qu'aucune décision ne change. La correction de cette coquille a été acceptée par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-26.
 
 - **Avant** : `inv_08_the_legifacile_sample_queries_return_the_same_results_after_export_and_import`.
 - **Après** : `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`.
