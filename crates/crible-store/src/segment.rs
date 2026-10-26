@@ -3,8 +3,8 @@
 //! Immutable vector files of one segment.
 //!
 //! A segment directory (`segments/<segment_id>/`) holds the reference vectors
-//! of a contiguous range of internal identifiers, plus `segment.json`
-//! (`docs/02-architecture.md`, "Organisation sur disque"):
+//! of a contiguous range of internal identifiers, their binary codes, plus
+//! `segment.json` (`docs/02-architecture.md`, "Organisation sur disque"):
 //!
 //! ```json
 //! {
@@ -29,6 +29,17 @@
 //! little-endian and explicit: 2 bytes for fp16, 4 bytes for fp32. Nothing is
 //! read through a platform-dependent transmutation (INV-15).
 //!
+//! The binary codes live in `codes.bin`, written by the same writer and read
+//! with the same atomicity: one code per vector, `ceil(dims / 64)` little-endian
+//! `u64` words, bit `i` set when `x_i > 0` (`ADR-0069`). The codes are kept in
+//! RAM, never memory-mapped, because every query scans them whole
+//! (`docs/02-architecture.md`, "Mémoire : ce qui est en RAM"). They are loaded
+//! **lazily**: a reader that only reads reference vectors — the compaction, the
+//! export, a verification — never pays their disk read nor their memory. A
+//! segment opened without a `codes.bin` builds them in RAM and writes nothing;
+//! the writer open rebuilds and persists them
+//! ([`crate::codes::rebuild_codes`]).
+//!
 //! Writing is atomic (`docs/02-architecture.md`, "Générations et point de
 //! commit"): the files are built in `segments/tmp-<segment_id>/`, fsynced, then
 //! the directory is renamed to its final name. A segment therefore stays
@@ -39,6 +50,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};
@@ -46,6 +58,8 @@ use crible_core::ids::{Generation, Iid};
 use half::f16;
 use memmap2::Mmap;
 use serde_json::{Value, json};
+
+use crate::codes::{self, CODES_FILE_NAME};
 
 /// Version of the segment on-disk format (INV-15).
 pub const FORMAT_VERSION: u32 = 1;
@@ -158,6 +172,7 @@ pub struct SegmentWriter {
     temporary_dir: PathBuf,
     final_dir: PathBuf,
     vectors: BufWriter<File>,
+    codes: BufWriter<File>,
     hasher: blake3::Hasher,
     count: u32,
 }
@@ -199,11 +214,15 @@ impl SegmentWriter {
         let vectors_path = temporary_dir.join(vector_file_name(spec.precision));
         let file = File::create(&vectors_path)
             .map_err(|error| io_error("create the vector file", &vectors_path, &error))?;
+        let codes_path = temporary_dir.join(CODES_FILE_NAME);
+        let codes = File::create(&codes_path)
+            .map_err(|error| io_error("create the binary codes file", &codes_path, &error))?;
         Ok(Self {
             spec,
             temporary_dir,
             final_dir,
             vectors: BufWriter::new(file),
+            codes: BufWriter::new(codes),
             hasher: blake3::Hasher::new(),
             count: 0,
         })
@@ -267,18 +286,35 @@ impl SegmentWriter {
         // The checksum is computed on the bytes actually written, so the hash of
         // a whole fp32 segment never has to be held in memory.
         self.hasher.update(&encoded);
+        // The codes are quantized from the bytes actually written, not from the
+        // caller's `f32`: a positive component that underflows to +0 in fp16
+        // must not set a bit the reader would never see, or a rebuild from the
+        // stored vectors would produce a different `codes.bin` (ADR-0069).
+        let stored = decode_vector(&encoded, self.spec.precision)?;
+        let codes_path = self.temporary_dir.join(CODES_FILE_NAME);
+        for word in codes::quantize(&stored) {
+            self.codes.write_all(&word.to_le_bytes()).map_err(|error| {
+                io_error("append to the binary codes file", &codes_path, &error)
+            })?;
+        }
         self.count = next_count;
         Ok(Iid::new(iid))
     }
 
-    /// Completes the segment: fsyncs the vector file, writes `segment.json`,
-    /// fsyncs the directory and renames it to `segments/<segment_id>/`.
+    /// Completes the segment: fsyncs the vector and code files, writes
+    /// `segment.json`, fsyncs the directory and renames it to
+    /// `segments/<segment_id>/`.
+    ///
+    /// `codes.bin` is not part of the checksums of `segment.json`: it is derived
+    /// from the vectors and rebuilds, whereas the checksums name the files whose
+    /// absence is a failure (`ADR-0069`, decision 6).
     pub fn finish(self) -> Result<SegmentMeta, CribleError> {
         let Self {
             spec,
             temporary_dir,
             final_dir,
             vectors,
+            codes,
             hasher,
             count,
         } = self;
@@ -301,6 +337,16 @@ impl SegmentWriter {
             )
         })?;
         drop(file);
+
+        let codes_path = temporary_dir.join(CODES_FILE_NAME);
+        let codes_file = codes
+            .into_inner()
+            .map_err(|error| error.into_error())
+            .map_err(|error| io_error("flush the binary codes file", &codes_path, &error))?;
+        codes_file
+            .sync_all()
+            .map_err(|error| io_error("fsync the binary codes file", &codes_path, &error))?;
+        drop(codes_file);
 
         let checksums = BTreeMap::from([(
             vector_file_name(spec.precision).to_owned(),
@@ -343,17 +389,51 @@ impl SegmentWriter {
     }
 }
 
-/// Read-only view of the vectors of one segment, through a memory map.
-#[derive(Debug)]
+/// Read-only view of the vectors of one segment, through a memory map, and of
+/// its binary codes, built in RAM at the first use.
+///
+/// The codes are copied into memory rather than mapped: every query scans them
+/// whole, so letting the kernel evict them would cost a page fault per passage
+/// (`docs/02-architecture.md`, "Mémoire : ce qui est en RAM"). They are loaded
+/// **lazily**: a caller that only reads reference vectors — the compaction, the
+/// export, the verification of a written segment — never pays their disk read
+/// nor their memory. A search path calls [`SegmentReader::codes`] once and pays
+/// them then.
 pub struct SegmentReader {
     meta: SegmentMeta,
+    segment_dir: PathBuf,
     data: Option<Mmap>,
+    codes: OnceLock<Vec<u64>>,
+}
+
+impl std::fmt::Debug for SegmentReader {
+    /// Summarizes the code array: it is the largest field of a segment, and a
+    /// reader in a log line must not print hundreds of megabytes.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SegmentReader")
+            .field("meta", &self.meta)
+            .field("mapped_bytes", &self.data.as_ref().map(|data| data.len()))
+            .field(
+                "codes",
+                &format_args!("{} words", self.codes.get().map_or(0, Vec::len)),
+            )
+            .finish()
+    }
 }
 
 impl SegmentReader {
     /// Opens a segment directory: checks the format version (INV-15), derives
     /// the precision and the identifier from the disk layout, checks the
-    /// declared checksum and the file length, then maps the vector file.
+    /// declared checksum and the file length, then maps the vector file. The
+    /// binary codes are checked for their length here and loaded on first use.
+    ///
+    /// The codes come from `codes.bin` when it is present. A **missing** file is
+    /// not an error: the codes are quantized from the reference vectors into
+    /// RAM, and nothing is written under the epoch — a read-only open must not
+    /// modify the epoch it reads (`ADR-0069`, decision 2). A file of the wrong
+    /// length is an [`ErrorCode::Internal`] error naming it (`ADR-0069`,
+    /// decision 3).
     ///
     /// An unknown or missing `format_version` is an [`ErrorCode::InvalidRequest`]
     /// error, because it describes the caller's view of the format. Everything
@@ -365,8 +445,10 @@ impl SegmentReader {
     /// verify its blake3 checksum, as the segment task requires ("a corrupted
     /// checksum is detected at open time"). At the scale of Legifacile that is
     /// about 13 GB per open. The policy is unchanged here: the generation
-    /// snapshot reads the metadata through `read_meta` and opens no segment,
-    /// so it never pays that cost. Deferring the verification itself (once per
+    /// snapshot reads the metadata through `read_meta` and the binary codes from
+    /// `codes.bin`, and opens no vector file, so it never pays that cost. The
+    /// compaction and the export open segments only for their vectors, and the
+    /// codes stay unloaded. Deferring the verification itself (once per
     /// generation, or only on recovery) stays an open question for a later
     /// decision.
     pub fn open(segment_dir: &Path) -> Result<Self, CribleError> {
@@ -418,7 +500,31 @@ impl SegmentReader {
                     .map_err(|error| io_error("map the vector file", &vectors_path, &error))?,
             )
         };
-        Ok(Self { meta, data })
+        // The codes are loaded on first use, never here: the compaction and the
+        // export open segments whose vectors they read and whose codes they
+        // never scan. A present `codes.bin` is still checked for its length: a
+        // truncated or oversized derived file is a corruption, refused at open
+        // as the segment task requires.
+        let codes_path = segment_dir.join(CODES_FILE_NAME);
+        match fs::metadata(&codes_path) {
+            Ok(metadata) => {
+                codes::verify_codes_len(&codes_path, meta.count, meta.dims, metadata.len())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error(
+                    "inspect the binary codes file",
+                    &codes_path,
+                    &error,
+                ));
+            }
+        }
+        Ok(Self {
+            meta,
+            segment_dir: segment_dir.to_path_buf(),
+            data,
+            codes: OnceLock::new(),
+        })
     }
 
     /// Metadata of the segment.
@@ -452,8 +558,127 @@ impl SegmentReader {
                 ),
             ));
         };
+        decode_vector(self.row_bytes(index)?, self.meta.precision)
+    }
+
+    /// Returns the binary code of `iid`: `ceil(dims / 64)` words, bit `i` set
+    /// when the component `i` of the reference vector is positive.
+    ///
+    /// The words come from the RAM copy of `codes.bin`, loaded at the first call,
+    /// or from the RAM copy quantized from the reference vectors when the file
+    /// was missing (`ADR-0069`, decisions 1 and 2). An identifier outside the
+    /// range of the segment is an [`ErrorCode::Internal`] error, for the same
+    /// reason as [`Self::vector`].
+    pub fn codes(&self, iid: Iid) -> Result<&[u64], CribleError> {
+        let Some(index) = self.index_of(iid) else {
+            let end = u64::from(self.meta.iid_start.get()) + u64::from(self.meta.count);
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "iid {} is outside the range [{}, {end}) of segment {}",
+                    iid.get(),
+                    self.meta.iid_start.get(),
+                    self.meta.segment_id
+                ),
+            ));
+        };
+        let words = codes::words_per_code(self.meta.dims);
+        let start = index.checked_mul(words).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "offset of the code of iid {} overflows in segment {}",
+                    iid.get(),
+                    self.meta.segment_id
+                ),
+            )
+        })?;
+        let end = start.checked_add(words).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "end of the code of iid {} overflows in segment {}",
+                    iid.get(),
+                    self.meta.segment_id
+                ),
+            )
+        })?;
+        self.codes_words()?.get(start..end).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the binary code of iid {} is missing from the codes of segment {}",
+                    iid.get(),
+                    self.meta.segment_id
+                ),
+            )
+        })
+    }
+
+    /// Whole code array of the segment, one code after another, as
+    /// `codes.bin` holds it, loaded on first use.
+    ///
+    /// The writer open rebuilds a missing `codes.bin` from this array, which is
+    /// then exactly the quantization of the reference vectors
+    /// ([`crate::codes::rebuild_codes`]).
+    pub(crate) fn codes_words(&self) -> Result<&[u64], CribleError> {
+        if let Some(codes) = self.codes.get() {
+            return Ok(codes);
+        }
+        // Two threads may load the same array at once; both values are equal, so
+        // the loser is dropped and the winner is kept.
+        let codes = self.load_codes()?;
+        Ok(self.codes.get_or_init(|| codes))
+    }
+
+    /// Loads the codes of the segment: from `codes.bin` when it is present,
+    /// quantized from the mapped vectors otherwise.
+    fn load_codes(&self) -> Result<Vec<u64>, CribleError> {
+        let path = self.segment_dir.join(CODES_FILE_NAME);
+        match fs::metadata(&path) {
+            Ok(_) => codes::read_codes_bin(&path, self.meta.count, self.meta.dims),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.quantize_vectors(),
+            Err(error) => Err(io_error("inspect the binary codes file", &path, &error)),
+        }
+    }
+
+    /// Quantizes every reference vector of the segment, in RAM, without writing
+    /// anything under the epoch (`ADR-0069`, decision 2).
+    fn quantize_vectors(&self) -> Result<Vec<u64>, CribleError> {
+        let count = usize::try_from(self.meta.count).map_err(|_| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "segment {} holds too many vectors for this platform",
+                    self.meta.segment_id
+                ),
+            )
+        })?;
+        let mut words =
+            Vec::with_capacity(count.saturating_mul(codes::words_per_code(self.meta.dims)));
+        for index in 0..count {
+            words.extend(codes::quantize(&decode_vector(
+                self.row_bytes(index)?,
+                self.meta.precision,
+            )?));
+        }
+        Ok(words)
+    }
+
+    /// Bytes of the stored reference vector at `index` inside the vector file.
+    fn row_bytes(&self, index: usize) -> Result<&[u8], CribleError> {
         let dims = self.meta.dims as usize;
         let width = bytes_per_component(self.meta.precision);
+        let iid = u64::from(self.meta.iid_start.get())
+            + u64::try_from(index).map_err(|_| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "row {index} does not fit in the identifier space of segment {}",
+                        self.meta.segment_id
+                    ),
+                )
+            })?;
         let start = index
             .checked_mul(dims)
             .and_then(|offset| offset.checked_mul(width))
@@ -461,8 +686,7 @@ impl SegmentReader {
                 CribleError::new(
                     ErrorCode::Internal,
                     format!(
-                        "offset of iid {} overflows in segment {}",
-                        iid.get(),
+                        "offset of iid {iid} overflows in segment {}",
                         self.meta.segment_id
                     ),
                 )
@@ -472,23 +696,20 @@ impl SegmentReader {
             return Err(CribleError::new(
                 ErrorCode::Internal,
                 format!(
-                    "segment {} holds no vector file bytes, so no vector for iid {}",
-                    self.meta.segment_id,
-                    iid.get()
-                ),
-            ));
-        };
-        let Some(bytes) = data.get(start..end) else {
-            return Err(CribleError::new(
-                ErrorCode::Internal,
-                format!(
-                    "iid {} falls outside the vector file of segment {}",
-                    iid.get(),
+                    "segment {} holds no vector file bytes, so no vector for iid {iid}",
                     self.meta.segment_id
                 ),
             ));
         };
-        decode_vector(bytes, self.meta.precision)
+        data.get(start..end).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "iid {iid} falls outside the vector file of segment {}",
+                    self.meta.segment_id
+                ),
+            )
+        })
     }
 
     /// Position of `iid` in the vector file, or `None` when it is out of range.
