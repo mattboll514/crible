@@ -105,14 +105,13 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
+use arrow::array::{Array, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::Generation;
@@ -121,8 +120,6 @@ use crible_store::attach::{AttachReport, attach};
 use crible_store::batch_reader::BatchReader;
 use crible_store::generation::GenerationStore;
 use half::f16;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
@@ -587,22 +584,6 @@ fn unit_vector() -> Vec<u8> {
         .collect()
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the fixture batch is valid: {error}"));
-    let file =
-        File::create(path).unwrap_or_else(|error| panic!("the fixture Parquet file: {error}"));
-    let properties = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
-        .unwrap_or_else(|error| panic!("the fixture Parquet writer opens: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the fixture batch is written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the fixture Parquet file closes: {error}"));
-}
-
 /// Rows of one mini batch.
 struct MiniBatch<'a> {
     /// Directory name, and `batch_id` of the manifest.
@@ -635,7 +616,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
         .map(|(_, doc_hash)| Some(*doc_hash))
         .collect();
     let years = Int64Array::from(vec![None::<i64>; spec.documents.len()]);
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &document_schema(),
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(years)],
@@ -668,7 +649,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
             .unwrap_or_else(|error| panic!("a two-dimensional fp16 vector width: {error}")),
     )
     .unwrap_or_else(|error| panic!("the fixture vectors share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &dir.join("passages.parquet"),
         &passage_schema(),
         vec![
@@ -687,7 +668,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
             false,
         )]));
         let column: StringArray = spec.deletions.iter().map(|id| Some(*id)).collect();
-        write_parquet(
+        common::write_parquet(
             &dir.join("deletions.parquet"),
             &schema,
             vec![Arc::new(column)],
@@ -1420,6 +1401,11 @@ fn no_sqlite_write_follows_the_commit_point() {
             "metadata_updated": 0,
             "deleted": 0,
             "ignored": 0,
+            // `docs/04` gives `acceptance: null` its one meaning, a missing
+            // check: the fixture model is `external`, so no check ran, and the
+            // member is written with `null` (ADR-0054). An absent member would
+            // be a second spelling of the same fact.
+            "acceptance": null,
         }),
         "the batches row must already hold the definitive report at the commit point, \
          with no durations"

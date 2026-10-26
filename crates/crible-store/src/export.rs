@@ -330,8 +330,7 @@ fn attempt_export(
     // the rename leaves a batch whose bytes match the blake3 of its manifest,
     // not a published batch with short files.
     crate::segment::sync_directory(&staging)?;
-    fs::rename(&staging, &directory)
-        .map_err(|error| io_error("rename the export into place", &staging, &error))?;
+    publish(&staging, &directory)?;
     guard.disarm();
     crate::segment::sync_directory(outbox)?;
 
@@ -341,6 +340,34 @@ fn attempt_export(
         documents: counts.documents,
         passages: counts.passages,
     })
+}
+
+/// Renames the finished staging directory into the name of the batch.
+///
+/// The pre-check of [`attempt_export`] gives the usual message, but it is not
+/// atomic: two exports of the same generation can both pass it, and only one
+/// rename wins because the directory entry is created once. The loser is a
+/// request this store cannot carry out, the same [`ErrorCode::InvalidRequest`]
+/// the pre-check returns (ADR-0061, `docs/04`), not an internal disk fault; the
+/// rename is what decides, so the outcome does not depend on the order of the
+/// two checks.
+///
+/// A rename that fails for any other reason stays a disk error, and so does a
+/// fault whose target is absent: the fault, not a lost race, is then the cause.
+fn publish(staging: &Path, directory: &Path) -> Result<(), BatchFailure> {
+    match fs::rename(staging, directory) {
+        Ok(()) => Ok(()),
+        Err(_error) if directory.exists() => Err(BatchFailure::Fatal(invalid(format!(
+            "the export batch {} was created by another export of the same generation while this \
+             one was being written; an export never overwrites a batch (ADR-0061)",
+            directory.display()
+        )))),
+        Err(error) => Err(BatchFailure::Fatal(io_error(
+            "rename the export into place",
+            staging,
+            &error,
+        ))),
+    }
 }
 
 /// Draws a staging directory name no other export of `batch_id` can hold.
@@ -412,9 +439,11 @@ fn write_batch(
     let created_at = utc_now(&transaction)?;
 
     let documents = records::all_documents(&transaction)?;
-    // The export copies the encoder input, the document id and the ord: it
-    // never reads the passage fields of the snapshot, so the JSON of every
-    // live passage is decoded once, by `passage_by_iid` below, instead of
+    // The export copies the encoder input, the document id and the ord from
+    // the identity rows, then decodes each whole passage row with
+    // `passage_by_iid` below, because the batch writes the declared passage
+    // fields. The identity query therefore leaves those fields undecoded
+    // (`live_identities(…, false)`), so every passage JSON is decoded once, not
     // twice (`compact.rs` does the same when it does not cluster on them).
     let mut identities = records::live_identities(&transaction, false)?;
     identities.sort_by(|left, right| {
@@ -1025,12 +1054,13 @@ mod tests {
 
     use std::collections::BTreeMap;
 
-    use crible_core::ids::{Epoch, Iid};
+    use crible_core::ids::Iid;
 
     use super::*;
     use crate::batch_reader::BatchReader;
     use crate::generation::GenerationChange;
     use crate::generation::write_index_config;
+    use crate::generation::{INDEXES_DIRECTORY, INITIAL_EPOCH};
     use crate::records::{DocumentRecord, PassageRecord};
     use crate::segment::{SegmentSpec, SegmentWriter};
 
@@ -1079,12 +1109,12 @@ mod tests {
         let temp = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
         let exchange = temp.path().join("exchange");
-        let index_dir = temp.path().join("indexes").join(INDEX);
+        let index_dir = temp.path().join(INDEXES_DIRECTORY).join(INDEX);
         let index_config = IndexConfig::from_json_str(CONFIG)
             .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
         write_index_config(&index_dir, CONFIG)
             .unwrap_or_else(|error| panic!("the fixture configuration must be written: {error}"));
-        let mut store = GenerationStore::create(&index_dir, Epoch::new(1), &index_config.schema)
+        let mut store = GenerationStore::create(&index_dir, INITIAL_EPOCH, &index_config.schema)
             .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"));
 
         let vectors = [
@@ -1097,7 +1127,7 @@ mod tests {
             &[0.0, 0.0, 1.0, 0.0],
         ];
         let segments_dir = crate::generation::segments_directory(
-            &crate::generation::epoch_directory(&index_dir, Epoch::new(1)),
+            &crate::generation::epoch_directory(&index_dir, INITIAL_EPOCH),
         );
         fs::create_dir_all(&segments_dir)
             .unwrap_or_else(|error| panic!("the segments directory must be creatable: {error}"));
@@ -1416,6 +1446,50 @@ mod tests {
         );
     }
 
+    /// A rename that loses the race to another export of the same generation is
+    /// the request's fault, not a disk fault: the pre-check above is not
+    /// atomic, and the loser must get the code ADR-0061 promises. The staging
+    /// directory of the loser is left to its guard, never renamed.
+    #[test]
+    fn a_rename_that_loses_the_race_is_an_invalid_request() {
+        let temp = tempfile::tempdir()
+            .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
+        let staging = temp.path().join("export-g1-tmp");
+        fs::create_dir(&staging)
+            .unwrap_or_else(|error| panic!("the staging directory must be creatable: {error}"));
+        fs::write(staging.join("manifest.json"), b"{}")
+            .unwrap_or_else(|error| panic!("the staging manifest must be writable: {error}"));
+
+        // The directory the other export renamed into place first.
+        let directory = temp.path().join("export-g1");
+        fs::create_dir(&directory)
+            .unwrap_or_else(|error| panic!("the batch directory must be creatable: {error}"));
+        fs::write(directory.join("manifest.json"), b"{}")
+            .unwrap_or_else(|error| panic!("the batch manifest must be writable: {error}"));
+
+        let error = publish(&staging, &directory)
+            .err()
+            .unwrap_or_else(|| panic!("the losing rename must fail"));
+        let BatchFailure::Fatal(error) = error else {
+            panic!("a taken name is not a generation the writer moved");
+        };
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "the loser of a creation race gets the code of an existing batch: {error}"
+        );
+        assert!(
+            error
+                .message()
+                .contains("another export of the same generation"),
+            "the message must name the race: {error}"
+        );
+        assert!(
+            staging.exists(),
+            "the loser keeps its own staging directory, which its guard removes"
+        );
+    }
+
     /// An existing batch of the same generation is refused, and its files are
     /// left untouched: an export never overwrites a copy an operator already
     /// moved out.
@@ -1565,12 +1639,12 @@ mod tests {
         let temp = tempfile::tempdir()
             .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
         let exchange = temp.path().join("exchange");
-        let index_dir = temp.path().join("indexes").join(INDEX);
+        let index_dir = temp.path().join(INDEXES_DIRECTORY).join(INDEX);
         let index_config = IndexConfig::from_json_str(CONFIG)
             .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
         write_index_config(&index_dir, CONFIG)
             .unwrap_or_else(|error| panic!("the fixture configuration must be written: {error}"));
-        let store = GenerationStore::create(&index_dir, Epoch::new(1), &index_config.schema)
+        let store = GenerationStore::create(&index_dir, INITIAL_EPOCH, &index_config.schema)
             .unwrap_or_else(|error| panic!("the empty index must be created: {error}"));
         let model_config = ModelConfig::from_json_str(MODEL)
             .unwrap_or_else(|error| panic!("the fixture model must be valid: {error}"));

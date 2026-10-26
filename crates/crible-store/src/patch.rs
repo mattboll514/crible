@@ -46,7 +46,11 @@ use crate::records::{self, DocumentRecord};
 
 /// Largest patch accepted, in bytes, for the CLI file and the HTTP body alike
 /// (ADR-0060, decision 7).
-pub const MAX_BYTES: u64 = 32 * 1024 * 1024;
+///
+/// The bound is the decimal megabyte of ADR-0060, `docs/04` and `docs/05`
+/// ("32 Mo"), not the binary mebibyte the former `32 * 1024 * 1024` wrote, so
+/// the code and the documents name the same number of bytes.
+pub const MAX_BYTES: u64 = 32_000_000;
 
 /// Largest number of entries accepted in one patch (ADR-0060, decision 7).
 pub const MAX_ENTRIES: usize = 10_000;

@@ -109,7 +109,7 @@ fn inv_04_crash_before_sqlite_commit_keeps_previous_generation() {
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 0, &[], &[]);
     // Nothing of the aborted generation is visible, not even its segment.
-    common::assert_segment_directories(&index, &[]);
+    common::assert_segment_directories(&index, common::EPOCH, &[]);
     assert!(
         common::temporary_segment_directories(&index).is_empty(),
         "no tmp-* directory survives the restart"
@@ -127,7 +127,7 @@ fn inv_04_crash_after_sqlite_commit_keeps_new_generation() {
 
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
     // The manifest of generation 1 did not exist at crash time.
     common::assert_manifest_describes(&index, 1, &["seg-a"]);
 }
@@ -177,7 +177,7 @@ fn inv_04_crash_at_every_step_yields_old_or_new_generation() {
             segments,
             live_iids,
         );
-        common::assert_segment_directories(&index, segments);
+        common::assert_segment_directories(&index, common::EPOCH, segments);
         common::assert_manifest_describes(&index, expected_generation, segments);
         assert!(
             common::temporary_segment_directories(&index).is_empty(),
@@ -228,7 +228,7 @@ fn inv_04_recovery_removes_temporary_and_orphan_segments() {
 
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
 }
 
 /// A missing manifest is rewritten from SQLite at restart, and describes the
@@ -304,7 +304,7 @@ fn inv_04_recovery_is_idempotent() {
 
     let second = common::open_store(&index);
     common::assert_view(&second.snapshot(), 1, &["seg-a"], &[0]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
     // One manifest per generation, no accumulation: a second restart writes
     // exactly the manifests the first one left, and never a duplicate.
     assert_eq!(

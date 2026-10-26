@@ -91,11 +91,11 @@ use serde_json::Value;
 use crate::compact::{next_epoch, remove_directory};
 use crate::generation::{
     CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME,
-    MANIFESTS_DIR_NAME, RECORDS_FILE_NAME, SEGMENTS_DIR_NAME, TEMPORARY_PREFIX, epoch_directory,
-    epochs_directory, manifests_directory, read_current_epoch, segments_directory,
-    write_current_epoch,
+    INDEXES_DIRECTORY, INITIAL_EPOCH, MANIFESTS_DIR_NAME, RECORDS_FILE_NAME, SEGMENTS_DIR_NAME,
+    TEMPORARY_PREFIX, epoch_directory, epochs_directory, manifests_directory, read_current_epoch,
+    segments_directory, write_current_epoch,
 };
-use crate::records::RecordStore;
+use crate::records::{self, RecordStore};
 use crate::segment::{io_error, sync_directory, vector_file_name, write_file_synced};
 
 /// Version of the snapshot attestation (`snapshot.json`), from ADR-0064.
@@ -107,21 +107,11 @@ pub const SNAPSHOT_FILE_NAME: &str = "snapshot.json";
 /// Sub-directory of the exchange root that holds the snapshots (`docs/02`).
 pub(crate) const SNAPSHOTS_DIRECTORY: &str = "snapshots";
 
-/// Sub-directory of the data root that holds the indexes (`docs/02`).
-pub(crate) const INDEXES_DIRECTORY: &str = "indexes";
-
 /// Name of the tantivy directory of an epoch (`docs/02`).
 ///
 /// Absent in P3: tantivy arrives in P5, and the snapshot copies it only when the
 /// epoch carries it (ADR-0064, decision 4).
 pub(crate) const LEXICAL_DIR_NAME: &str = "lexical";
-
-/// Epoch a restoration gives to an index it creates (`crates/crible/src/commands.rs`).
-///
-/// `ADR-0065`, decision 2: an absent target has no epoch to pass, so it gets the
-/// initial epoch of a creation; the `E+1` rule only applies to an index that
-/// already has an epoch.
-pub const INITIAL_EPOCH: Epoch = Epoch::new(1);
 
 /// Prefix of the staging directory of a snapshot, inside `snapshots/`.
 const STAGING_PREFIX: &str = ".tmp-";
@@ -206,10 +196,12 @@ struct SnapshotAttestation {
 ///
 /// - [`ErrorCode::InvalidRequest`] when
 ///   `<exchange>/snapshots/<index>-e<E>-g<G>/` already exists: a snapshot never
-///   overwrites one (ADR-0064, decision 3);
-/// - [`ErrorCode::Internal`] when the disk fails, or when the index holds a state
-///   no commit could have produced (a segment of the published generation without
-///   its directory, a manifest of G that cannot be found).
+///   overwrites one (ADR-0064, decision 3), or when the copied `index.json` names
+///   another index than the one the snapshot is taken from;
+/// - [`ErrorCode::Internal`] when the disk fails, when the index holds a state no
+///   commit could have produced (a segment of the published generation without its
+///   directory, a manifest of G that cannot be found, a reference database whose
+///   generation or epoch is not the one the store publishes).
 pub fn create(
     store: &mut GenerationStore,
     index_config: &IndexConfig,
@@ -261,6 +253,7 @@ pub fn create(
         store.records().connection(),
         &staging.join(RECORDS_FILE_NAME),
     )?;
+    check_copied_state(&staging.join(RECORDS_FILE_NAME), name, epoch, generation)?;
     files.insert(
         RECORDS_FILE_NAME.to_owned(),
         attest(&staging, RECORDS_FILE_NAME)?,
@@ -274,6 +267,7 @@ pub fn create(
         INDEX_CONFIG_FILE_NAME.to_owned(),
         attest(&staging, INDEX_CONFIG_FILE_NAME)?,
     );
+    check_copied_index_name(&staging.join(INDEX_CONFIG_FILE_NAME), name)?;
 
     // "The manifest" of the task sheet is `manifests/<G>.json`, and only G is
     // copied: the earlier generations are the history of the index (ADR-0064,
@@ -317,7 +311,7 @@ pub fn create(
         generation: generation.get(),
         files: files.into_values().collect(),
     };
-    let text = serde_json::to_string(&attestation).map_err(|error| {
+    let text = records::serialize_canonical(&attestation).map_err(|error| {
         CribleError::new(
             ErrorCode::Internal,
             format!("cannot serialize the attestation of a snapshot: {error}"),
@@ -345,11 +339,70 @@ pub fn create(
     })
 }
 
+/// Refuses a copy whose reference database does not describe the state the
+/// store publishes.
+///
+/// The files of a generation must agree with each other: `records.sqlite` names
+/// the generation and the epoch, and the segments are those of that generation.
+/// A store reused after a commit whose publication failed — the route P6
+/// describes — would otherwise copy a database at G+1 while its segments are
+/// still those of G, and a restore would install a state no commit produced. The
+/// control is unreachable through the CLI today, which closes the store after
+/// every command.
+fn check_copied_state(
+    copied_records: &Path,
+    name: &str,
+    epoch: Epoch,
+    generation: Generation,
+) -> Result<(), CribleError> {
+    let connection = records::open_read_only(copied_records)?;
+    let meta = records::read_meta(&connection)?;
+    drop(connection);
+    if meta.generation == generation && meta.epoch == epoch {
+        return Ok(());
+    }
+    Err(CribleError::new(
+        ErrorCode::Internal,
+        format!(
+            "the copy of index {name} holds generation {} in epoch {}, but the store publishes \
+             generation {} in epoch {}; a store reused after a commit it could not publish would \
+             copy a database newer than its segments (INV-04, ADR-0064)",
+            meta.generation.get(),
+            meta.epoch.get(),
+            generation.get(),
+            epoch.get()
+        ),
+    ))
+}
+
+/// Refuses a copy whose `index.json` declares another index than the one the
+/// snapshot names.
+///
+/// The copied configuration is the authority for a restore (ADR-0065, decision
+/// 3), so a configuration naming another index would install an index under a
+/// name its own configuration does not carry. The caller asked for the snapshot
+/// of an index this store does not describe, which is a request the store cannot
+/// carry out.
+fn check_copied_index_name(copied_index: &Path, name: &str) -> Result<(), CribleError> {
+    let text = fs::read_to_string(copied_index)
+        .map_err(|error| io_error("read the copied index configuration", copied_index, &error))?;
+    let declared = IndexConfig::from_json_str(&text)?;
+    if declared.name == name {
+        return Ok(());
+    }
+    Err(invalid(format!(
+        "the snapshot of index {name} copied an index.json that declares {}; the copy cannot be \
+         installed under a name its configuration does not carry (ADR-0065)",
+        declared.name
+    )))
+}
+
 /// Restores the snapshot at `snapshot_directory` into the index of `data`.
 ///
 /// The index name is the one `snapshot.json` declares, so the command has no
 /// `--index`: the copy names its own target (ADR-0065, decision 3). Nothing is
-/// written before the snapshot and the target have been checked.
+/// written before the snapshot and the target have been checked, the stale
+/// online batches of `<data>/tmp` included (ADR-0056).
 ///
 /// # Errors
 ///
@@ -413,7 +466,11 @@ pub fn restore(data: &Path, snapshot_directory: &Path) -> Result<RestoreReport, 
     };
 
     // From here the command writes. Everything it writes lives outside the tree
-    // `CURRENT_EPOCH` makes reachable until the last step.
+    // `CURRENT_EPOCH` makes reachable until the last step. The stale online
+    // batches of `<data>/tmp` are removed first, as in every other write command
+    // (ADR-0056): a lot a writer holds under its presence lock is left alone. The
+    // refusal paths above therefore leave `<data>/tmp` untouched as well.
+    crate::online::remove_stale_batches(data)?;
     fs::create_dir_all(&index_dir)
         .map_err(|error| io_error("create the index directory", &index_dir, &error))?;
     if !complete {
@@ -1024,7 +1081,15 @@ fn invalid(message: impl Into<String>) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{first_difference, validate_index_name, validate_relative_path};
+    use std::path::PathBuf;
+
+    use crible_core::config::IndexConfig;
+    use crible_core::error::ErrorCode;
+
+    use super::{create, first_difference, validate_index_name, validate_relative_path};
+    use crate::generation::{
+        GenerationStore, INDEXES_DIRECTORY, INITIAL_EPOCH, write_index_config,
+    };
     use serde_json::json;
 
     #[test]
@@ -1082,6 +1147,133 @@ mod tests {
         assert_eq!(
             first_difference(&left, &json!({"name": "i"}), "$"),
             Some("$.search".to_owned())
+        );
+    }
+
+    // --- The two guards of `create`, unreachable through the CLI ---
+
+    /// Configuration of the small index the guard tests copy.
+    const GUARD_CONFIG: &str = r#"{
+        "name": "guard",
+        "model": "m",
+        "reference_precision": "fp16",
+        "schema": { "document_fields": {}, "passage_fields": {} },
+        "cluster_by": [],
+        "lexical": { "enabled": false, "language": "fr", "positions": false },
+        "search": {
+            "scan": "none",
+            "rescore_candidates": 10,
+            "exact_threshold": 10,
+            "candidates_per_branch": 10,
+            "fusion": { "method": "rrf" }
+        },
+        "ingest": { "acceptance_sample": 1, "acceptance_min_cosine": 0.9 },
+        "compaction": { "dead_ratio": 0.1 }
+    }"#;
+
+    /// Creates the index the guard tests snapshot: one index, generation 0,
+    /// epoch 1, under `<data>/indexes/guard`.
+    fn guard_fixture() -> (tempfile::TempDir, PathBuf, GenerationStore, IndexConfig) {
+        let temp = tempfile::tempdir()
+            .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
+        let index_dir = temp.path().join(INDEXES_DIRECTORY).join("guard");
+        let config = IndexConfig::from_json_str(GUARD_CONFIG)
+            .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
+        write_index_config(&index_dir, GUARD_CONFIG)
+            .unwrap_or_else(|error| panic!("the fixture configuration must be written: {error}"));
+        let store = GenerationStore::create(&index_dir, INITIAL_EPOCH, &config.schema)
+            .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"));
+        (temp, index_dir, store, config)
+    }
+
+    /// A store reused after a commit it could not publish holds a database at
+    /// G+1 while it still publishes G, the segments of G: the copy would name a
+    /// generation its segments do not carry, so `create` refuses it instead of
+    /// writing an attestation over a mixed state.
+    #[test]
+    fn create_refuses_a_database_ahead_of_the_published_generation() {
+        let (temp, _index_dir, mut store, config) = guard_fixture();
+        store
+            .records()
+            .connection()
+            .execute("UPDATE meta SET generation = 2 WHERE id = 1", [])
+            .unwrap_or_else(|error| panic!("the database generation must move: {error}"));
+
+        let error = create(&mut store, &config, &temp.path().join("exchange"))
+            .err()
+            .unwrap_or_else(|| panic!("a database at G+1 must be refused"));
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "a copy no commit produced is an internal state: {error}"
+        );
+        assert!(
+            error.message().contains("generation 2") && error.message().contains("generation 0"),
+            "the refusal must name the two generations: {error}"
+        );
+        assert!(
+            !temp
+                .path()
+                .join("exchange")
+                .join("snapshots")
+                .join("guard-e1-g0")
+                .exists(),
+            "a refused snapshot must not be renamed into place"
+        );
+    }
+
+    /// The epoch is the second half of the same agreement: a database naming
+    /// another epoch than the snapshot's would be installed under an epoch its
+    /// segments were not written for.
+    #[test]
+    fn create_refuses_a_database_naming_another_epoch() {
+        let (temp, _index_dir, mut store, config) = guard_fixture();
+        store
+            .records()
+            .connection()
+            .execute("UPDATE meta SET epoch = 7 WHERE id = 1", [])
+            .unwrap_or_else(|error| panic!("the database epoch must move: {error}"));
+
+        let error = create(&mut store, &config, &temp.path().join("exchange"))
+            .err()
+            .unwrap_or_else(|| panic!("a database in epoch 7 must be refused"));
+        assert_eq!(error.code(), ErrorCode::Internal, "{error}");
+        assert!(
+            error.message().contains("epoch 7") && error.message().contains("epoch 1"),
+            "the refusal must name the two epochs: {error}"
+        );
+    }
+
+    /// The copied `index.json` is the authority of the restore, so it must name
+    /// the index the snapshot is taken from: a caller that passes another
+    /// configuration gets `invalid_request`, not a copy installed under a name
+    /// its configuration does not carry.
+    #[test]
+    fn create_refuses_a_copied_index_json_that_names_another_index() {
+        let (temp, _index_dir, mut store, _config) = guard_fixture();
+        let other = IndexConfig::from_json_str(&GUARD_CONFIG.replace("\"guard\"", "\"other\""))
+            .unwrap_or_else(|error| panic!("the other configuration must be valid: {error}"));
+
+        let error = crate::snapshot::create(&mut store, &other, &temp.path().join("exchange"))
+            .err()
+            .unwrap_or_else(|| panic!("an index.json naming another index must be refused"));
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "the caller asked for a snapshot of an index this store does not describe: {error}"
+        );
+        assert!(
+            error.message().contains("\"guard\"") || error.message().contains("guard"),
+            "the refusal must name the index the copy declares: {error}"
+        );
+        assert!(
+            !temp
+                .path()
+                .join("exchange")
+                .join("snapshots")
+                .join("other-e1-g0")
+                .exists(),
+            "a refused snapshot must not be renamed into place"
         );
     }
 }

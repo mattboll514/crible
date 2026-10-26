@@ -4,7 +4,7 @@
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Décision** : accepté par anticipation par le propriétaire le 2026-10-26, tel que proposé, à confirmer au point de fin de NETTOYER-P3. Le job Rust d'`.github/workflows/ci.yml` construit et teste aussi `crible-store` avec la feature `failpoints`, à chaque push et chaque PR, avec les deux commandes exactes de la décision 1, sans ONNX Runtime.
-- **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `NETTOYER-P3` (phase P3, branche `tache/NETTOYER-P3`), passage B. Origine : le point remonté par `@relecteur` pendant `COMPACTER-INDEX`, déjà consigné au suivi
+- **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `NETTOYER-P3` (phase P3, branche `tache/NETTOYER-P3`), passage A. Origine : le point remonté par `@relecteur` pendant `COMPACTER-INDEX`, déjà consigné au suivi
 - **Remplace** : — (complète ADR-0057, qui reste en vigueur et `Accepté` ; son corps n'est pas modifié)
 
 ## Contexte

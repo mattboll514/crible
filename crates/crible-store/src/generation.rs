@@ -98,6 +98,19 @@ pub const CURRENT_EPOCH_FILE_NAME: &str = "CURRENT_EPOCH";
 /// structures can never be built from a schema the index does not declare.
 pub const INDEX_CONFIG_FILE_NAME: &str = "index.json";
 
+/// Sub-directory of the data root that holds the indexes (`docs/02`).
+pub const INDEXES_DIRECTORY: &str = "indexes";
+
+/// Epoch a new index starts on: `crible index create` and a restoration to an
+/// absent target both give it this one.
+///
+/// `ADR-0065`, decision 2: an absent target has no epoch to pass, so it gets the
+/// initial epoch of a creation; the `E+1` rule only applies to an index that
+/// already has an epoch. No on-disk format depends on the value: `CURRENT_EPOCH`,
+/// `meta.epoch` and the manifests carry whatever epoch the commit writes, so this
+/// is the convention of the commands, not a format constant.
+pub const INITIAL_EPOCH: Epoch = Epoch::new(1);
+
 /// Writes the index configuration `index.json` atomically in `index_dir`.
 ///
 /// The directory is created when it does not exist. The caller writes the
@@ -327,22 +340,6 @@ pub(crate) fn stop_at_failpoint(step: &str) {
 /// Does nothing: a normal build carries neither the environment read nor a call.
 #[cfg(not(feature = "failpoints"))]
 pub(crate) fn stop_at_failpoint(_step: &str) {}
-
-/// Reaches one step of an attach, inside the transaction of its generation.
-///
-/// Only an attach calls this, so the steps `after_attach_documents` and
-/// `after_attach_passages` are never reached by a plain
-/// [`GenerationStore::commit`] (the `GERER-GENERATIONS` tests). The panic it
-/// raises unwinds through the transaction, which rolls it back (INV-03).
-#[cfg(feature = "failpoints")]
-pub(crate) fn attach_failpoint(step: &str) {
-    stop_at_failpoint(step);
-}
-
-/// Reaches one step of an attach; a normal build carries neither the
-/// environment read nor a call.
-#[cfg(not(feature = "failpoints"))]
-pub(crate) fn attach_failpoint(_step: &str) {}
 
 /// Reaches the step `step` of the commit protocol.
 ///
@@ -2145,6 +2142,8 @@ mod tests {
 
         let connection = store.records.connection();
         let mut offenders = Vec::new();
+        let mut documents_by_primary_key = false;
+        let mut passages_by_doc_id = false;
         for statement in &statements {
             if !explains(statement) {
                 continue;
@@ -2177,7 +2176,22 @@ mod tests {
                          the query is:\n{statement}\nSQLite said: {error}"
                     )
                 });
+            let is_select = sql_tokens(statement)
+                .first()
+                .is_some_and(|token| token.eq_ignore_ascii_case("SELECT"));
             for detail in &details {
+                // The two accesses ADR-0066 allows are bounded SELECTs:
+                // `documents` by its primary key and `passages` by its `doc_id`
+                // index. Requiring the statement itself to be a SELECT keeps an
+                // upsert, whose plan also searches the primary key, from
+                // standing in for the read the commit must really run.
+                let plan = detail.to_lowercase();
+                if plan.starts_with("search documents") && plan.contains("(doc_id=?") {
+                    documents_by_primary_key |= is_select;
+                }
+                if plan.starts_with("search passages") && plan.contains("(doc_id=?") {
+                    passages_by_doc_id |= is_select;
+                }
                 let Some(relation) = scanned_relation(statement, detail) else {
                     continue;
                 };
@@ -2196,6 +2210,19 @@ mod tests {
                 }
             }
         }
+        assert!(
+            documents_by_primary_key,
+            "the trace planned no bounded read of `documents` by its primary key. The commit \
+             must read the fields of a rewritten document (`SELECT fields FROM documents \
+             WHERE doc_id = ?1`), which ADR-0066 allows because the plan is bounded: {statements:#?}"
+        );
+        assert!(
+            passages_by_doc_id,
+            "the trace planned no bounded read of `passages` by `passages(doc_id)`. The commit \
+             must read the passages of a rewritten or removed document (`SELECT iid FROM \
+             passages WHERE doc_id = ?1`), which ADR-0066 allows because the plan is bounded: \
+             {statements:#?}"
+        );
         assert!(
             offenders.is_empty(),
             "the commit path scans a table whose size is the size of the index. A generation \

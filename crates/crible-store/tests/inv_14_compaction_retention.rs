@@ -149,20 +149,9 @@ fn fixture_config(raw: &str) -> IndexConfig {
         .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"))
 }
 
-/// The fixture configuration of `common::test_config`, with `cluster_by` set to
-/// `fields`.
+/// The fixture configuration of `common::test_config_with_cluster_by`.
 fn clustered_config_json(fields: &[&str]) -> String {
-    let cluster_by = fields
-        .iter()
-        .map(|field| format!("\"{field}\""))
-        .collect::<Vec<_>>()
-        .join(",");
-    // `test_config` declares `"cluster_by":[]`; the fixture replaces the value
-    // rather than re-declaring the whole configuration.
-    common::test_config("compaction", &common::fixture_schema()).replace(
-        "\"cluster_by\":[]",
-        &format!("\"cluster_by\":[{cluster_by}]"),
-    )
+    common::test_config_with_cluster_by("compaction", &common::fixture_schema(), fields)
 }
 
 /// One document whose `title` is `title`, at the given generation.

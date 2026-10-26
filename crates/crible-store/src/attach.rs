@@ -115,7 +115,7 @@ use serde_json::{Map, Number, Value, json};
 
 use crate::batch_reader::BatchReader;
 use crate::filters_index::{CommitDelta, CreatedPassage};
-use crate::generation::{GenerationStore, attach_failpoint};
+use crate::generation::{GenerationStore, stop_at_failpoint};
 use crate::records::{self, DocumentRecord, PassageRecord};
 use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 
@@ -510,7 +510,7 @@ pub fn attach(
     let validation = validation_started.elapsed();
     // Step 1 of `docs/02`: validation, acceptance and the semantic table done,
     // no state modified.
-    attach_failpoint("attach_validated");
+    stop_at_failpoint("attach_validated");
 
     // Step 2 of `docs/02`: the segment is written and renamed before the
     // transaction opens.
@@ -532,7 +532,7 @@ pub fn attach(
     // End of step 2 of `docs/02`: the segment is renamed into `segments/<id>/`
     // and no transaction is open. Until SQLite references it, recovery removes
     // it as an unreferenced segment directory (INV-03, INV-04).
-    attach_failpoint("after_attach_segment");
+    stop_at_failpoint("after_attach_segment");
 
     let committed =
         store.commit_with_rows(|transaction, committed_generation, committed_iid| {
@@ -558,7 +558,7 @@ pub fn attach(
             }
 
             write_document_rows(transaction, &reader, schema, &plan.rewrite, generation)?;
-            attach_failpoint("after_attach_documents");
+            stop_at_failpoint("after_attach_documents");
 
             let (after_passages, created) = write_passage_rows(
                 transaction,
@@ -595,7 +595,7 @@ pub fn attach(
                     ),
                 ));
             }
-            attach_failpoint("after_attach_passages");
+            stop_at_failpoint("after_attach_passages");
 
             // Old passages die at G+1, and the row of a removed document goes with
             // them, in the same transaction (ADR-0041).

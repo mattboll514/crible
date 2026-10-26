@@ -658,4 +658,94 @@ fn export_writes_a_replace_all_batch_under_outbox_index_generation() {
         !report.directory.join("deletions.parquet").exists(),
         "a replace_all batch must not hold a deletion file"
     );
+
+    // ADR-0061: the values the export writes into the manifest are fixed, and
+    // a later edit must not drift from them.
+    assert_eq!(
+        manifest
+            .get("chunker")
+            .and_then(|chunker| chunker.get("name"))
+            .and_then(Value::as_str),
+        Some("none"),
+        "an export declares that it chunked nothing (ADR-0061, décision 1): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("chunker")
+            .and_then(|chunker| chunker.get("version"))
+            .and_then(Value::as_str),
+        Some("1"),
+        "the chunker version of an export is 1 (ADR-0061, décision 1): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("template")
+            .and_then(|template| template.get("name"))
+            .and_then(Value::as_str),
+        Some("none"),
+        "an export declares that it composed no text (ADR-0061, décision 1): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("template")
+            .and_then(|template| template.get("version"))
+            .and_then(Value::as_str),
+        Some("1"),
+        "the template version of an export is 1 (ADR-0061, décision 1): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("producer")
+            .and_then(|producer| producer.get("name"))
+            .and_then(Value::as_str),
+        Some("crible"),
+        "the export names itself as its producer (ADR-0061, décision 4): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("producer")
+            .and_then(|producer| producer.get("host"))
+            .and_then(Value::as_str),
+        Some("crible-export"),
+        "no host crate is listed in docs/07, so the export names itself (ADR-0061): {manifest}"
+    );
+    assert_eq!(
+        manifest
+            .get("producer")
+            .and_then(|producer| producer.get("version"))
+            .and_then(Value::as_str),
+        Some(env!("CARGO_PKG_VERSION")),
+        "the manifest carries the version of the binary that wrote it (ADR-0061): {manifest}"
+    );
+    let created_at = manifest
+        .get("created_at")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("manifest.json must carry a created_at: {manifest}"));
+    assert!(
+        is_rfc3339_utc(created_at),
+        "created_at must be the real RFC 3339 UTC time of the export, got {created_at:?} \
+         (ADR-0061, décision 2)"
+    );
+}
+
+/// True when `raw` has the shape `YYYY-MM-DDTHH:MM:SSZ`, the RFC 3339 UTC form
+/// SQLite writes for `created_at` (ADR-0061, décision 2).
+fn is_rfc3339_utc(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    if bytes.len() != 20 {
+        return false;
+    }
+    let digit = |index: usize| bytes[index].is_ascii_digit();
+    (0..4).all(digit)
+        && bytes[4] == b'-'
+        && (5..7).all(digit)
+        && bytes[7] == b'-'
+        && (8..10).all(digit)
+        && bytes[10] == b'T'
+        && (11..13).all(digit)
+        && bytes[13] == b':'
+        && (14..16).all(digit)
+        && bytes[16] == b':'
+        && (17..19).all(digit)
+        && bytes[19] == b'Z'
 }

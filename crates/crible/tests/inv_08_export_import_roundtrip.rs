@@ -68,21 +68,15 @@
 //!   cargo test -p crible --test inv_08_export_import_roundtrip -- --ignored
 //! ```
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::sync::Arc;
+mod common;
+
+use std::path::Path;
 use std::time::Instant;
 
 use crible_core::config::IndexConfig;
-use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation};
 use crible_core::model::ModelConfig;
-use crible_encode::{
-    DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, ModelRegistry, QueryEncoder,
-};
-use crible_search::dense::exact::{ExactSearcher, Hit};
-use crible_search::pool::Pool;
+use crible_encode::QueryEncoder;
 use crible_store::attach::attach;
 use crible_store::export::export;
 use crible_store::generation::{GenerationStore, write_index_config};
@@ -90,306 +84,20 @@ use crible_store::patch::{DocumentPatch, PatchReport, PatchSource};
 use crible_store::records::{ReadPool, RecordStore};
 use serde_json::{Map, Value};
 
-/// Tolerance on a score, from the acceptance criterion of the task sheet:
-/// "mêmes clés et mêmes scores à `1e-6` près".
-const SCORE_TOLERANCE: f32 = 1e-6;
+use crate::common::{
+    EXTERNAL_MODEL_JSON, LEGIFACILE_STRUCTURES, Query, SYNTH_BATCHES, SYNTH_LIVE_PASSAGES,
+    SamplePaths, array, assert_answer_is_not_vacuous, assert_same_results, crible_ok,
+    legifacile_encoder, legifacile_queries, legifacile_sample_paths, parse_filter, path, read_file,
+    read_json_lines, repository_root, require_synth, search_all, synth_queries, synth_root,
+};
 
-/// The three batches of `synth-small`, and the generation each one publishes.
-const SYNTH_BATCHES: [(&str, u64); 3] = [("l1", 1), ("l2", 2), ("l3", 3)];
-
-/// Live passages `synth-small` holds after its three batches, before the
-/// metadata patch (which changes no passage): 10 000 created, 300 documents
-/// replaced, 150 documents deleted (`tools/gen_synth.py`).
-const SYNTH_LIVE_PASSAGES: u64 = 9_750;
-
-/// Number of results asked of a Legifacile query.
-const LEGIFACILE_K: usize = 100;
-
-/// The structures of the Legifacile sample, in the order of its batches: one
-/// index each, and one batch `legifacile-sample-<structure>-v1`.
-const LEGIFACILE_STRUCTURES: [&str; 6] =
-    ["dole", "articles", "jorf", "titres", "sarde", "decisions"];
-
-/// Command that generates the synthetic dataset.
-const SYNTH_DATASET_COMMAND: &str =
-    "cd tools && uv sync && uv run python gen_synth.py --out ../data/synth-small";
-
-/// Command that builds the Legifacile sample and its model (gitignored).
-const LEGIFACILE_SAMPLE_COMMAND: &str = "build data/legifacile-sample/ as \
-     data/legifacile-sample/README.md, section \"Reproduire\", describes (production \
-     read-only), then:\n  cd tools && uv sync --group export && uv run python export_onnx.py \
-     --out ../data/models/mdenseon --overwrite";
-
-/// External model configuration of `synth-small` (768 dimensions, `normalize`),
-/// the one the dataset declares and the J1 demo writes.
-const EXTERNAL_MODEL_JSON: &str =
-    r#"{ "name": "synthetic-external", "kind": "external", "dims": 768, "normalize": true }"#;
-
-/// The two filters every query is run with, on top of its own filter: a keyword
-/// equality and an interval, both non-trivial on `synth-small` (`annee` runs
-/// from 1990 to 2025, `categorie` has 16 values).
+/// The two filters every query is also run with, alone and never on top of the
+/// query's own filter: a keyword equality and an interval, both non-trivial on
+/// `synth-small` (`annee` runs from 1990 to 2025, `categorie` has 16 values).
 const FIXED_FILTERS: [&str; 2] = [
     r#"{ "categorie": "cat-00" }"#,
     r#"{ "annee": { "gte": 2010 } }"#,
 ];
-
-// --- One query and one answer ---
-
-/// One query of the invariant: a label for the failure messages, the number of
-/// results asked for, the vector, and the filter of its pool.
-struct Query {
-    label: String,
-    k: usize,
-    vector: Vec<f32>,
-    filter: Filter,
-}
-
-/// What one query answered: the size of its pool and the top-k results.
-struct Outcome {
-    pool_size: u32,
-    hits: Vec<Hit>,
-}
-
-// --- Tiny JSON readers with readable failures ---
-
-fn read_file(path: &Path) -> String {
-    fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
-}
-
-fn read_json_lines(path: &Path) -> Vec<Value> {
-    read_file(path)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str(line).unwrap_or_else(|error| {
-                panic!(
-                    "{} must hold one JSON value per line: {error}",
-                    path.display()
-                )
-            })
-        })
-        .collect()
-}
-
-fn array(value: &Value, name: &str) -> Vec<f32> {
-    value
-        .get(name)
-        .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("{value} must carry an array '{name}'"))
-        .iter()
-        .map(|item| {
-            item.as_f64()
-                .map(|number| number as f32)
-                .unwrap_or_else(|| panic!("the '{name}' of {value} must hold numbers"))
-        })
-        .collect()
-}
-
-fn unsigned<T>(value: &Value, name: &str) -> T
-where
-    T: TryFrom<u64>,
-{
-    let raw = value
-        .get(name)
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| panic!("{value} must carry an unsigned '{name}'"));
-    T::try_from(raw).unwrap_or_else(|_| panic!("{name} = {raw} does not fit the expected type"))
-}
-
-fn text(value: &Value, name: &str) -> String {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("{value} must carry a string '{name}'"))
-        .to_owned()
-}
-
-// --- Filters ---
-
-/// Parses and validates a filter, `{}` when the JSON carries none.
-fn parse_filter(raw: &str, schema: &crible_core::config::Schema) -> Filter {
-    let filter = Filter::from_json_str(raw)
-        .unwrap_or_else(|error| panic!("the filter {raw} must parse: {error}"));
-    filter
-        .validate(schema)
-        .unwrap_or_else(|error| panic!("the filter {raw} must be valid: {error}"));
-    filter
-}
-
-/// Parses and validates the filter of one query, `{}` when it carries none.
-fn query_filter(value: &Value, schema: &crible_core::config::Schema) -> Filter {
-    let raw = match value.get("filter") {
-        Some(filter) if filter.is_object() => filter.to_string(),
-        _ => "{}".to_owned(),
-    };
-    parse_filter(&raw, schema)
-}
-
-// --- Running the exact search ---
-
-/// Runs every query over the published generation, opening the searcher once.
-///
-/// The pool of a query is evaluated on the filter structures of the snapshot,
-/// as `RECHERCHER-DENSE-EXACT` does: the import must not change the pool
-/// either, so its size is returned and compared too.
-fn search_all(store: &GenerationStore, queries: &[Query]) -> Vec<Outcome> {
-    let snapshot = store.snapshot();
-    let searcher = ExactSearcher::open(
-        &store.segments_directory(),
-        snapshot.segments(),
-        &store.records_path(),
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "the exact searcher must open on epoch {}: {error}",
-            snapshot.epoch().get()
-        )
-    });
-
-    queries
-        .iter()
-        .map(|query| {
-            let pool = Pool::evaluate(snapshot.filters(), &query.filter).unwrap_or_else(|error| {
-                panic!("the pool of query {} must evaluate: {error}", query.label)
-            });
-            let pool_size = pool.len();
-            let hits = searcher
-                .top_k(&query.vector, &pool, query.k)
-                .unwrap_or_else(|error| {
-                    panic!("the search of query {} must succeed: {error}", query.label)
-                });
-            Outcome { pool_size, hits }
-        })
-        .collect()
-}
-
-// --- The comparison of INV-08 ---
-
-/// Compares two answers of the same query, position by position.
-///
-/// The acceptance criterion of the task sheet is "mêmes clés et mêmes scores à
-/// `1e-6` près": the keys must be equal and in the same order, the scores must
-/// be within [`SCORE_TOLERANCE`] and finite, and the answer must hold the same
-/// number of results. The payload the export carries (the document and passage
-/// fields merged, and the encoder input) is compared too, so a batch that lost
-/// a column cannot pass. An error names the position and both values, so a
-/// failure says what moved.
-fn compare_results(before: &[Hit], after: &[Hit]) -> Result<(), String> {
-    if before.len() != after.len() {
-        return Err(format!(
-            "{} result(s) after the import for {} before it",
-            after.len(),
-            before.len()
-        ));
-    }
-    for (position, (left, right)) in before.iter().zip(after).enumerate() {
-        if left.key != right.key {
-            return Err(format!(
-                "position {position}: key {} after the import, {} before it",
-                right.key, left.key
-            ));
-        }
-        let gap = (left.score - right.score).abs();
-        if !gap.is_finite() || gap > SCORE_TOLERANCE {
-            return Err(format!(
-                "position {position}: key {} scored {:.9} after the import and {:.9} before it, \
-                 a gap of {gap:.9} that is not within the {SCORE_TOLERANCE} tolerance",
-                left.key, right.score, left.score
-            ));
-        }
-        if left.fields != right.fields {
-            return Err(format!(
-                "position {position}: key {} carries the fields {} after the import and {} \
-                 before it",
-                left.key, right.fields, left.fields
-            ));
-        }
-        if left.text != right.text {
-            return Err(format!(
-                "position {position}: key {} carries the text {:?} after the import and {:?} \
-                 before it",
-                left.key, right.text, left.text
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Asserts that one query answered the same thing before and after the import,
-/// and that its pool did not move.
-fn assert_same_results(label: &str, before: &Outcome, after: &Outcome) {
-    assert_eq!(
-        before.pool_size, after.pool_size,
-        "query {label}: the pool must hold the same live passages after the import \
-         ({} before, {} after)",
-        before.pool_size, after.pool_size
-    );
-    compare_results(&before.hits, &after.hits)
-        .unwrap_or_else(|message| panic!("query {label}: {message}"));
-}
-
-/// Checks the premises of a non-empty answer: the pool is not empty and the
-/// answer holds `min(k, pool_size)` results. An empty pool would compare
-/// nothing and read as a pass.
-fn assert_answer_is_not_vacuous(query: &Query, answer: &Outcome) {
-    assert!(
-        answer.pool_size > 0,
-        "query {} must have a non-empty pool, otherwise it proves nothing",
-        query.label
-    );
-    assert_eq!(
-        answer.hits.len(),
-        usize::try_from(answer.pool_size)
-            .unwrap_or(usize::MAX)
-            .min(query.k),
-        "query {} must return min(k, pool_size) results",
-        query.label
-    );
-}
-
-// --- The synthetic dataset ---
-
-fn synth_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/synth-small")
-}
-
-/// Fails with the generator command when a file of the dataset is missing, as
-/// every test of the crate does.
-fn require_synth(root: &Path) {
-    for name in ["index.json", "queries.jsonl"] {
-        let path = root.join(name);
-        assert!(
-            path.is_file(),
-            "{} is missing; generate the dataset before running `cargo test`:\n  \
-             {SYNTH_DATASET_COMMAND}",
-            path.display()
-        );
-    }
-    for (batch, _) in SYNTH_BATCHES {
-        let path = root.join(batch).join("manifest.json");
-        assert!(
-            path.is_file(),
-            "the synthetic batch '{batch}' is missing at {}; generate the dataset:\n  \
-             {SYNTH_DATASET_COMMAND}",
-            path.display()
-        );
-    }
-}
-
-/// The 200 queries of `queries.jsonl`, in file order, with their own filters.
-fn synth_queries(root: &Path, index: &IndexConfig) -> Vec<Query> {
-    let rows = read_json_lines(&root.join("queries.jsonl"));
-    assert_eq!(rows.len(), 200, "queries.jsonl must hold the 200 queries");
-    rows.iter()
-        .map(|row| Query {
-            label: format!("synth#{}", unsigned::<u64>(row, "query_id")),
-            k: unsigned::<usize>(row, "k"),
-            vector: array(row, "vector"),
-            filter: query_filter(row, &index.schema),
-        })
-        .collect()
-}
 
 /// The vector of the first query, used by the fixed-filter queries.
 fn first_vector(root: &Path) -> Vec<f32> {
@@ -692,11 +400,11 @@ fn inv_08_synth_small_200_queries_return_the_same_results_after_export_and_impor
 
     let after = search_all(&imported, &queries);
     for ((query, before), after) in queries.iter().zip(&before).zip(&after) {
-        assert_same_results(&query.label, before, after);
+        assert_same_results("the import", &query.label, before, after);
     }
     let after_fixed = search_all(&imported, &fixed);
     for ((query, before), after) in fixed.iter().zip(&before_fixed).zip(&after_fixed) {
-        assert_same_results(&query.label, before, after);
+        assert_same_results("the import", &query.label, before, after);
     }
     eprintln!(
         "INV-08: {} queries of synth-small compared ({} unfiltered, {} filtered, {} fixed \
@@ -712,63 +420,6 @@ fn inv_08_synth_small_200_queries_return_the_same_results_after_export_and_impor
     );
 }
 
-// --- The Legifacile sample ---
-
-fn repository_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-/// Paths of the Legifacile sample the ignored test reads.
-#[derive(Debug)]
-struct SamplePaths {
-    /// Directory of the sample, holding `queries.jsonl` and `configs/`.
-    directory: PathBuf,
-    /// Root of the models, holding `<model>/model.json`.
-    models: PathBuf,
-}
-
-impl SamplePaths {
-    /// Configuration of one structure: `configs/<structure>.json`.
-    fn config(&self, structure: &str) -> PathBuf {
-        self.directory.join(format!("configs/{structure}.json"))
-    }
-
-    /// Batch of one structure: `batches/legifacile-sample-<structure>-v1`.
-    fn batch(&self, structure: &str) -> PathBuf {
-        self.directory
-            .join(format!("batches/legifacile-sample-{structure}-v1"))
-    }
-}
-
-/// Returns the paths of the sample, or the message naming the missing file and
-/// the command that produces it (`docs/08`, "Sauts de test"; ADR-0057).
-fn legifacile_sample_paths(root: &Path) -> Result<SamplePaths, String> {
-    let sample = root.join("data/legifacile-sample");
-    let paths = SamplePaths {
-        directory: sample,
-        models: root.join("data/models"),
-    };
-    let model_json = paths.models.join("mdenseon/model.json");
-    let mut required = Vec::new();
-    for structure in LEGIFACILE_STRUCTURES {
-        required.push(paths.config(structure));
-        required.push(paths.batch(structure).join("manifest.json"));
-    }
-    required.push(paths.directory.join("queries.jsonl"));
-    required.push(model_json);
-    for required in &required {
-        if !required.is_file() {
-            return Err(format!(
-                "{} is missing, so \
-                 inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import \
-                 cannot run; build the gitignored data with:\n  {LEGIFACILE_SAMPLE_COMMAND}",
-                required.display()
-            ));
-        }
-    }
-    Ok(paths)
-}
-
 /// An `#[ignore]` test launched explicitly without its prerequisite fails,
 /// instead of passing while proving nothing (ADR-0057).
 #[test]
@@ -776,8 +427,11 @@ fn inv_08_the_legifacile_sample_test_fails_without_its_prerequisites() {
     let root = tempfile::tempdir()
         .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
 
-    let error = legifacile_sample_paths(root.path())
-        .expect_err("an empty root holds no Legifacile sample, so the check must fail");
+    let error = legifacile_sample_paths(
+        root.path(),
+        "inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import",
+    )
+    .expect_err("an empty root holds no Legifacile sample, so the check must fail");
 
     assert!(
         error.contains("data/legifacile-sample/configs/dole.json"),
@@ -799,86 +453,6 @@ fn inv_08_the_legifacile_sample_test_fails_without_its_prerequisites() {
     );
 }
 
-fn crible(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_crible"))
-        .args(arguments)
-        .output()
-        .unwrap_or_else(|error| panic!("cannot run crible {arguments:?}: {error}"))
-}
-
-fn crible_ok(arguments: &[&str]) {
-    let output = crible(arguments);
-    assert!(
-        output.status.success(),
-        "crible {arguments:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-fn path(path: &Path) -> &str {
-    path.to_str()
-        .unwrap_or_else(|| panic!("the path {} must be UTF-8", path.display()))
-}
-
-/// The query encoder of the model of the sample, in fp32.
-///
-/// This is the path of `crible search --query`: the same `QueryEncoder`, the same
-/// `DEFAULT_QUERY_PRECISION` (fp32, ADR-0052) and the same `query: ` prompt. One
-/// encoder serves every structure, since they share the model.
-fn legifacile_encoder(sample: &SamplePaths, index: &IndexConfig) -> QueryEncoder {
-    let directory = sample.models.join(&index.model);
-    QueryEncoder::new(
-        &directory,
-        Arc::new(ModelRegistry::new()),
-        DEFAULT_QUERY_CACHE_ENTRIES,
-    )
-}
-
-/// The queries of one structure, encoded from their question.
-fn legifacile_queries(
-    sample: &SamplePaths,
-    structure: &str,
-    index: &IndexConfig,
-    encoder: &QueryEncoder,
-) -> Vec<Query> {
-    let rows = read_json_lines(&sample.directory.join("queries.jsonl"));
-    let filter = parse_filter("{}", &index.schema);
-    let mut queries = Vec::new();
-
-    for row in &rows {
-        if row.get("structure").and_then(Value::as_str) != Some(structure) {
-            continue;
-        }
-        let label = text(row, "id");
-        let question = text(row, "question");
-        let encoded = encoder
-            .encode_query(&question, DEFAULT_QUERY_PRECISION)
-            .unwrap_or_else(|error| {
-                panic!(
-                    "query {label} must be encodable, got {}: {}",
-                    error.code().as_str(),
-                    error.message()
-                )
-            });
-        assert!(
-            !encoded.vector.is_empty(),
-            "query {label} must encode to a non-empty vector"
-        );
-        queries.push(Query {
-            label: format!("legifacile#{label}"),
-            k: LEGIFACILE_K,
-            vector: encoded.vector,
-            filter: filter.clone(),
-        });
-    }
-
-    assert!(
-        !queries.is_empty(),
-        "the sample must hold the queries of the '{structure}' structure"
-    );
-    queries
-}
-
 /// INV-08 on the Legifacile sample: the queries of every structure return the
 /// same keys, in the same order, with the same scores within 1e-6, after the
 /// export of the structure and its attach into an empty index of the same
@@ -891,7 +465,11 @@ fn legifacile_queries(
 #[ignore = "needs data/legifacile-sample, data/models/mdenseon and ORT_DYLIB_PATH; run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test inv_08_export_import_roundtrip -- --ignored"]
 fn inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import() {
     let root = repository_root();
-    let sample = legifacile_sample_paths(&root).unwrap_or_else(|reason| panic!("{reason}"));
+    let sample = legifacile_sample_paths(
+        &root,
+        "inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import",
+    )
+    .unwrap_or_else(|reason| panic!("{reason}"));
     assert!(
         std::env::var_os("ORT_DYLIB_PATH").is_some(),
         "ORT_DYLIB_PATH must name the ONNX Runtime library: the attach of an 'onnx' index \
@@ -1038,7 +616,7 @@ fn check_structure(
     }
     let after = search_all(&imported, &queries);
     for ((query, before), after) in queries.iter().zip(&before).zip(&after) {
-        assert_same_results(&query.label, before, after);
+        assert_same_results("the import", &query.label, before, after);
     }
     eprintln!(
         "INV-08: {structure}: {} queries compared, {} document(s) and {} live passage(s) exported \
@@ -1060,7 +638,7 @@ mod comparison_guards {
 
     use crible_search::dense::exact::Hit;
 
-    use crate::compare_results;
+    use crate::common::compare_results;
 
     fn hit(key: &str, score: f32) -> Hit {
         let (doc_id, ord) = key.split_once('#').unwrap_or((key, "0"));

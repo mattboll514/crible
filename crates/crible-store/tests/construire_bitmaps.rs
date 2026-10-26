@@ -537,12 +537,13 @@ fn inv_03_after_mixed_attach_and_metadata_patch_equals_a_full_rebuild() {
 
 // --- Test 3c: INV-02 on the commit path ---
 
-/// A reader that took its snapshot before a commit reads it while the commit
-/// runs and after it: the new generation is published whole, and the structures
-/// the reader holds are unchanged.
+/// A reader that took its snapshot before a commit reads it after the commit:
+/// the new generation is published whole, and the structures the reader holds
+/// are unchanged.
 ///
 /// The two threads rendezvous on channels, never on a clock: the reader signals
-/// that it holds the snapshot, the main thread commits, then releases it.
+/// that it holds the snapshot and waits, the main thread commits, then releases
+/// the reader, which reads the snapshot it kept once the commit is over.
 #[test]
 fn inv_02_commit_publishes_without_mutating_the_structures_a_reader_holds() {
     use std::sync::mpsc;

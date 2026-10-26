@@ -13,11 +13,11 @@
 //! and parts in a batch v1).
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
+use arrow::array::{FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use crible_core::config::IndexConfig;
@@ -25,8 +25,8 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::ModelConfig;
 use crible_store::batch_reader::{BatchCounts, BatchReader, DEFAULT_BATCH_ROWS};
 use half::f16;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+
+mod common;
 
 /// Command that generates the reference dataset, quoted by the failure
 /// message of a missing batch.
@@ -128,22 +128,6 @@ fn unit_vector() -> Vec<u8> {
     fp16(&[1.0, 0.0])
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the fixture batch is valid: {error}"));
-    let file =
-        File::create(path).unwrap_or_else(|error| panic!("the fixture Parquet file: {error}"));
-    let properties = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
-        .unwrap_or_else(|error| panic!("the fixture Parquet writer opens: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the fixture batch is written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the fixture Parquet file closes: {error}"));
-}
-
 type DocumentRow<'a> = (&'a str, &'a str, Option<i64>);
 
 fn write_documents(dir: &Path, rows: &[DocumentRow<'_>]) {
@@ -164,7 +148,7 @@ fn write_documents_named_with(
     let ids: StringArray = rows.iter().map(|row| Some(row.0)).collect();
     let hashes: StringArray = rows.iter().map(|row| Some(row.1)).collect();
     let years = Int64Array::from(rows.iter().map(|row| row.2).collect::<Vec<_>>());
-    write_parquet(
+    common::write_parquet(
         &dir.join(name),
         schema,
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(years)],
@@ -179,7 +163,7 @@ fn write_deletions(dir: &Path, ids: &[&str]) {
         false,
     )]));
     let column: StringArray = ids.iter().map(|id| Some(*id)).collect();
-    write_parquet(
+    common::write_parquet(
         &dir.join("deletions.parquet"),
         &schema,
         vec![Arc::new(column)],
@@ -204,7 +188,7 @@ fn write_passages_named(dir: &Path, name: &str, schema: &SchemaRef, rows: &[Pass
     let parts: StringArray = rows.iter().map(|row| row.3).collect();
     let vectors = FixedSizeBinaryArray::try_from_iter(rows.iter().map(|row| row.4.clone()))
         .unwrap_or_else(|error| panic!("the fixture vectors share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &dir.join(name),
         schema,
         vec![
@@ -540,7 +524,7 @@ fn open_refuses_a_column_the_index_does_not_declare() {
     let hashes = StringArray::from(vec!["hash-a"]);
     let years = Int64Array::from(vec![Some(2020_i64)]);
     let unknown = StringArray::from(vec![Some("x")]);
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &schema,
         vec![
@@ -573,7 +557,7 @@ fn open_refuses_a_missing_column() {
     ]));
     let ids = StringArray::from(vec!["doc-a"]);
     let hashes = StringArray::from(vec!["hash-a"]);
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &schema,
         vec![Arc::new(ids), Arc::new(hashes)],
@@ -603,7 +587,7 @@ fn open_refuses_a_column_of_the_wrong_type() {
     let ids = StringArray::from(vec!["doc-a"]);
     let hashes = StringArray::from(vec!["hash-a"]);
     let years = StringArray::from(vec![Some("2020")]);
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &schema,
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(years)],

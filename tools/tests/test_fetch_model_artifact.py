@@ -56,6 +56,14 @@ class _TruncatedResponse(_Response):
         self.headers = {"Content-Length": str(length)}
 
 
+class _SizedResponse(_Response):
+    """A complete body whose `Content-Length` matches its true size."""
+
+    def __init__(self, payload: bytes, status: int = 200):
+        super().__init__(payload, status)
+        self.headers = {"Content-Length": str(len(payload))}
+
+
 class Opener:
     """Records the URLs it is asked for and serves one payload or one error."""
 
@@ -629,6 +637,33 @@ def test_a_body_of_several_chunks_is_written_without_losing_bytes(tmp_path, size
     assert actions == [
         f"downloaded 'model.onnx' from {opener.urls[0]} (blake3 {digest(content)})"
     ]
+    assert_no_part(tmp_path)
+
+
+def test_a_body_of_the_announced_length_with_wrong_content_fails_on_the_digest(
+    tmp_path,
+):
+    expected = b"the fp32 graph"
+    wrong = b"a wrong graph!"
+    assert len(wrong) == len(expected)
+    opener = ScriptedOpener(_SizedResponse(wrong))
+    waiter = Waiter()
+
+    with pytest.raises(artifact.ArtifactError) as raised:
+        artifact.ensure_artifact(
+            manifest(("model.onnx", expected)),
+            tmp_path,
+            opener=opener,
+            sleep=waiter,
+        )
+
+    message = str(raised.value)
+    assert len(opener.urls) == 1
+    assert waiter.delays == []
+    assert digest(expected) in message
+    assert digest(wrong) in message
+    assert "model.onnx" in message
+    assert not (tmp_path / "model.onnx").exists()
     assert_no_part(tmp_path)
 
 

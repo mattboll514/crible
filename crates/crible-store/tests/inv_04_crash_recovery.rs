@@ -78,23 +78,20 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
+use arrow::array::{FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use crible_core::config::IndexConfig;
 use crible_core::ids::{Epoch, Iid};
 use crible_core::model::ModelConfig;
 use crible_store::attach::{AttachReport, attach};
 use crible_store::compact::{CompactReport, compact, reclaim_epochs};
 use half::f16;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
@@ -283,22 +280,6 @@ fn fp16(vector: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the fixture batch must be valid: {error}"));
-    let file = File::create(path)
-        .unwrap_or_else(|error| panic!("the fixture file must be created: {error}"));
-    let properties = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
-        .unwrap_or_else(|error| panic!("the fixture writer must open: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the fixture rows must be written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the fixture file must close: {error}"));
-}
-
 /// Writes a batch of two documents and two passages, each passage covering a
 /// distinct document, and its manifest.
 fn write_batch(root: &Path, batch_id: &str) -> PathBuf {
@@ -314,7 +295,7 @@ fn write_batch(root: &Path, batch_id: &str) -> PathBuf {
         .iter()
         .map(|title| Some(*title))
         .collect();
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &document_schema(),
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(titles)],
@@ -331,7 +312,7 @@ fn write_batch(root: &Path, batch_id: &str) -> PathBuf {
         [fp16(&[1.0, 0.0, 0.0, 0.0]), fp16(&[0.0, 1.0, 0.0, 0.0])].into_iter(),
     )
     .unwrap_or_else(|error| panic!("the fixture vectors must share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &dir.join("passages.parquet"),
         &passage_schema(),
         vec![
@@ -673,27 +654,14 @@ fn assert_index_state(index: &Path, expected: &ExpectedState) {
     );
 
     assert_manifest(&epoch_dir, expected.generation, expected.segments);
-    assert_eq!(
-        directories(&epoch_dir.join("segments")),
-        {
-            let mut expected_names: Vec<String> = expected
-                .segments
-                .iter()
-                .map(|id| (*id).to_owned())
-                .collect();
-            expected_names.sort_unstable();
-            expected_names
-        },
-        "the segments of the current epoch must be exactly the ones SQLite references: an \
-         orphan or a tmp-* directory would be a mixture of two generations (INV-04)"
-    );
+    common::assert_segment_directories(index, expected.epoch, expected.segments);
 }
 
 /// Asserts no `tmp-*` entry survives in the index directory, any epoch directory
 /// or its `segments/` and `manifests/` directories.
 fn assert_no_temporary_entries(index: &Path) {
-    let mut checked = vec![index.to_path_buf()];
     let epochs = index.join("epochs");
+    let mut checked = vec![index.to_path_buf(), epochs.clone()];
     for epoch in directories(&epochs) {
         let epoch_dir = epochs.join(&epoch);
         checked.push(epoch_dir.join("segments"));
@@ -770,6 +738,9 @@ fn crash_attach_at(step: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 fn assert_attach_crash(step: &str, expected: &ExpectedState) {
     let (_temp, index, batch) = crash_attach_at(step);
     assert_index_state(&index, expected);
+    // Before the replay: a `tmp-*` the crash left behind must be gone, not
+    // hidden by the replay.
+    assert_no_temporary_entries(&index);
 
     let report = replay_attach(&index, &batch);
     assert_eq!(
@@ -851,6 +822,9 @@ fn assert_compaction_crash(step: &str, expected: &ExpectedState, replay: bool) {
     let outcome = spawn_child(step, COMPACTION_SCENARIO, &index, None);
     assert_child_was_killed(step, &outcome);
     assert_index_state(&index, expected);
+    // Before the replay: recovery, which `assert_index_state` ran by opening
+    // the store, must have removed the `epochs/tmp-*` a crash can leave.
+    assert_no_temporary_entries(&index);
 
     if replay {
         let report = replay_compaction(&index);

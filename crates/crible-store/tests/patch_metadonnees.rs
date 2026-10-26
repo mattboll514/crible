@@ -699,10 +699,18 @@ fn patch_refuses_more_entries_than_the_limit() {
 }
 
 #[test]
+fn the_patch_byte_limit_is_thirty_two_million_bytes() {
+    // ADR-0060, decision 7, `docs/04` and `docs/05` all say "32 Mo": the
+    // decimal megabyte, not a binary mebibyte. The value is pinned here so a
+    // later edit cannot drift from the accepted documents again.
+    assert_eq!(patch::MAX_BYTES, 32_000_000);
+}
+
+#[test]
 fn patch_refuses_more_bytes_than_the_limit() {
-    // ADR-0060, decision 7: 32 MiB at most, refused in `payload_too_large`
-    // before the bytes are parsed. The buffer is never a real patch, so the
-    // check on the length is what the test pins.
+    // ADR-0060, decision 7: 32 000 000 bytes at most, refused in
+    // `payload_too_large` before the bytes are parsed. The buffer is never a
+    // real patch, so the check on the length is what the test pins.
     let oversized = vec![b'\n'; patch::MAX_BYTES as usize + 1];
     let error = patch::parse(&oversized)
         .err()
@@ -719,7 +727,7 @@ fn patch_refuses_more_bytes_than_the_limit() {
 fn read_file_refuses_an_oversized_file_before_loading_it() {
     // ADR-0060, decision 7, at the boundary of the CLI: `read_file` refuses on
     // the size the file system reports, before reading anything. The file is
-    // sparse — `set_len` writes no block — so the test costs no real 32 MiB.
+    // sparse — `set_len` writes no block — so the test costs no real 32 MB.
     let directory = tempfile::tempdir()
         .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
     let path = directory.path().join("patch.jsonl");
@@ -727,6 +735,16 @@ fn read_file_refuses_an_oversized_file_before_loading_it() {
         .unwrap_or_else(|error| panic!("the patch file must be creatable: {error}"));
     file.set_len(patch::MAX_BYTES + 1)
         .unwrap_or_else(|error| panic!("the patch file must be resized: {error}"));
+    // Removing the read permission proves the order: `read_file` must answer
+    // from the size the file system reports (`metadata.len()`), because it
+    // could not read a single byte of this file. Crible targets Linux (docs/07),
+    // where the mode holds even for the owner.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
+            .unwrap_or_else(|error| panic!("the patch file must become unreadable: {error}"));
+    }
 
     let error = patch::read_file(&path)
         .err()

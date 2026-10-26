@@ -412,11 +412,11 @@ mesure que l'ADR-0047 attendait pour trancher l'ordre des remèdes.
   **native**, aucun conteneur.
 - Charge ambiante : la machine n'était **pas au repos**. La moyenne de charge est
   passée de 4,11 à 4,33 sur 8 cœurs pendant la campagne
-  (`data/mes13/replay-raw/conditions-start.txt` et `conditions-end.txt`) ;
-  `mediaanalysisd` et `mds_stores` ont occupé jusqu'à un cœur chacun par moments.
-  Les p95 des cinq points sont à moins de 2 % des p50, donc l'effet sur les p50 est
-  faible, sans être mesuré. La campagne du 2026-10-22 avait une charge du même ordre
-  (4,06 à 3,01).
+  (`data/mes13/replay-raw/conditions-start.txt` et `conditions-end.txt`) ; ces
+  relevés ne portent que les moyennes de charge, pas le détail des processus.
+  Les p95 des cinq points sont à au plus 2,5 % des p50, donc l'effet sur les p50
+  est faible, sans être mesuré. La campagne du 2026-10-22 avait une charge du même
+  ordre (4,06 à 3,01).
 - Jeu de données : les **cinq index attachés de `data/legifacile-sample`**, copiés
   dans `data/mes13/legifacile-<structure>` (clone APFS) pour laisser les index
   attachés intacts. Tailles décimales (Mo = 10⁶ octets), mémoires en Mio.
@@ -525,10 +525,10 @@ donc **extrapolées** par la règle linéaire mesurée sur 50 k lignes par index
 signalées comme telles ; ce ne sont pas des mesures. Deux bornes encadrent le
 résultat :
 
-| Base de l'extrapolation | Coût par ligne | 8,58 M passages | 9,44 M lignes (10 % de morts) | Mesuré ou extrapolé |
+| Base de l'extrapolation | Coût par ligne | 8,58 M passages | 9,53 M lignes (10 % de morts) | Mesuré ou extrapolé |
 |---|---:|---:|---:|---|
-| Total pondéré des cinq index | 1,94 µs | **16,6 s** | 18,3 s | extrapolé |
-| Index le plus cher, `articles` | 3,37 µs | **28,9 s** | 31,8 s | extrapolé |
+| Total pondéré des cinq index | 1,94 µs | **16,6 s** | 18,5 s | extrapolé |
+| Index le plus cher, `articles` | 3,37 µs | **28,9 s** | 32,1 s | extrapolé |
 | Fixture `synth-small` à 8,58 M (§ 3) | 2,35 µs | 20,1 s | 22,4 s | mesuré le 2026-10-22 |
 
 Deux corrections sont connues mais non mesurées sur ce schéma :
@@ -540,9 +540,9 @@ Deux corrections sont connues mais non mesurées sur ce schéma :
 - les 10 % de lignes mortes du seuil de compaction (ADR-0006) ajoutent 10 % de
   lignes à lire, ce que la colonne de droite chiffre.
 
-Même la borne la plus haute — `articles` à 8,58 M avec 10 % de morts, 31,8 s —
+Même la borne la plus haute — `articles` à 8,58 M avec 10 % de morts, 32,1 s —
 reste **sous le seuil de 60 s**, avec une marge de 1,9. La borne pondérée donne une
-marge de 3,3 à 3,6.
+marge de 3,2 à 3,6.
 
 ### 11.6 Nombre de passages par document et gain maximal du décodage unique
 
@@ -585,8 +585,8 @@ Ce que la mesure permet d'affirmer, sur le schéma et les proportions de
 l'échantillon Legifacile, à cache chaud :
 
 1. **Le démarrage n'atteint pas le seuil de 60 s à l'échelle de Legifacile.** La
-   borne pondérée donne 16,6 s pour 8,58 M passages (18,3 s avec 10 % de morts), la
-   borne la plus chère 28,9 s (31,8 s avec 10 % de morts). Les deux sont des
+   borne pondérée donne 16,6 s pour 8,58 M passages (18,5 s avec 10 % de morts), la
+   borne la plus chère 28,9 s (32,1 s avec 10 % de morts). Les deux sont des
    extrapolations linéaires, signalées ; la marge au seuil va de 1,9 à 3,6.
 2. **Le décodage JSON n'est plus le premier poste** : 27,6 % de la construction,
    contre 46,8 % sur la fixture. La lecture SQLite (39,0 %) et l'insertion dans les
@@ -613,7 +613,7 @@ Ce que la mesure ne permet pas d'affirmer :
 
 **Comparaison au budget et ordre des remèdes (ADR-0047).** Le seuil est 60 s à
 l'échelle de Legifacile ; la borne la plus haute mesurée par extrapolation vaut
-31,8 s, soit **53 % du budget**. Le seuil **n'est pas dépassé** : ni
+32,1 s, soit **54 % du budget**. Le seuil **n'est pas dépassé** : ni
 `DECODER-DOCUMENTS-UNE-FOIS` ni `AJOUTER-CACHE-BITMAPS` ne sont proposées par cette
 campagne. La seconde ne pouvait de toute façon pas l'être avant la première, et le
 gain maximal de la première (5,3 %, borne haute) ne suffirait pas à justifier un
@@ -640,3 +640,28 @@ la mémoire des structures et la taille de `records.sqlite`. Les JSON par invoca
 et les conditions de charge restent dans `data/mes13/replay-raw/` ; les copies de
 travail dans `data/mes13/legifacile-*` (clone APFS, 586 Mo) et
 `data/mes13/cold-work/` (vide après la campagne).
+
+### Corrections du 2026-10-26 (NETTOYER-P3)
+
+Texte seulement : aucune mesure n'a été rejouée, les chiffres mesurés restent ceux
+du 2026-10-25.
+
+- **§ 11.2, charge ambiante** : les fichiers `data/mes13/replay-raw/conditions-*.txt`
+  ne portent que les moyennes de charge. Avant : « `mediaanalysisd` et `mds_stores`
+  ont occupé jusqu'à un cœur chacun par moments ». Après : ces relevés ne portent
+  que les moyennes de charge, pas le détail des processus.
+- **§ 11.2, dispersion** : avant « les p95 des cinq points sont à moins de 2 % des
+  p50 », faux pour `titres` en phase `open` (68,4 ms contre 66,8 ms, +2,4 %).
+  Après : « au plus 2,5 % des p50 ».
+- **§ 11.5, tableau d'extrapolation** : la colonne « 10 % de morts » vaut
+  `8,58 / 0,9 = 9,53 M` lignes, et non `8,58 × 1,1 = 9,44 M`. Avant : « 9,44 M
+  lignes », 18,3 s et 31,8 s. Après : « 9,53 M lignes », 18,5 s et 32,1 s.
+  Détail du calcul : `1,94 µs × 9,5333 M = 18,49 s` ; `3,37 µs × 9,5333 M = 32,13 s`.
+- **§ 11.5, marges** : avant « marge de 3,3 à 3,6 », après « marge de 3,2 à 3,6 »
+  (`60 / 18,5 = 3,24`). La marge de la borne haute reste 1,9 (`60 / 32,1 = 1,87`).
+- **§ 11.8, conclusion** : mêmes valeurs corrigées dans la première affirmation
+  (18,5 s et 32,1 s avec 10 % de morts) ; la conclusion est inchangée, les deux
+  bornes restent sous le seuil de 60 s.
+- **§ 11.8, comparaison au budget** : avant « 31,8 s, soit 53 % du budget », après
+  « 32,1 s, soit 54 % du budget » (`32,1 / 60 = 53,5 %`). Le seuil n'est toujours
+  pas dépassé.
