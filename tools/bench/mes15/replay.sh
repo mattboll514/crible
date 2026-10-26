@@ -14,6 +14,10 @@
 #   Re-preparing them would rebuild the same reference state, not replay it.
 # - the campaign the replay writes lives under `data/mes15/replay-raw/`, so the
 #   `.json` and `.time` files of the 2026-10-21 campaign stay untouched.
+#   `MES15_RAW` moves that directory: a later replay must not overwrite the
+#   point files and the `after-commit-scans*.json` files a report cites.
+#   `MES15_DAY` names the campaign date; the default is the UTC date, which can
+#   be the day before the local one around midnight.
 # - `data/mes15/i-*/index.json` has been added by hand before the replay: the
 #   indexes were prepared by a bench that did not write the index configuration,
 #   and `GenerationStore::open` now refuses an index that does not declare its
@@ -23,11 +27,11 @@ set -eu
 
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 DATA="$ROOT/data/mes15"
-RAW="$DATA/replay-raw"
+RAW=${MES15_RAW:-"$DATA/replay-raw"}
 WORK="$DATA/replay-work"
 REPEATS=10
 SHA=$(git -C "$ROOT" rev-parse --short HEAD)
-DAY=$(date -u +%F)
+DAY=${MES15_DAY:-$(date -u +%F)}
 MACHINE="Apple M3 / 24 GB / macOS 15.7.7"
 
 mkdir -p "$RAW" "$WORK"

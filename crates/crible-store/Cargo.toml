@@ -30,6 +30,12 @@ failpoints = []
 
 [dev-dependencies]
 tempfile.workspace = true
+# The commit-path plan test of `src/generation.rs` traces the statements the
+# commit connection really runs, then explains each of them (ADR-0066). `trace`
+# is a pure Rust rusqlite feature — no new crate, no C symbol — and it is only
+# enabled for the test targets of this package: a production build keeps the
+# feature set of the workspace.
+rusqlite = { workspace = true, features = ["trace"] }
 
 # MES-15: the commit-cost bench drives `GenerationStore::commit` itself; the
 # harness is `harness = false` because the measure is a scenario matrix (N, S),

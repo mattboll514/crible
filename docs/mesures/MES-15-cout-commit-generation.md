@@ -685,3 +685,236 @@ par répétition pour le commit et chaque réplique, le maximum de RSS du proces
 par point. Le relevé hors banc est dans `data/mes15/replay-raw/` :
 `after-commit-scans.json`, `after-commit-scans-with-indexes.json`, les `.time` et
 les JSON de point. Les index de base restent dans `data/mes15/` (6,3 Go).
+
+## 11. Campagne du 2026-10-26 — rejeu après `BORNER-COUT-DU-COMMIT` (ADR-0066)
+
+Rejeu demandé par la fiche `BORNER-COUT-DU-COMMIT` (phase P3, hors plan) et par la
+décision 3 de l'ADR-0066. Il mesure le commit après que `FilterIndex::after_commit`
+a reçu le delta que la transaction vient d'écrire, au lieu de le relire dans
+SQLite par estampille de génération. Même banc, mêmes points `N` et `S` que la
+campagne du 2026-10-21 (§ 1 à § 3) et que le rejeu du 2026-10-25 (§ 10).
+
+### 11.1 Conditions
+
+- Tâche : `BORNER-COUT-DU-COMMIT` (phase P3, hors plan), étape mesure.
+- Références : ADR-0066 (décisions 1, 3 et 4), `docs/phases/P3-cycle-de-vie.md`
+  (`### BORNER-COUT-DU-COMMIT`), § 10 de ce rapport, `docs/02-architecture.md`
+  (« Générations et point de commit »).
+- Commit de base : `4d9c7c01022aba10b9b143de274a460f7ada5581` (branche
+  `tache/BORNER-COUT-DU-COMMIT`, dernier commit `docs(adr)` d'acceptation de
+  l'ADR-0066). **L'implémentation mesurée est le diff de travail non commité de
+  la tâche**, et non ce commit : `crates/crible-store/src/attach.rs`,
+  `filters_index.rs`, `generation.rs`, `patch.rs`, `crates/crible-store/Cargo.toml`
+  (feature `trace` de `rusqlite`, réservée aux cibles de test) et
+  `crates/crible-store/tests/construire_bitmaps.rs`. Aucun code n'a été modifié
+  pendant la campagne. Le banc `crates/crible-store/benches/commit_cost.rs` n'est
+  **pas** modifié par la tâche : il appelle déjà `GenerationStore::commit`, donc
+  le chemin réel, et continue de le faire avec la nouvelle signature.
+- Machine : MacBook Apple M3 (`Mac15,12`, 8 cœurs : 4 performance, 4 efficacité),
+  24 Go de RAM (25 769 803 776 octets), macOS 15.7.7 (24G720), APFS, 102 Gio
+  libres avant la campagne et 101 Gio après. Mesure **native**, aucun conteneur.
+  Le banc est un binaire de `crates/crible-store/benches/`, compilé par
+  `cargo bench` (profil `bench`, optimisations actives, héritées de `release`).
+- Charge ambiante : la machine n'était **pas au repos**. Moyenne de charge de
+  3,06 au début et 7,58 à la fin du premier tour
+  (`data/mes15/replay-raw-2026-10-26/conditions-start.txt` et
+  `conditions-end.txt`), 6,93 à la fin du second. Les
+  processus visibles sont un éditeur (VS Code, jusqu'à 74 % d'un cœur avant la
+  campagne), l'agent de mesure lui-même (`opencode`, 13 %), `claude`, `Arc`,
+  `Ollama`, et par moments `mediaanalysisd` et `mds_stores`. Leur part n'a pas
+  été isolée ; aucune autre charge lourde n'a été lancée par la campagne. Les
+  p95 et p99 restent à moins de 35 % des p50 (le point `100 000` / 10 est le plus
+  dispersé : 65,8 contre 48,7 ms) et le second tour reproduit les p50 à 3,3 % au
+  plus (§ 11.4) : l'effet de cette charge sur les écarts comparés ici est faible,
+  sans être mesuré.
+- Jeu de données : les **sept index de base de la campagne du 2026-10-21**, dans
+  `data/mes15/` (gitignoré), inchangés depuis le rejeu du 2026-10-25. Sommes de
+  contrôle revérifiées à la main après la campagne sur quatre d'entre eux
+  (`shasum -a 256`, préfixe de 16 caractères) : `2679d0c3619b6fd3`
+  (`i-1000000-s10`), `04802183f3ce4087` (`i-8580000-s10`), `fb9836d4b41a1040`
+  (`i-8580000-s1000`), `a56f01fd3fa63187` (`i-10000-s10`), identiques aux
+  préfixes du § 1. Les trois autres n'ont pas été re-hachés.
+- Configuration mesurée : identique au § 1 — commit type d'un segment neuf de
+  2 000 passages (768 dimensions, fp16), 1 000 documents, 50 pierres tombales,
+  10 répétitions par point, `N` et `S` fixes à chaque répétition, cache chaud
+  (préchauffage par lecture complète de `records.sqlite` avant chaque
+  répétition).
+
+### 11.2 Protocole
+
+```sh
+# une fois, hors mesure : compiler le banc (profil `bench`)
+cargo build --release
+cargo bench -p crible-store --bench commit_cost --no-run
+
+# premier tour : les sept points, 10 répétitions, sortie datée séparée
+MES15_RAW="$PWD/data/mes15/replay-raw-2026-10-26" sh tools/bench/mes15/replay.sh
+
+# second tour de répétabilité sur trois points
+for label in i-1000000-s10 i-8580000-s10 i-8580000-s1000; do
+    cargo bench -p crible-store --bench commit_cost -- measure \
+        --index "$PWD/data/mes15/$label" --work "$PWD/data/mes15/replay-work" \
+        --repeats 10 --commit "$(git rev-parse --short HEAD)" \
+        --machine "Apple M3 / 24 GB / macOS 15.7.7" --date 2026-10-26 \
+        --out "$PWD/data/mes15/replay-raw-2026-10-26/round2-$label.json"
+done
+
+# fusion des dix points
+python3 tools/bench/mes15/merge.py \
+    docs/mesures/MES-15-cout-commit-generation.2026-10-26.json \
+    data/mes15/replay-raw-2026-10-26/i-*.json \
+    data/mes15/replay-raw-2026-10-26/round2-*.json
+```
+
+`replay.sh` est réutilisé tel quel à deux ajouts près, tous deux dans le script et
+aucun dans le banc : `MES15_RAW` déplace le dossier de sortie, pour que le rejeu
+n'écrase ni les JSON de point du 2026-10-25 ni les `after-commit-scans*.json`
+cités au § 10.5 ; `MES15_DAY` nomme la date de campagne, parce que le défaut
+`date -u` désigne encore le 2026-10-25 à 00 h 35 heure locale. Le protocole du § 2
+s'applique sans changement : dix répétitions, clone APFS de l'index de base par
+répétition (`clone_kind` vaut `clonefile` pour les 100 répétitions), préchauffage,
+cache chaud, p50/p95/p99 par rang le plus proche.
+
+### 11.3 Résultats
+
+Commit complet, 10 répétitions par point, cache chaud, en millisecondes.
+« Campagne » est le p50 du 2026-10-21 (§ 3) ; « rejeu 25 » celui du 2026-10-25
+(§ 10.3). Les deux colonnes d'écart valent `rejeu 26 − campagne`.
+
+| N | S | p50 rejeu 26 | p95 | p99 | p50 2026-10-21 | Écart | Écart relatif | p50 2026-10-25 | Écart | Écart relatif |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 10 000 | 10 | **45,5** | 46,8 | 46,8 | 106,4 | −60,9 | −57,2 % | 41,1 | +4,4 | +10,7 % |
+| 100 000 | 10 | **48,7** | 65,8 | 65,8 | 110,1 | −61,4 | −55,8 % | 71,9 | −23,2 | −32,2 % |
+| 1 000 000 | 10 | **62,0** | 64,8 | 64,8 | 160,0 | −98,0 | −61,3 % | 375,8 | −313,8 | −83,5 % |
+| 1 000 000 | 10 (vecteurs vides) | **61,3** | 63,2 | 63,2 | 154,3 | −93,0 | −60,3 % | 375,3 | −314,0 | −83,7 % |
+| 1 000 000 | 1 000 | **87,0** | 92,9 | 92,9 | 195,4 | −108,4 | −55,5 % | 401,4 | −314,4 | −78,3 % |
+| 8 580 000 | 10 | **89,8** | 96,8 | 96,8 | 598,3 | −508,5 | **−85,0 %** | 3 085,1 | −2 995,3 | **−97,1 %** |
+| 8 580 000 | 1 000 | **111,1** | 117,3 | 117,3 | 641,3 | −530,2 | −82,7 % | 3 108,1 | −2 997,0 | −96,4 % |
+
+Sur 10 échantillons, p95 et p99 valent le maximum : ces colonnes mesurent la queue
+de la campagne, pas une queue de production (convention du § 2). Le contrôle
+« vecteurs vides » reste à 1,1 % de son jumeau, comme les deux campagnes
+précédentes : le commit ne lit toujours pas les octets de vecteurs.
+
+Décomposition, p50 en millisecondes sur la même répétition. « Reste » est
+`commit − corps de transaction − COMMIT SQLite − métadonnées de segments −
+manifeste` ; il porte la dérivation de l'instantané, la publication et l'écart entre
+la transaction répliquée et la transaction réelle (constat du § 9).
+
+| N | S | Commit | Transaction (corps) | `COMMIT` SQLite | Métadonnées de segments | Manifeste | Reste |
+|---|---|---|---|---|---|---|---|
+| 10 000 | 10 | 45,5 | 12,7 | 1,43 | 0,37 | 7,9 | 23,1 |
+| 100 000 | 10 | 48,7 | 16,2 | 1,45 | 0,37 | 8,0 | 22,7 |
+| 1 000 000 | 10 | 62,0 | 16,2 | 1,41 | 0,37 | 8,0 | 36,0 |
+| 1 000 000 | 10 (vecteurs vides) | 61,3 | 16,2 | 1,44 | 0,36 | 8,0 | 35,3 |
+| 1 000 000 | 1 000 | 87,0 | 16,5 | 1,57 | 14,70 | 9,0 | 45,2 |
+| 8 580 000 | 10 | 89,8 | 16,8 | 1,48 | 0,32 | 8,0 | 63,2 |
+| 8 580 000 | 1 000 | 111,1 | 17,4 | 1,49 | 13,83 | 9,7 | 68,6 |
+
+Trois lectures immédiates :
+
+1. **Le terme qui dominait le commit a disparu.** Le « reste » valait 350 ms à
+   1 M et 3 058,7 ms à 8,58 M au § 10.3, pour l'essentiel les deux balayages
+   complets de `passages` mesurés à 2,92 s au § 10.5. Il vaut 36,0 et 63,2 ms, et
+   le commit entier passe de 3 085,1 à 89,8 ms à 8,58 M / 10.
+2. **La dérivation reste légèrement linéaire en `N`, mais d'un autre ordre.** Le
+   « reste » passe de 23,1 ms à 10 k à 63,2 ms à 8,58 M, soit ≈ 4,7 ns par passage
+   ajouté, à comparer aux 60 à 65 ns par passage du § 4. La part de ce résidu qui
+   vient de la copie sur écriture des structures et celle qui vient de l'écart
+   entre la transaction répliquée et la transaction réelle ne sont pas isolées.
+3. **La réplique `live_iids` n'est toujours pas appelée** : elle coûte encore
+   495,9 et 508,5 ms à 8,58 M (champs `live_iids_ns` du JSON), et le commit ne la
+   paie pas. C'est le contrôle de ce que la dérivation a retiré au § 10.3.
+
+### 11.4 Répétabilité
+
+Second tour intégral sur trois points, même banc, même jour, mêmes index,
+10 répétitions :
+
+| N | S | Premier tour (p50) | Second tour (p50) | Écart |
+|---|---|---|---|---|
+| 1 000 000 | 10 | 62,0 ms | 59,9 ms | −3,3 % |
+| 8 580 000 | 10 | 89,8 ms | 88,2 ms | −1,7 % |
+| 8 580 000 | 1 000 | 111,1 ms | 110,7 ms | −0,4 % |
+
+Les deux tours se suivent à 3,3 % près au plus, malgré une charge ambiante plus
+forte au second (moyenne de charge 6,93 à la fin). Le second tour est dans le JSON
+brut avec `round: 2`.
+
+### 11.5 Conclusion du rejeu
+
+Ce que la mesure permet d'affirmer, aux points `N` et `S` de la campagne du
+2026-10-21, pour le même commit type :
+
+1. **Le commit à 8,58 M passages vivants repasse sous les 598,3 ms du
+   2026-10-21** : 89,8 ms en p50 à `S` = 10 (−85,0 %) et 111,1 ms à `S` = 1 000
+   (−82,7 %). Le commit est aussi plus court de 97,1 % et 96,4 % que celui du rejeu
+   du 2026-10-25 (3 085,1 et 3 108,1 ms). **La décision 2 de l'ADR-0066 — les deux
+   index SQLite `passages(created_generation)` et `documents(updated_generation)`
+   — ne devient donc pas le recours à instruire** : elle n'est pas appliquée, et
+   rien dans cette campagne ne demande de l'instruire.
+2. **Le coût du commit ne suit plus la taille de l'index au premier ordre** : à
+   8,58 M, 89,8 ms pour un commit de 2 000 passages, dont 16,8 ms de corps de
+   transaction, 8,0 ms de manifeste et 1,5 ms de `COMMIT` SQLite. Le solde de
+   63,2 ms est le seul terme qui croît encore avec `N`, à ≈ 4,7 ns par passage.
+3. **Les petits points ne sont pas dégradés** : 45,5 ms à 10 k (+10,7 % contre le
+   rejeu du 2026-10-25, qui avait déjà gagné 61,4 % sur la campagne du
+   2026-10-21) et 48,7 ms à 100 k (−32,2 %). L'écart de +4,4 ms à 10 k est du même
+   ordre que la dispersion des deux tours de cette campagne.
+4. **Le contrôle « vecteurs vides » tient** : 61,3 ms contre 62,0 ms, écart de
+   1,1 %, comme en 2026-10-21 (3,6 %) et en 2026-10-25 (0,1 %).
+
+Ce que la mesure ne permet pas d'affirmer :
+
+- Rien sur un cache froid contrôlé : le protocole reste celui du § 2, cache chaud.
+  L'effet du froid sur un commit qui n'a plus de balayage complet n'est pas
+  mesuré ; il porte désormais sur les accès bornés et sur la transaction.
+- Rien sur l'attache complète : la recette, le segment, le manifeste et le lexical
+  restent hors du commit. C'est l'objet de la campagne du 2026-10-26 de MES-08.
+- Rien sur la répartition interne du « reste » de 63,2 ms : ni la part de la
+  dérivation, ni celle de la transaction réelle contre sa réplique.
+- Rien sur les points intermédiaires entre 100 k et 1 M, non mesurés.
+
+**Comparaison au budget.** Il n'existe toujours aucune cible chiffrée pour MES-15
+dans `docs/08`. Le seul budget écrit reste `wait_timeout_ms` (60 s, `docs/05`) :
+à 89,8 ms, le commit en consomme 0,15 % à 8,58 M, contre 1,0 % avant la dérivation
+et 5,2 % après elle. La contrainte qui reste est la sérialisation de l'écrivain
+unique, pas le délai du client.
+
+**Recommandation, à valider par le propriétaire** : aucune modification de code
+n'est proposée ici. Le chiffre de 89,8 ms laisse la décision 2 de l'ADR-0066 en
+recours non instruit, ce qui est l'état que l'ADR prévoit.
+
+### 11.6 Écarts au protocole, et incident de fusion
+
+- **La machine n'était pas au repos** : moyenne de charge 3,06 au début, 7,58 à la
+  fin du premier tour, avec un éditeur et l'agent de mesure actifs. La dispersion
+  reste bornée (p95 à 35 % au plus du p50, second tour à 3,3 %) ; aucune valeur
+  n'est retirée.
+- **Pas de cache froid contrôlé**, comme aux deux campagnes précédentes.
+- **Incident de fusion, réparé** : au premier appel de `replay.sh`, le 2026-10-26 à
+  00 h 43 heure locale, `merge.py` a écrit le fichier fusionné sous le nom
+  `MES-15-cout-commit-generation.2026-10-25.json`, parce que `DAY` suit la date
+  UTC (2026-10-25 à 23 h 43 UTC). Le JSON du 2026-10-25, versionné, a donc été
+  écrasé. Il a été **restauré depuis `HEAD`** (`git show
+  HEAD:docs/mesures/MES-15-cout-commit-generation.2026-10-25.json`), et son
+  contenu est identique à la version commitée (`git status` ne le signale plus).
+  La fusion de ce rejeu a été conservée sous le nom daté du jour local,
+  `MES-15-cout-commit-generation.2026-10-26.json`. `replay.sh` porte désormais
+  `MES15_DAY` pour que le cas ne se reproduise pas.
+- **Date des fichiers de point** : le banc estampille la date qu'on lui passe.
+  Les sept points du premier tour portent `2026-10-25` (date UTC au lancement) et
+  les trois du second `2026-10-26`. La campagne fusionnée porte `2026-10-26`,
+  date locale de la mesure (00 h 35 à 00 h 59, heure de Paris). Les fichiers
+  bruts n'ont pas été réécrits pour cela.
+- **`replay.sh` modifié** (deux variables d'environnement, `MES15_RAW` et
+  `MES15_DAY`) ; le banc n'est pas modifié.
+
+### 11.7 Données brutes
+
+`docs/mesures/MES-15-cout-commit-generation.2026-10-26.json` : les dix points
+(sept du premier tour, trois du second), 10 répétitions chacun, toutes les valeurs
+brutes par répétition pour le commit et chaque réplique, le maximum de RSS du
+processus par point. Les fichiers de point, les `.time` et les relevés de charge
+sont dans `data/mes15/replay-raw-2026-10-26/` (gitignoré) ; les relevés du
+2026-10-25 restent dans `data/mes15/replay-raw/`, intacts.

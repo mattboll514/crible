@@ -114,6 +114,7 @@ use rusqlite::{Connection, Transaction};
 use serde_json::{Map, Number, Value, json};
 
 use crate::batch_reader::BatchReader;
+use crate::filters_index::{CommitDelta, CreatedPassage};
 use crate::generation::{GenerationStore, attach_failpoint};
 use crate::records::{self, DocumentRecord, PassageRecord};
 use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
@@ -559,7 +560,7 @@ pub fn attach(
             write_document_rows(transaction, &reader, schema, &plan.rewrite, generation)?;
             attach_failpoint("after_attach_documents");
 
-            let after_passages = write_passage_rows(
+            let (after_passages, created) = write_passage_rows(
                 transaction,
                 &reader,
                 schema,
@@ -617,7 +618,15 @@ pub fn attach(
             if let Some(segment) = &segment {
                 records::insert_segment(transaction, segment)?;
             }
-            Ok(after_passages)
+            Ok((
+                after_passages,
+                CommitDelta {
+                    created,
+                    rewritten_documents: plan.rewrite.iter().cloned().collect(),
+                    tombstones: plan.tombstones.clone(),
+                    removed_documents: plan.removed.clone(),
+                },
+            ))
         })?;
 
     let mut report =
@@ -1138,7 +1147,9 @@ fn write_segment(
 
 /// Streams the passage files and writes the `passages` rows of the refreshed
 /// documents, in the same order as [`write_segment`], so each row takes the
-/// `iid` of its vector. Returns the first free `iid` after them.
+/// `iid` of its vector. Returns the first free `iid` after them, and the
+/// passages it created, for the delta of
+/// [`crate::filters_index::FilterIndex::after_commit`] (ADR-0066).
 fn write_passage_rows(
     transaction: &Transaction<'_>,
     reader: &BatchReader,
@@ -1147,8 +1158,9 @@ fn write_passage_rows(
     iid_start: u32,
     segment_id: &str,
     generation: Generation,
-) -> Result<u32, CribleError> {
+) -> Result<(u32, Vec<CreatedPassage>), CribleError> {
     let mut next_iid = iid_start;
+    let mut created = Vec::new();
     // One compressor for the whole batch of passage rows (ADR-0048).
     let mut compressor = records::TextCompressor::new()?;
 
@@ -1170,25 +1182,23 @@ fn write_passage_rows(
                 )
             })?;
             let text = required_string(texts, row, "text")?;
-            records::insert_passage(
-                transaction,
-                &PassageRecord {
-                    iid,
-                    doc_id: doc_id.to_owned(),
-                    ord: ords.value(row),
-                    text: text.to_owned(),
-                    passage_hash: passage_hash(text),
-                    fields: fields_value(&chunk, row, schema, FieldLevel::Passage)?,
-                    segment_id: segment_id.to_owned(),
-                    created_generation: generation,
-                    dead_since_gen: None,
-                },
-                &mut compressor,
-            )?;
+            let record = PassageRecord {
+                iid,
+                doc_id: doc_id.to_owned(),
+                ord: ords.value(row),
+                text: text.to_owned(),
+                passage_hash: passage_hash(text),
+                fields: fields_value(&chunk, row, schema, FieldLevel::Passage)?,
+                segment_id: segment_id.to_owned(),
+                created_generation: generation,
+                dead_since_gen: None,
+            };
+            records::insert_passage(transaction, &record, &mut compressor)?;
+            created.push(CreatedPassage::from(record));
         }
     }
 
-    Ok(next_iid)
+    Ok((next_iid, created))
 }
 
 /// Builds the JSON object of one row's fields for `level`, as canonical JSON.

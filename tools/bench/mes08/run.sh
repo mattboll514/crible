@@ -27,22 +27,31 @@
 # (`tools/README.md`), because one of the two indexes uses an `onnx` model.
 #
 # Datasets and raw data go to `data/` (gitignored).
+#
+# `MES08_ONLY` restricts the campaign to one index (`articles` or
+# `synth-large`), and `MES08_RAW` moves the raw directory, so that a replay of a
+# single index does not overwrite the raw files a later report cites.
+# `MES08_DAY` names the campaign date; the default is the UTC date, which can be
+# the day before the local one around midnight.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
 DATA="$ROOT/data/mes08"
 MES07="$ROOT/data/mes07"
-RAW="$DATA/raw"
+RAW=${MES08_RAW:-"$DATA/raw"}
+ONLY=${MES08_ONLY:-all}
 REPEATS=5
 SHA=$(git -C "$ROOT" rev-parse --short HEAD)
-DAY=$(date -u +%F)
+DAY=${MES08_DAY:-$(date -u +%F)}
 MACHINE="Apple M3 / 24 GB / macOS 15.7.7"
 ARTICLES="$MES07/indexes/articles"
 LARGE="$ROOT/data/synth-large/indexes/synth-large"
 SAMPLE="$ROOT/data/legifacile-sample"
 BATCHES="$DATA/batches"
 
-: "${ORT_DYLIB_PATH:?set ORT_DYLIB_PATH to the ONNX Runtime library (tools/README.md)}"
+if [ "$ONLY" = all ] || [ "$ONLY" = articles ]; then
+    : "${ORT_DYLIB_PATH:?set ORT_DYLIB_PATH to the ONNX Runtime library (tools/README.md)}"
+fi
 
 prepare_batches() {
     if [ ! -d "$BATCHES/articles/daily-articles-1000" ]; then
@@ -111,16 +120,23 @@ echo "== build the bench"
 
 prepare_batches
 
-measure articles "$ARTICLES" \
-    "$BATCHES/articles/daily-articles-1000" "$BATCHES/articles/daily-articles-3000"
-measure synth-large "$LARGE" \
-    "$BATCHES/synth-large/daily-synth-1000" "$BATCHES/synth-large/daily-synth-3000"
+FILES=""
+if [ "$ONLY" = all ] || [ "$ONLY" = articles ]; then
+    measure articles "$ARTICLES" \
+        "$BATCHES/articles/daily-articles-1000" "$BATCHES/articles/daily-articles-3000"
+    FILES="$FILES $RAW/articles.json"
+fi
+if [ "$ONLY" = all ] || [ "$ONLY" = synth-large ]; then
+    measure synth-large "$LARGE" \
+        "$BATCHES/synth-large/daily-synth-1000" "$BATCHES/synth-large/daily-synth-3000"
+    FILES="$FILES $RAW/synth-large.json"
+fi
 
 printf '%s\n' "$(date -u +%FT%TZ)" >"$RAW/conditions-end.txt"
 uptime >>"$RAW/conditions-end.txt"
 ps -Ao pcpu,comm -r | head -8 >>"$RAW/conditions-end.txt"
 
+# shellcheck disable=SC2086 # one path per measured index, none of them has a space
 python3 "$ROOT/tools/bench/mes08/merge.py" \
     "$ROOT/docs/mesures/MES-08-duree-attache-quotidienne.$DAY.json" \
-    "$RAW/articles.json" \
-    "$RAW/synth-large.json"
+    $FILES
