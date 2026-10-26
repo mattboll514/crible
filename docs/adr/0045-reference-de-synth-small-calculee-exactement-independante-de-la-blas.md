@@ -6,6 +6,8 @@
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, d'après le diagnostic de l'agent dev et le verdict de l'agent architecte ; tâche d'origine : RECHERCHER-DENSE-EXACT (phase P1), après l'échec de la CI du run `39794175404`
 - **Remplace** : —
 
+> **Note du 2026-10-26.** La clause arithmétique de cet ADR — « le calcul du moteur ne change pas : il reste en f32, dans l'ordre des composantes » (décision, puis « Ce qui n'est pas décidé ici ») — est **remplacée par ADR-0072**. EXACT et le rescoring partagent désormais un seul calcul du produit scalaire : `kernels::dot` pour une référence fp16, une fonction scalaire accumulée en `f64` pour une référence fp32. Le reste de cet ADR est inchangé : la référence numpy reste exacte et indépendante de BLAS, le comparateur reste à `1e-5` avec départage stable par clé, et les décomptes de quasi-égalités restent des assertions exactes. La décision d'origine n'est pas réécrite (ADR-0072, décision 1).
+
 ## Contexte
 
 ### Ce que montre la CI

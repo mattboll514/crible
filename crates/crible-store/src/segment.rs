@@ -546,19 +546,41 @@ impl SegmentReader {
     /// [`ErrorCode::Internal`] error: an internal identifier always comes from
     /// the engine, so a foreign one is a bug, not a bad request (INV-01).
     pub fn vector(&self, iid: Iid) -> Result<Vec<f32>, CribleError> {
-        let Some(index) = self.index_of(iid) else {
-            let end = u64::from(self.meta.iid_start.get()) + u64::from(self.meta.count);
+        let index = self.index_or_error(iid)?;
+        decode_vector(self.row_bytes(index)?, self.meta.precision)
+    }
+
+    /// Returns the reference vector of `iid` as the `f16` components the
+    /// segment stores, read from the memory map.
+    ///
+    /// This is the form the search path needs: the rescoring step hands these
+    /// components to the dot-product kernel, which takes `f16` and widens them
+    /// itself (ADR-0070, ADR-0072). Widening here, as [`Self::vector`] does,
+    /// would hand the kernel values it cannot take, and copy each row at twice
+    /// its size.
+    ///
+    /// A segment of `fp32` reference precision is refused with an
+    /// [`ErrorCode::Internal`] error: no lossless conversion to `f16` exists, and
+    /// a caller that asks for `f16` components of an `fp32` reference
+    /// contradicts the metadata of the segment it opened. The `fp32` path of the
+    /// search reads [`Self::vector`] instead and computes in `f64`
+    /// (ADR-0072, decision 2).
+    ///
+    /// An identifier outside the range of the segment is refused exactly as
+    /// [`Self::vector`] refuses it.
+    pub fn vector_f16(&self, iid: Iid) -> Result<Vec<f16>, CribleError> {
+        let index = self.index_or_error(iid)?;
+        if self.meta.precision != ReferencePrecision::Fp16 {
             return Err(CribleError::new(
                 ErrorCode::Internal,
                 format!(
-                    "iid {} is outside the range [{}, {end}) of segment {}",
-                    iid.get(),
-                    self.meta.iid_start.get(),
-                    self.meta.segment_id
+                    "segment {} stores {} components where f16 components were asked for",
+                    self.meta.segment_id,
+                    precision_name(self.meta.precision)
                 ),
             ));
-        };
-        decode_vector(self.row_bytes(index)?, self.meta.precision)
+        }
+        decode_vector_f16(self.row_bytes(index)?)
     }
 
     /// Returns the binary code of `iid`: `ceil(dims / 64)` words, bit `i` set
@@ -710,6 +732,28 @@ impl SegmentReader {
                 ),
             )
         })
+    }
+
+    /// Position of `iid` in the vector file, or the error a foreign identifier
+    /// raises.
+    ///
+    /// An identifier outside the range of the segment is an
+    /// [`ErrorCode::Internal`] error: an internal identifier always comes from
+    /// the engine, so a foreign one is a bug, not a bad request (INV-01).
+    fn index_or_error(&self, iid: Iid) -> Result<usize, CribleError> {
+        let Some(index) = self.index_of(iid) else {
+            let end = u64::from(self.meta.iid_start.get()) + u64::from(self.meta.count);
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "iid {} is outside the range [{}, {end}) of segment {}",
+                    iid.get(),
+                    self.meta.iid_start.get(),
+                    self.meta.segment_id
+                ),
+            ));
+        };
+        Ok(index)
     }
 
     /// Position of `iid` in the vector file, or `None` when it is out of range.
@@ -998,6 +1042,36 @@ fn encode_component(buffer: &mut Vec<u8>, precision: ReferencePrecision, value: 
     }
 }
 
+/// Decodes a whole vector of `f16` components from little-endian words.
+///
+/// The caller checks the precision and the row length first: [`decode_vector`]
+/// and `row_bytes` guarantee `dims` two-byte components, so the iterator never
+/// meets a short chunk.
+fn decode_vector_f16(bytes: &[u8]) -> Result<Vec<f16>, CribleError> {
+    let (chunks, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "a stored fp16 row is {} bytes long, which is not a whole number of components",
+                bytes.len()
+            ),
+        ));
+    }
+    Ok(chunks
+        .iter()
+        .map(|chunk| f16::from_bits(u16::from_le_bytes(*chunk)))
+        .collect())
+}
+
+/// Name of a reference precision, as the configuration writes it.
+fn precision_name(precision: ReferencePrecision) -> &'static str {
+    match precision {
+        ReferencePrecision::Fp16 => "fp16",
+        ReferencePrecision::Fp32 => "fp32",
+    }
+}
+
 /// Decodes a whole vector from little-endian components.
 fn decode_vector(bytes: &[u8], precision: ReferencePrecision) -> Result<Vec<f32>, CribleError> {
     bytes
@@ -1066,14 +1140,39 @@ mod tests {
 
     /// Builds a specification for the tests of this module.
     fn spec(segment_id: &str, dims: u32) -> SegmentSpec {
+        spec_at(segment_id, dims, ReferencePrecision::Fp32)
+    }
+
+    /// Builds a specification of the given reference precision.
+    fn spec_at(segment_id: &str, dims: u32, precision: ReferencePrecision) -> SegmentSpec {
         SegmentSpec {
             segment_id: segment_id.to_owned(),
             iid_start: Iid::new(0),
             dims,
             generation: Generation::new(1),
             batch_id: "batch-empty".to_owned(),
-            precision: ReferencePrecision::Fp32,
+            precision,
         }
+    }
+
+    /// Writes a segment holding `vectors`, in order, and returns the directory
+    /// to keep alive and the path of the segment.
+    fn write_segment(
+        vectors: &[Vec<f32>],
+        dims: u32,
+        precision: ReferencePrecision,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let segments = dir.path().join("segments");
+        fs::create_dir_all(&segments).expect("the segments directory is created");
+        let mut writer = SegmentWriter::create(&segments, spec_at("seg-f16", dims, precision))
+            .expect("the writer starts in a temporary directory");
+        for vector in vectors {
+            writer.append(vector).expect("the vector is appended");
+        }
+        writer.finish().expect("the segment is committed");
+        let path = segments.join("seg-f16");
+        (dir, path)
     }
 
     /// A segment with no vector still opens: an epoch may attach an empty batch.
@@ -1201,6 +1300,104 @@ mod tests {
         assert!(
             Path::new(&segments.join("tmp-seg-1")).is_dir(),
             "the writer never deletes a temporary directory: that is recovery's job"
+        );
+    }
+
+    /// The `f16` accessor returns the components exactly as stored, without the
+    /// `f32` widening of [`SegmentReader::vector`].
+    ///
+    /// Test of the task `RESCORER-FP16`: the dot-product kernel takes `f16`, so
+    /// the widening belongs to the kernel (ADR-0070, ADR-0072). The values are
+    /// chosen exactly representable in `f16`, so the comparison is an equality
+    /// and not a tolerance.
+    #[test]
+    fn vector_f16_returns_the_stored_components() {
+        let vectors = [
+            vec![0.5_f32, -1.0, 0.25, 0.0],
+            vec![-2.0, 0.0, 0.125, 3.0],
+            vec![1.5, -0.5, 0.75, -0.25],
+        ];
+        let (_dir, path) = write_segment(&vectors, 4, ReferencePrecision::Fp16);
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        for (position, vector) in vectors.iter().enumerate() {
+            let iid = Iid::new(
+                u32::try_from(position).expect("the position of a fixture vector fits u32"),
+            );
+            let stored = reader
+                .vector_f16(iid)
+                .expect("the stored f16 components must be readable");
+            let expected: Vec<half::f16> = vector
+                .iter()
+                .map(|value| half::f16::from_f32(*value))
+                .collect();
+            assert_eq!(
+                stored,
+                expected,
+                "iid {}: the accessor must return the stored f16 components",
+                iid.get()
+            );
+            let widened: Vec<f32> = stored.iter().map(|value| value.to_f32()).collect();
+            assert_eq!(
+                reader.vector(iid).expect("the widened vector is readable"),
+                widened,
+                "iid {}: the two accessors must agree once the f16 components are widened",
+                iid.get()
+            );
+        }
+    }
+
+    /// An `fp32` segment cannot lose its precision on demand: the `f16` accessor
+    /// is refused, and the message names the precision it found.
+    #[test]
+    fn vector_f16_refuses_an_fp32_segment() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0]],
+            4,
+            ReferencePrecision::Fp32,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let error = reader
+            .vector_f16(Iid::new(0))
+            .expect_err("an fp32 reference has no f16 components to return");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("fp32") && error.message().contains("f16"),
+            "the message must name both precisions: {}",
+            error.message()
+        );
+    }
+
+    /// A foreign identifier is refused by the `f16` accessor exactly as by
+    /// [`SegmentReader::vector`].
+    #[test]
+    fn vector_f16_refuses_a_foreign_iid() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0]],
+            4,
+            ReferencePrecision::Fp16,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let error = reader
+            .vector_f16(Iid::new(7))
+            .expect_err("an identifier outside the segment must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("outside the range"),
+            "the message must name the range: {}",
+            error.message()
         );
     }
 }

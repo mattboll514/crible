@@ -54,7 +54,7 @@
 - **Objectif** : le score exact des N candidats.
 - **Dépend de** : SCANNER-POOL-BINAIRE
 - **Livrables** : la lecture des vecteurs de référence des N candidats (mmap), le produit scalaire via les noyaux, puis le tri final.
-- **Critères d'acceptation** : quand N est au moins égal à la taille du pool, le résultat est identique à la stratégie EXACT.
+- **Critères d'acceptation** : quand N est au moins égal à la taille du pool, le rescoring rend les mêmes clés que la stratégie EXACT, dans le même ordre (départage stable par clé `doc_id#ord`), avec des scores identiques au bit près ; les deux stratégies passent par la même fonction de calcul du produit scalaire (ADR-0072, décision 3). La comparaison à la référence numpy reste celle d'ADR-0045 (`1e-5`, quasi-égalités admises).
 
 ### PLANIFIER-STRATEGIE
 - **Objectif** : choisir EXACT ou BINARY, et forcer l'exact à la demande.

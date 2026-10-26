@@ -67,7 +67,7 @@ pub mod dense;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crible_core::config::{FieldLevel, Schema};
+use crible_core::config::{FieldLevel, ReferencePrecision, Schema};
 use crible_core::filter::{Condition, Filter, Operator};
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
@@ -104,8 +104,25 @@ pub fn fixture_schema() -> Schema {
 
 /// Index configuration declaring `schema`, as `crible index create` writes it.
 pub fn test_config(name: &str, schema: &Schema) -> String {
+    test_config_with_precision(name, schema, ReferencePrecision::Fp16)
+}
+
+/// Index configuration declaring `schema` and a reference precision.
+///
+/// The precision is frozen when the index is created (`docs/03-recherche.md`,
+/// ADR-0005), so a test that wants an `fp32` reference writes it here and then
+/// writes its segments with the same precision.
+pub fn test_config_with_precision(
+    name: &str,
+    schema: &Schema,
+    precision: ReferencePrecision,
+) -> String {
+    let precision = match precision {
+        ReferencePrecision::Fp16 => "fp16",
+        ReferencePrecision::Fp32 => "fp32",
+    };
     format!(
-        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        r#"{{"name":"{name}","model":"m","reference_precision":"{precision}","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
         schema.to_json_string()
     )
 }
