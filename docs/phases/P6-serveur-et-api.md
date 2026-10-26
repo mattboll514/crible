@@ -54,7 +54,7 @@
 ### FILE-D-ECRITURE-ET-JOBS
 - **Objectif** : un écrivain par index, une file bornée et le suivi des jobs.
 - **Dépend de** : DEMARRER-SERVEUR-AXUM
-- **À lire** : `02-architecture.md` (concurrence) ; `05-api.md` (jobs, `?wait=true`).
+- **À lire** : `02-architecture.md` (concurrence) ; `05-api.md` (jobs, `?wait=true`) ; ADR-0067.
 - **Livrables** :
   - une tâche tokio par index, avec une file bornée (`writer_queue`) ;
   - les jobs (états, progression, résultat, erreur), gardés en mémoire et dans une table SQLite `jobs`, au niveau de l'instance ;
@@ -63,6 +63,7 @@
 - **Critères d'acceptation** :
   - les jobs d'un même index s'exécutent dans l'ordre d'arrivée ;
   - les jobs terminés restent consultables après un redémarrage ;
+  - à l'échéance de `wait_timeout_ms`, `?wait=true` rend `202` avec le job en cours ; un job terminé avant est rendu terminé ; un test pour chaque cas (ADR-0067) ;
   - le test de file pleine renvoie bien `503`.
 
 ### ROUTES-INDEX

@@ -95,6 +95,7 @@ query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-
 [limits]
 writer_queue = 16
 default_timeout_ms = 2000
+wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067)
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
 

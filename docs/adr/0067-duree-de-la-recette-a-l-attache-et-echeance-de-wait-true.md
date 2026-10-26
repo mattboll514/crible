@@ -1,8 +1,9 @@
 # ADR-0067 — Durée de la recette à l'attache et échéance de `?wait=true`
 
-- **Statut** : Proposé
-- **Date** : 2026-10-26 (proposition)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-26)
+- **Date** : 2026-10-26 (proposition et acceptation)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-26 par le propriétaire, tel que proposé : décision 1 retenue (la recette ne change pas : `acceptance_sample` 200, fp32, `acceptance_min_cosine` 0,999, défauts d'ONNX Runtime, recette dans le chemin de l'attache avant toute écriture), décision 2 retenue (un job terminé dans le délai est rendu terminé en `200` ; à l'échéance de `wait_timeout_ms`, `202` avec le job dans son état courant, jamais `504` ni un code `timeout`, le client suit `GET /v1/jobs/{job_id}` ; `wait_timeout_ms` entre dans le tableau des limites de `docs/05` et dans `[limits]` de `docs/07`, 60 000 ms par défaut), décision 3 retenue (tâche hors plan `ACCELERER-RECETTE` en P4, en deux temps : ventilation mesurée de `validation`, puis encodage de la recette par lots seulement si la ventilation le justifie), décision 4 retenue (aucun de ces points ne bloque J3 : la durée de la recette est un fait documenté de la mesure, pas un critère de jalon). Aucun changement de format, de schéma ni d'invariant ; INV-12 reste tenu par la même preuve qu'aujourd'hui.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur. Origine : tâche `MESURER-CYCLE-DE-VIE` (phase P3), campagne de MES-08 du 2026-10-25, point de fin avec le propriétaire du 2026-10-26, faits établis par `@architecte` le 2026-10-26
 - **Remplace** : —
 

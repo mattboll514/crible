@@ -13,7 +13,7 @@
 
 - **Traçabilité** : chaque réponse porte l'en-tête `x-request-id`, et chaque réponse de recherche donne la `generation` lue.
 - **Mutations asynchrones** : elles renvoient `202 Accepted` avec un objet `job`.
-  - Avec `?wait=true`, l'appel attend la fin du job (au plus `wait_timeout_ms`, 60 s par défaut) et renvoie le job terminé.
+  - Avec `?wait=true`, l'appel attend la fin du job (au plus `wait_timeout_ms`, 60 s par défaut). Un job terminé dans le délai est rendu **terminé**, en `200`, avec son objet `job` complet (`state` à `succeeded` ou `failed`, et son `error` le cas échéant). À l'échéance de `wait_timeout_ms`, l'appel rend `202 Accepted` avec le job **dans son état courant** (`queued` ou `running`), sans erreur, et le client suit l'avancement par `GET /v1/jobs/{job_id}` : jamais `504`, jamais un code `timeout`, le job n'est pas annulé (ADR-0067).
 - **Dates** : ISO 8601 pour les horodatages, `YYYY-MM-DD` pour les champs de type `date`.
 - **Ids** : seuls les ids externes apparaissent (**INV-01**).
 
@@ -262,4 +262,5 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 | File d'écriture par index | 16 jobs, puis `503` avec `Retry-After` |
 | Recherches concurrentes | 2 × le nombre de cœurs, puis `503` |
 | `timeout_ms` | 2 000 par défaut, 30 000 au plus |
+| `wait_timeout_ms` | 60 000 par défaut : attente au plus de `?wait=true`, puis `202` avec le job dans son état courant (ADR-0067) |
 | Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |
