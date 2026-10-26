@@ -35,6 +35,12 @@ jobs:
           uv run python reference_topk.py --dataset ../data/synth-small
       - name: Test
         run: cargo test --locked
+      # The failpoint tests of INV-02, INV-03, INV-04 and INV-14 only exist with
+      # the `failpoints` cargo feature: without these two steps they never run in CI.
+      - name: Lint the failpoint build
+        run: cargo clippy -p crible-store --all-targets --locked --features failpoints -- -D warnings
+      - name: Test the failpoint build
+        run: cargo test -p crible-store --locked --features failpoints
       - name: Test the Python client against the binary
         working-directory: clients/python
         env:
@@ -128,6 +134,7 @@ jobs:
         working-directory: tools
         run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
       # No save step here: `.github/workflows/model-cache.yml` is the only writer of this cache (ADR-0059).
-      # The Legifacile sample tests stay local, excluded by name one by one (ADR-0062, ADR-0063).
+      # The three Legifacile sample tests stay local, excluded by name one by one
+      # (ADR-0057, ADR-0062, ADR-0063).
       - name: Test with ONNX Runtime
         run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import

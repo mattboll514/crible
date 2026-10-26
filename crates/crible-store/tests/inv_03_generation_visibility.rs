@@ -239,7 +239,7 @@ fn inv_03_failed_commit_leaves_generation_and_snapshot_unchanged() {
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
     // `seg-b` was never referenced by SQLite: recovery removes it.
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
 }
 
 /// The snapshot and the reference database agree: the live iids and the
@@ -338,7 +338,7 @@ fn inv_03_commit_refuses_rows_of_another_generation() {
     drop(store);
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
 }
 
 /// The passage branch of the guard: the segment declares the right generation,
@@ -382,7 +382,7 @@ fn inv_03_commit_refuses_a_passage_of_another_generation() {
     drop(store);
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
 }
 
 /// The document branch of the guard: a `DocumentRecord` that names another
@@ -425,7 +425,7 @@ fn inv_03_commit_refuses_a_document_of_another_generation() {
     drop(store);
     let reopened = common::open_store(&index);
     common::assert_view(&reopened.snapshot(), 1, &["seg-a"], &[0, 1]);
-    common::assert_segment_directories(&index, &["seg-a"]);
+    common::assert_segment_directories(&index, common::EPOCH, &["seg-a"]);
 
     // The row was rolled back: the document is not committed either.
     let connection =

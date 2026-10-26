@@ -35,6 +35,33 @@ use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 use serde_json::{Value, json};
 
+/// Writes one Parquet file holding `columns`, with the fixture writer settings.
+///
+/// Every test crate that builds a batch shares this writer, so the files a test
+/// reads are the ones another test writes.
+pub fn write_parquet(
+    path: &Path,
+    schema: &arrow::datatypes::SchemaRef,
+    columns: Vec<arrow::array::ArrayRef>,
+) {
+    use parquet::arrow::ArrowWriter;
+    use parquet::file::properties::WriterProperties;
+
+    let batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), columns)
+        .unwrap_or_else(|error| panic!("the fixture batch must be valid: {error}"));
+    let file = fs::File::create(path)
+        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", path.display()));
+    let properties = WriterProperties::builder().build();
+    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
+        .unwrap_or_else(|error| panic!("the fixture Parquet writer must open: {error}"));
+    writer
+        .write(&batch)
+        .unwrap_or_else(|error| panic!("the fixture batch must be written: {error}"));
+    writer
+        .close()
+        .unwrap_or_else(|error| panic!("the fixture Parquet file must close: {error}"));
+}
+
 /// Epoch created by every test.
 pub const EPOCH: u32 = 1;
 
@@ -56,7 +83,12 @@ pub fn temp_index() -> (tempfile::TempDir, PathBuf) {
 
 /// Directory of the single epoch created by the tests.
 pub fn epoch_dir(index: &Path) -> PathBuf {
-    index.join("epochs").join(EPOCH.to_string())
+    epoch_dir_of(index, EPOCH)
+}
+
+/// Directory of one epoch of the index.
+pub fn epoch_dir_of(index: &Path, epoch: u32) -> PathBuf {
+    index.join("epochs").join(epoch.to_string())
 }
 
 /// Path of the reference database of the epoch.
@@ -66,7 +98,12 @@ pub fn records_path(index: &Path) -> PathBuf {
 
 /// Directory of the segments of the epoch.
 pub fn segments_dir(index: &Path) -> PathBuf {
-    epoch_dir(index).join("segments")
+    segments_dir_of(index, EPOCH)
+}
+
+/// Directory of the segments of one epoch of the index.
+pub fn segments_dir_of(index: &Path, epoch: u32) -> PathBuf {
+    epoch_dir_of(index, epoch).join("segments")
 }
 
 /// Directory of the derived manifests of the epoch.
@@ -126,8 +163,21 @@ pub fn create_store_with(index: &Path, schema: &Schema) -> GenerationStore {
 
 /// Index configuration declaring `schema`, with the settings the store ignores.
 pub fn test_config(name: &str, schema: &Schema) -> String {
+    test_config_with_cluster_by(name, schema, &[])
+}
+
+/// Index configuration of [`test_config`], with `cluster_by` set to `fields`.
+///
+/// A test that pins the order of the compaction passes the clustered fields
+/// here: the identifier order is `(cluster_by, doc_id, ord)` (`docs/02`).
+pub fn test_config_with_cluster_by(name: &str, schema: &Schema, fields: &[&str]) -> String {
+    let cluster_by = fields
+        .iter()
+        .map(|field| format!("\"{field}\""))
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[{cluster_by}],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
         schema.to_json_string()
     )
 }
@@ -299,13 +349,13 @@ pub fn directory_entries(dir: &Path) -> Vec<String> {
     names
 }
 
-/// Asserts that the segments directory holds exactly these directories: no
-/// orphan and no leftover `tmp-*` survived recovery.
-pub fn assert_segment_directories(index: &Path, expected: &[&str]) {
+/// Asserts that the segments directory of `epoch` holds exactly these
+/// directories: no orphan and no leftover `tmp-*` survived recovery.
+pub fn assert_segment_directories(index: &Path, epoch: u32, expected: &[&str]) {
     let mut expected_sorted: Vec<String> = expected.iter().map(|id| (*id).to_owned()).collect();
     expected_sorted.sort_unstable();
     assert_eq!(
-        directory_entries(&segments_dir(index)),
+        directory_entries(&segments_dir_of(index, epoch)),
         expected_sorted,
         "recovery must keep exactly the segments referenced by SQLite: \
          an orphan or a tmp-* directory would be a mix of two generations (INV-04)"

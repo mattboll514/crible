@@ -27,6 +27,10 @@
     (`tools/gen_synth.py --large`, graine 20261021), un passage par document,
     modèle `synthetic-external` (`external`). 7 740 000 passages vivants (dead
     ratio 0,1000), 1 segment. Index : 16 Go.
+  - Les deux index de base sont construits par `tools/bench/mes07/run.sh`
+    (fonction `prepare`, idempotente : `tools/gen_synth.py --large`,
+    `crible index create`, `crible attach`) ; c'est ce script qui fait foi pour
+    leur contenu, aucune somme de contrôle n'est recalculée ici.
 - Lots quotidiens mesurés, écrits par `make_batches.py daily` (mode `upsert`,
   graine 20261025) :
 
@@ -110,7 +114,8 @@ dépasse le p50 de plus de 10 %.
 | `synth-large` | 1 000 | 3 257 | 7 (0,2 %) | 19 (0,6 %) | 18 (0,6 %) | 7 (0,2 %) | **3 207 (98,5 %)** |
 | `synth-large` | 3 002 | 3 333 | 19 (0,6 %) | 33 (1,0 %), max 58 | 55 (1,7 %) | 6 (0,2 %) | **3 219 (96,6 %)** |
 
-La somme des cinq étapes égale l'attache à ±6 ms près (−0,01 % à +0,01 %) : la
+La somme des cinq étapes égale l'attache à 6 ms près au plus, jamais à plus de
+0,04 % en relatif : la
 décomposition couvre tout l'appel, il n'y a pas de « reste » significatif. Le
 maximum de RSS du processus de banc est de 2,81 Gio pour l'index `articles`
 (encodeur fp32 chargé) et de 591 Mio pour `synth-large`.
@@ -166,7 +171,8 @@ deux index de diagnostic. La mesure de MES-08 le retrouve par un autre chemin (u
 attache réelle de production) et lui donne la même valeur.
 
 Sur l'échantillon, la même étape croît avec le nombre de passages ajoutés (823 ms
-pour 905 documents, 2 439 ms pour 2 517, soit ≈ 1,0 ms par passage ajouté) : les
+pour 905 documents, 2 439 ms pour 2 517, soit ≈ 1,0 ms par document ajouté et
+≈ 0,8 ms par passage ajouté) : les
 deux balayages n'y expliquent qu'une faible part, et le travail par ligne ajoutée
 (analyse des champs, insertion dans les six champs de document et les cinq champs
 de passage du schéma) n'est **pas isolé**. L'écart de comportement entre les deux
@@ -271,7 +277,8 @@ Ce que la mesure permet d'affirmer :
 Ce que la mesure ne permet **pas** d'affirmer :
 
 - rien sur le coût par ligne ajoutée de l'étape `snapshot` sur l'échantillon
-  (≈ 1,0 ms par passage ajouté, entre 823 et 2 439 ms) : ni sa cause, ni son
+  (≈ 1,0 ms par document ajouté et ≈ 0,8 ms par passage ajouté, entre 823 et
+  2 439 ms) : ni sa cause, ni son
   comportement à 8,58 M, où il est masqué par les balayages ;
 - rien sur un index à plusieurs centaines de segments, ni sur une attache
   concurrente de lectures (INV-02) ;
@@ -509,3 +516,23 @@ pour le commit ; elle reste sans effet sur la recette, qui est un autre sujet.
 compression, le maximum de RSS du processus. Les relevés de charge et le JSON de
 point sont dans `data/mes08/replay-raw-2026-10-26/` (gitignoré) ; ceux du
 2026-10-25 restent dans `data/mes08/raw/`, intacts.
+
+### Corrections du 2026-10-26 (NETTOYER-P3)
+
+Texte seulement : aucune mesure n'a été rejouée, les chiffres mesurés restent ceux
+du 2026-10-25.
+
+- **Jeux de données, index de base** : avant, le rapport ne disait pas d'où
+  venaient `data/mes07/indexes/articles` et `data/synth-large/indexes/synth-large`.
+  Après, il renvoie au script qui les construit, `tools/bench/mes07/run.sh`
+  (fonction `prepare`, idempotente : `tools/gen_synth.py --large`,
+  `crible index create`, `crible attach`). Aucune somme de contrôle n'est
+  recalculée.
+- **Somme des cinq étapes** : avant « −0,01 % à +0,01 % », après « ±0,04 % ». Le
+  plus grand écart relatif est sur les points `synth-large` (1 ms sur 3 257 ms et
+  sur 3 333 ms, soit 0,03 %) ; sur `articles`, 6 ms sur 52 333 ms valent 0,01 %.
+- **Coût par ligne ajoutée de `snapshot`** (deux endroits : § « Part du commit de
+  génération » et « Ce que la mesure ne permet pas d'affirmer ») : avant
+  « ≈ 1,0 ms par passage ajouté ». Après « ≈ 1,0 ms par document ajouté et
+  ≈ 0,8 ms par passage ajouté ». Détail : `(2 439 − 823) / (2 517 − 905) = 1,00 ms`
+  par document, `(2 439 − 823) / (3 002 − 1 000) = 0,81 ms` par passage.

@@ -7,6 +7,15 @@
 - **Proposé par** : agent greffier, sur demande du propriétaire, à la suite de l'écart relevé par l'orchestrateur **avant l'écriture des tests** de la tâche `VERIFIER-ALLER-RETOUR-EXPORT` (phase P3, branche `tache/VERIFIER-ALLER-RETOUR-EXPORT`). Verdict de `@architecte` : **ECART**.
 - **Remplace** : — (complète ADR-0057 et ADR-0062, qui restent en vigueur et `Accepté` ; aucun de leurs corps n'est modifié, comme ADR-0059 puis ADR-0062 l'ont déjà fait pour ADR-0057)
 
+## Erratum du 2026-10-26
+
+Le nom du test écrit au point 3 de la section « Modifications à appliquer après acceptation » était mal orthographié, et il est corrigé, sans qu'aucune décision ne change. La correction de cette coquille a été acceptée par anticipation par le propriétaire le 2026-10-26, à confirmer au point de fin de NETTOYER-P3.
+
+- **Avant** : `inv_08_the_legifacile_sample_queries_return_the_same_results_after_export_and_import`.
+- **Après** : `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`.
+
+Motif : ce nom est un contrat (section « Contexte », « Le test s'appellera… »), et il est écrit sans l'article défini partout ailleurs dans ce document, dans `docs/07-stack-et-deploiement.md`, dans `docs/08-invariants-et-tests.md` et dans le code. La décision elle-même, l'option (1a) et le troisième `--skip` explicite, est inchangée.
+
 ## Contexte
 
 ### Ce que la fiche de la tâche demande
@@ -157,7 +166,7 @@ Cette section décrit les modifications. **Aucune n'est appliquée par cet ADR**
 ### `docs/07-stack-et-deploiement.md`
 
 2. **« CI (GitHub Actions) »**, commande ligne 140 : ajouter le troisième `--skip`. La commande doit rester identique à celle de `ci.yml`.
-3. **« CI (GitHub Actions) »**, ligne 143 : remplacer « les **deux exclus** » et la liste des deux noms par **les trois exclus**, nommés un par un : `inv_12_…`, `inv_09_…` et `inv_08_the_legifacile_sample_queries_return_the_same_results_after_export_and_import`. La justification reste celle d'ADR-0032, complétée par ONNX Runtime et le vrai modèle (ADR-0057). Citer `ADR-0057`, `ADR-0062` et `ADR-0063`.
+3. **« CI (GitHub Actions) »**, ligne 143 : remplacer « les **deux exclus** » et la liste des deux noms par **les trois exclus**, nommés un par un : `inv_12_…`, `inv_09_…` et `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`. La justification reste celle d'ADR-0032, complétée par ONNX Runtime et le vrai modèle (ADR-0057). Citer `ADR-0057`, `ADR-0062` et `ADR-0063`.
 
 ### `docs/08-invariants-et-tests.md`
 

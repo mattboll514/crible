@@ -1288,6 +1288,22 @@ pub(crate) fn canonical_json(fields: &Value) -> Result<String, CribleError> {
     })
 }
 
+/// Serializes a structure as canonical JSON: keys sorted at every level, compact,
+/// no space.
+///
+/// Reserved for structures, not for a value that is already decoded: it goes
+/// through `serde_json::to_value`, which copies the whole document, so a caller
+/// holding a [`Value`] calls [`canonical_json`] instead and pays no copy. The
+/// sorting is explicit, so the bytes written on disk depend neither on the
+/// declaration order of a structure nor on the map implementation of
+/// `serde_json` (ADR-0019, ADR-0027).
+pub(crate) fn serialize_canonical<T: serde::Serialize>(
+    value: &T,
+) -> Result<String, serde_json::Error> {
+    let value = serde_json::to_value(value)?;
+    serde_json::to_string(&canonical_value(&value))
+}
+
 /// Rebuilds `value` with the keys of every object in lexicographic order.
 ///
 /// Arrays keep their order: it carries meaning. Sorting is explicit here so the
@@ -1615,6 +1631,15 @@ mod tests {
         }
         for (frame, text) in frames.iter().zip(&texts) {
             assert_eq!(decode_text(frame).expect("the frame decodes"), *text);
+            assert_eq!(
+                *frame,
+                TextCompressor::new()
+                    .expect("the reference compressor is created")
+                    .encode(text)
+                    .expect("the reference text is compressed"),
+                "a compressor carries no state from one passage to the next (ADR-0048): \
+                 the frame of a fresh compressor must be the same"
+            );
         }
     }
 

@@ -445,9 +445,9 @@ production :
    `zstd::bulk::Compressor`, créé une fois par répétition, comme
    `records::TextCompressor` (ADR-0048). Le niveau reste
    `zstd::DEFAULT_COMPRESSION_LEVEL`, qui est la valeur de
-   `TEXT_COMPRESSION_LEVEL` ; la constante de production est `pub(crate)`, donc le
-   banc nomme le niveau qu'il reproduit. Avant, la réplique appelait
-   `zstd::stream::encode_all` par ligne, c'est-à-dire l'ancienne méthode.
+   `TEXT_COMPRESSION_LEVEL` ; la constante de production est privée à
+   `records.rs`, donc le banc nomme le niveau qu'il reproduit. Avant, la réplique
+   appelait `zstd::stream::encode_all` par ligne, c'est-à-dire l'ancienne méthode.
 2. **Le point de contrôle `encode_reused_ns` est retiré.** Il mesurait les mêmes
    textes avec un contexte réutilisé, pour borner la part évitable ; c'est
    désormais ce que fait la production, donc la série ferait doublon avec
@@ -464,12 +464,13 @@ production :
 Ce que le banc mesure par ailleurs ne change pas : la transaction répliquée garde
 le même SQL, les mêmes documents, les mêmes pierres tombales et le même `meta` ;
 le commit réel, la réplique des `segment.json`, celle du manifeste et le
-préchauffage sont intacts. Deux champs ne décrivent plus l'état courant et ne sont
-utilisés dans aucun chiffre de ce rapport :
+préchauffage sont intacts. Deux champs ne décrivent plus l'état courant :
 
 - `live_iids_ns` rejoue `RecordStore::live_iids`, que `build_snapshot_after_commit`
   **n'appelle plus** ; c'est le contrôle du coût que la dérivation a retiré, pas un
-  terme du commit rejoué ;
+  terme du commit rejoué. Il entre dans les chiffres du § 10.3 (colonne
+  « `live_iids` (ancien chemin, non appelé) ») et du § 10.6 (constat de la
+  réplique), et dans aucun terme du commit ;
 - `snapshot_bytes_computed` calcule encore `4 × N + 152 × S`, la formule de
   l'ancien `Vec<Iid>` ; la bitmap réelle n'a pas cette taille. Le champ est laissé
   tel quel pour ne pas changer la sortie du banc ; il n'entre dans aucune
@@ -634,9 +635,9 @@ Ce que la mesure permet d'affirmer, aux points `N` et `S` de la campagne du
 3. **Le compresseur zstd réutilisé est le gain net de la campagne** : 60 à 83 ms
    par attache de 2 000 passages, à tous les points, sans dépendre de `N`.
 4. **La dérivation n'est pas en cause dans son principe, mais dans ses requêtes** :
-   avec les deux index de diagnostic, les mêmes requêtes tombent sous 0,01 ms
-   (§ 10.5). Le coût vient du plan d'exécution, pas de la copie sur écriture des
-   structures.
+   avec les deux index de diagnostic, les mêmes requêtes ont un p50 sous 0,01 ms et
+   un maximum de 0,06 ms (§ 10.5). Le coût vient du plan d'exécution, pas de la
+   copie sur écriture des structures.
 
 Ce que la mesure ne permet pas d'affirmer :
 
@@ -662,8 +663,9 @@ client.
 1. **Traiter le coût ajouté par `after_commit` avant toute autre optimisation du
    commit.** Deux voies, à trancher par le propriétaire :
    - ajouter les index `passages(created_generation)` et
-     `documents(updated_generation)` — le relevé du § 10.5 les chiffre à moins de
-     0,01 ms par requête, mais c'est un changement de schéma SQLite, donc un
+     `documents(updated_generation)` — le relevé du § 10.5 les chiffre à un p50
+     sous 0,01 ms et un maximum de 0,06 ms par requête, mais c'est un changement
+     de schéma SQLite, donc un
      format sur disque à versionner et à tester ;
    - ou dériver les passages créés de la plage d'iid du changement
      (`next_iid` avant le commit) et les documents modifiés du changement lui-même,
@@ -900,8 +902,9 @@ recours non instruit, ce qui est l'état que l'ADR prévoit.
   HEAD:docs/mesures/MES-15-cout-commit-generation.2026-10-25.json`), et son
   contenu est identique à la version commitée (`git status` ne le signale plus).
   La fusion de ce rejeu a été conservée sous le nom daté du jour local,
-  `MES-15-cout-commit-generation.2026-10-26.json`. `replay.sh` porte désormais
-  `MES15_DAY` pour que le cas ne se reproduise pas.
+  `MES-15-cout-commit-generation.2026-10-26.json`. `replay.sh` accepte désormais
+  `MES15_DAY`, mais son défaut reste `date -u +%F` : le cas ne se reproduit pas
+  seulement si la variable est passée.
 - **Date des fichiers de point** : le banc estampille la date qu'on lui passe.
   Les sept points du premier tour portent `2026-10-25` (date UTC au lancement) et
   les trois du second `2026-10-26`. La campagne fusionnée porte `2026-10-26`,
@@ -918,3 +921,27 @@ brutes par répétition pour le commit et chaque réplique, le maximum de RSS du
 processus par point. Les fichiers de point, les `.time` et les relevés de charge
 sont dans `data/mes15/replay-raw-2026-10-26/` (gitignoré) ; les relevés du
 2026-10-25 restent dans `data/mes15/replay-raw/`, intacts.
+
+### Corrections du 2026-10-26 (NETTOYER-P3)
+
+Texte seulement : aucune mesure n'a été rejouée, les chiffres mesurés restent ceux
+des campagnes du 2026-10-21 et du 2026-10-25.
+
+- **§ 10.1, point 1** : avant « la constante de production est `pub(crate)` »,
+  après « la constante de production est privée à `records.rs` »
+  (`crates/crible-store/src/records.rs:45`).
+- **§ 10.1, champs hors état courant** : avant « Deux champs ne décrivent plus
+  l'état courant et ne sont utilisés dans aucun chiffre de ce rapport ».
+  Après : deux champs ne décrivent plus l'état courant ; `live_iids_ns` entre dans
+  les chiffres du § 10.3 (colonne de la réplique de l'ancien chemin) et du § 10.6
+  (constat de cette réplique), et dans aucun terme du commit ;
+  `snapshot_bytes_computed`, lui, n'entre dans aucun chiffre.
+- **§ 10.6, point 4, et recommandation 1** : avant « tombent sous 0,01 ms » et
+  « à moins de 0,01 ms par requête ». Après « p50 sous 0,01 ms, maximum 0,06 ms »,
+  d'après `data/mes15/replay-raw/after-commit-scans-with-indexes.json`
+  (`created_passages` : 0,0 ms quatre fois, 0,06 ms une fois).
+- **§ 11.6, incident de fusion** : avant « `replay.sh` porte désormais `MES15_DAY`
+  pour que le cas ne se reproduise pas ». Après : `replay.sh` accepte `MES15_DAY`,
+  mais son défaut reste `date -u +%F` ; le cas ne se reproduit pas seulement si la
+  variable est passée. Les scripts `tools/bench/mes15/replay.sh` et
+  `tools/bench/mes08/run.sh` ne sont pas modifiés.

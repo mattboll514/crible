@@ -179,8 +179,9 @@ Ce que la mesure permet d'affirmer :
 1. **À l'échelle de Legifacile, une compaction dure environ 6 min 20 s**
    (377,9 s p50 mesurés sur 7,74 M passages vivants à 8,6 M passages) ; à zéro
    mort, environ 7 min (419 s extrapolés). C'est **deux ordres de grandeur
-   au-dessus** du coût d'un commit de génération mesuré par MES-15 sur le même
-   index (3,1 s), ce qui est attendu : la compaction réécrit tous les passages.
+   au-dessus** du coût d'un commit de génération mesuré par MES-15 sur un index de
+   taille comparable (`data/mes15/i-8580000-s10` contre `data/synth-large` ici,
+   3,1 s), ce qui est attendu : la compaction réécrit tous les passages.
 2. **`passage_by_iid` coûte 9,6 % de la compaction à 8,6 M** (36,1 s) **et 29,4 %
    sur l'échantillon réel** (0,65 s sur 2,21 s). L'écart vient de la taille des
    textes : 1 167 octets en moyenne sur l'échantillon contre ~19 sur
@@ -238,3 +239,13 @@ Recommandations, **à valider par le propriétaire** :
    mesure de suivi qui sépare les insertions de passages, les insertions de
    documents, l'écriture des segments et la vérification dirait où va le temps.
    À proposer seulement si une compaction de 6 min gêne l'exploitation.
+
+### Corrections du 2026-10-26 (NETTOYER-P3)
+
+Texte seulement : aucune mesure n'a été rejouée.
+
+- **Conclusion, point 1** : avant « le coût d'un commit de génération mesuré par
+  MES-15 sur le même index (3,1 s) ». Après : « sur un index de taille comparable
+  (`data/mes15/i-8580000-s10` contre `data/synth-large` ici, 3,1 s) ». Les deux
+  index ne sont pas les mêmes fichiers : `synth-large` sert à cette campagne,
+  `i-8580000-s10` à MES-15.

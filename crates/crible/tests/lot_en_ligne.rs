@@ -47,16 +47,13 @@
 
 mod common;
 
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, FixedSizeBinaryArray, StringArray, UInt32Array};
+use arrow::array::{FixedSizeBinaryArray, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
@@ -372,25 +369,6 @@ fn passage_schema() -> SchemaRef {
     ]))
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the reference batch must be valid: {error}"));
-    let file = File::create(path)
-        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", path.display()));
-    let mut writer = ArrowWriter::try_new(
-        file,
-        schema.clone(),
-        Some(WriterProperties::builder().build()),
-    )
-    .unwrap_or_else(|error| panic!("the reference Parquet writer must open: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the reference batch must be written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the reference Parquet file must close: {error}"));
-}
-
 /// Writes a batch of `documents` for the `external` model of the reference
 /// index, with the vectors of the fake encoder in fp16, and returns its
 /// directory.
@@ -408,7 +386,7 @@ fn write_reference_batch(root: &Path, texts: &[&str]) -> PathBuf {
         .collect();
     let id_refs: StringArray = ids.iter().map(|id| Some(id.as_str())).collect();
     let hash_refs: StringArray = hashes.iter().map(|hash| Some(hash.as_str())).collect();
-    write_parquet(
+    common::write_parquet(
         &directory.join("documents.parquet"),
         &document_schema(),
         vec![Arc::new(id_refs), Arc::new(hash_refs)],
@@ -427,7 +405,7 @@ fn write_reference_batch(root: &Path, texts: &[&str]) -> PathBuf {
         vector_width(),
     )
     .unwrap_or_else(|error| panic!("the reference vectors must share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &directory.join("passages.parquet"),
         &passage_schema(),
         vec![

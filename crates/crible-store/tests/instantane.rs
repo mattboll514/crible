@@ -16,11 +16,12 @@
 //! | Test | Criterion / decision |
 //! |---|---|
 //! | `snapshot_then_restore_keeps_the_generation_and_the_rows` | a restore gives back G and the same rows (task criterion 1; ADR-0065 §2) |
-//! | `restore_rolls_back_and_keeps_the_replaced_epoch` | a higher-generation target is accepted, the replaced epoch stays (ADR-0065 §3, §4) |
+//! | `inv_14_restore_rolls_back_and_keeps_the_replaced_epoch` | a higher-generation target is accepted, the replaced epoch stays (ADR-0065 §3, §4; INV-14) |
 //! | `restore_creates_an_absent_index_at_the_initial_epoch` | the absent target gets the initial epoch, generation G (ADR-0065 §2, §3) |
 //! | `restore_refuses_a_divergent_index_json` | a different `index.json` is refused, the setting named (ADR-0065 §3) |
+//! | `restore_refuses_a_snapshot_that_names_another_index_in_its_index_json` | the attestation and the copied `index.json` must name the same index (ADR-0064 §1, ADR-0065 §3) |
 //! | `restore_refuses_an_absent_attestation` | no `snapshot.json` (ADR-0064 §1) |
-//! | `restore_refuses_an_unknown_format_version` | unknown `format_version` (ADR-0064 §1, INV-15) |
+//! | `inv_15_restore_refuses_an_unknown_format_version` | unknown `format_version` (ADR-0064 §1, INV-15) |
 //! | `restore_refuses_a_missing_listed_file` | a missing listed file (task criterion 2; ADR-0064 §1) |
 //! | `restore_refuses_a_size_mismatch` | a size that differs (ADR-0064 §1) |
 //! | `restore_refuses_a_blake3_mismatch` | a blake3 that differs (ADR-0064 §1) |
@@ -30,6 +31,9 @@
 //! | `restore_removes_a_stale_staging_and_target_epoch` | a residue `tmp-N` or `N` is removed first (ADR-0065 §5) |
 //! | `a_failure_during_the_write_leaves_the_current_epoch_intact` | a failure before `CURRENT_EPOCH` leaves the target intact (ADR-0065 §5) |
 //! | `an_index_without_current_epoch_is_refused_at_open` | a partial tree is refused at open (ADR-0065 §5) |
+//! | `the_attestation_is_canonical_json` | `snapshot.json` has sorted keys, as ADR-0019 and ADR-0027 require (ADR-0064 §1) |
+//! | `a_refused_restore_leaves_the_stale_online_batches_alone` | a refused restore writes nothing, batch residues included (ADR-0065 §3, §5) |
+//! | `a_restore_removes_the_stale_online_batches_once_it_writes` | a restore that writes sweeps the batch residues (ADR-0065 §5) |
 //! | `the_attestation_is_deterministic` | two snapshots of one epoch are byte-identical (ADR-0064 §1) |
 
 use std::fs;
@@ -316,7 +320,7 @@ fn snapshot_then_restore_keeps_the_generation_and_the_rows() {
 }
 
 #[test]
-fn restore_rolls_back_and_keeps_the_replaced_epoch() {
+fn inv_14_restore_rolls_back_and_keeps_the_replaced_epoch() {
     // ADR-0065 decisions 3 and 4: a target at a higher generation is accepted
     // (deliberate rollback), and the replaced epoch stays on disk because it may
     // hold passages no valid copy carries (INV-14).
@@ -445,7 +449,7 @@ fn restore_refuses_an_absent_attestation() {
 }
 
 #[test]
-fn restore_refuses_an_unknown_format_version() {
+fn inv_15_restore_refuses_an_unknown_format_version() {
     // ADR-0064 decision 1 and INV-15: a version this build does not read is
     // refused, never guessed.
     let instance = Instance::new();
@@ -690,6 +694,121 @@ fn an_index_without_current_epoch_is_refused_at_open() {
     assert!(
         !index.join("CURRENT_EPOCH").exists(),
         "the refused restore writes no pointer"
+    );
+}
+
+#[test]
+fn the_attestation_is_canonical_json() {
+    // `docs/02` (ADR-0064, decision 1): `snapshot.json` is canonical JSON, keys
+    // sorted and compact. The attestation is declared in another order, so this
+    // test pins the serialization, not the declaration.
+    let instance = Instance::new();
+    let report = instance.snapshot();
+    let text = fs::read_to_string(report.directory.join(SNAPSHOT_FILE_NAME))
+        .unwrap_or_else(|error| panic!("the attestation must be readable: {error}"));
+    let value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the attestation must be valid JSON: {error}"));
+    assert_eq!(
+        text,
+        serde_json::to_string(&value)
+            .unwrap_or_else(|error| panic!("the attestation must serialize: {error}")),
+        "the attestation carries no space and no member the canonical form drops"
+    );
+
+    fn assert_sorted_keys(object: &serde_json::Map<String, Value>) {
+        let keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            keys, sorted,
+            "the keys of every object are sorted: {keys:?}"
+        );
+    }
+    let top = value
+        .as_object()
+        .unwrap_or_else(|| panic!("the attestation is an object"));
+    assert_sorted_keys(top);
+    for file in top["files"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the files are a list"))
+    {
+        let object = file
+            .as_object()
+            .unwrap_or_else(|| panic!("a file is an object"));
+        assert_sorted_keys(object);
+    }
+}
+
+/// Writes the two residues a stale online batch leaves under `<data>/tmp`: its
+/// directory, whose presence lock no writer holds, and an orphan lock file whose
+/// directory is already gone (ADR-0056). Both branches of
+/// `online::remove_stale_batches` are therefore covered.
+fn stale_online_batches(instance: &Instance) -> (PathBuf, PathBuf) {
+    let temporary = instance.data.join("tmp");
+    let directory = temporary.join("online-dead");
+    fs::create_dir_all(&directory)
+        .unwrap_or_else(|error| panic!("the stale batch must be creatable: {error}"));
+    fs::write(directory.join("manifest.json"), b"{}")
+        .unwrap_or_else(|error| panic!("the stale manifest must be writable: {error}"));
+    let orphan = temporary.join("online-orphan.lock");
+    fs::write(&orphan, b"")
+        .unwrap_or_else(|error| panic!("the orphan lock must be writable: {error}"));
+    (directory, orphan)
+}
+
+#[test]
+fn a_refused_restore_leaves_the_stale_online_batches_alone() {
+    // ADR-0056, decision 4 and ADR-0065: the write command removes the residue
+    // of `<data>/tmp`, but a restore that refuses its snapshot has not begun to
+    // write and touches nothing at all.
+    let instance = Instance::new();
+    let report = instance.snapshot();
+    let (stale, orphan) = stale_online_batches(&instance);
+
+    let mut value = attestation(&report.directory);
+    value["format_version"] = json!(99);
+    write_attestation(&report.directory, &value);
+
+    assert_refused(&instance, &report.directory, "format_version");
+    assert!(
+        stale.exists(),
+        "a refused restore must not touch <data>/tmp"
+    );
+    assert!(
+        orphan.exists(),
+        "a refused restore must leave the orphan lock alone"
+    );
+    assert!(
+        !instance.data.join("tmp").join("online-dead.lock").exists(),
+        "a refused restore must not even create the presence lock"
+    );
+}
+
+#[test]
+fn a_restore_removes_the_stale_online_batches_once_it_writes() {
+    // The rule of ADR-0056 still applies to a restore that goes through: the
+    // residue is removed once the snapshot and the target have been checked,
+    // before the first write of the new epoch.
+    let instance = Instance::new();
+    let report = instance.snapshot();
+    let (stale, orphan) = stale_online_batches(&instance);
+
+    let restored = restore_into(&instance.data, &report.directory);
+    assert_eq!(
+        restored.generation, report.generation,
+        "the restore installs the generation of the snapshot"
+    );
+    assert!(
+        !stale.exists(),
+        "a restore that writes removes the stale online batches"
+    );
+    assert!(
+        !orphan.exists(),
+        "a restore that writes removes the orphan lock of a lot whose directory is gone"
+    );
+    assert!(
+        !instance.data.join("tmp").join("online-dead.lock").exists(),
+        "the presence lock of the stale batch goes with its directory"
     );
 }
 

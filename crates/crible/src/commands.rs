@@ -37,7 +37,6 @@ use crible_core::batch::BatchMode;
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
-use crible_core::ids::Epoch;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
@@ -48,23 +47,14 @@ use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
 use crible_store::generation::{
-    CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, IndexState,
-    write_index_config,
+    CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, INDEXES_DIRECTORY,
+    INITIAL_EPOCH, IndexState, write_index_config,
 };
 use crible_store::online;
 use crible_store::patch::{self, PatchSource};
 use serde_json::{Value, json};
 
 use crate::vector;
-
-/// Epoch of a freshly created index.
-///
-/// The epoch changes at each compaction; the first epoch of an index is 1, the
-/// value the J1 demo and the bench use. No on-disk format depends on this
-/// value: `CURRENT_EPOCH`, `meta.epoch` and the manifests carry whatever epoch
-/// the store commits, so this is a convention of the CLI, not a format
-/// constant.
-const INITIAL_EPOCH: u32 = 1;
 
 /// Highest `k` accepted by a search (`docs/05-api.md`, "Recherche : requête").
 const MAX_K: usize = 1_000;
@@ -108,7 +98,7 @@ pub fn create_index(data: &Path, config_path: &Path) -> Result<(), CribleError> 
     // schema it builds the filter structures from.
     write_index_config(&index_dir, &raw)?;
 
-    let store = GenerationStore::create(&index_dir, Epoch::new(INITIAL_EPOCH), &config.schema)?;
+    let store = GenerationStore::create(&index_dir, INITIAL_EPOCH, &config.schema)?;
     println!(
         "index '{}' created at {} (epoch {}, generation {})",
         name,
@@ -353,9 +343,8 @@ pub fn snapshot_index(data: &Path, exchange: &Path, index: &str) -> Result<(), C
 /// report: it may hold passages no valid copy carries (INV-14), so only the
 /// operator removes it.
 pub fn restore_index(data: &Path, snapshot: &Path) -> Result<(), CribleError> {
-    // A restore writes into one index, like the other write commands, so the
-    // stale online batches of `<data>/tmp` follow the same rule (ADR-0056).
-    online::remove_stale_batches(data)?;
+    // The stale online batches of `<data>/tmp` are removed inside the restore,
+    // once the snapshot and the target have been checked (ADR-0056, ADR-0065).
     let report = crible_store::snapshot::restore(data, snapshot)?;
     let replaced = match (report.replaced_epoch, report.replaced_generation) {
         (Some(epoch), Some(generation)) => format!(
@@ -706,7 +695,7 @@ fn print_state(name: &str, state: &IndexState) {
 
 /// Directory holding every index of an instance.
 fn indexes_directory(data: &Path) -> PathBuf {
-    data.join("indexes")
+    data.join(INDEXES_DIRECTORY)
 }
 
 /// Directory of one index.
