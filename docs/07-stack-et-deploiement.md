@@ -12,7 +12,7 @@ crible/
     crible-encode/           # ONNX Runtime (ort) + tokenizers : chargement des modèles, pooling, prompts, cache LRU des requêtes
     crible-search/           # pool, stratégies dense (exact, binaire + rescoring), noyaux SIMD, BM25 limité au pool, fusion, regroupement, multi-index, explain
     crible-server/           # axum : routes, auth, limites, erreurs, écrivain et jobs, analytics, journal de debug, OpenAPI
-    crible/                  # binaire `crible` (CLI) : serve, index, attach, search, compact, export, snapshot, restore, inspect, eval, stats, key
+    crible/                  # binaire `crible` (CLI) : serve, index, attach, ingest, patch, search, compact, export, snapshot, restore, inspect, eval, stats, key
   clients/python/            # paquet `crible` : BatchWriter (pyarrow) + client HTTP (uv)
   tools/                     # scripts Python : export ONNX, jeux synthétiques, référence numpy
   docker/                    # Dockerfile, compose d'exemple, crible.example.toml
@@ -95,6 +95,7 @@ query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-
 [limits]
 writer_queue = 16
 default_timeout_ms = 2000
+wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067)
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
 
@@ -133,13 +134,14 @@ Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 
 ## CI (GitHub Actions)
 
-- **Sur chaque push et chaque PR** : `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, puis `uv run pytest` pour `clients/python`.
-- **Sur chaque push et chaque PR, job `rust-onnx`** (ADR-0057) : un job séparé, sur `ubuntu-latest`, qui prouve le chemin ONNX. Il a un `timeout-minutes` explicite, resserré après le premier run à froid. Dans l'ordre : toolchain Rust et `uv` ; génération de `synth-small` comme le job Rust ; `uv sync --group ci` et `ORT_DYLIB_PATH` vers la bibliothèque de la roue ; restauration du cache, sinon téléchargement des fichiers depuis le dépôt de modèle Hugging Face, épinglé sur un sha de commit et vérifié par blake3 contre un manifeste versionné, puis dépôt dans `data/models/mdenseon/` ; enfin la commande ci-dessous. Le job Rust actuel reste inchangé : `cargo test --locked`, sans ONNX Runtime.
+- **Sur chaque push et chaque PR** : `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, puis `cargo clippy -p crible-store --all-targets --locked --features failpoints -- -D warnings` et `cargo test -p crible-store --locked --features failpoints` (ADR-0068 : les tests de panne et de concurrence de `crible-store` — INV-02, INV-03, INV-04, INV-14 et les tests de panne d'`attacher_lot` — n'existent qu'avec la feature `failpoints`, et la CI ne les construisait jamais), puis `uv run pytest` pour `clients/python`.
+- **Sur chaque push et chaque PR, job `rust-onnx`** (ADR-0057) : un job séparé, sur `ubuntu-latest`, qui prouve le chemin ONNX. Il a un `timeout-minutes` explicite, resserré après le premier run à froid. Dans l'ordre : toolchain Rust et `uv` ; génération de `synth-small` comme le job Rust ; `uv sync --group ci` et `ORT_DYLIB_PATH` vers la bibliothèque de la roue ; restauration du cache, sinon téléchargement des fichiers depuis le dépôt de modèle Hugging Face, épinglé sur un sha de commit et vérifié par blake3 contre un manifeste versionné, puis dépôt dans `data/models/mdenseon/` ; enfin la commande ci-dessous. Le job Rust reste sans ONNX Runtime : `cargo test --locked`, puis les deux étapes `failpoints` d'ADR-0068, rien d'autre.
 
   ```
-  cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check
+  cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import
   ```
 
-  Le cache GitHub Actions est indexé sur les hash du manifeste et n'est jamais une source de confiance : le contenu restauré est vérifié comme un téléchargement neuf. Un échec de téléchargement, un hash faux, un fichier absent ou une révision introuvable fait échouer le job, avec l'URL, le fichier et les hash attendu et obtenu ; aucun repli silencieux (`continue-on-error`, `|| true`) n'est admis. Le test de l'échantillon Legifacile est le seul exclu, par son nom, parce que ses données dérivent de la production (ADR-0032).
+  Le cache GitHub Actions est indexé sur les hash du manifeste et n'est jamais une source de confiance : le contenu restauré est vérifié comme un téléchargement neuf. Un téléchargement fait au plus **quatre essais** par fichier, avec des attentes de 5, 15 et 45 s, un `Retry-After` respecté jusqu'à 60 s et refusé au-delà, et une **échéance globale de 600 s** pour l'artefact, bien sous le `timeout-minutes` du job ; seules les causes extérieures au contenu sont reprises (`URLError`, `TimeoutError`, autres `OSError` de lecture, `IncompleteRead`, HTTP 429 et 5xx), tandis qu'un hash faux, un autre 4xx, un manifeste invalide ou un cache divergent échouent du premier coup (ADR-0059). Un échec de téléchargement, un hash faux, un fichier absent ou une révision introuvable fait échouer le job, avec l'URL, le fichier et les hash attendu et obtenu ; aucun repli silencieux (`continue-on-error`, `|| true`) n'est admis. Les tests de l'échantillon Legifacile sont les **trois exclus**, nommés un par un : `inv_12_the_legifacile_sample_passes_the_acceptance_check`, `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` et `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`. Leurs données dérivent de la production (ADR-0032), et les deux derniers demandent en plus ONNX Runtime et le vrai modèle ; ils restent locaux (ADR-0057, ADR-0062, ADR-0063).
+- **`.github/workflows/model-cache.yml`, seul écrivain du cache** (ADR-0059) : un workflow séparé, un seul job, **aucun test lancé**. Il tourne sur `schedule` le lundi et le jeudi à 03:17 UTC (`17 3 * * 1,4`), sur `push` filtré par `paths` quand `ci/model-artifact.toml` ou le fichier du workflow change, et sur `workflow_dispatch`. Il calcule la même clé que `rust-onnx`, restaure `data/models/mdenseon`, vérifie les blake3 et ne télécharge que ce qui manque, puis enregistre le cache seulement sur un défaut de cache. Le job `rust-onnx` ne fait plus qu'en **restaurer** : un seul écrivain évite la course sur une clé identique et une entrée de cache par branche. Deux passages par semaine gardent le cache de `main` sous l'éviction de sept jours.
 - **Sur un tag `v*`** : build de l'image multi-arch avec buildx et publication sur GHCR.
 - Les **jeux de données lourds** ne tournent pas en CI : ils se génèrent sur la machine cible, et les mesures se font là, puis sont consignées dans `docs/mesures/`. Un **artefact de modèle déjà exporté** n'est pas un jeu de données : le job `rust-onnx` le télécharge et le met en cache, sans jamais ré-exporter le modèle (ADR-0049, ADR-0050, ADR-0057).

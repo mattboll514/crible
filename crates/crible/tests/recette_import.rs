@@ -82,17 +82,14 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{ArrayRef, FixedSizeBinaryArray, StringArray, UInt32Array};
+use arrow::array::{FixedSizeBinaryArray, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use arrow::record_batch::RecordBatch;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
@@ -435,22 +432,6 @@ fn passage_schema(dtype: Dtype) -> SchemaRef {
     ]))
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the fixture batch must be valid: {error}"));
-    let file = File::create(path)
-        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", path.display()));
-    let properties = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
-        .unwrap_or_else(|error| panic!("the fixture Parquet writer must open: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the fixture batch must be written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the fixture Parquet file must close: {error}"));
-}
-
 /// Writes a complete batch and returns its directory.
 ///
 /// The model block of the manifest is the fixture one, with `dtype` as
@@ -482,7 +463,7 @@ fn write_batch(
         .iter()
         .map(|id| Some(format!("hash:{id}")))
         .collect();
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &document_schema(),
         vec![Arc::new(ids), Arc::new(hashes)],
@@ -508,7 +489,7 @@ fn write_batch(
         dtype.width(),
     )
     .unwrap_or_else(|error| panic!("the fixture vectors must share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &dir.join("passages.parquet"),
         &passage_schema(dtype),
         vec![

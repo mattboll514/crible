@@ -138,6 +138,28 @@ pub(crate) struct StoredBatch {
     pub report: String,
 }
 
+/// One whole row of `batches`, as a compaction copies it into the next epoch.
+///
+/// A compaction keeps the history of the applied batches, so the idempotence
+/// check of a later attach still finds the batches of the previous epochs
+/// (INV-10). The row is copied verbatim, `applied_at` included, because the
+/// column names a fact that no compaction may rewrite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredBatchRow {
+    /// Identifier of the batch, its primary key.
+    pub batch_id: String,
+    /// Generation that applied it.
+    pub generation: Generation,
+    /// Wall clock of the original apply, in RFC 3339 UTC.
+    pub applied_at: String,
+    /// Digest of the bytes of its `manifest.json`.
+    pub manifest_blake3: String,
+    /// The `manifest.json` of the batch, as it was read.
+    pub manifest: String,
+    /// Report of the original attach, as JSON.
+    pub report: String,
+}
+
 /// One row of `passages`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassageRecord {
@@ -255,7 +277,10 @@ impl RecordStore {
 
     /// Inserts or replaces one passage, and commits before returning.
     pub fn write_passage(&mut self, record: &PassageRecord) -> Result<(), CribleError> {
-        let text = encode_text(&record.text)?;
+        // One passage is its own batch, so the compressor is built for it and
+        // dropped at once; batched writes share one across the whole batch.
+        let mut compressor = TextCompressor::new()?;
+        let text = compressor.encode(&record.text)?;
         let fields = canonical_json(&record.fields)?;
         let dead_since_gen = record
             .dead_since_gen
@@ -494,6 +519,185 @@ pub(crate) fn batch_by_id(
     .transpose()
 }
 
+/// Reads every row of `batches`, in ascending `batch_id`, the way a compaction
+/// copies the history of the applied batches into the next epoch (INV-10).
+pub(crate) fn all_batches(connection: &Connection) -> Result<Vec<StoredBatchRow>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT batch_id, generation, applied_at, manifest_blake3, manifest, report
+             FROM batches ORDER BY batch_id",
+        )
+        .map_err(|error| database_error("prepare the batches query", &error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| database_error("query the batches", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the batches", &error))?;
+    rows.into_iter()
+        .map(|row| {
+            let (batch_id, generation, applied_at, manifest_blake3, manifest, report) = row;
+            Ok(StoredBatchRow {
+                batch_id,
+                generation: Generation::new(from_sql_u64(generation, "generation")?),
+                applied_at,
+                manifest_blake3,
+                manifest,
+                report,
+            })
+        })
+        .collect()
+}
+
+/// Copies one `batches` row verbatim into the transaction of an epoch.
+///
+/// Unlike [`insert_batch`], which stamps the wall clock of the apply, this keeps
+/// the `applied_at` of the original row: a compaction moves the history, it does
+/// not rewrite it.
+pub(crate) fn insert_batch_row(
+    transaction: &Transaction<'_>,
+    row: &StoredBatchRow,
+) -> Result<(), CribleError> {
+    transaction
+        .execute(
+            "INSERT INTO batches (batch_id, generation, applied_at, manifest_blake3, manifest, report)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                row.batch_id.as_str(),
+                to_sql_u64(row.generation.get(), "generation")?,
+                row.applied_at.as_str(),
+                row.manifest_blake3.as_str(),
+                row.manifest.as_str(),
+                row.report.as_str(),
+            ],
+        )
+        .map_err(|error| database_error("copy a batch row into the commit transaction", &error))?;
+    Ok(())
+}
+
+/// Reads every row of `documents`, in ascending `doc_id`, the way a compaction
+/// copies the living documents into the next epoch.
+pub(crate) fn all_documents(connection: &Connection) -> Result<Vec<DocumentRecord>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT doc_id, doc_hash, fields, updated_generation
+             FROM documents ORDER BY doc_id",
+        )
+        .map_err(|error| database_error("prepare the documents query", &error))?;
+    let rows = statement
+        .query_map([], document_row)
+        .map_err(|error| database_error("query the documents", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the documents", &error))?;
+    rows.into_iter().map(document_from_row).collect()
+}
+
+/// Identity of one live passage, with the fields a compaction orders it by.
+///
+/// `docs/02-architecture.md` (compaction, step 2) sorts the live passages by
+/// (`cluster_by`, `doc_id`, `ord`): a clustered field may be declared at document
+/// level or at passage level. Only the passage fields are read here, and only
+/// when a clustered field lives at passage level; the document fields come from
+/// the document rows the compaction already reads once per document, because
+/// materialising them once per passage would duplicate every document on the
+/// heap. The text stays unread until the passage is copied.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct LiveIdentity {
+    /// Internal identifier in the epoch the row comes from.
+    pub iid: Iid,
+    /// External identifier of the document this passage belongs to.
+    pub doc_id: String,
+    /// Position of the passage in its document.
+    pub ord: u32,
+    /// Passage fields, parsed from their canonical JSON, or `None` when the
+    /// caller reads no passage-level field.
+    pub passage_fields: Option<Value>,
+}
+
+/// Reads one identity per live passage of the epoch.
+///
+/// `reads_passage_fields` selects the `fields` column of `passages`: a compaction
+/// that clusters on document fields only, or on nothing, does not read it, so no
+/// JSON value is built for the passages it does not need.
+pub(crate) fn live_identities(
+    connection: &Connection,
+    reads_passage_fields: bool,
+) -> Result<Vec<LiveIdentity>, CribleError> {
+    let sql = if reads_passage_fields {
+        "SELECT iid, doc_id, ord, fields
+         FROM passages
+         WHERE dead_since_gen IS NULL
+         ORDER BY iid"
+    } else {
+        "SELECT iid, doc_id, ord, NULL
+         FROM passages
+         WHERE dead_since_gen IS NULL
+         ORDER BY iid"
+    };
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| database_error("prepare the live passages query", &error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error("query the live passages", &error))?;
+    let mut identities = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error("read a live passage", &error))?
+    {
+        let iid = Iid::new(from_sql_u32(
+            row.get(0)
+                .map_err(|error| database_error("read an iid", &error))?,
+            "iid",
+        )?);
+        let doc_id = row
+            .get::<_, String>(1)
+            .map_err(|error| database_error("read a doc_id", &error))?;
+        let ord = from_sql_u32(
+            row.get(2)
+                .map_err(|error| database_error("read an ord", &error))?,
+            "ord",
+        )?;
+        let passage_fields = match row
+            .get::<_, Option<String>>(3)
+            .map_err(|error| database_error("read the passage fields", &error))?
+        {
+            Some(raw) => Some(parse_fields(&raw)?),
+            None => None,
+        };
+        identities.push(LiveIdentity {
+            iid,
+            doc_id,
+            ord,
+            passage_fields,
+        });
+    }
+    Ok(identities)
+}
+
+/// Number of rows of `passages` that carry a tombstone.
+///
+/// A compacted epoch must hold none of them: the compaction copies the live
+/// passages only, so a non-zero count is a verification failure (INV-14).
+pub(crate) fn tombstoned_passages(connection: &Connection) -> Result<u64, CribleError> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM passages WHERE dead_since_gen IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error("count the tombstoned passages", &error))?;
+    from_sql_u64(count, "tombstoned passages count")
+}
+
 /// Records one applied batch in the transaction of its generation (INV-10).
 ///
 /// `applied_at` is written by SQLite in RFC 3339 UTC: no decision of the engine
@@ -636,11 +840,15 @@ pub(crate) fn insert_document(
 /// (`docs/02-architecture.md`, "Identifiants"), so reusing one is a bug and the
 /// `INSERT` fails on the primary key, which rolls the whole generation back
 /// (INV-03).
+///
+/// `compressor` is the batch compressor of the caller (ADR-0048): one instance
+/// compresses every passage of the batch, never one per passage.
 pub(crate) fn insert_passage(
     transaction: &Transaction<'_>,
     record: &PassageRecord,
+    compressor: &mut TextCompressor,
 ) -> Result<(), CribleError> {
-    let text = encode_text(&record.text)?;
+    let text = compressor.encode(&record.text)?;
     let fields = canonical_json(&record.fields)?;
     let dead_since_gen = record
         .dead_since_gen
@@ -897,7 +1105,7 @@ fn open_writable(path: &Path) -> Result<Connection, CribleError> {
 
 /// Opens a database for reading only. The pool never writes, so no caller can
 /// bypass the single writer of the index.
-fn open_read_only(path: &Path) -> Result<Connection, CribleError> {
+pub(crate) fn open_read_only(path: &Path) -> Result<Connection, CribleError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| database_error("open the records database for reading", &error))?;
     configure_busy_timeout(&connection)?;
@@ -1080,6 +1288,22 @@ pub(crate) fn canonical_json(fields: &Value) -> Result<String, CribleError> {
     })
 }
 
+/// Serializes a structure as canonical JSON: keys sorted at every level, compact,
+/// no space.
+///
+/// Reserved for structures, not for a value that is already decoded: it goes
+/// through `serde_json::to_value`, which copies the whole document, so a caller
+/// holding a [`Value`] calls [`canonical_json`] instead and pays no copy. The
+/// sorting is explicit, so the bytes written on disk depend neither on the
+/// declaration order of a structure nor on the map implementation of
+/// `serde_json` (ADR-0019, ADR-0027).
+pub(crate) fn serialize_canonical<T: serde::Serialize>(
+    value: &T,
+) -> Result<String, serde_json::Error> {
+    let value = serde_json::to_value(value)?;
+    serde_json::to_string(&canonical_value(&value))
+}
+
 /// Rebuilds `value` with the keys of every object in lexicographic order.
 ///
 /// Arrays keep their order: it carries meaning. Sorting is explicit here so the
@@ -1104,14 +1328,41 @@ fn canonical_value(value: &Value) -> Value {
     }
 }
 
-/// Compresses a passage text into a zstd frame.
-fn encode_text(text: &str) -> Result<Vec<u8>, CribleError> {
-    zstd::stream::encode_all(text.as_bytes(), TEXT_COMPRESSION_LEVEL).map_err(|error| {
-        CribleError::new(
-            ErrorCode::Internal,
-            format!("cannot compress a passage text: {error}"),
-        )
-    })
+/// Reusable zstd compressor for the `passages.text` frames (ADR-0048).
+///
+/// `zstd::stream::encode_all` builds a zstd context on every call, which costs
+/// 34 to 45 µs per passage (MES-15, § 4: 67 to 90 ms for a 2 000-passage
+/// attach). One compressor therefore serves a whole batch of written
+/// passages, and is rebuilt only when a new batch starts.
+///
+/// Nothing else changes: the level stays [`TEXT_COMPRESSION_LEVEL`], the column
+/// still holds one plain zstd frame, and [`decode_text`] keeps reading the
+/// frames the previous method wrote.
+pub(crate) struct TextCompressor {
+    compressor: zstd::bulk::Compressor<'static>,
+}
+
+impl TextCompressor {
+    /// Builds the compressor for one batch of written passages.
+    pub(crate) fn new() -> Result<Self, CribleError> {
+        let compressor = zstd::bulk::Compressor::new(TEXT_COMPRESSION_LEVEL).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("cannot create the passage text compressor: {error}"),
+            )
+        })?;
+        Ok(Self { compressor })
+    }
+
+    /// Compresses one passage text into a zstd frame.
+    pub(crate) fn encode(&mut self, text: &str) -> Result<Vec<u8>, CribleError> {
+        self.compressor.compress(text.as_bytes()).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("cannot compress a passage text: {error}"),
+            )
+        })
+    }
 }
 
 /// Decompresses a `passages.text` frame back to UTF-8.
@@ -1287,7 +1538,7 @@ fn passage_from_row(row: PassageColumns) -> Result<PassageRecord, CribleError> {
 }
 
 /// Parses the canonical JSON stored in a `fields` column.
-fn parse_fields(fields: &str) -> Result<Value, CribleError> {
+pub(crate) fn parse_fields(fields: &str) -> Result<Value, CribleError> {
     serde_json::from_str(fields).map_err(|error| {
         CribleError::new(
             ErrorCode::Internal,
@@ -1336,6 +1587,75 @@ mod tests {
                 error.code(),
                 ErrorCode::Internal,
                 "SQLite code {code} is not a lock contention"
+            );
+        }
+    }
+
+    /// Texts of every shape a passage can carry: empty, short, non-ASCII, and
+    /// long enough to span several zstd blocks (ADR-0048).
+    fn sample_texts() -> Vec<String> {
+        vec![
+            String::new(),
+            "Le présent arrêté entre en vigueur le lendemain de sa publication.".to_owned(),
+            "Article 1er — « le maire » ; élève, œuvre, naïf.".to_owned(),
+            "Un texte de passage représentatif. ".repeat(8_000),
+        ]
+    }
+
+    #[test]
+    fn text_compressor_round_trips_empty_and_long_texts() {
+        let mut compressor = TextCompressor::new().expect("the compressor is created");
+        for text in sample_texts() {
+            let frame = compressor
+                .encode(&text)
+                .expect("the passage text is compressed");
+            assert_eq!(
+                decode_text(&frame).expect("the frame decodes"),
+                text,
+                "a {} byte text must survive compression and decompression",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn text_compressor_serves_a_whole_batch_of_passages() {
+        // One compressor carries every passage of a batch (ADR-0048), so it must
+        // not leak state from one text to the next, nor from one empty text to a
+        // long one.
+        let texts = sample_texts();
+        let mut compressor = TextCompressor::new().expect("the compressor is created");
+        let mut frames = Vec::new();
+        for text in &texts {
+            frames.push(compressor.encode(text).expect("the text is compressed"));
+        }
+        for (frame, text) in frames.iter().zip(&texts) {
+            assert_eq!(decode_text(frame).expect("the frame decodes"), *text);
+            assert_eq!(
+                *frame,
+                TextCompressor::new()
+                    .expect("the reference compressor is created")
+                    .encode(text)
+                    .expect("the reference text is compressed"),
+                "a compressor carries no state from one passage to the next (ADR-0048): \
+                 the frame of a fresh compressor must be the same"
+            );
+        }
+    }
+
+    #[test]
+    fn frames_written_by_encode_all_still_decode() {
+        // Text already stored was compressed one context per passage with
+        // `zstd::stream::encode_all`; no migration rewrites it (ADR-0048). The
+        // criterion is decompression, never byte equality: a zstd header may
+        // carry the content size.
+        for text in sample_texts() {
+            let legacy = zstd::stream::encode_all(text.as_bytes(), TEXT_COMPRESSION_LEVEL)
+                .expect("the legacy frame is written");
+            assert_eq!(
+                decode_text(&legacy).expect("a legacy frame decodes"),
+                text,
+                "a frame of the previous method must keep decoding"
             );
         }
     }

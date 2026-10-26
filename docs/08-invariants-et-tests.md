@@ -20,7 +20,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 | INV-12 | Un lot incompatible avec le modèle de l'index est refusé | Lot avec un mauvais prompt ou un modèle différent : `acceptance_failed` ou `incompatible_model` |
 | INV-13 | Les analytics ne contiennent ni texte de requête, ni valeur de filtre, ni hash, ni id de résultat | Recherche des textes et valeurs utilisés dans le fichier `analytics.sqlite` |
 | INV-14 | Rien de ce qui a coûté du GPU n'est détruit sans copie valide | La compaction garde l'époque E jusqu'à la bascule ; un échec de compaction laisse E intacte |
-| INV-15 | Tout format sur disque est little-endian explicite et versionné | Relecture d'un segment écrit avec des valeurs connues ; refus d'une version inconnue |
+| INV-15 | Tout format sur disque est little-endian explicite et versionné | Relecture d'un segment écrit avec des valeurs connues ; refus d'une version inconnue, `snapshot.json` d'un instantané compris (ADR-0064) |
 | INV-16 | Un réglage figé ne se modifie pas par l'API | `PATCH` → `409 immutable_setting` |
 | INV-17 | L'écriture des analytics ou du journal ne bloque jamais une requête | File saturée artificiellement : latence de recherche inchangée, pertes comptées |
 
@@ -45,7 +45,7 @@ Règle normative (ADR-0057) : **`#[ignore]` est le seul mécanisme de saut autor
 Deux conséquences pratiques :
 
 - un test qui saute silencieusement ne prouve rien et se lit pourtant comme vert : c'est le défaut corrigé dans `crates/crible/tests/recette_import.rs` par `AJOUTER-ORT-CI` ; les tests de `crates/crible-encode/tests/charger_modele.rs` et de `crates/crible-core/tests/model_config.rs` sont le modèle à suivre, puisqu'ils échouent déjà avec la commande d'export à lancer ;
-- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, dont les données dérivent de la production Legifacile (ADR-0032).
+- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` et de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`, dont les données dérivent de la production Legifacile (ADR-0032) et dont les deux derniers demandent en plus ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062, ADR-0063).
 
 ## Jeux de données
 

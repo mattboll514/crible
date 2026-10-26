@@ -79,10 +79,14 @@
 //! # Fault injection
 //!
 //! With the `failpoints` feature only, the attach stops at
+//! `attach_validated` (step 1 of `docs/02`: validation, acceptance and the
+//! semantic table done, nothing written), `after_attach_segment` (step 2: the
+//! segment is renamed into `segments/<id>/`, no transaction open),
 //! `after_attach_documents` (document rows written, passages not yet) and at
 //! `after_attach_passages` (passage rows written, tombstones, `batches`, the
 //! `segments` row and `meta` not yet; the segment files were already renamed
-//! before the transaction). Stopping means panicking with a message
+//! before the transaction). Steps 3, 4, 5 and 6 stop at their own points of the
+//! commit protocol. Stopping means panicking with a message
 //! containing `CRIBLE_FAILPOINT`, exactly as
 //! [`GenerationStore::commit`](crate::generation::GenerationStore::commit)
 //! does, so the transaction rolls back (INV-03).
@@ -110,7 +114,8 @@ use rusqlite::{Connection, Transaction};
 use serde_json::{Map, Number, Value, json};
 
 use crate::batch_reader::BatchReader;
-use crate::generation::{GenerationStore, attach_failpoint};
+use crate::filters_index::{CommitDelta, CreatedPassage};
+use crate::generation::{GenerationStore, stop_at_failpoint};
 use crate::records::{self, DocumentRecord, PassageRecord};
 use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 
@@ -503,6 +508,9 @@ pub fn attach(
         Ok((plan, generation, meta.next_iid))
     })?;
     let validation = validation_started.elapsed();
+    // Step 1 of `docs/02`: validation, acceptance and the semantic table done,
+    // no state modified.
+    stop_at_failpoint("attach_validated");
 
     // Step 2 of `docs/02`: the segment is written and renamed before the
     // transaction opens.
@@ -521,6 +529,10 @@ pub fn attach(
         },
     )?;
     let segment_duration = segment_started.elapsed();
+    // End of step 2 of `docs/02`: the segment is renamed into `segments/<id>/`
+    // and no transaction is open. Until SQLite references it, recovery removes
+    // it as an unreferenced segment directory (INV-03, INV-04).
+    stop_at_failpoint("after_attach_segment");
 
     let committed =
         store.commit_with_rows(|transaction, committed_generation, committed_iid| {
@@ -546,9 +558,9 @@ pub fn attach(
             }
 
             write_document_rows(transaction, &reader, schema, &plan.rewrite, generation)?;
-            attach_failpoint("after_attach_documents");
+            stop_at_failpoint("after_attach_documents");
 
-            let after_passages = write_passage_rows(
+            let (after_passages, created) = write_passage_rows(
                 transaction,
                 &reader,
                 schema,
@@ -583,7 +595,7 @@ pub fn attach(
                     ),
                 ));
             }
-            attach_failpoint("after_attach_passages");
+            stop_at_failpoint("after_attach_passages");
 
             // Old passages die at G+1, and the row of a removed document goes with
             // them, in the same transaction (ADR-0041).
@@ -606,7 +618,15 @@ pub fn attach(
             if let Some(segment) = &segment {
                 records::insert_segment(transaction, segment)?;
             }
-            Ok(after_passages)
+            Ok((
+                after_passages,
+                CommitDelta {
+                    created,
+                    rewritten_documents: plan.rewrite.iter().cloned().collect(),
+                    tombstones: plan.tombstones.clone(),
+                    removed_documents: plan.removed.clone(),
+                },
+            ))
         })?;
 
     let mut report =
@@ -1127,7 +1147,9 @@ fn write_segment(
 
 /// Streams the passage files and writes the `passages` rows of the refreshed
 /// documents, in the same order as [`write_segment`], so each row takes the
-/// `iid` of its vector. Returns the first free `iid` after them.
+/// `iid` of its vector. Returns the first free `iid` after them, and the
+/// passages it created, for the delta of
+/// [`crate::filters_index::FilterIndex::after_commit`] (ADR-0066).
 fn write_passage_rows(
     transaction: &Transaction<'_>,
     reader: &BatchReader,
@@ -1136,8 +1158,11 @@ fn write_passage_rows(
     iid_start: u32,
     segment_id: &str,
     generation: Generation,
-) -> Result<u32, CribleError> {
+) -> Result<(u32, Vec<CreatedPassage>), CribleError> {
     let mut next_iid = iid_start;
+    let mut created = Vec::new();
+    // One compressor for the whole batch of passage rows (ADR-0048).
+    let mut compressor = records::TextCompressor::new()?;
 
     for chunk in reader.passages() {
         let chunk = chunk?;
@@ -1157,24 +1182,23 @@ fn write_passage_rows(
                 )
             })?;
             let text = required_string(texts, row, "text")?;
-            records::insert_passage(
-                transaction,
-                &PassageRecord {
-                    iid,
-                    doc_id: doc_id.to_owned(),
-                    ord: ords.value(row),
-                    text: text.to_owned(),
-                    passage_hash: passage_hash(text),
-                    fields: fields_value(&chunk, row, schema, FieldLevel::Passage)?,
-                    segment_id: segment_id.to_owned(),
-                    created_generation: generation,
-                    dead_since_gen: None,
-                },
-            )?;
+            let record = PassageRecord {
+                iid,
+                doc_id: doc_id.to_owned(),
+                ord: ords.value(row),
+                text: text.to_owned(),
+                passage_hash: passage_hash(text),
+                fields: fields_value(&chunk, row, schema, FieldLevel::Passage)?,
+                segment_id: segment_id.to_owned(),
+                created_generation: generation,
+                dead_since_gen: None,
+            };
+            records::insert_passage(transaction, &record, &mut compressor)?;
+            created.push(CreatedPassage::from(record));
         }
     }
 
-    Ok(next_iid)
+    Ok((next_iid, created))
 }
 
 /// Builds the JSON object of one row's fields for `level`, as canonical JSON.

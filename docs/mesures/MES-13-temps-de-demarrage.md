@@ -388,3 +388,280 @@ charge) et `cold-work/` (vide après la campagne, le banc supprime chaque copie)
   options qu'une lecture de production (lecture-écriture, WAL, `busy_timeout`
   1 000 ms), parce que `RecordStore::connection` est `pub(crate)`. La phase
   `build` et la phase `open` appellent, elles, le code de production.
+
+## 11. Campagne du 2026-10-25 — rejeu sur l'échantillon Legifacile (schéma réel)
+
+Rejeu demandé par la fiche `MESURER-CYCLE-DE-VIE` (P3), pour remplacer la fixture
+au schéma de `synth-small` du § 3 par **l'échantillon Legifacile** : schéma réel,
+cardinalités réelles, proportions réelles de passages par document. C'est la
+mesure que l'ADR-0047 attendait pour trancher l'ordre des remèdes.
+
+- Tâche : `MESURER-CYCLE-DE-VIE` (phase P3), passage A.
+- Références : `docs/08-invariants-et-tests.md` (MES-13), ADR-0047,
+  `docs/02-architecture.md` (« Reprise au démarrage »),
+  `docs/phases/P3-cycle-de-vie.md` (seuil de 60 s),
+  `crates/crible-store/src/filters_index.rs` (`FilterIndex::from_records`),
+  `crates/crible-store/src/generation.rs` (`GenerationStore::open`,
+  `build_snapshot`).
+- Commit : `46c2dd1edc8fcac06df61ea560c86ecc915de1fc` (branche
+  `tache/MESURER-CYCLE-DE-VIE`). **Aucun code de production n'a été modifié
+  pendant la campagne.** Le seul ajout de code est `tools/bench/mes13/replay.sh` ;
+  le banc `crates/crible-store/benches/startup_cost.rs` est inchangé.
+- Machine : MacBook Apple M3 (8 cœurs : 4 performance, 4 efficacité), 24 Go de RAM
+  (25 769 803 776 octets), macOS 15.7.7 (24G720), APFS, 134 Go libres. Mesure
+  **native**, aucun conteneur.
+- Charge ambiante : la machine n'était **pas au repos**. La moyenne de charge est
+  passée de 4,11 à 4,33 sur 8 cœurs pendant la campagne
+  (`data/mes13/replay-raw/conditions-start.txt` et `conditions-end.txt`) ; ces
+  relevés ne portent que les moyennes de charge, pas le détail des processus.
+  Les p95 des cinq points sont à au plus 2,5 % des p50, donc l'effet sur les p50
+  est faible, sans être mesuré. La campagne du 2026-10-22 avait une charge du même
+  ordre (4,06 à 3,01).
+- Jeu de données : les **cinq index attachés de `data/legifacile-sample`**, copiés
+  dans `data/mes13/legifacile-<structure>` (clone APFS) pour laisser les index
+  attachés intacts. Tailles décimales (Mo = 10⁶ octets), mémoires en Mio.
+
+| Index | Lignes `passages` | Documents | Passages / document | `records.sqlite` | SHA-256 |
+|---|---:|---:|---:|---:|---|
+| `articles` | 50 000 | 42 417 | 1,179 | 58,8 Mo | `1f1b5f7be15336f683e4fa44654a934bfbeaccb7e2de9bdaa6f62b7b36ab0985` |
+| `decisions` | 49 998 | 20 120 | 2,485 | 62,0 Mo | `4d4c027857af3eeac8d3b96cadbac79994a552755204da49597793ad313a2f60` |
+| `jorf` | 50 000 | 39 457 | 1,267 | 55,1 Mo | `795972b376b82b4a84e7df4bbb8930a698f8a0136a203d9408050689b3fbe5bb` |
+| `titres` | 50 000 | 50 000 | 1,000 | 25,6 Mo | `e54016e7da5c955c3397ec72af3abfb1d6cce0d98873469e5385e56a34a7c88f` |
+| `sarde` | 50 000 | 49 674 | 1,007 | 29,1 Mo | `e30c740496bec53973a8bfb07bdfb41056fb41b5ad7a317aff6b14d5e14ec08c` |
+| **Total attaché** | **249 998** | **201 668** | **1,2397** | 230,6 Mo | — |
+
+  Le lot `dole` de l'échantillon **n'est pas attaché** : il porte 3 593 documents et
+  7 628 passages, soit 3,0 % des passages de l'échantillon complet. L'échantillon
+  complet (six lots) porte 205 261 documents et 257 626 passages, soit
+  **1,2551 passage par document** ; c'est ce dernier rapport que cite le § 11.5,
+  et 1,2397 pour les cinq index mesurés. Aucune ligne n'est morte : les cinq index
+  sont à leur première génération, sans pierre tombale. Les index ont des segments
+  réels (un par lot) et leurs vecteurs fp16, contrairement aux fixtures du § 3.
+
+- Configuration mesurée : `--repeats 5 --warmup 1`, cache chaud, puis mode `cold`
+  (une copie neuve par phase). Aucun réglage de recherche n'entre dans la mesure :
+  elle ne lit que `records.sqlite`.
+
+### 11.1 Ce qui n'a pas pu être mesuré : le chargement du cache
+
+La fiche demande un temps de démarrage « en reconstruisant les bitmaps puis en
+chargeant le cache ». **Aucun cache de bitmaps n'existe** : la tâche
+`AJOUTER-CACHE-BITMAPS` n'a jamais été ouverte, et l'ADR-0047 la conditionne à un
+dépassement du seuil de 60 s **après** `DECODER-DOCUMENTS-UNE-FOIS`. Cette
+campagne ne mesure donc que la **reconstruction**, comme celle du 2026-10-22 ; la
+comparaison avec un chargement de cache reste impossible et n'est pas simulée.
+C'est un écart au protocole demandé, imposé par l'état du code, et non un choix de
+mesure.
+
+### 11.2 Protocole
+
+```sh
+# compilation du banc avant la campagne
+cargo bench -p crible-store --bench startup_cost --no-run
+
+# cinq copies de travail, clone APFS des index attachés
+for n in articles decisions jorf titres sarde; do
+    cp -cR data/indexes/$n data/mes13/legifacile-$n
+done
+
+# chaud : 1 ouverture non chronométrée, puis 5 passes des quatre phases
+# froid approximatif : une copie neuve par phase
+sh tools/bench/mes13/replay.sh
+```
+
+`replay.sh` enchaîne les deux modes sur les cinq structures et fusionne le tout
+dans `docs/mesures/MES-13-temps-de-demarrage.2026-10-25.json`. Les conventions du
+§ 2 s'appliquent : quatre phases (`sql_read`, `json_decode`, `build`, `open`),
+p50/p95/p99 par rang le plus proche, `open` appelle `GenerationStore::open` et
+`build` appelle `FilterIndex::from_records`. Les deux premières phases restent des
+répliques du SQL privé, comme en 2026-10-22.
+
+### 11.3 Résultats — cache chaud
+
+En millisecondes, 5 répétitions par phase et par point.
+
+| Index | Lignes | `sql_read` p50 | `json_decode` p50 | `build` p50 | `open` p50 | `open` p95 | `open` p99 | `open` par ligne |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `articles` | 50 000 | 45,0 | 82,4 | 168,5 | **168,7** | 171,8 | 171,8 | 3,37 µs |
+| `decisions` | 49 998 | 35,4 | 67,7 | 86,3 | **86,4** | 86,7 | 86,7 | 1,73 µs |
+| `jorf` | 50 000 | 37,8 | 67,2 | 97,3 | **97,8** | 98,0 | 98,0 | 1,96 µs |
+| `titres` | 50 000 | 34,8 | 58,7 | 66,4 | **66,8** | 68,4 | 68,4 | 1,34 µs |
+| `sarde` | 50 000 | 35,4 | 45,8 | 64,2 | **64,5** | 64,9 | 64,9 | 1,29 µs |
+| **Total** | **249 998** | **188,3** | **321,8** | **482,6** | **484,1** | — | — | **1,94 µs** |
+
+Le total n'est pas un index : c'est la somme des cinq ouvertures, utile pour le
+coût par ligne pondéré. `open − build` vaut +0,2 ms à +0,5 ms par index : les
+métadonnées de segments, la reprise et le manifeste sont négligeables à cette
+échelle, comme le § 4 le prévoyait.
+
+### 11.4 Décomposition
+
+« Décodage » est `json_decode − sql_read`, « insertion » est
+`build − json_decode` ; le pourcentage est la part de `build`.
+
+| Index | Lecture SQLite | Décodage JSON | Insertion | Reste de `open` |
+|---|---:|---:|---:|---:|
+| `articles` | 45,0 ms (26,7 %) | 37,4 ms (22,2 %) | 86,1 ms (51,1 %) | +0,2 ms |
+| `decisions` | 35,4 ms (41,0 %) | 32,3 ms (37,4 %) | 18,6 ms (21,6 %) | +0,1 ms |
+| `jorf` | 37,8 ms (38,8 %) | 29,4 ms (30,2 %) | 30,1 ms (30,9 %) | +0,5 ms |
+| `titres` | 34,8 ms (52,4 %) | 23,9 ms (36,1 %) | 7,7 ms (11,6 %) | +0,4 ms |
+| `sarde` | 35,4 ms (55,1 %) | 10,4 ms (16,2 %) | 18,4 ms (28,7 %) | +0,3 ms |
+| **Total** | **188,3 ms (39,0 %)** | **133,5 ms (27,6 %)** | **161,5 ms (33,4 %)** | **+1,5 ms** |
+
+Le décodage JSON n'est plus le premier poste sur le schéma réel : il vaut
+**27,6 %** de la construction, contre 46,8 % sur la fixture du § 4. Comme
+`open − build` vaut +1,5 ms au total, cette part est aussi celle du démarrage
+mesuré. La raison est
+visible dans les extrêmes : sur `sarde`, un seul champ `keyword` de faible
+cardinalité donne 0,21 µs de décodage par ligne ; sur `articles`, six champs dont
+37 228 codes distincts donnent 1,72 µs d'insertion par ligne et 22,2 % de décodage.
+L'insertion dans les bitmaps de `keyword` porte 51 % de `articles` et 11,6 % de
+`titres` : c'est la cardinalité qui décide, pas le nombre de lignes.
+
+### 11.5 À l'échelle de Legifacile — extrapolation
+
+Aucun index de l'échantillon n'atteint 8,58 M passages. Les valeurs ci-dessous sont
+donc **extrapolées** par la règle linéaire mesurée sur 50 k lignes par index, et
+signalées comme telles ; ce ne sont pas des mesures. Deux bornes encadrent le
+résultat :
+
+| Base de l'extrapolation | Coût par ligne | 8,58 M passages | 9,53 M lignes (10 % de morts) | Mesuré ou extrapolé |
+|---|---:|---:|---:|---|
+| Total pondéré des cinq index | 1,94 µs | **16,6 s** | 18,5 s | extrapolé |
+| Index le plus cher, `articles` | 3,37 µs | **28,9 s** | 32,1 s | extrapolé |
+| Fixture `synth-small` à 8,58 M (§ 3) | 2,35 µs | 20,1 s | 22,4 s | mesuré le 2026-10-22 |
+
+Deux corrections sont connues mais non mesurées sur ce schéma :
+
+- la lecture SQLite par ligne augmente avec la taille du fichier : 0,44 → 0,75 µs
+  entre 1 M et 8,58 M sur la fixture (§ 4), +70 %, alors que le décodage reste
+  stable. Appliquée à `articles`, elle porterait l'extrapolation de 28,9 à environ
+  **34 s** (calculé, non mesuré) ;
+- les 10 % de lignes mortes du seuil de compaction (ADR-0006) ajoutent 10 % de
+  lignes à lire, ce que la colonne de droite chiffre.
+
+Même la borne la plus haute — `articles` à 8,58 M avec 10 % de morts, 32,1 s —
+reste **sous le seuil de 60 s**, avec une marge de 1,9. La borne pondérée donne une
+marge de 3,2 à 3,6.
+
+### 11.6 Nombre de passages par document et gain maximal du décodage unique
+
+L'échantillon complet porte **1,2551 passage par document** (257 626 / 205 261) ;
+les cinq index mesurés portent **1,2397** (249 998 / 201 668). `from_records`
+décode le JSON du document à **chaque passage** qui l'hérite : un document y est
+donc décodé 1,24 fois en moyenne, et non cinq fois comme dans la fixture du § 4.
+
+Conséquence : décoder chaque document une seule fois épargnerait au plus
+`1 − 1 / 1,2397 = 19,3 %` du décodage des documents, et le décodage complet vaut
+27,6 % de la construction. La borne **haute** du gain est donc **5,3 % du
+démarrage**, soit environ **0,9 s** sur les 16,6 s extrapolés, ou 1,5 s sur les
+28,9 s de `articles`. C'est calculé, pas mesuré, et c'est une borne : la part du
+JSON de document dans le décodage n'a pas été isolée, et le décodage du passage
+n'est pas répété. Sur ce corpus, `DECODER-DOCUMENTS-UNE-FOIS` ne peut donc pas
+retirer les ≈ 7,5 s calculés sur la fixture à cinq passages par document (ADR-0047).
+
+### 11.7 Cache froid — approximation
+
+Une copie neuve par phase, chronométrée une fois. Ce n'est toujours pas un froid
+contrôlé : macOS ne purge pas son cache de pages sans `root`, et un clone APFS
+partage ses blocs avec l'original.
+
+| Index | `sql_read` | `json_decode` | `build` | `open` | `open` contre chaud |
+|---|---:|---:|---:|---:|---:|
+| `articles` | 198,4 ms | 219,7 ms | 304,2 ms | 333,3 ms | +97,6 % |
+| `decisions` | 159,4 ms | 177,0 ms | 192,4 ms | 216,5 ms | +150,6 % |
+| `jorf` | 173,3 ms | 186,8 ms | 245,2 ms | 225,4 ms | +130,5 % |
+| `titres` | 127,9 ms | 141,9 ms | 173,9 ms | 150,3 ms | +124,9 % |
+| `sarde` | 132,5 ms | 132,7 ms | 153,8 ms | 153,8 ms | +138,4 % |
+
+À cette échelle (25 à 62 Mo de `records.sqlite`), le premier accès d'un clone coûte
+2 à 2,5 fois le chaud, mais les valeurs restent des centaines de millisecondes. Le
+`build` de `jorf` et de `titres` sort au-dessus de leur `open` : c'est la
+dispersion d'une mesure unique par phase, pas un ordre inversé du code.
+
+### 11.8 Conclusion
+
+Ce que la mesure permet d'affirmer, sur le schéma et les proportions de
+l'échantillon Legifacile, à cache chaud :
+
+1. **Le démarrage n'atteint pas le seuil de 60 s à l'échelle de Legifacile.** La
+   borne pondérée donne 16,6 s pour 8,58 M passages (18,5 s avec 10 % de morts), la
+   borne la plus chère 28,9 s (32,1 s avec 10 % de morts). Les deux sont des
+   extrapolations linéaires, signalées ; la marge au seuil va de 1,9 à 3,6.
+2. **Le décodage JSON n'est plus le premier poste** : 27,6 % de la construction,
+   contre 46,8 % sur la fixture. La lecture SQLite (39,0 %) et l'insertion dans les
+   `keyword` (33,4 %) pèsent davantage.
+3. **Le nombre moyen de passages par document est 1,2551** sur l'échantillon complet
+   et 1,2397 sur les cinq index mesurés. Le décodage unique par document ne peut
+   donc retirer au plus que 5,3 % du démarrage, calculé, pas mesuré.
+4. **Le schéma change le coût par ligne d'un facteur 2,6** : 1,29 µs (`sarde`) à
+   3,37 µs (`articles`) pour 50 000 lignes. Un chiffre unique « par passage » n'a
+   pas de sens sans dire le schéma.
+
+Ce que la mesure ne permet pas d'affirmer :
+
+- **Rien sur le chargement d'un cache** : il n'existe pas (§ 11.1), et la
+  comparaison demandée par la fiche n'a pas été faite.
+- **Rien de mesuré à 8,58 M sur ce schéma** : les valeurs du § 11.5 sont
+  extrapolées d'un point à 50 k lignes par index. La croissance de la lecture
+  SQLite avec la taille du fichier n'est pas modélisée, seulement bornée par
+  analogie avec la fixture.
+- **Rien sur `dole`** : 3,0 % des passages de l'échantillon ne sont pas attachés.
+- **Rien sur les autres étapes du démarrage** : le lexical (tantivy, P5), les
+  `mmap` de vecteurs et le chargement du modèle ne sont pas dans le snapshot
+  mesuré.
+
+**Comparaison au budget et ordre des remèdes (ADR-0047).** Le seuil est 60 s à
+l'échelle de Legifacile ; la borne la plus haute mesurée par extrapolation vaut
+32,1 s, soit **54 % du budget**. Le seuil **n'est pas dépassé** : ni
+`DECODER-DOCUMENTS-UNE-FOIS` ni `AJOUTER-CACHE-BITMAPS` ne sont proposées par cette
+campagne. La seconde ne pouvait de toute façon pas l'être avant la première, et le
+gain maximal de la première (5,3 %, borne haute) ne suffirait pas à justifier un
+format de cache.
+
+**Recommandations, à valider par le propriétaire** (aucune n'a été appliquée) :
+
+1. **Ne pas ouvrir `DECODER-DOCUMENTS-UNE-FOIS` sur la foi de cette campagne** : le
+   seuil n'est pas atteint, et le gain maximal calculé (0,9 à 1,5 s) est faible sur
+   un corpus à 1,24 passage par document. La condition de réouverture est un index
+   réel dont le démarrage mesuré dépasserait 60 s.
+2. **Ne pas ouvrir `AJOUTER-CACHE-BITMAPS`** : sa condition (dépassement après
+   `DECODER-DOCUMENTS-UNE-FOIS`) n'est pas remplie.
+3. **Si un jour le démarrage doit diminuer**, la mesure désigne la lecture SQLite
+   (39 %) et l'insertion dans les `keyword` (33 %), pas le décodage (27,6 %) — un
+   ordre différent de celui de la fixture. Aucune de ces pistes n'est chiffrée ici.
+4. **Aucun seuil `N` ni `exact_threshold`** ne se déduit de cette mesure.
+
+### 11.9 Données brutes
+
+`docs/mesures/MES-13-temps-de-demarrage.2026-10-25.json` : les dix points (cinq
+chauds, cinq froids approximatifs), 5 répétitions par phase pour les points chauds,
+la mémoire des structures et la taille de `records.sqlite`. Les JSON par invocation
+et les conditions de charge restent dans `data/mes13/replay-raw/` ; les copies de
+travail dans `data/mes13/legifacile-*` (clone APFS, 586 Mo) et
+`data/mes13/cold-work/` (vide après la campagne).
+
+### Corrections du 2026-10-26 (NETTOYER-P3)
+
+Texte seulement : aucune mesure n'a été rejouée, les chiffres mesurés restent ceux
+du 2026-10-25.
+
+- **§ 11.2, charge ambiante** : les fichiers `data/mes13/replay-raw/conditions-*.txt`
+  ne portent que les moyennes de charge. Avant : « `mediaanalysisd` et `mds_stores`
+  ont occupé jusqu'à un cœur chacun par moments ». Après : ces relevés ne portent
+  que les moyennes de charge, pas le détail des processus.
+- **§ 11.2, dispersion** : avant « les p95 des cinq points sont à moins de 2 % des
+  p50 », faux pour `titres` en phase `open` (68,4 ms contre 66,8 ms, +2,4 %).
+  Après : « au plus 2,5 % des p50 ».
+- **§ 11.5, tableau d'extrapolation** : la colonne « 10 % de morts » vaut
+  `8,58 / 0,9 = 9,53 M` lignes, et non `8,58 × 1,1 = 9,44 M`. Avant : « 9,44 M
+  lignes », 18,3 s et 31,8 s. Après : « 9,53 M lignes », 18,5 s et 32,1 s.
+  Détail du calcul : `1,94 µs × 9,5333 M = 18,49 s` ; `3,37 µs × 9,5333 M = 32,13 s`.
+- **§ 11.5, marges** : avant « marge de 3,3 à 3,6 », après « marge de 3,2 à 3,6 »
+  (`60 / 18,5 = 3,24`). La marge de la borne haute reste 1,9 (`60 / 32,1 = 1,87`).
+- **§ 11.8, conclusion** : mêmes valeurs corrigées dans la première affirmation
+  (18,5 s et 32,1 s avec 10 % de morts) ; la conclusion est inchangée, les deux
+  bornes restent sous le seuil de 60 s.
+- **§ 11.8, comparaison au budget** : avant « 31,8 s, soit 53 % du budget », après
+  « 32,1 s, soit 54 % du budget » (`32,1 / 60 = 53,5 %`). Le seuil n'est toujours
+  pas dépassé.

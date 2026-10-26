@@ -71,7 +71,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -81,7 +81,7 @@ use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::{Connection, Transaction};
 use serde_json::{Value, json};
 
-use crate::filters_index::{FilterIndex, FilterMemory};
+use crate::filters_index::{CommitDelta, CreatedPassage, FilterIndex, FilterMemory};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
 use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
 
@@ -97,6 +97,19 @@ pub const CURRENT_EPOCH_FILE_NAME: &str = "CURRENT_EPOCH";
 /// next to `CURRENT_EPOCH`. The store reads its schema from it, so the filter
 /// structures can never be built from a schema the index does not declare.
 pub const INDEX_CONFIG_FILE_NAME: &str = "index.json";
+
+/// Sub-directory of the data root that holds the indexes (`docs/02`).
+pub const INDEXES_DIRECTORY: &str = "indexes";
+
+/// Epoch a new index starts on: `crible index create` and a restoration to an
+/// absent target both give it this one.
+///
+/// `ADR-0065`, decision 2: an absent target has no epoch to pass, so it gets the
+/// initial epoch of a creation; the `E+1` rule only applies to an index that
+/// already has an epoch. No on-disk format depends on the value: `CURRENT_EPOCH`,
+/// `meta.epoch` and the manifests carry whatever epoch the commit writes, so this
+/// is the convention of the commands, not a format constant.
+pub const INITIAL_EPOCH: Epoch = Epoch::new(1);
 
 /// Writes the index configuration `index.json` atomically in `index_dir`.
 ///
@@ -197,22 +210,22 @@ fn existing_index_error(index_dir: &Path, occupied: &OccupiedIndex) -> CribleErr
 }
 
 /// Name of the directory holding the epochs of an index.
-const EPOCHS_DIR_NAME: &str = "epochs";
+pub(crate) const EPOCHS_DIR_NAME: &str = "epochs";
 
 /// Name of the reference database inside an epoch directory.
-const RECORDS_FILE_NAME: &str = "records.sqlite";
+pub(crate) const RECORDS_FILE_NAME: &str = "records.sqlite";
 
 /// Name of the segments directory inside an epoch directory.
-const SEGMENTS_DIR_NAME: &str = "segments";
+pub(crate) const SEGMENTS_DIR_NAME: &str = "segments";
 
 /// Name of the derived manifests directory inside an epoch directory.
-const MANIFESTS_DIR_NAME: &str = "manifests";
+pub(crate) const MANIFESTS_DIR_NAME: &str = "manifests";
 
 /// Prefix of a directory or file built before its rename into place.
 ///
 /// The same prefix as the one [`SegmentWriter`](crate::segment::SegmentWriter)
 /// uses: recovery removes every `tmp-*` entry of `segments/` and `manifests/`.
-const TEMPORARY_PREFIX: &str = "tmp-";
+pub(crate) const TEMPORARY_PREFIX: &str = "tmp-";
 
 /// Environment variable naming the step at which `commit` must stop.
 #[cfg(feature = "failpoints")]
@@ -242,6 +255,9 @@ pub struct Snapshot {
     generation: Generation,
     segments: Vec<SegmentMeta>,
     filters: FilterIndex,
+    /// Keep-alive of the epoch the snapshot reads: its strong count is what the
+    /// reclaim of [`crate::compact::reclaim_epochs`] looks at (INV-14).
+    lease: Arc<EpochLease>,
 }
 
 impl Snapshot {
@@ -249,6 +265,16 @@ impl Snapshot {
     #[must_use]
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    /// Epoch holding the reference state and the payloads of this snapshot.
+    ///
+    /// The payload step reads `records.sqlite` in this epoch (ADR-0043, point
+    /// 4), and the compaction never deletes an epoch a live snapshot holds
+    /// (INV-14).
+    #[must_use]
+    pub fn epoch(&self) -> Epoch {
+        self.lease.epoch
     }
 
     /// Segments the generation references, in ascending `iid_start` order, then
@@ -304,28 +330,16 @@ impl Snapshot {
 /// read `CRIBLE_FAILPOINT` expect the panic.
 #[cfg(feature = "failpoints")]
 #[allow(clippy::panic)]
-fn stop_at_failpoint(step: &str) {
+pub(crate) fn stop_at_failpoint(step: &str) {
     let armed = std::env::var(FAILPOINT_ENV).unwrap_or_default();
     if armed == step {
         panic!("CRIBLE_FAILPOINT={step}: simulated crash at this step of the commit protocol");
     }
 }
 
-/// Reaches one step of an attach, inside the transaction of its generation.
-///
-/// Only an attach calls this, so the steps `after_attach_documents` and
-/// `after_attach_passages` are never reached by a plain
-/// [`GenerationStore::commit`] (the `GERER-GENERATIONS` tests). The panic it
-/// raises unwinds through the transaction, which rolls it back (INV-03).
-#[cfg(feature = "failpoints")]
-pub(crate) fn attach_failpoint(step: &str) {
-    stop_at_failpoint(step);
-}
-
-/// Reaches one step of an attach; a normal build carries neither the
-/// environment read nor a call.
+/// Does nothing: a normal build carries neither the environment read nor a call.
 #[cfg(not(feature = "failpoints"))]
-pub(crate) fn attach_failpoint(_step: &str) {}
+pub(crate) fn stop_at_failpoint(_step: &str) {}
 
 /// Reaches the step `step` of the commit protocol.
 ///
@@ -390,9 +404,25 @@ pub(crate) fn generation_after(generation: Generation) -> Result<Generation, Cri
 /// can bypass the commit point of ADR-0016.
 pub struct GenerationStore {
     index_dir: PathBuf,
-    epoch: Epoch,
     records: RecordStore,
     snapshot: ArcSwap<Snapshot>,
+    lease: Arc<EpochLease>,
+    retained: Mutex<Vec<Weak<EpochLease>>>,
+}
+
+/// Marks one epoch as held by the store and by every snapshot of it.
+///
+/// A snapshot clones the `Arc`, so the strong count of the lease is the number
+/// of live views of that epoch in this process. The store keeps the strong
+/// reference of its current epoch, and only a [`Weak`] of every epoch it left
+/// behind: an epoch no snapshot holds any more can therefore be deleted
+/// (INV-14, ADR-0043 point 4).
+///
+/// The epoch number lives here and nowhere else on the store: the store reads it
+/// through its lease, so a publication cannot leave the two out of step.
+#[derive(Debug)]
+pub(crate) struct EpochLease {
+    epoch: Epoch,
 }
 
 impl GenerationStore {
@@ -444,7 +474,8 @@ impl GenerationStore {
         let mut records = RecordStore::create(&epoch_dir.join(RECORDS_FILE_NAME))?;
         records.set_epoch(epoch)?;
 
-        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         write_manifest(&epoch_dir, epoch, &snapshot)?;
 
         // fsync the directories bottom-up before the pointer that makes them
@@ -464,9 +495,10 @@ impl GenerationStore {
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
-            epoch,
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lease,
+            retained: Mutex::new(Vec::new()),
         })
     }
 
@@ -510,21 +542,23 @@ impl GenerationStore {
         }
 
         recover(&records, index_dir, &epoch_dir)?;
-        let snapshot = build_snapshot(&records, &epoch_dir, schema)?;
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
-            epoch,
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lease,
+            retained: Mutex::new(Vec::new()),
         })
     }
 
     /// Epoch of the index, as `CURRENT_EPOCH` names it.
     #[must_use]
     pub fn epoch(&self) -> Epoch {
-        self.epoch
+        self.lease.epoch
     }
 
     /// Generation currently published.
@@ -560,7 +594,8 @@ impl GenerationStore {
     /// error as "nothing was written".
     pub fn commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError> {
         self.commit_with_rows(|transaction, generation, next_iid| {
-            write_generation_change(transaction, &change, generation, next_iid)
+            let next_iid = write_generation_change(transaction, &change, generation, next_iid)?;
+            Ok((next_iid, delta_of(change)))
         })
         .map(|committed| committed.generation)
     }
@@ -576,7 +611,9 @@ impl GenerationStore {
     ///
     /// The callback receives the transaction, the generation it must stamp on
     /// its rows (G+1), and the first free `iid`; it returns the first free `iid`
-    /// after its rows.
+    /// after its rows, and the delta it wrote, which
+    /// [`build_snapshot_after_commit`] derives the new filter structures from
+    /// (ADR-0066).
     ///
     /// This is how an attach writes the `batches` row, the segments, the
     /// documents, the passages, the tombstones and the document removals in one
@@ -588,16 +625,16 @@ impl GenerationStore {
         write: F,
     ) -> Result<CommittedGeneration, CribleError>
     where
-        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<u32, CribleError>,
+        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
     {
-        let epoch_dir = epoch_directory(&self.index_dir, self.epoch);
+        let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
 
         let transaction_started = Instant::now();
         let transaction = self.records.begin()?;
         let meta = records::read_meta(&transaction)?;
         let generation = generation_after(meta.generation)?;
 
-        let next_iid = write(&transaction, generation, meta.next_iid)?;
+        let (next_iid, delta) = write(&transaction, generation, meta.next_iid)?;
         records::advance_meta(&transaction, generation, next_iid)?;
 
         failpoint!("before_sqlite_commit");
@@ -609,12 +646,18 @@ impl GenerationStore {
 
         let snapshot_started = Instant::now();
         let previous = self.snapshot.load_full();
-        let snapshot =
-            build_snapshot_after_commit(&self.records, &epoch_dir, &previous, generation)?;
+        let snapshot = build_snapshot_after_commit(
+            &self.records,
+            &epoch_dir,
+            &previous,
+            generation,
+            &delta,
+            Arc::clone(&self.lease),
+        )?;
         let snapshot_time = snapshot_started.elapsed();
 
         let manifest_started = Instant::now();
-        write_manifest(&epoch_dir, self.epoch, &snapshot)?;
+        write_manifest(&epoch_dir, self.lease.epoch, &snapshot)?;
         let manifest_time = manifest_started.elapsed();
         failpoint!("after_manifest");
 
@@ -656,7 +699,7 @@ impl GenerationStore {
     /// Directory of the current epoch: `<index>/epochs/<epoch>`.
     #[must_use]
     pub fn epoch_directory(&self) -> PathBuf {
-        epoch_directory(&self.index_dir, self.epoch)
+        epoch_directory(&self.index_dir, self.lease.epoch)
     }
 
     /// Path of the reference database of the current epoch.
@@ -673,6 +716,72 @@ impl GenerationStore {
     #[must_use]
     pub fn segments_directory(&self) -> PathBuf {
         segments_directory(&self.epoch_directory())
+    }
+
+    /// Root directory of the index: `<index>`.
+    pub(crate) fn index_dir(&self) -> &Path {
+        &self.index_dir
+    }
+
+    /// Borrows the reference state of the current epoch.
+    ///
+    /// The compaction reads the live passages through this connection, which is
+    /// the single writer of the index, so no commit can change the rows under
+    /// it.
+    pub(crate) fn records(&self) -> &RecordStore {
+        &self.records
+    }
+
+    /// Epochs an earlier snapshot of this store still holds.
+    ///
+    /// The store only keeps a [`Weak`] reference of every epoch it left behind,
+    /// so an epoch disappears from this list as soon as its last snapshot is
+    /// dropped: [`crate::compact::reclaim_epochs`] can then delete it (INV-14,
+    /// ADR-0043 point 4).
+    pub(crate) fn held_epochs(&self) -> Vec<Epoch> {
+        let mut retained = self.retained.lock().unwrap_or_else(PoisonError::into_inner);
+        retained.retain(|lease| lease.strong_count() > 0);
+        retained
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(|lease| lease.epoch)
+            .collect()
+    }
+
+    /// Publishes `epoch` as the current epoch of the index, after the switch of
+    /// `CURRENT_EPOCH` by a compaction.
+    ///
+    /// The caller passes the reference state it has just opened at the new
+    /// epoch, whose `meta` carries the generation the compaction committed. The
+    /// snapshot is rebuilt from that state, its manifest is written, then the
+    /// store switches to it and releases its strong reference on the previous
+    /// epoch, which only the snapshots the readers still hold keep alive
+    /// (INV-14).
+    ///
+    /// An error before the publication leaves the store on its previous epoch,
+    /// although `CURRENT_EPOCH` already names the new one: the next
+    /// [`GenerationStore::open`] publishes the committed epoch (INV-04).
+    pub(crate) fn adopt_epoch(
+        &mut self,
+        epoch: Epoch,
+        records: RecordStore,
+        schema: &Schema,
+    ) -> Result<(), CribleError> {
+        let epoch_dir = epoch_directory(&self.index_dir, epoch);
+        let lease = Arc::new(EpochLease { epoch });
+        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
+        write_manifest(&epoch_dir, epoch, &snapshot)?;
+
+        let previous = std::mem::replace(&mut self.lease, lease);
+        self.retained
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&previous));
+        drop(previous);
+
+        self.records = records;
+        self.snapshot.store(Arc::new(snapshot));
+        Ok(())
     }
 
     /// State of the published generation, as `crible inspect` and the index
@@ -692,7 +801,7 @@ impl GenerationStore {
             )
         })?;
         Ok(IndexState {
-            epoch: self.epoch,
+            epoch: self.lease.epoch,
             generation: snapshot.generation(),
             documents: counts.documents,
             live_passages,
@@ -806,6 +915,8 @@ fn write_generation_change(
     } = change;
 
     let mut next_iid = next_iid;
+    // One compressor for the passages of this generation change (ADR-0048).
+    let mut compressor = records::TextCompressor::new()?;
     for segment in segments {
         check_generation_matches(
             "segment",
@@ -831,7 +942,7 @@ fn write_generation_change(
             passage.created_generation,
             generation,
         )?;
-        records::insert_passage(transaction, passage)?;
+        records::insert_passage(transaction, passage, &mut compressor)?;
         next_iid = next_iid.max(passage.iid.get().checked_add(1).ok_or_else(|| {
             CribleError::new(
                 ErrorCode::Internal,
@@ -848,20 +959,45 @@ fn write_generation_change(
     Ok(next_iid)
 }
 
+/// The delta one [`GenerationChange`] writes into `passages` and `documents`, in
+/// the form [`FilterIndex::after_commit`] consumes (ADR-0066).
+///
+/// A change never removes a document row: removal belongs to an attach
+/// (ADR-0041), whose plan feeds `removed_documents` itself.
+fn delta_of(change: GenerationChange) -> CommitDelta {
+    CommitDelta {
+        created: change
+            .passages
+            .into_iter()
+            .map(CreatedPassage::from)
+            .collect(),
+        rewritten_documents: change
+            .documents
+            .into_iter()
+            .map(|document| document.doc_id)
+            .collect(),
+        tombstones: change.deletions,
+        removed_documents: Vec::new(),
+    }
+}
+
 /// Directory of one epoch: `<index>/epochs/<epoch>`.
-fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
-    index_dir
-        .join(EPOCHS_DIR_NAME)
-        .join(epoch.get().to_string())
+pub(crate) fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    epochs_directory(index_dir).join(epoch.get().to_string())
+}
+
+/// Directory holding every epoch of an index: `<index>/epochs`.
+pub(crate) fn epochs_directory(index_dir: &Path) -> PathBuf {
+    index_dir.join(EPOCHS_DIR_NAME)
 }
 
 /// Directory of the segments of an epoch.
-fn segments_directory(epoch_dir: &Path) -> PathBuf {
+pub(crate) fn segments_directory(epoch_dir: &Path) -> PathBuf {
     epoch_dir.join(SEGMENTS_DIR_NAME)
 }
 
 /// Directory of the derived manifests of an epoch.
-fn manifests_directory(epoch_dir: &Path) -> PathBuf {
+pub(crate) fn manifests_directory(epoch_dir: &Path) -> PathBuf {
     epoch_dir.join(MANIFESTS_DIR_NAME)
 }
 
@@ -877,7 +1013,11 @@ fn manifest_path(epoch_dir: &Path, generation: Generation) -> PathBuf {
 /// layout is carried by the `epochs/<epoch>/` structure and by the format
 /// versions of the files inside it, not by this pointer, which has to stay
 /// readable by an operator with `cat`.
-fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
+///
+/// A compaction reads it too: the epoch the store holds must be the one on disk
+/// before it writes, switches or reclaims anything (see
+/// [`crate::compact::compact`]).
+pub(crate) fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
     let path = index_dir.join(CURRENT_EPOCH_FILE_NAME);
     let raw = fs::read_to_string(&path).map_err(|error| {
         CribleError::new(
@@ -904,7 +1044,7 @@ fn read_current_epoch(index_dir: &Path) -> Result<Epoch, CribleError> {
 
 /// Writes `CURRENT_EPOCH` atomically: temporary file, fsync, rename, fsync of
 /// the index directory.
-fn write_current_epoch(index_dir: &Path, epoch: Epoch) -> Result<(), CribleError> {
+pub(crate) fn write_current_epoch(index_dir: &Path, epoch: Epoch) -> Result<(), CribleError> {
     let bytes = format!("{}\n", epoch.get());
     write_atomically(&index_dir.join(CURRENT_EPOCH_FILE_NAME), bytes.as_bytes())
 }
@@ -1072,25 +1212,27 @@ fn build_snapshot(
     records: &RecordStore,
     epoch_dir: &Path,
     schema: &Schema,
+    lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     Ok(Snapshot {
         generation: records.meta()?.generation,
         segments: segments_of(records, epoch_dir)?,
         filters: FilterIndex::from_records(records.connection(), schema)?,
+        lease,
     })
 }
 
 /// Builds the snapshot that follows the commit of `generation`.
 ///
 /// The filter structures are derived from those of the previous snapshot in
-/// copy on write: only the rows the generation stamped are read, and the
-/// bitmaps and column blocks no change touches are shared with the generation
-/// the readers still hold (INV-02).
+/// copy on write: only the rows `delta` names are read, and the bitmaps and
+/// column blocks no change touches are shared with the generation the readers
+/// still hold (INV-02, ADR-0066).
 ///
 /// The previous snapshot is at generation G-1 whenever the commit succeeded, so
-/// the delta is the whole difference. It is not when an earlier commit stopped
+/// `delta` is the whole difference. It is not when an earlier commit stopped
 /// **after** its SQLite commit (a manifest that could not be written): that
-/// generation is committed but was never published, and a delta would leave its
+/// generation is committed but was never published, and `delta` would leave its
 /// rows out. The snapshot is then rebuilt from `records.sqlite`, which is what
 /// the next [`GenerationStore::open`] would do (INV-04).
 fn build_snapshot_after_commit(
@@ -1098,11 +1240,13 @@ fn build_snapshot_after_commit(
     epoch_dir: &Path,
     previous: &Snapshot,
     generation: Generation,
+    delta: &CommitDelta,
+    lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
         previous
             .filters()
-            .after_commit(records.connection(), generation)?
+            .after_commit(records.connection(), delta)?
     } else {
         FilterIndex::from_records(records.connection(), previous.filters().schema())?
     };
@@ -1110,6 +1254,7 @@ fn build_snapshot_after_commit(
         generation,
         segments: segments_of(records, epoch_dir)?,
         filters,
+        lease,
     })
 }
 
@@ -1185,13 +1330,18 @@ fn segment_value(meta: &SegmentMeta) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME,
-        RECORDS_FILE_NAME, read_current_epoch,
+        CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationChange, GenerationStore,
+        INDEX_CONFIG_FILE_NAME, RECORDS_FILE_NAME, read_current_epoch,
     };
     use crible_core::config::Schema;
     use crible_core::error::ErrorCode;
-    use crible_core::ids::Epoch;
+    use crible_core::ids::{Epoch, Generation, Iid};
+    use rusqlite::trace::{TraceEvent, TraceEventCodes};
+    use serde_json::json;
     use std::fs;
+    use std::sync::Mutex;
+
+    use crate::records::{DocumentRecord, PassageRecord};
 
     /// JSON schema of an index that indexes no field.
     const EMPTY_SCHEMA_JSON: &str = r#"{ "document_fields": {}, "passage_fields": {} }"#;
@@ -1596,6 +1746,490 @@ mod tests {
             ErrorCode::InvalidRequest,
             "wrong error code: {}",
             error.message()
+        );
+    }
+
+    // --- The plan of the commit path (ADR-0066) ---
+
+    /// JSON schema of an index indexing one field of each level: the commit
+    /// path reads the two tables that carry those fields, so a test that pins
+    /// its plans has both of them in play.
+    const PLAN_SCHEMA_JSON: &str = r#"{ "document_fields": { "annee": { "type": "integer" } },
+             "passage_fields": { "rang": { "type": "integer" } } }"#;
+
+    /// Relations a `SCAN` line may name without the test failing: the
+    /// reference database holds at most one row of `meta` and one of `batches`
+    /// per batch, and `segments` holds one row per segment. A full scan of
+    /// those costs nothing at the scale targeted by ADR-0066, whereas a scan of
+    /// `passages` or `documents` costs the size of the index.
+    const SCANNABLE_RELATIONS: [&str; 3] = ["meta", "batches", "segments"];
+
+    /// Words after a relation that introduce no alias: the statement continues
+    /// with a clause instead.
+    const NOT_AN_ALIAS: [&str; 30] = [
+        "WHERE",
+        "ON",
+        "USING",
+        "SET",
+        "VALUES",
+        "SELECT",
+        "LEFT",
+        "RIGHT",
+        "INNER",
+        "OUTER",
+        "CROSS",
+        "NATURAL",
+        "JOIN",
+        "ORDER",
+        "GROUP",
+        "LIMIT",
+        "OFFSET",
+        "HAVING",
+        "WINDOW",
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+        "INDEXED",
+        "NOT",
+        "AND",
+        "OR",
+        "AS",
+        "BY",
+        "NULLS",
+        "DO",
+    ];
+
+    /// Words that introduce the relation of a clause.
+    const RELATION_INTRODUCERS: [&str; 4] = ["FROM", "JOIN", "INTO", "UPDATE"];
+
+    /// Relations a plan line may scan without being a table: a constant row, a
+    /// subquery, a materialised set.
+    const NOT_A_RELATION: [&str; 3] = ["CONSTANT", "SUBQUERY", "ROW"];
+
+    /// Statements recorded by [`record_statement`].
+    ///
+    /// The trace callback of rusqlite is a plain function pointer, so the
+    /// statements land in one process-wide buffer. Only the connection the test
+    /// traces writes into it, and that connection belongs to one test.
+    static TRACED_STATEMENTS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Trace callback: keeps the SQL text of every statement that starts.
+    fn record_statement(event: TraceEvent<'_>) {
+        if let TraceEvent::Stmt(_, sql) = event
+            && let Ok(mut statements) = TRACED_STATEMENTS.lock()
+        {
+            statements.push(sql.to_owned());
+        }
+    }
+
+    /// Splits SQL into words and single punctuation characters, skipping string
+    /// literals and comments.
+    fn sql_tokens(sql: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut chars = sql.chars().peekable();
+        while let Some(character) = chars.next() {
+            if character.is_whitespace() {
+                continue;
+            }
+            if character == '\'' {
+                // A string literal: a doubled quote is an escaped one.
+                while let Some(inner) = chars.next() {
+                    if inner == '\'' {
+                        if chars.peek() == Some(&'\'') {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            if character == '-' && chars.peek() == Some(&'-') {
+                for inner in chars.by_ref() {
+                    if inner == '\n' {
+                        break;
+                    }
+                }
+                continue;
+            }
+            if character == '/' && chars.peek() == Some(&'*') {
+                chars.next();
+                let mut previous = '\0';
+                for inner in chars.by_ref() {
+                    if previous == '*' && inner == '/' {
+                        break;
+                    }
+                    previous = inner;
+                }
+                continue;
+            }
+            if character.is_alphanumeric() || character == '_' || character == '$' {
+                let mut word = String::from(character);
+                while let Some(&inner) = chars.peek() {
+                    if inner.is_alphanumeric() || inner == '_' || inner == '$' {
+                        word.push(inner);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                tokens.push(word);
+                continue;
+            }
+            tokens.push(character.to_string());
+        }
+        tokens
+    }
+
+    /// Every `(alias, relation)` pair one statement declares, with the relation
+    /// name standing for itself when the statement gives it no alias.
+    fn relations_of(sql: &str) -> Vec<(String, String)> {
+        let tokens = sql_tokens(sql);
+        let mut relations = Vec::new();
+        let introduced = |token: &str| {
+            RELATION_INTRODUCERS
+                .iter()
+                .any(|keyword| keyword.eq_ignore_ascii_case(token))
+        };
+        let mut position = 0;
+        while position < tokens.len() {
+            if !introduced(&tokens[position]) {
+                position += 1;
+                continue;
+            }
+            let mut next = position + 1;
+            if tokens.get(next).map(String::as_str) == Some("(") {
+                position = next;
+                continue;
+            }
+            let Some(relation) = tokens.get(next) else {
+                break;
+            };
+            // A schema-qualified name: `main.passages`.
+            if tokens.get(next + 1).map(String::as_str) == Some(".") {
+                if let Some(qualified) = tokens.get(next + 2) {
+                    relations.push((qualified.clone(), qualified.clone()));
+                    next += 2;
+                }
+            } else {
+                relations.push((relation.clone(), relation.clone()));
+            }
+            let mut alias_at = next + 1;
+            if tokens
+                .get(alias_at)
+                .is_some_and(|token| token.eq_ignore_ascii_case("AS"))
+            {
+                alias_at += 1;
+            }
+            if let Some(alias) = tokens.get(alias_at) {
+                let is_word = alias
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || character == '_');
+                let is_clause = NOT_AN_ALIAS
+                    .iter()
+                    .any(|keyword| keyword.eq_ignore_ascii_case(alias))
+                    || alias == "("
+                    || alias == ",";
+                if is_word && !is_clause {
+                    relations.push((alias.clone(), relation.clone()));
+                }
+            }
+            position = next + 1;
+        }
+        relations
+    }
+
+    /// The relation one `SCAN` line of an execution plan reads, or `None` when
+    /// the line scans no relation at all.
+    fn scanned_relation(sql: &str, detail: &str) -> Option<String> {
+        let tokens: Vec<&str> = detail.split_whitespace().collect();
+        let scan = tokens.first()?;
+        if !scan.eq_ignore_ascii_case("SCAN") {
+            return None;
+        }
+        let target = if tokens
+            .get(1)
+            .is_some_and(|token| token.eq_ignore_ascii_case("TABLE"))
+        {
+            tokens.get(2)?
+        } else {
+            tokens.get(1)?
+        };
+        if NOT_A_RELATION
+            .iter()
+            .any(|keyword| keyword.eq_ignore_ascii_case(target))
+        {
+            return None;
+        }
+        let relations = relations_of(sql);
+        // Every relation the alias may denote: an alias reused by a subquery
+        // names both, and the test then treats the scan as touching the
+        // expensive one too, which is the safe direction.
+        let mut denoted: Vec<&str> = relations
+            .iter()
+            .filter(|(alias, _)| alias.eq_ignore_ascii_case(target))
+            .map(|(_, relation)| relation.as_str())
+            .collect();
+        if denoted.is_empty() {
+            denoted.push(target);
+        }
+        Some(denoted.join(" or "))
+    }
+
+    /// Executable statements of a trace: the ones with a plan to explain.
+    fn explains(statement: &str) -> bool {
+        sql_tokens(statement).first().is_some_and(|first| {
+            ["SELECT", "WITH", "INSERT", "UPDATE", "DELETE"]
+                .iter()
+                .any(|verb| verb.eq_ignore_ascii_case(first))
+        })
+    }
+
+    /// Number of parameters a statement binds, so its plan can be explained
+    /// without running it: SQLite requires them bound even for
+    /// `EXPLAIN QUERY PLAN`.
+    fn parameter_count(sql: &str) -> usize {
+        let tokens = sql_tokens(sql);
+        let mut numbered = 0;
+        let mut anonymous = 0;
+        let mut position = 0;
+        while position < tokens.len() {
+            if tokens[position] == "?" {
+                match tokens
+                    .get(position + 1)
+                    .and_then(|token| token.parse::<usize>().ok())
+                {
+                    Some(number) => {
+                        numbered = numbered.max(number);
+                        position += 2;
+                        continue;
+                    }
+                    None => anonymous += 1,
+                }
+            }
+            position += 1;
+        }
+        numbered.max(anonymous)
+    }
+
+    /// A commit of one generation that creates a document and two passages, so
+    /// the following commit has a document to update and a passage to
+    /// tombstone.
+    fn plan_test_first_generation(store: &mut GenerationStore) {
+        store
+            .commit(GenerationChange {
+                segments: Vec::new(),
+                documents: vec![DocumentRecord {
+                    doc_id: "doc-a".to_owned(),
+                    doc_hash: "blake3:doc-a".to_owned(),
+                    fields: json!({ "annee": 2021 }),
+                    updated_generation: Generation::new(1),
+                }],
+                passages: vec![
+                    PassageRecord {
+                        iid: Iid::new(0),
+                        doc_id: "doc-a".to_owned(),
+                        ord: 0,
+                        text: "doc-a#0".to_owned(),
+                        passage_hash: "blake3:passage-0".to_owned(),
+                        fields: json!({ "rang": 0 }),
+                        segment_id: "seg-a".to_owned(),
+                        created_generation: Generation::new(1),
+                        dead_since_gen: None,
+                    },
+                    PassageRecord {
+                        iid: Iid::new(1),
+                        doc_id: "doc-a".to_owned(),
+                        ord: 1,
+                        text: "doc-a#1".to_owned(),
+                        passage_hash: "blake3:passage-1".to_owned(),
+                        fields: json!({ "rang": 1 }),
+                        segment_id: "seg-a".to_owned(),
+                        created_generation: Generation::new(1),
+                        dead_since_gen: None,
+                    },
+                ],
+                deletions: Vec::new(),
+            })
+            .expect("the first generation commits");
+    }
+
+    /// The commit of a generation must not scan `passages` or `documents`.
+    ///
+    /// The test does not list the queries to watch: it records **every**
+    /// statement the connection of the commit really runs, then asks SQLite for
+    /// the execution plan of each of them. A query added to the commit path is
+    /// therefore examined without anyone updating a list here (ADR-0066,
+    /// "À surveiller").
+    ///
+    /// The generation committed here touches the four steps of the derivation:
+    /// a document and a passage created, a document rewritten, a passage
+    /// tombstoned, and the removed-documents query, which runs even when it
+    /// finds nothing.
+    #[test]
+    fn commit_path_plans_no_scan_on_passages_or_documents() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, PLAN_SCHEMA_JSON);
+        let schema = Schema::from_json_str(PLAN_SCHEMA_JSON)
+            .unwrap_or_else(|error| panic!("the plan schema must be valid: {error}"));
+        let mut store =
+            GenerationStore::create(&index, Epoch::new(1), &schema).expect("the index is created");
+        plan_test_first_generation(&mut store);
+
+        TRACED_STATEMENTS
+            .lock()
+            .expect("the trace buffer is not poisoned")
+            .clear();
+        {
+            let connection = store.records.connection();
+            connection.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_statement));
+        }
+        let outcome = store.commit(GenerationChange {
+            segments: Vec::new(),
+            documents: vec![
+                DocumentRecord {
+                    doc_id: "doc-a".to_owned(),
+                    doc_hash: "blake3:doc-a".to_owned(),
+                    fields: json!({ "annee": 2022 }),
+                    updated_generation: Generation::new(2),
+                },
+                DocumentRecord {
+                    doc_id: "doc-b".to_owned(),
+                    doc_hash: "blake3:doc-b".to_owned(),
+                    fields: json!({ "annee": 2022 }),
+                    updated_generation: Generation::new(2),
+                },
+            ],
+            passages: vec![PassageRecord {
+                iid: Iid::new(2),
+                doc_id: "doc-b".to_owned(),
+                ord: 0,
+                text: "doc-b#0".to_owned(),
+                passage_hash: "blake3:passage-2".to_owned(),
+                fields: json!({ "rang": 0 }),
+                segment_id: "seg-b".to_owned(),
+                created_generation: Generation::new(2),
+                dead_since_gen: None,
+            }],
+            deletions: vec![Iid::new(1)],
+        });
+        {
+            let connection = store.records.connection();
+            connection.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, None);
+        }
+        outcome.expect("the traced generation commits");
+
+        let mut statements = TRACED_STATEMENTS
+            .lock()
+            .expect("the trace buffer is not poisoned")
+            .clone();
+        statements.sort();
+        statements.dedup();
+        assert!(
+            !statements.is_empty(),
+            "the trace recorded no statement of the commit: the test would prove nothing"
+        );
+        for table in ["passages", "documents"] {
+            assert!(
+                statements
+                    .iter()
+                    .any(|statement| statement.to_lowercase().contains(table)),
+                "the trace recorded no statement naming {table}, so the commit path it captured \
+                 is not the one this test means to check: {statements:#?}"
+            );
+        }
+
+        let connection = store.records.connection();
+        let mut offenders = Vec::new();
+        let mut documents_by_primary_key = false;
+        let mut passages_by_doc_id = false;
+        for statement in &statements {
+            if !explains(statement) {
+                continue;
+            }
+            let mut plan = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {statement}"))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "the plan of a statement of the commit path must be explainable; \
+                         the query is:\n{statement}\nSQLite said: {error}"
+                    )
+                });
+            let parameters: Vec<rusqlite::types::Value> = (0..parameter_count(statement))
+                .map(|_| rusqlite::types::Value::Null)
+                .collect();
+            let details = plan
+                .query_map(rusqlite::params_from_iter(parameters), |row| {
+                    row.get::<_, String>(3)
+                })
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "the plan of a statement of the commit path must be readable; \
+                         the query is:\n{statement}\nSQLite said: {error}"
+                    )
+                })
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "the plan of a statement of the commit path must be read; \
+                         the query is:\n{statement}\nSQLite said: {error}"
+                    )
+                });
+            let is_select = sql_tokens(statement)
+                .first()
+                .is_some_and(|token| token.eq_ignore_ascii_case("SELECT"));
+            for detail in &details {
+                // The two accesses ADR-0066 allows are bounded SELECTs:
+                // `documents` by its primary key and `passages` by its `doc_id`
+                // index. Requiring the statement itself to be a SELECT keeps an
+                // upsert, whose plan also searches the primary key, from
+                // standing in for the read the commit must really run.
+                let plan = detail.to_lowercase();
+                if plan.starts_with("search documents") && plan.contains("(doc_id=?") {
+                    documents_by_primary_key |= is_select;
+                }
+                if plan.starts_with("search passages") && plan.contains("(doc_id=?") {
+                    passages_by_doc_id |= is_select;
+                }
+                let Some(relation) = scanned_relation(statement, detail) else {
+                    continue;
+                };
+                let expensive = relation.split(" or ").any(|name| {
+                    name.eq_ignore_ascii_case("passages") || name.eq_ignore_ascii_case("documents")
+                });
+                let allowed = relation.split(" or ").all(|name| {
+                    SCANNABLE_RELATIONS
+                        .iter()
+                        .any(|table| table.eq_ignore_ascii_case(name))
+                });
+                if expensive || !allowed {
+                    offenders.push(format!(
+                        "  query:\n{statement}\n  plan line: {detail}\n  scans: {relation}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            documents_by_primary_key,
+            "the trace planned no bounded read of `documents` by its primary key. The commit \
+             must read the fields of a rewritten document (`SELECT fields FROM documents \
+             WHERE doc_id = ?1`), which ADR-0066 allows because the plan is bounded: {statements:#?}"
+        );
+        assert!(
+            passages_by_doc_id,
+            "the trace planned no bounded read of `passages` by `passages(doc_id)`. The commit \
+             must read the passages of a rewritten or removed document (`SELECT iid FROM \
+             passages WHERE doc_id = ?1`), which ADR-0066 allows because the plan is bounded: \
+             {statements:#?}"
+        );
+        assert!(
+            offenders.is_empty(),
+            "the commit path scans a table whose size is the size of the index. A generation \
+             must be derived from the delta the transaction wrote, not re-read by \
+             generation stamp (ADR-0066); a bounded read goes through passages(doc_id) or the \
+             primary key of documents. Offending statements:\n{}",
+            offenders.join("\n")
         );
     }
 

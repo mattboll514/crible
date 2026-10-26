@@ -47,44 +47,44 @@
 //! deletion (`docs/04-donnees-et-ingestion.md`, "Document retiré", ADR-0041) has
 //! no document-level value left, exactly as a field stored as `null` has none.
 //!
-//! # Hypothesis of the delta
+//! # The delta of a commit
 //!
-//! The delta recognises the documents of a generation that were removed, but
-//! no row records a removal: the `documents` row is gone, and the tombstone is
-//! all that is left. It therefore relies on the rule that **every document has
-//! at least one passage** (`docs/04-donnees-et-ingestion.md`,
-//! `docs/format-lot-v1.md`, checked by `batch_reader`): removing a document
-//! tombstones at least one of its passages in the same transaction, so the set
-//! of documents touched by a removal is readable from `passages.dead_since_gen`.
+//! [`FilterIndex::after_commit`] receives the delta the transaction has just
+//! written, as [`CommitDelta`] (ADR-0066): the passages it created, the
+//! documents whose row it rewrote, the passages it tombstoned, and the
+//! documents it removed. Re-reading those rows by generation stamp
+//! (`created_generation`, `updated_generation`) would make the commit cost a
+//! full scan of `passages` and of `documents`, so the cost of a generation
+//! would follow the size of the index instead of the size of the change.
 //!
-//! Should that rule ever fall, the delta would keep the document-level values of
-//! the dead passages of a removed document, where a rebuild writes nulls. The
-//! divergence would stay invisible to a query, because the `live` bitmap hides
-//! those passages, and only a comparison with [`FilterIndex::from_records`]
-//! would show it. The acceptance test of `CONSTRUIRE-BITMAPS` covers the case on
-//! `synth-small`, whose `L3` removes 150 documents.
+//! Two SQL accesses remain, both bounded: the passages of one document by
+//! `passages(doc_id)`, and the fields of one document by the primary key
+//! `documents(doc_id)`. The caller that fills the delta is the only description
+//! of the change: a document it forgets leaves the structures wrong in silence,
+//! which is why the equality with [`FilterIndex::from_records`] is the guard
+//! (ADR-0066, "À surveiller"). The acceptance test of `CONSTRUIRE-BITMAPS`
+//! checks it on `synth-small`, whose `L3` removes 150 documents, then after a
+//! metadata patch (ADR-0060).
 //!
 //! # Update in copy on write
 //!
 //! [`FilterIndex::after_commit`] derives the structures of generation G+1 from
-//! those of G plus the delta SQLite records: the rows stamped by G
-//! (`created_generation`, `dead_since_gen`, `updated_generation`) and the
-//! deleted documents. Each bitmap sits behind an `Arc`, and each column is a
-//! sequence of `Arc` blocks, so a value no change touches is shared between the
-//! two generations instead of being copied: a reader holding the previous
-//! snapshot keeps reading it whole (INV-02, INV-03).
+//! those of G plus that delta. Each bitmap sits behind an `Arc`, and each column
+//! is a sequence of `Arc` blocks, so a value no change touches is shared
+//! between the two generations instead of being copied: a reader holding the
+//! previous snapshot keeps reading it whole (INV-02, INV-03).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crible_core::config::{FieldLevel, FieldType, Schema};
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::ids::{Generation, Iid};
+use crible_core::ids::Iid;
 use roaring::RoaringBitmap;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use crate::records::{database_error, from_sql_u32};
+use crate::records::{PassageRecord, canonical_json, database_error, from_sql_u32};
 
 /// Number of values one block of a value column holds.
 ///
@@ -132,6 +132,56 @@ fn bitmap_bytes(bitmap: &RoaringBitmap) -> usize {
     } else {
         bitmap.serialized_size()
     }
+}
+
+/// One passage a committed transaction created, as the derivation of the next
+/// filter structures needs it (ADR-0066).
+///
+/// The text and the hash are left out: they never reach a filter structure, and
+/// keeping them would double the memory the delta holds until the snapshot is
+/// published.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreatedPassage {
+    /// Internal identifier the transaction assigned, never exposed (INV-01).
+    pub iid: Iid,
+    /// External identifier of the document the passage belongs to.
+    pub doc_id: String,
+    /// Passage fields, with the values the transaction wrote.
+    pub fields: Value,
+    /// Whether the transaction marked the passage dead as well.
+    pub dead: bool,
+}
+
+impl From<PassageRecord> for CreatedPassage {
+    fn from(record: PassageRecord) -> Self {
+        Self {
+            iid: record.iid,
+            doc_id: record.doc_id,
+            fields: record.fields,
+            dead: record.dead_since_gen.is_some(),
+        }
+    }
+}
+
+/// What one committed transaction wrote into `passages` and `documents`, in the
+/// form [`FilterIndex::after_commit`] consumes (ADR-0066).
+///
+/// The caller fills it from the change it wrote: `GenerationChange` on the
+/// commit path, the plan of the attach on its path. Every access
+/// [`FilterIndex::after_commit`] still makes to SQLite is bounded by an index
+/// of `docs/02-architecture.md`, so the commit never scans a table whose size
+/// is the size of the index.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct CommitDelta {
+    /// Passages the transaction created.
+    pub created: Vec<CreatedPassage>,
+    /// Documents whose `documents` row the transaction wrote: their passages
+    /// inherit the new document-level values.
+    pub rewritten_documents: Vec<String>,
+    /// Passages the transaction tombstoned.
+    pub tombstones: Vec<Iid>,
+    /// Documents whose `documents` row the transaction removed.
+    pub removed_documents: Vec<String>,
 }
 
 /// The filter structures of one generation.
@@ -837,31 +887,31 @@ impl FilterIndex {
         Ok(index)
     }
 
-    /// Derives the structures of the generation that `records.sqlite` has just
-    /// committed, from those of the previous generation.
+    /// Derives the structures of the generation a transaction has just
+    /// committed, from those of the previous generation and from `delta`
+    /// (ADR-0066).
     ///
-    /// The delta is what SQLite stamped with `generation`: the passages it
-    /// created, the passages it tombstoned, the documents whose fields it
-    /// rewrote, and the documents it removed: a removal tombstones at least one
-    /// passage in the same transaction, because every document has at least one
-    /// passage (`docs/04-donnees-et-ingestion.md`, `docs/format-lot-v1.md`). A
-    /// value no change touches is shared with the previous generation, not
-    /// copied.
+    /// `delta` is what the transaction wrote, as the caller filled it while
+    /// writing: the passages it created, the documents whose row it rewrote,
+    /// the passages it tombstoned, and the documents it removed. Nothing is
+    /// re-read by generation stamp, so the commit never scans `passages` or
+    /// `documents`; the two accesses that remain are bounded, by
+    /// `passages(doc_id)` and by the primary key of `documents`. A value no
+    /// change touches is shared with the previous generation, not copied.
     ///
     /// The result equals [`FilterIndex::from_records`] on the same reference
     /// state, which the acceptance test of `CONSTRUIRE-BITMAPS` checks after
-    /// `L1`, `L2` and `L3`.
-    pub fn after_commit(
+    /// `L1`, `L2`, `L3` and a metadata patch (ADR-0060, ADR-0066).
+    pub(crate) fn after_commit(
         &self,
         connection: &Connection,
-        generation: Generation,
+        delta: &CommitDelta,
     ) -> Result<Self, CribleError> {
-        let stamp = sql_generation(generation)?;
         let mut next = self.clone();
-        next.insert_created_passages(connection, stamp)?;
-        next.apply_tombstones(connection, stamp)?;
-        next.refresh_updated_documents(connection, stamp)?;
-        next.clear_removed_documents(connection, stamp)?;
+        next.insert_created_passages(connection, delta)?;
+        next.apply_tombstones(&delta.tombstones);
+        next.refresh_updated_documents(connection, &delta.rewritten_documents)?;
+        next.clear_removed_documents(connection, &delta.removed_documents)?;
         Ok(next)
     }
 
@@ -996,48 +1046,37 @@ impl FilterIndex {
     }
 
     /// Step 1 of the delta: the passages this generation created.
+    ///
+    /// The passages come from the delta, in ascending `iid` order because a
+    /// value column appends in that order. Their document-level values are the
+    /// ones the transaction wrote, read back by the primary key of `documents`:
+    /// one bounded lookup per distinct document, cached for the whole step.
     fn insert_created_passages(
         &mut self,
         connection: &Connection,
-        stamp: i64,
+        delta: &CommitDelta,
     ) -> Result<(), CribleError> {
-        let mut statement = connection
-            .prepare(
-                "SELECT p.iid, p.fields, d.fields, p.dead_since_gen
-                 FROM passages p LEFT JOIN documents d ON d.doc_id = p.doc_id
-                 WHERE p.created_generation = ?1 ORDER BY p.iid",
-            )
-            .map_err(|error| database_error("prepare the created passages query", &error))?;
-        let mut rows = statement
-            .query(params![stamp])
-            .map_err(|error| database_error("query the created passages", &error))?;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| database_error("read a created passage", &error))?
-        {
-            let iid = Iid::new(from_sql_u32(
-                row.get(0)
-                    .map_err(|error| database_error("read an iid", &error))?,
-                "iid",
-            )?);
-            let passage = parse_fields(
-                &row.get::<_, String>(1)
-                    .map_err(|error| database_error("read the passage fields", &error))?,
-            )?;
-            let document = match row
-                .get::<_, Option<String>>(2)
-                .map_err(|error| database_error("read the document fields", &error))?
-            {
-                Some(raw) => Some(parse_fields(&raw)?),
-                None => None,
+        let mut created: Vec<&CreatedPassage> = delta.created.iter().collect();
+        created.sort_by_key(|passage| passage.iid.get());
+        let mut documents: HashMap<&str, Option<Value>> = HashMap::new();
+        for passage in created {
+            let document = match documents.get(passage.doc_id.as_str()) {
+                Some(fields) => fields.clone(),
+                None => {
+                    let fields = document_fields(connection, &passage.doc_id)?;
+                    documents.insert(passage.doc_id.as_str(), fields.clone());
+                    fields
+                }
             };
-            let dead = row
-                .get::<_, Option<i64>>(3)
-                .map_err(|error| database_error("read the tombstone of a passage", &error))?;
-
-            self.insert_row(iid, document.as_ref(), &passage)?;
-            if dead.is_none() {
-                Arc::make_mut(&mut self.live).insert(iid.get());
+            // The fields go through the same canonical JSON the transaction
+            // stored, then back through the parser: a rebuild reads those bytes,
+            // and serde_json's parser is not bit-exact on `float` by default, so
+            // using the in-memory value would make the derived structures differ
+            // from `from_records` by one unit in the last place.
+            let fields = parse_fields(&canonical_json(&passage.fields)?)?;
+            self.insert_row(passage.iid, document.as_ref(), &fields)?;
+            if !passage.dead {
+                Arc::make_mut(&mut self.live).insert(passage.iid.get());
             }
         }
         Ok(())
@@ -1045,53 +1084,29 @@ impl FilterIndex {
 
     /// Step 2 of the delta: the passages this generation tombstoned are no
     /// longer live. Their other structures stay: a rebuild keeps them too.
-    fn apply_tombstones(&mut self, connection: &Connection, stamp: i64) -> Result<(), CribleError> {
-        let mut statement = connection
-            .prepare("SELECT iid FROM passages WHERE dead_since_gen = ?1")
-            .map_err(|error| database_error("prepare the tombstones query", &error))?;
-        let iids = statement
-            .query_map(params![stamp], |row| row.get::<_, i64>(0))
-            .map_err(|error| database_error("query the tombstones", &error))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| database_error("read a tombstone", &error))?;
-        for iid in iids {
-            let iid = from_sql_u32(iid, "iid")?;
-            Arc::make_mut(&mut self.live).remove(iid);
+    fn apply_tombstones(&mut self, tombstones: &[Iid]) {
+        for iid in tombstones {
+            Arc::make_mut(&mut self.live).remove(iid.get());
         }
-        Ok(())
     }
 
-    /// Step 3 of the delta: the passages whose document had its fields
-    /// rewritten inherit the new values, the way a rebuild would give them.
+    /// Step 3 of the delta: the passages whose document had its row rewritten
+    /// inherit the new values, the way a rebuild would give them.
+    ///
+    /// The passages of the document are read by `passages(doc_id)` and its
+    /// fields by the primary key of `documents`, both bounded (ADR-0066).
     fn refresh_updated_documents(
         &mut self,
         connection: &Connection,
-        stamp: i64,
+        rewritten: &[String],
     ) -> Result<(), CribleError> {
-        let mut statement = connection
-            .prepare(
-                "SELECT p.iid, d.fields
-                 FROM documents d JOIN passages p ON p.doc_id = d.doc_id
-                 WHERE d.updated_generation = ?1 ORDER BY p.iid",
-            )
-            .map_err(|error| database_error("prepare the updated documents query", &error))?;
-        let mut rows = statement
-            .query(params![stamp])
-            .map_err(|error| database_error("query the updated documents", &error))?;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| database_error("read a passage of an updated document", &error))?
-        {
-            let iid = Iid::new(from_sql_u32(
-                row.get(0)
-                    .map_err(|error| database_error("read an iid", &error))?,
-                "iid",
-            )?);
-            let document = parse_fields(
-                &row.get::<_, String>(1)
-                    .map_err(|error| database_error("read the document fields", &error))?,
-            )?;
-            self.refresh_document_fields(iid, &document)?;
+        for doc_id in rewritten {
+            let Some(document) = document_fields(connection, doc_id)? else {
+                continue;
+            };
+            for iid in passage_iids_of_document(connection, doc_id)? {
+                self.refresh_document_fields(iid, &document)?;
+            }
         }
         Ok(())
     }
@@ -1100,32 +1115,57 @@ impl FilterIndex {
     /// document-level value to the passages it still has
     /// (`docs/04-donnees-et-ingestion.md`, "Document retiré", ADR-0041).
     ///
-    /// The removal is recognised through the tombstone the same transaction
-    /// wrote on at least one passage of the document (see the hypothesis in the
-    /// module documentation): nothing else records it once the `documents` row
-    /// is gone.
+    /// The removed documents come from the delta, so no row has to record the
+    /// removal; their passages are read by `passages(doc_id)`, which is bounded
+    /// by the index of `docs/02-architecture.md`.
     fn clear_removed_documents(
         &mut self,
         connection: &Connection,
-        stamp: i64,
+        removed: &[String],
     ) -> Result<(), CribleError> {
-        let mut statement = connection
-            .prepare(
-                "SELECT p.iid FROM passages p
-                 WHERE p.doc_id IN (SELECT q.doc_id FROM passages q WHERE q.dead_since_gen = ?1)
-                   AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.doc_id = p.doc_id)",
-            )
-            .map_err(|error| database_error("prepare the removed documents query", &error))?;
-        let iids = statement
-            .query_map(params![stamp], |row| row.get::<_, i64>(0))
-            .map_err(|error| database_error("query the orphan passages", &error))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| database_error("read an orphan passage", &error))?;
-        for iid in iids {
-            self.clear_document_fields(Iid::new(from_sql_u32(iid, "iid")?))?;
+        for doc_id in removed {
+            for iid in passage_iids_of_document(connection, doc_id)? {
+                self.clear_document_fields(iid)?;
+            }
         }
         Ok(())
     }
+}
+
+/// Reads the fields of one document by its primary key, or `None` when the
+/// document has no row (ADR-0066).
+fn document_fields(connection: &Connection, doc_id: &str) -> Result<Option<Value>, CribleError> {
+    let raw = connection
+        .query_row(
+            "SELECT fields FROM documents WHERE doc_id = ?1",
+            params![doc_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| database_error("read the fields of a document", &error))?;
+    raw.map(|raw| parse_fields(&raw)).transpose()
+}
+
+/// Reads the iids of one document's passages, bounded by `passages(doc_id)`
+/// (ADR-0066).
+///
+/// The dead passages are included: a rebuild gives them their document-level
+/// values too, and the `live` bitmap alone hides them from a query.
+fn passage_iids_of_document(
+    connection: &Connection,
+    doc_id: &str,
+) -> Result<Vec<Iid>, CribleError> {
+    let mut statement = connection
+        .prepare("SELECT iid FROM passages WHERE doc_id = ?1 ORDER BY iid")
+        .map_err(|error| database_error("prepare the passages of a document query", &error))?;
+    let iids = statement
+        .query_map(params![doc_id], |row| row.get::<_, i64>(0))
+        .map_err(|error| database_error("query the passages of a document", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read an iid of a document", &error))?;
+    iids.into_iter()
+        .map(|iid| from_sql_u32(iid, "iid").map(Iid::new))
+        .collect()
 }
 
 /// Parses the canonical JSON of one row's fields.
@@ -1134,19 +1174,6 @@ fn parse_fields(raw: &str) -> Result<Value, CribleError> {
         CribleError::new(
             ErrorCode::Internal,
             format!("the reference state holds fields that are not valid JSON: {error}"),
-        )
-    })
-}
-
-/// A generation stamped in a SQLite column.
-fn sql_generation(generation: Generation) -> Result<i64, CribleError> {
-    i64::try_from(generation.get()).map_err(|_| {
-        CribleError::new(
-            ErrorCode::Internal,
-            format!(
-                "generation {} does not fit in a SQLite integer",
-                generation.get()
-            ),
         )
     })
 }

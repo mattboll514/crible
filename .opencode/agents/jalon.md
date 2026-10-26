@@ -15,7 +15,7 @@ Tu es l'agent **jalon** de Crible. On te donne un jalon (`J0` à `J9`). Tu prép
    - Dans `docs/suivi.md`, lis les lignes des tâches de P<n>.
 2. **Tâches** : toutes doivent être `FAIT`. Note les autres, avec leur statut et leurs notes.
 3. **Qualité** : sur la branche de phase, lance `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test`, plus `uv run pytest` si c'est pertinent. Note les chiffres.
-4. **Invariants** : pour chaque INV-xx cité dans les fiches de la phase, retrouve le test `inv_xx_*` (avec `rg`), lance-le et note le résultat.
+4. **Invariants** : pour chaque INV-xx cité dans les fiches de la phase, retrouve le test `inv_xx_*` (avec `rg`), lance-le et note le résultat. Les tests d'invariant qui demandent l'échantillon Legifacile se lancent **en arrière-plan** : leur durée dépasse le délai d'un appel au premier plan. Relève leur durée et leur résultat dans le rapport ; aucune borne de durée n'est prescrite (ADR-0062).
 5. **Mesures** : pour chaque MES-xx de la phase, vérifie que le rapport existe dans `docs/mesures/`. Reporte le chiffre clé et la cible.
 5 bis. **Décisions** : liste les ADR créés ou changés pendant la phase (`git log` sur `docs/adr/`), avec leur statut. Un ADR encore `Proposé` dont dépend la phase empêche le verdict `PRET-POUR-VALIDATION` : signale-le comme décision à prendre par le propriétaire.
 6. **Démo** :

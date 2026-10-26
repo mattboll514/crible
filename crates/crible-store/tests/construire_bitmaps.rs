@@ -23,6 +23,8 @@
 //! | `reopening_an_index_rebuilds_the_same_structures` | "la construction depuis SQLite, intégrée au `Snapshot`" |
 //! | `a_null_value_is_absent_from_the_present_bitmaps` | ADR-0035, the present bitmap |
 //! | `a_passage_inherits_the_fields_of_its_document` | "l'héritage des champs de document par les passages" |
+//! | `inv_03_after_mixed_attach_and_metadata_patch_equals_a_full_rebuild` | ADR-0066, critère 2: l'égalité à `from_records` après une attache qui mêle créations, mises à jour, suppressions et un patch de métadonnées (ADR-0060), et INV-03 |
+//! | `inv_02_commit_publishes_without_mutating_the_structures_a_reader_holds` | ADR-0066: l'ordre du commit ne change pas, donc un lecteur qui tient son instantané lit des structures intactes pendant et après le commit (INV-02) |
 //! | `an_empty_index_has_empty_structures` | creation |
 //!
 //! # API under test
@@ -42,13 +44,16 @@
 //!
 //! # Datasets
 //!
-//! The `synth-small` batches `l1`, `l2` and `l3` come from `tools/gen_synth.py`;
+//! `synth-small` batches `l1`, `l2` and `l3` come from `tools/gen_synth.py`;
 //! the CI generates them before `cargo test`. `l2` replaces 300 documents and
 //! creates 100, `l3` rewrites the metadata of 50 documents only and deletes 150:
 //! the three generations therefore exercise a creation, a replacement, a
 //! metadata-only update and a deletion, which is the whole delta of an attach.
-//! The schema of the dataset declares all five field types at both levels, so
-//! every structure is exercised.
+//! `inv_03_after_mixed_attach_and_metadata_patch_equals_a_full_rebuild` adds a
+//! metadata patch on top of that state, so the delta of a commit is checked
+//! against a full rebuild once more after ADR-0066 made it the only description
+//! of the change. The schema of the dataset declares all five field types at
+//! both levels, so every structure is exercised.
 //!
 //! # Serialisation
 //!
@@ -72,9 +77,10 @@ use crible_core::model::ModelConfig;
 use crible_store::attach::attach;
 use crible_store::filters_index::FilterIndex;
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
+use crible_store::patch::{DocumentPatch, PatchSource};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use rusqlite::{Connection, OpenFlags};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// Command that generates the reference dataset, quoted by the failure message
 /// of a missing batch.
@@ -410,6 +416,214 @@ fn copy_on_write_after_each_generation_equals_a_full_rebuild() {
              once the following generations are committed"
         );
     }
+}
+
+// --- Test 3b: the invariant of the acceptance criteria of ADR-0066 ---
+
+/// External identifier of a document that still has a live passage.
+///
+/// Picking it from `records.sqlite` rather than from a constant keeps the test
+/// independent of the exact composition of `synth-small`: the patch must target
+/// a document the index really holds after `l3`.
+fn live_document_id(index: &Path) -> String {
+    let connection = open_records(index);
+    connection
+        .query_row(
+            "SELECT d.doc_id FROM documents d
+             WHERE EXISTS (SELECT 1 FROM passages p
+                           WHERE p.doc_id = d.doc_id AND p.dead_since_gen IS NULL)
+             ORDER BY d.doc_id LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_else(|error| {
+            panic!("the reference database must hold a live document to patch: {error}")
+        })
+}
+
+/// The structures `after_commit` derives stay equal to a full rebuild when one
+/// state carries every kind of delta an attach can produce, then a metadata
+/// patch: creations, replacements and metadata-only updates (`l2`, `l3`),
+/// removals and tombstones (`l3`), and finally a patch of document fields
+/// (ADR-0060).
+///
+/// This is the guard ADR-0066 names for its own change: once `after_commit`
+/// consumes the delta the transaction wrote instead of re-reading it by
+/// generation stamp, a document the caller forgets in that delta makes the
+/// structures wrong **in silence**. Only this equality catches it.
+///
+/// INV-03: the structures published after the patch are the whole state of the
+/// committed generation; the snapshot a reader holds keeps its own.
+///
+/// INV-02: a reader that took its snapshot before the patch still reads the
+/// structures it took, untouched, including the bitmaps the new generation
+/// shares with it.
+#[test]
+fn inv_03_after_mixed_attach_and_metadata_patch_equals_a_full_rebuild() {
+    let _serial = common::SerialGuard::acquire();
+    let index = dataset_index();
+    let model = dataset_model();
+    let (_temp, index_dir) = common::temp_index();
+    let mut store = common::create_store_with(&index_dir, &index.schema);
+
+    // `l2` creates 100 documents and replaces 300; `l3` rewrites the metadata of
+    // 50 documents and deletes 150.
+    for name in ["l1", "l2", "l3"] {
+        attach_synth(&mut store, name, &index, &model);
+    }
+    assert_eq!(
+        store.snapshot().filters(),
+        &rebuild(&index_dir, &index.schema),
+        "the structures published after the mixed attach (creations, replacements, \
+         metadata-only updates, removals) must equal a full rebuild from SQLite"
+    );
+
+    let held = store.snapshot();
+    let held_structures = held.filters().clone();
+    let live_before: Vec<u32> = held.live_iids().map(|iid| iid.get()).collect();
+    let generation_before = held.generation();
+
+    let doc_id = live_document_id(&index_dir);
+    let patches = vec![DocumentPatch {
+        doc_id: doc_id.clone(),
+        fields: Map::from_iter([
+            ("categorie".to_owned(), json!("categorie-patchee")),
+            ("annee".to_owned(), json!(1999)),
+        ]),
+    }];
+    let report = crible_store::patch::apply(&mut store, &index.schema, PatchSource::File, &patches)
+        .unwrap_or_else(|error| panic!("the metadata patch of {doc_id} must succeed: {error}"));
+    assert_eq!(report.updated, 1, "exactly one document must change");
+    assert_eq!(
+        report.generation,
+        Generation::new(generation_before.get() + 1),
+        "a patch that changes a document commits the next generation (ADR-0060)"
+    );
+
+    let after = store.snapshot();
+    assert_eq!(
+        after.generation(),
+        report.generation,
+        "the published snapshot must be the generation the patch committed"
+    );
+    assert_eq!(
+        after.filters(),
+        &rebuild(&index_dir, &index.schema),
+        "the structures published after a metadata patch must equal a full rebuild from SQLite: \
+         a document missing from the delta of the transaction would leave the passages of {doc_id} \
+         with their old inherited values"
+    );
+
+    // A patch rewrites inherited values only: liveness and iid allocation do not
+    // move, so the bitmap of the live passages must be the one before the patch.
+    let live_after: Vec<u32> = after.live_iids().map(|iid| iid.get()).collect();
+    assert_eq!(
+        live_after, live_before,
+        "a metadata patch must not change which passages are alive"
+    );
+
+    // INV-02 / INV-03: the generation the reader holds is still whole.
+    assert_eq!(
+        held.generation(),
+        generation_before,
+        "the held snapshot must keep the generation it was taken on"
+    );
+    assert_eq!(
+        held.filters(),
+        &held_structures,
+        "a commit must not mutate the structures of the snapshot a reader holds"
+    );
+}
+
+// --- Test 3c: INV-02 on the commit path ---
+
+/// A reader that took its snapshot before a commit reads it after the commit:
+/// the new generation is published whole, and the structures the reader holds
+/// are unchanged.
+///
+/// The two threads rendezvous on channels, never on a clock: the reader signals
+/// that it holds the snapshot and waits, the main thread commits, then releases
+/// the reader, which reads the snapshot it kept once the commit is over.
+#[test]
+fn inv_02_commit_publishes_without_mutating_the_structures_a_reader_holds() {
+    use std::sync::mpsc;
+
+    let _serial = common::SerialGuard::acquire();
+    let (_temp, index_dir) = common::temp_index();
+    let schema = rich_schema();
+    let mut store = common::create_store_with(&index_dir, &schema);
+
+    common::commit(
+        &mut store,
+        GenerationChange {
+            segments: Vec::new(),
+            documents: vec![document("doc-a", "alpha", 1)],
+            passages: vec![
+                passage(0, "doc-a", "corps", 1, false),
+                passage(1, "doc-a", "annexe", 1, false),
+            ],
+            deletions: Vec::new(),
+        },
+    );
+
+    let held = store.snapshot();
+    let for_reader = Arc::clone(&held);
+    let (ready_tx, ready_rx) = mpsc::channel::<()>();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let reader = std::thread::spawn(move || {
+        ready_tx.send(()).unwrap_or_else(|error| {
+            panic!("the reader must signal that it holds the snapshot: {error}")
+        });
+        go_rx.recv().unwrap_or_else(|error| {
+            panic!("the reader must be released once the commit is over: {error}")
+        });
+        assert_eq!(
+            for_reader.generation(),
+            Generation::new(1),
+            "the held snapshot must still name the generation it was taken on"
+        );
+        let categorie = for_reader
+            .filters()
+            .keyword("categorie")
+            .unwrap_or_else(|| panic!("categorie is a keyword field of the schema"));
+        let alpha = categorie
+            .bitmap("alpha")
+            .unwrap_or_else(|| panic!("doc-a carries categorie alpha"));
+        assert!(
+            alpha.contains(0) && alpha.contains(1),
+            "the held structures must still carry the values of generation 1"
+        );
+        assert!(
+            !alpha.contains(2),
+            "the held structures must not see the passage the commit created"
+        );
+    });
+
+    ready_rx
+        .recv()
+        .unwrap_or_else(|error| panic!("the main thread waits for the reader: {error}"));
+    common::commit(
+        &mut store,
+        GenerationChange {
+            segments: Vec::new(),
+            documents: vec![document("doc-a", "beta", 2), document("doc-b", "beta", 2)],
+            passages: vec![passage(2, "doc-b", "corps", 2, false)],
+            deletions: vec![Iid::new(0)],
+        },
+    );
+    go_tx
+        .send(())
+        .unwrap_or_else(|error| panic!("the main thread releases the reader: {error}"));
+    if let Err(payload) = reader.join() {
+        std::panic::resume_unwind(payload);
+    }
+
+    assert_eq!(
+        store.snapshot().filters(),
+        &rebuild(&index_dir, &schema),
+        "the generation the commit published must be whole: its structures must equal a rebuild"
+    );
+    common::assert_view(&held, 1, &[], &[0, 1]);
 }
 
 // --- Test 4: startup ---

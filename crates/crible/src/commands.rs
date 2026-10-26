@@ -37,7 +37,6 @@ use crible_core::batch::BatchMode;
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
-use crible_core::ids::Epoch;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
@@ -48,22 +47,14 @@ use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
 use crible_store::generation::{
-    CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, IndexState,
-    write_index_config,
+    CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, INDEXES_DIRECTORY,
+    INITIAL_EPOCH, IndexState, write_index_config,
 };
 use crible_store::online;
+use crible_store::patch::{self, PatchSource};
 use serde_json::{Value, json};
 
 use crate::vector;
-
-/// Epoch of a freshly created index.
-///
-/// The epoch changes at each compaction; the first epoch of an index is 1, the
-/// value the J1 demo and the bench use. No on-disk format depends on this
-/// value: `CURRENT_EPOCH`, `meta.epoch` and the manifests carry whatever epoch
-/// the store commits, so this is a convention of the CLI, not a format
-/// constant.
-const INITIAL_EPOCH: u32 = 1;
 
 /// Highest `k` accepted by a search (`docs/05-api.md`, "Recherche : requête").
 const MAX_K: usize = 1_000;
@@ -107,7 +98,7 @@ pub fn create_index(data: &Path, config_path: &Path) -> Result<(), CribleError> 
     // schema it builds the filter structures from.
     write_index_config(&index_dir, &raw)?;
 
-    let store = GenerationStore::create(&index_dir, Epoch::new(INITIAL_EPOCH), &config.schema)?;
+    let store = GenerationStore::create(&index_dir, INITIAL_EPOCH, &config.schema)?;
     println!(
         "index '{}' created at {} (epoch {}, generation {})",
         name,
@@ -206,6 +197,174 @@ pub fn ingest_documents(
         },
     )?;
     print_report(name, &report);
+    Ok(())
+}
+
+/// `crible patch --data <dir> --index <i> <fichier>.jsonl`.
+///
+/// Reads a JSONL patch and applies it, as ADR-0060 defines it: the fields of
+/// each named document are merged, `doc_hash` does not change, one generation
+/// G+1 is committed when at least one document changes, and no generation is
+/// created otherwise. No model is loaded and no passage is encoded, so the
+/// command takes no `--models`.
+///
+/// The file is parsed before the writer opens: a file above the bounds of
+/// ADR-0060, or one that is not a list of `{doc_id, fields}`, is refused without
+/// touching the index. The JSONL file is a positional argument, as the batch
+/// directory of `crible attach` is; `--data` keeps its meaning of data root.
+pub fn patch_documents(data: &Path, index: &str, file: &Path) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let patches = patch::read_file(file)?;
+    // Write opening: same recovery and same cleanup of the stale online batches
+    // as `attach` and `ingest`.
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let report = patch::apply(&mut store, &config.schema, PatchSource::File, &patches)?;
+    println!(
+        "{}",
+        compact(&json!({
+            "updated": report.updated,
+            "unchanged": report.unchanged,
+            "generation": report.generation.get(),
+        }))?
+    );
+    Ok(())
+}
+
+/// `crible compact --data <dir> --index <i>`.
+///
+/// Compacts an index into the next epoch without its dead passages
+/// (`docs/02-architecture.md`, "Suppressions, pierres tombales et compaction";
+/// ADR-0006, ADR-0017). The command ignores the `dead_ratio` of the
+/// configuration that triggers an automatic compaction: the operator asks for
+/// it, so an index that holds no dead passage is rewritten and renumbered too.
+///
+/// The report gives the state before the compaction, so a log keeps the dead
+/// ratio that justified it, then what the compaction moved.
+pub fn compact_index(data: &Path, index: &str) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    // Write opening: same recovery and same cleanup of the stale online batches
+    // as the other write commands; the compaction suspends the writer, which is
+    // this exclusive `&mut`, and the readers keep their snapshots (ADR-0017).
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let before = store.state()?;
+    println!(
+        "index '{}': epoch {}, generation {}, {} live and {} dead passages (dead ratio {:.4})",
+        name,
+        before.epoch.get(),
+        before.generation.get(),
+        before.live_passages,
+        before.dead_passages,
+        before.dead_ratio(),
+    );
+    let report = crible_store::compact::compact(&mut store, &config)?;
+    println!(
+        "index '{}' compacted: epoch {} -> {}, generation {}, {} live passages, \
+         {} removed",
+        name,
+        report.from_epoch.get(),
+        report.to_epoch.get(),
+        report.generation.get(),
+        report.live_passages,
+        report.removed_passages,
+    );
+    Ok(())
+}
+
+/// `crible export --data <dir> --models <dir> --exchange <dir> --index <i>`.
+///
+/// Writes a `replace_all` batch of the live data of the published generation
+/// into `<exchange>/outbox/<index>-g<G>/` (`docs/04`, "Export, instantanés,
+/// restauration"). The export reads the published snapshot through its own
+/// read-only connection, so it never suspends the writer. The model
+/// configuration is read because the manifest of the batch declares it, with
+/// `dims` and `normalize`, which the index configuration does not carry.
+pub fn export_index(
+    data: &Path,
+    models: &Path,
+    exchange: &Path,
+    index: &str,
+) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let model = load_model(models, &config.model)?;
+    // Read opening, like `search` and `inspect`: no cleanup of `<data>/tmp`,
+    // and the store's recovery only repairs what a crash left behind.
+    let store = GenerationStore::open(&index_dir, &config.schema)?;
+    let report = crible_store::export::export(&store, &config, &model, exchange)?;
+    println!(
+        "index '{}' exported to {}: generation {}, {} document(s), {} passage(s)",
+        name,
+        report.directory.display(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+    );
+    Ok(())
+}
+
+/// `crible snapshot --data <dir> --exchange <dir> --index <i>`.
+///
+/// Takes a coherent copy of the current epoch into
+/// `<exchange>/snapshots/<index>-e<E>-g<G>/` (`docs/04`, "Règles de
+/// l'instantané"; ADR-0064, ADR-0065). The command is **offline**: the operator
+/// stops the server first, because a process cannot suspend the writer of
+/// another. Inside this process, the write opening holds the single writer, so
+/// no commit can run while the copy is taken.
+///
+/// The command encodes nothing and takes no `--models`: neither the copy nor the
+/// restore loads the model (ADR-0065, decision 6).
+pub fn snapshot_index(data: &Path, exchange: &Path, index: &str) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let report = crible_store::snapshot::create(&mut store, &config, exchange)?;
+    println!(
+        "index '{}' snapshot to {}: epoch {}, generation {}, {} document(s), {} passage(s), \
+         {} bytes",
+        report.index,
+        report.directory.display(),
+        report.epoch.get(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+        report.bytes,
+    );
+    Ok(())
+}
+
+/// `crible restore --data <dir> --snapshot <dir>`.
+///
+/// Installs a snapshot as the epoch `E+1` of the index it names, the generation
+/// left at the snapshot's G, then switches `CURRENT_EPOCH` (`docs/04`, "Règles
+/// de la restauration"; ADR-0065). The command is offline, encodes nothing and
+/// takes no `--models`. The replaced epoch is **kept** on disk and named in the
+/// report: it may hold passages no valid copy carries (INV-14), so only the
+/// operator removes it.
+pub fn restore_index(data: &Path, snapshot: &Path) -> Result<(), CribleError> {
+    // The stale online batches of `<data>/tmp` are removed inside the restore,
+    // once the snapshot and the target have been checked (ADR-0056, ADR-0065).
+    let report = crible_store::snapshot::restore(data, snapshot)?;
+    let replaced = match (report.replaced_epoch, report.replaced_generation) {
+        (Some(epoch), Some(generation)) => format!(
+            "replaced epoch {} (generation {})",
+            epoch.get(),
+            generation.get()
+        ),
+        _ => "no epoch replaced".to_owned(),
+    };
+    println!(
+        "index '{}' restored from {}: {}, new epoch {}, generation {}, {} document(s), \
+         {} passage(s)",
+        report.index,
+        snapshot.display(),
+        replaced,
+        report.epoch.get(),
+        report.generation.get(),
+        report.documents,
+        report.passages,
+    );
     Ok(())
 }
 
@@ -536,7 +695,7 @@ fn print_state(name: &str, state: &IndexState) {
 
 /// Directory holding every index of an instance.
 fn indexes_directory(data: &Path) -> PathBuf {
-    data.join("indexes")
+    data.join(INDEXES_DIRECTORY)
 }
 
 /// Directory of one index.
@@ -561,6 +720,11 @@ fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleE
         )
     })?;
     let config = IndexConfig::from_json_str(&raw)?;
+    // The export writes under `<exchange>/outbox/<index name>-g<G>/`, so the
+    // name an index directory holds must be one path component, exactly as the
+    // name the caller asks for (`export.rs` therefore keeps no copy of this
+    // check).
+    path_component(&config.name, "index name")?;
     if config.name != name {
         return Err(invalid_request(format!(
             "index directory '{}' holds a configuration for index '{}'",

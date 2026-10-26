@@ -74,7 +74,7 @@ data/                                   # volume Docker nommé (mmap rapide)
       manifests/<generation>.json       # vue dérivée d'une génération
       cache/                            # bitmaps sérialisées, estampillées par génération (dérivé)
 models/<model_name>/                    # volume : model.json, model.onnx, model.int8.onnx, tokenizer.json
-exchange/                               # dossier monté : inbox/ (lots), outbox/ (exports), snapshots/
+exchange/                               # dossier monté : inbox/ (lots), outbox/ (exports), snapshots/ (instantanés, ADR-0064)
 ```
 
 Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`.
@@ -83,6 +83,10 @@ Deux fichiers méritent une description de format propre :
 
 - **`CURRENT_EPOCH`** : un nombre décimal ASCII suivi d'un saut de ligne, sans version propre. La version des formats est portée par `meta.format_version` de `records.sqlite` et par les `format_version` des fichiers de l'époque. Le fichier est écrit dans `tmp-CURRENT_EPOCH`, puis fsync, renommage et fsync du dossier de l'index ; `meta.epoch` en garde une copie, vérifiée à l'ouverture : un désaccord est une erreur interne. `create` fsynce les dossiers de l'époque de bas en haut (`segments/`, puis le dossier de l'époque, puis `epochs/`) avant d'écrire `CURRENT_EPOCH`.
 - **`manifests/<generation>.json`** : un JSON canonique — clés triées, compact (ADR-0027) ; versionné (INV-15) — dérivé de SQLite, jamais source de vérité (ADR-0016). Il porte `epoch`, `format_version` (1), `generation` et `segments`, la liste des segments de la génération, triée par `iid_start` puis par `segment_id`. Chaque segment y reprend les champs de son `segment.json` (`iid_start`, `count`, `dims`, `format_version`, `generation`, `batch_id`, `checksums`) et son `segment_id`, tiré du nom du dossier. Il est écrit de façon atomique — fichier `tmp-`, fsync, renommage, fsync du dossier — et la reprise le reconstruit depuis SQLite et les `segment.json` s'il manque.
+
+Hors du volume de données, l'instantané ajoute un troisième fichier de format propre :
+
+- **`exchange/snapshots/<index>-e<E>-g<G>/snapshot.json`** (ADR-0064) : un JSON canonique, **versionné** (`format_version` 1, INV-15) et **sans horodatage**, écrit après la copie de l'instantané — fichier temporaire, fsync, renommage, fsync du dossier. Il porte le nom de l'index, l'époque source E, la génération G et, pour chaque fichier copié sauf lui-même, son chemin relatif, sa taille et son blake3 (`blake3:<hex>`), triés par chemin. Il **atteste une copie de fichiers** : il ne décrit pas une génération, ne remplace ni `manifests/<G>.json` ni `meta.generation`, et la restauration ne s'en sert pas comme source de vérité. Sa présence à la racine du dossier est le signal que la copie est allée au bout.
 
 ## Tables SQLite (`records.sqlite`, une base par époque)
 
@@ -98,6 +102,7 @@ Index SQLite : `passages(doc_id)`, `passages(dead_since_gen)`.
 
 - `batches.manifest_blake3` est le digest blake3 des octets de `manifest.json` tels que lus, sous la forme `blake3:<hex>`, `<hex>` en hexadécimal minuscule (ADR-0041). Il identifie le contenu du manifeste pour comparer deux tentatives du même `batch_id` ; ce n'est pas un contrôle d'intégrité.
 - Une ligne `documents` n'existe que pour un document vivant. Sa suppression appartient à la transaction du commit de génération, que le document soit nommé dans `deletions` ou absent d'un lot `replace_all` (ADR-0041). Un document ré-ajouté ensuite est un document neuf.
+- `documents.updated_generation` est la génération de la **dernière écriture de la ligne `documents`** : création par une attache, mise à jour de champs par une attache ou par un patch (ADR-0060). Elle sert à sélectionner les documents dont les champs ont changé, pour que leurs passages héritent des nouvelles valeurs lors de la construction des bitmaps. Le `doc_hash` d'un document patché ne change pas : les champs de document sont hors du hash (ADR-0055, `docs/04`).
 
 En v1, les champs sont stockés en JSON canonique (ADR-0019). Les bitmaps et les colonnes de valeurs en sont dérivées.
 
@@ -116,11 +121,20 @@ Attacher un lot (un seul écrivain par index) :
 
 Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3, 4 (suppressions), 5 et 6.
 
+**Patch de métadonnées (ADR-0060).** Une mise à jour de champs de document sans ré-encodage ne touche ni le texte, ni les vecteurs, ni les iid, ni le `doc_hash` :
+
+- l'étape 3 écrit la ligne `documents` de chaque document patché — `fields` et `updated_generation = G+1` — et `meta.generation = G+1`. Elle n'écrit ni `segments`, ni `batches`, ni `passages` ;
+- l'étape 4 n'a pas lieu : le texte ne change pas, donc tantivy n'est pas touché ;
+- l'étape 5 écrit `manifests/<G+1>.json`, qui reprend **les mêmes segments que G** : un patch ne crée aucun segment ;
+- l'étape 6 reconstruit les bitmaps et les colonnes de valeurs en copie sur écriture, puis publie l'instantané, comme pour toute génération (INV-02, INV-03).
+
+Une génération n'est créée que si au moins un document change réellement : un patch dont tous les documents sont inchangés laisse la génération à G, n'écrit aucun manifeste et ne publie aucun instantané.
+
 **Reprise au démarrage**, pour chaque index :
 
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
-- Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`.
+- Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`. La reprise ne touche pas au dossier `epochs/` : un dossier de transit `epochs/tmp-*`, laissé par une compaction ou une restauration interrompue, y reste, inerte, et se supprime à la main ou par l'opération suivante qui vise ce numéro d'époque (ADR-0065).
 - Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Un lot n'est résiduel que si son verrou de présence, `<data>/tmp/online-<batch_id>.lock`, peut être pris : le nettoyage ouvre ce fichier en lecture-écriture avec création, tente un verrou exclusif avec `try_lock`, et ne supprime le dossier puis le verrou qu'en cas de succès. Si le verrou est déjà tenu, un écrivain tient le lot et il est laissé en place. Toute autre erreur de verrou (système de fichiers sans verrou, montage réseau) ne supprime rien et est journalisée : la règle est asymétrique à dessein, car un résidu qui s'accumule est un coût alors qu'une suppression de lot vivant est une panne (ADR-0056). Ce nettoyage n'efface rien de plus large que `<data>/tmp/` et ne s'exécute qu'à l'ouverture en écriture.
 - Comparer la charge utile du dernier commit tantivy (Gt) à G :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
@@ -170,6 +184,19 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
   6. Publier l'instantané, relancer l'écrivain, puis supprimer l'époque E quand plus aucun lecteur ne la tient.
 - La compaction ne demande aucun GPU, mais il faut temporairement deux fois l'espace disque.
 - Pour Legifacile, avec ~1 % de passages morts par mois, elle sert surtout après les campagnes de ré-encodage.
+
+## Restauration d'un instantané (ADR-0065)
+
+`crible restore` est **hors ligne**, comme `crible snapshot` : l'opérateur arrête le serveur, et aucun verrou inter-processus n'est ajouté (même règle d'exploitation que `crible patch`, ADR-0038). La commande n'encode rien, ne charge pas le modèle et ne fait aucune recette.
+
+1. **Contrôler l'instantané** : `snapshot.json` présent, `format_version` connu, chaque fichier listé présent avec sa taille et son blake3, aucun fichier non listé (ADR-0064). Un écart est refusé en `invalid_request`, avant toute écriture.
+2. **Contrôler la cible** : le nom de l'index vient de `snapshot.json`. Un index absent est créé depuis l'`index.json` de l'instantané, avec l'époque initiale d'une création et la génération G. Un index existant doit porter un `index.json` **identique** ; sinon le refus nomme le réglage divergent. Une cible à une génération supérieure à G est acceptée : c'est le retour arrière voulu.
+3. **Écrire l'époque E+1** : la copie va dans `epochs/tmp-<E+1>/`, puis fsync et renommage vers `epochs/<E+1>/`, comme pour la compaction. Un dossier de transit ou une époque E+1 déjà présents sont supprimés avant l'écriture. `meta.epoch` de la base copiée et `manifests/<G>.json` reçoivent le numéro E+1.
+4. **Basculer** : `CURRENT_EPOCH ← E+1` en dernier, tmp puis renommage. Une panne avant cette écriture laisse l'index cible intact (INV-03, INV-04).
+
+La **génération reste G** : une restauration ne l'incrémente pas, c'est ce qui satisfait « une restauration redonne la génération ». L'époque est copiée en entier, donc les iid sont conservés et restent denses : aucun renumérotage, et les résultats sont identiques sans reconstruction. Les `segment.json` ne sont pas réécrits — leur `generation` et leur `batch_id` disent la provenance du segment, comme pour une compaction. Seuls `meta.epoch`, le manifeste de G et `CURRENT_EPOCH` changent. Le couple (époque, génération) n'est donc pas monotone dans ses deux composantes.
+
+**L'époque remplacée n'est pas supprimée** : elle reste sur disque, le rapport la nomme, et elle se supprime à la main. Dès qu'une écriture a suivi la prise de l'instantané, elle contient des passages qu'aucune copie valide ne porte ; `reclaim_epochs` la détruirait, ce qui violerait INV-14 (ADR-0065).
 
 ## Mémoire : ce qui est en RAM
 

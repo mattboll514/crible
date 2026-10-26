@@ -1,6 +1,6 @@
 # ADR-0057 — ONNX Runtime et vrai modèle mDenseOn en intégration continue
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-24)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-24) — complété par ADR-0059 (politique de reprise du téléchargement et cache de `main` tenu chaud), sans modification du corps
 - **Date** : 2026-10-24 (proposition, révision et acceptation)
 - **Décideurs** : propriétaire
 - **Décision** : accepté le 2026-10-24 par le propriétaire, tel que révisé le même jour : l'artefact de modèle est hébergé dans un dépôt de modèle Hugging Face dédié au compte du propriétaire, `mattboll/mdenseon-onnx`, public.

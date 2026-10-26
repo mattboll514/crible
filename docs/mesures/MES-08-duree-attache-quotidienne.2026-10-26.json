@@ -1,0 +1,374 @@
+{
+  "campaign": {
+    "measure": "MES-08",
+    "commit": "4d9c7c0",
+    "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+    "date": "2026-10-26",
+    "repeats": 5
+  },
+  "indexes": [
+    {
+      "batches": [
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/synth-large/daily-synth-1000",
+          "batch_id": "daily-synth-1000",
+          "compress_new_ms": 12.100458,
+          "compress_old_ms": 47.004708,
+          "documents": 905,
+          "manifest_ms": {
+            "max": 9,
+            "min": 7,
+            "p50": 8,
+            "p95": 9,
+            "p99": 9,
+            "values": [
+              8,
+              9,
+              8,
+              7,
+              8
+            ]
+          },
+          "passages": 1000,
+          "points": [
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 8.095,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 17.840000000000003,
+              "snapshot_ms": 9.894,
+              "total_ms": 62.29775,
+              "transaction_ms": 18.087,
+              "unchanged": 0,
+              "validation_ms": 8.064
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 9.241,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 23.343,
+              "snapshot_ms": 10.095,
+              "total_ms": 69.191583,
+              "transaction_ms": 18.818,
+              "unchanged": 0,
+              "validation_ms": 7.2589999999999995
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 7.832000000000001,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 18.435,
+              "snapshot_ms": 10.005,
+              "total_ms": 62.986625000000004,
+              "transaction_ms": 19.182000000000002,
+              "unchanged": 0,
+              "validation_ms": 7.19
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 6.913,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 28.633,
+              "snapshot_ms": 9.683,
+              "total_ms": 72.251041,
+              "transaction_ms": 18.787000000000003,
+              "unchanged": 0,
+              "validation_ms": 7.917999999999999
+            },
+            {
+              "added": 905,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7741000,
+              "live_before": 7740000,
+              "manifest_ms": 7.832999999999999,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 19.015,
+              "snapshot_ms": 9.923,
+              "total_ms": 63.167,
+              "transaction_ms": 18.225,
+              "unchanged": 0,
+              "validation_ms": 7.8069999999999995
+            }
+          ],
+          "segment_ms": {
+            "max": 29,
+            "min": 18,
+            "p50": 19,
+            "p95": 29,
+            "p99": 29,
+            "values": [
+              18,
+              23,
+              18,
+              29,
+              19
+            ]
+          },
+          "snapshot_ms": {
+            "max": 10,
+            "min": 10,
+            "p50": 10,
+            "p95": 10,
+            "p99": 10,
+            "values": [
+              10,
+              10,
+              10,
+              10,
+              10
+            ]
+          },
+          "text_bytes_mean": 1132.33,
+          "total_ms": {
+            "max": 72,
+            "min": 62,
+            "p50": 63,
+            "p95": 72,
+            "p99": 72,
+            "values": [
+              62,
+              69,
+              63,
+              72,
+              63
+            ]
+          },
+          "transaction_ms": {
+            "max": 19,
+            "min": 18,
+            "p50": 19,
+            "p95": 19,
+            "p99": 19,
+            "values": [
+              18,
+              19,
+              19,
+              19,
+              18
+            ]
+          },
+          "validation_ms": {
+            "max": 8,
+            "min": 7,
+            "p50": 8,
+            "p95": 8,
+            "p99": 8,
+            "values": [
+              8,
+              7,
+              7,
+              8,
+              8
+            ]
+          }
+        },
+        {
+          "batch": "/Users/mattboll/MattCorp/crible/data/mes08/batches/synth-large/daily-synth-3000",
+          "batch_id": "daily-synth-3000",
+          "compress_new_ms": 19.768875,
+          "compress_old_ms": 118.060375,
+          "documents": 2517,
+          "manifest_ms": {
+            "max": 8,
+            "min": 6,
+            "p50": 7,
+            "p95": 8,
+            "p99": 8,
+            "values": [
+              8,
+              8,
+              7,
+              6,
+              7
+            ]
+          },
+          "passages": 3002,
+          "points": [
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 7.589,
+              "repetition": 0,
+              "replaced": 0,
+              "segment_ms": 33.538,
+              "snapshot_ms": 28.882,
+              "total_ms": 146.542584,
+              "transaction_ms": 54.516000000000005,
+              "unchanged": 0,
+              "validation_ms": 20.988
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 8.112,
+              "repetition": 1,
+              "replaced": 0,
+              "segment_ms": 33.111000000000004,
+              "snapshot_ms": 29.35,
+              "total_ms": 145.098167,
+              "transaction_ms": 54.568,
+              "unchanged": 0,
+              "validation_ms": 18.973
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 7.064,
+              "repetition": 2,
+              "replaced": 0,
+              "segment_ms": 27.733,
+              "snapshot_ms": 28.959,
+              "total_ms": 142.44970800000002,
+              "transaction_ms": 56.964,
+              "unchanged": 0,
+              "validation_ms": 19.955000000000002
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 6.011,
+              "repetition": 3,
+              "replaced": 0,
+              "segment_ms": 31.656999999999996,
+              "snapshot_ms": 28.52,
+              "total_ms": 141.132167,
+              "transaction_ms": 53.854,
+              "unchanged": 0,
+              "validation_ms": 19.182000000000002
+            },
+            {
+              "added": 2517,
+              "deleted": 0,
+              "generation": 3,
+              "live_after": 7743002,
+              "live_before": 7740000,
+              "manifest_ms": 7.2459999999999996,
+              "repetition": 4,
+              "replaced": 0,
+              "segment_ms": 31.206999999999997,
+              "snapshot_ms": 29.002,
+              "total_ms": 142.915334,
+              "transaction_ms": 54.775,
+              "unchanged": 0,
+              "validation_ms": 18.967000000000002
+            }
+          ],
+          "segment_ms": {
+            "max": 34,
+            "min": 28,
+            "p50": 32,
+            "p95": 34,
+            "p99": 34,
+            "values": [
+              34,
+              33,
+              28,
+              32,
+              31
+            ]
+          },
+          "snapshot_ms": {
+            "max": 29,
+            "min": 29,
+            "p50": 29,
+            "p95": 29,
+            "p99": 29,
+            "values": [
+              29,
+              29,
+              29,
+              29,
+              29
+            ]
+          },
+          "text_bytes_mean": 1220.7081945369753,
+          "total_ms": {
+            "max": 147,
+            "min": 141,
+            "p50": 143,
+            "p95": 147,
+            "p99": 147,
+            "values": [
+              147,
+              145,
+              142,
+              141,
+              143
+            ]
+          },
+          "transaction_ms": {
+            "max": 57,
+            "min": 54,
+            "p50": 55,
+            "p95": 57,
+            "p99": 57,
+            "values": [
+              55,
+              55,
+              57,
+              54,
+              55
+            ]
+          },
+          "validation_ms": {
+            "max": 21,
+            "min": 19,
+            "p50": 19,
+            "p95": 21,
+            "p99": 21,
+            "values": [
+              21,
+              19,
+              20,
+              19,
+              19
+            ]
+          }
+        }
+      ],
+      "commit": "4d9c7c0",
+      "date": "2026-10-26",
+      "index": "/Users/mattboll/MattCorp/crible/data/synth-large/indexes/synth-large",
+      "machine": "Apple M3 / 24 GB / macOS 15.7.7",
+      "measure": "MES-08",
+      "model": "synthetic-external",
+      "model_kind": "External",
+      "repeats": 5,
+      "process_max_rss_bytes": 593559552
+    }
+  ]
+}

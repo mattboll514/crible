@@ -19,6 +19,7 @@
 //! |---|---|
 //! | `attaching_l1_then_l2_then_l3_gives_the_expected_counts` | "L1, L2 puis L3 donnent les comptes attendus", plus the three rules of the semantic table the batches exercise |
 //! | `inv_10_replaying_an_applied_batch_changes_nothing` | INV-10, first bullet of "Idempotence" |
+//! | `inv_10_a_compaction_keeps_the_batches_history_so_a_replay_changes_nothing` | INV-10 and the `batches` history of a compacted epoch |
 //! | `inv_10_same_batch_id_with_another_manifest_is_a_batch_conflict` | INV-10, `409 batch_conflict` |
 //! | `inv_03_failed_attach_leaves_the_records_database_untouched` | INV-03, atomicity of an attach |
 //! | `no_sqlite_write_follows_the_commit_point` | ADR-0016 and ADR-0042: the report is final at the commit point |
@@ -104,14 +105,13 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Array, ArrayRef, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
+use arrow::array::{Array, FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::Generation;
@@ -120,8 +120,6 @@ use crible_store::attach::{AttachReport, attach};
 use crible_store::batch_reader::BatchReader;
 use crible_store::generation::GenerationStore;
 use half::f16;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
@@ -472,7 +470,6 @@ fn document_fields(records: &Path, doc_id: &str) -> Option<String> {
 }
 
 /// The `batches.report` JSON of one applied batch.
-#[cfg(feature = "failpoints")]
 fn stored_report(records: &Path, batch_id: &str) -> String {
     let connection = open_records(records);
     connection
@@ -587,22 +584,6 @@ fn unit_vector() -> Vec<u8> {
         .collect()
 }
 
-fn write_parquet(path: &Path, schema: &SchemaRef, columns: Vec<ArrayRef>) {
-    let batch = RecordBatch::try_new(schema.clone(), columns)
-        .unwrap_or_else(|error| panic!("the fixture batch is valid: {error}"));
-    let file =
-        File::create(path).unwrap_or_else(|error| panic!("the fixture Parquet file: {error}"));
-    let properties = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))
-        .unwrap_or_else(|error| panic!("the fixture Parquet writer opens: {error}"));
-    writer
-        .write(&batch)
-        .unwrap_or_else(|error| panic!("the fixture batch is written: {error}"));
-    writer
-        .close()
-        .unwrap_or_else(|error| panic!("the fixture Parquet file closes: {error}"));
-}
-
 /// Rows of one mini batch.
 struct MiniBatch<'a> {
     /// Directory name, and `batch_id` of the manifest.
@@ -635,7 +616,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
         .map(|(_, doc_hash)| Some(*doc_hash))
         .collect();
     let years = Int64Array::from(vec![None::<i64>; spec.documents.len()]);
-    write_parquet(
+    common::write_parquet(
         &dir.join("documents.parquet"),
         &document_schema(),
         vec![Arc::new(ids), Arc::new(hashes), Arc::new(years)],
@@ -668,7 +649,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
             .unwrap_or_else(|error| panic!("a two-dimensional fp16 vector width: {error}")),
     )
     .unwrap_or_else(|error| panic!("the fixture vectors share one width: {error}"));
-    write_parquet(
+    common::write_parquet(
         &dir.join("passages.parquet"),
         &passage_schema(),
         vec![
@@ -687,7 +668,7 @@ fn write_mini_batch(root: &Path, spec: MiniBatch<'_>) -> PathBuf {
             false,
         )]));
         let column: StringArray = spec.deletions.iter().map(|id| Some(*id)).collect();
-        write_parquet(
+        common::write_parquet(
             &dir.join("deletions.parquet"),
             &schema,
             vec![Arc::new(column)],
@@ -1078,8 +1059,81 @@ fn inv_10_replaying_an_applied_batch_changes_nothing() {
     );
 }
 
-// --- Test 3: INV-10, conflict of manifest ---
+/// A compaction copies the `batches` history verbatim, so a lot applied before
+/// the compaction still replays as a no-op after it.
+///
+/// INV-10 (idempotence) and step 3 of the compaction in
+/// `docs/02-architecture.md`: the new `records.sqlite` keeps the history, with the
+/// `applied_at` of each row. Re-attaching the same `batch_id` therefore matches the
+/// stored digest, writes nothing, returns the report of the original attach, and
+/// creates no generation.
+#[test]
+fn inv_10_a_compaction_keeps_the_batches_history_so_a_replay_changes_nothing() {
+    let _serial = common::SerialGuard::acquire();
+    let index = mini_index();
+    let model = mini_model();
+    let (_temp, index_dir) = common::temp_index();
+    let mut store = common::create_store_with(&index_dir, &index.schema);
+    let batch_root = tempfile::tempdir().expect("a temporary directory");
 
+    let batch = write_mini_batch(
+        batch_root.path(),
+        MiniBatch {
+            batch_id: "applied",
+            mode: "upsert",
+            documents: &[("doc-a", "hash-a"), ("doc-b", "hash-b")],
+            passages: &[("doc-a", 0, "a0"), ("doc-a", 1, "a1"), ("doc-b", 0, "b0")],
+            deletions: &[],
+        },
+    );
+    let first = attach_batch(&mut store, &batch, &index, &model);
+    assert_eq!(first.added, 2, "the first attach creates both documents");
+    let report_before = stored_report(&common::records_path(&index_dir), "applied");
+
+    let compaction = crible_store::compact::compact(&mut store, &index)
+        .unwrap_or_else(|error| panic!("the fixture compaction must succeed: {error}"));
+    assert_eq!(
+        compaction.to_epoch.get(),
+        2,
+        "the compaction must move the index to the next epoch"
+    );
+
+    // The replaced epoch is gone: the history is read in the new one.
+    let records = index_dir
+        .join("epochs")
+        .join(compaction.to_epoch.get().to_string())
+        .join("records.sqlite");
+    assert_eq!(
+        stored_report(&records, "applied"),
+        report_before,
+        "the compaction must copy the report of the applied batch verbatim (INV-10)"
+    );
+    let compacted = db_state(&records);
+    assert_eq!(
+        compacted.batches_rows, 1,
+        "the new epoch must keep one `batches` row per applied batch"
+    );
+
+    let replay = attach_batch(&mut store, &batch, &index, &model);
+
+    assert_eq!(
+        counters(&replay),
+        counters(&first),
+        "a replay returns the report of the original attach, not a new generation"
+    );
+    assert_eq!(
+        store.generation().get(),
+        2,
+        "the replay must not create a generation after the compaction"
+    );
+    assert_eq!(
+        db_state(&records),
+        compacted,
+        "a replay writes nothing: no row, no meta change, not even applied_at"
+    );
+}
+
+// --- Test 3: INV-10, conflict of manifest ---
 /// The same `batch_id` with another manifest is a `batch_conflict`, and the
 /// reference state is untouched.
 #[test]
@@ -1347,6 +1401,11 @@ fn no_sqlite_write_follows_the_commit_point() {
             "metadata_updated": 0,
             "deleted": 0,
             "ignored": 0,
+            // `docs/04` gives `acceptance: null` its one meaning, a missing
+            // check: the fixture model is `external`, so no check ran, and the
+            // member is written with `null` (ADR-0054). An absent member would
+            // be a second spelling of the same fact.
+            "acceptance": null,
         }),
         "the batches row must already hold the definitive report at the commit point, \
          with no durations"

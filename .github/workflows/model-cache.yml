@@ -1,0 +1,62 @@
+name: Model cache
+
+# The only writer of the `data/models/mdenseon` Actions cache (ADR-0059).
+#
+# `ci.yml` restores that cache and never saves it: the `rust-onnx` job of a
+# branch or phase run finds the cache of `main`, so a long outage of Hugging
+# Face does not block the CI while it stays warm. A cache entry is evicted after
+# seven days without access, hence two scheduled passes per week; the `push`
+# trigger refreshes the key as soon as the manifest or this file changes, and
+# `workflow_dispatch` allows a manual pass once this file is on the default
+# branch. This workflow runs no test.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1,4"
+  push:
+    paths:
+      - ci/model-artifact.toml
+      - .github/workflows/model-cache.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Refresh the model artifact cache
+    runs-on: ubuntu-latest
+    # Restore, verification and an 8 s cold download: a pass fits in a minute.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+      - name: Install the CI group
+        working-directory: tools
+        run: uv sync --group ci
+      - name: Validate the manifest and compute the cache key
+        id: artifact
+        working-directory: tools
+        run: echo "key=$(uv run python fetch_model_artifact.py cache-key)" >> "$GITHUB_OUTPUT"
+      # Same key and same steps as the `rust-onnx` job of `ci.yml`: a different
+      # key would break the restore there. The cache is never a source of trust:
+      # the fetch step verifies every restored file against the manifest and
+      # only downloads what is missing.
+      - name: Restore the model artifact
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/models/mdenseon
+          key: ${{ runner.os }}-${{ steps.artifact.outputs.key }}
+      - name: Fetch and verify the model artifact
+        working-directory: tools
+        run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
+      # An Actions cache entry cannot be overwritten: save only on a miss, so a
+      # restored entry is left untouched and an evicted one is recreated.
+      - name: Save the model artifact
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data/models/mdenseon
+          key: ${{ runner.os }}-${{ steps.artifact.outputs.key }}
