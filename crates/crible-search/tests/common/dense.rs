@@ -148,26 +148,41 @@ pub struct DenseFixture {
     _temp: tempfile::TempDir,
     index: PathBuf,
     dims: u32,
+    precision: ReferencePrecision,
     store: GenerationStore,
     next_iid: u32,
 }
 
 impl DenseFixture {
-    /// Creates an empty index whose vectors have `dims` dimensions.
+    /// Creates an empty index whose vectors have `dims` dimensions, stored in
+    /// `fp16`, the default reference precision of `docs/03-recherche.md`.
     pub fn create(dims: u32) -> Self {
+        Self::create_with_precision(dims, ReferencePrecision::Fp16)
+    }
+
+    /// Creates an empty index whose vectors have `dims` dimensions, stored in
+    /// `precision`.
+    ///
+    /// The precision is frozen at creation (ADR-0005): it is written in the
+    /// configuration and used for every segment the fixture adds.
+    pub fn create_with_precision(dims: u32, precision: ReferencePrecision) -> Self {
         let temp = tempfile::tempdir().unwrap_or_else(|error| {
             panic!("a temporary directory for the index must be creatable: {error}")
         });
         let index = temp.path().join("indexes").join("dense-exact");
         let schema = fixture_schema();
-        write_index_config(&index, &super::test_config("dense-exact", &schema))
-            .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
+        write_index_config(
+            &index,
+            &super::test_config_with_precision("dense-exact", &schema, precision),
+        )
+        .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
         let store = GenerationStore::create(&index, Epoch::new(EPOCH), &schema)
             .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"));
         Self {
             _temp: temp,
             index,
             dims,
+            precision,
             store,
             next_iid: 0,
         }
@@ -201,7 +216,7 @@ impl DenseFixture {
             dims: self.dims,
             generation,
             batch_id: format!("batch-{}", generation.get()),
-            precision: ReferencePrecision::Fp16,
+            precision: self.precision,
         };
         let mut writer = SegmentWriter::create(&segments, spec)
             .unwrap_or_else(|error| panic!("the segment writer must start: {error}"));
