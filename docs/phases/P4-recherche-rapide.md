@@ -24,6 +24,7 @@
   - les codes reconstruits sont identiques à ceux écrits à l'attache ;
   - `crible inspect` affiche la mémoire occupée par les codes.
 - **Invariants** : INV-15.
+- **Précisé par ADR-0069** (accepté par anticipation le 2026-10-26) : le « job de reconstruction » est l'ouverture du segment par l'écrivain ; `codes.bin` absent y est reconstruit depuis les `vectors.*` du segment et persisté atomiquement, sans nouvelle génération ni nouvelle époque. En lecture seule, les codes manquants sont construits en RAM et jamais écrits dans l'époque. Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). Le format n'a pas d'en-tête : taille `count × ceil(dims/64) × 8` octets, version portée par `format_version` de `segment.json`, incrémenté à tout changement de disposition, et `codes.bin` reste hors des `checksums`. Aucune sous-commande CLI n'est ajoutée en P4.
 
 ### NOYAUX-SIMD
 - **Objectif** : les calculs de base, rapides et sûrs.
