@@ -98,6 +98,18 @@ pub fn hamming(a: &[u64], b: &[u64]) -> u64 {
     (selected().hamming)(a, b)
 }
 
+/// The selected Hamming implementation, to resolve the runtime dispatch once.
+///
+/// [`hamming`] looks the selection up through a [`OnceLock`] on every call,
+/// which costs about 1.4 ns, some 40 % of a 12-word Hamming (`NOYAUX-SIMD`,
+/// `benches/kernels.rs`). A scan that hashes millions of codes therefore
+/// resolves the pointer **once** with this function and calls it for every
+/// passage, instead of paying the dispatch per passage.
+#[must_use]
+pub fn hamming_function() -> fn(&[u64], &[u64]) -> u64 {
+    selected().hamming
+}
+
 /// Exact dot product of a stored `f16` vector and a query `f32` vector.
 ///
 /// `a` holds the reference vector read from a segment (fp16), `b` the
