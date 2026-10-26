@@ -34,7 +34,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Calcul parallèle | `rayon` | Pool dédié, séparé de tokio |
 | Encodage | `ort` (2.x, `load-dynamic`), `tokenizers` | ONNX Runtime chargé dynamiquement, comme NextPlaid |
 | Vecteurs | `memmap2`, `half` | Fichiers plats little-endian |
-| Noyaux SIMD | à trancher (crate dédiée ou intrinsèques NEON/AVX2 avec repli scalaire) | Micro-benchmark dans `NOYAUX-SIMD` |
+| Noyaux SIMD | `std::arch` en code maison (`crible-search::kernels`) : NEON sur `aarch64`, AVX2 sur `x86_64`, repli scalaire, détection à l'exécution (ADR-0070) | Micro-benchmark `criterion` dans `benches/kernels.rs`, chiffres consignés dans ADR-0070 |
 | Bitmaps | `roaring` | |
 | SQLite | `rusqlite` (`bundled`) | Mode WAL |
 | Compression du texte | `zstd` | |
