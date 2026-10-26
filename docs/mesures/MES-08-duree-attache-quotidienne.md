@@ -321,3 +321,191 @@ Recommandations, **à valider par le propriétaire** :
   `make_batches.py`, `merge.py`.
 - Disque : 104 Gio libres avant et après ; la campagne n'ajoute que les 17 Mo de
   lots (les index de base sont ceux de MES-07).
+
+## Campagne du 2026-10-26 — rejeu sur `synth-large` après `BORNER-COUT-DU-COMMIT`
+
+Rejeu demandé par la fiche `BORNER-COUT-DU-COMMIT` (phase P3, hors plan) et par la
+décision 3 de l'ADR-0066, sur le même index et les mêmes lots que la campagne du
+2026-10-25. La partie « échantillon Legifacile avec `mdenseon` » n'est pas
+demandée par la fiche et n'est pas rejouée : seule la mesure `synth-large` l'est.
+
+- Tâche : `BORNER-COUT-DU-COMMIT`, étape mesure.
+- Références : ADR-0066 (décisions 1, 3 et 4), fiche de la tâche, campagne du
+  2026-10-25 ci-dessus (résultats, part du `snapshot`, écarts au protocole).
+- Commit de base : `4d9c7c01022aba10b9b143de274a460f7ada5581` (branche
+  `tache/BORNER-COUT-DU-COMMIT`). **L'attache mesurée est celle du diff de travail
+  non commité de la tâche** : `crates/crible-store/src/attach.rs`,
+  `filters_index.rs`, `generation.rs`, `patch.rs`, plus
+  `crates/crible-store/Cargo.toml` et `tests/construire_bitmaps.rs`. Le banc
+  `crates/crible/benches/attach_cost.rs` n'est **pas** modifié ; les cinq durées
+  d'étape viennent toujours du rapport de production (`AttachDurations`,
+  `docs/04`). Aucun code n'a été modifié pendant la campagne.
+- Machine : MacBook Apple M3 (`Mac15,12`, 8 cœurs), 24 Go de RAM, macOS 15.7.7
+  (24G720), APFS, 101 Gio libres avant et après. Mesure **native**, aucun
+  conteneur ; banc compilé par `cargo bench` (profil `bench`).
+- Charge ambiante : la machine n'était pas au repos. Moyenne de charge 1,59 au
+  début et 1,11 à la fin (8 cœurs) ; au début, `opencode` (agent de mesure)
+  occupait 33,8 % d'un cœur, `mediaanalysisd` 3,4 %, `mdworker_shared` 1,1 % ; à la
+  fin, `fseventsd` 1,1 % et `mds_stores` 0,2 %
+  (`data/mes08/replay-raw-2026-10-26/conditions-start.txt` et
+  `conditions-end.txt`). C'est la même charge
+  de fond que celle signalée le 2026-10-25 (`mediaanalysisd`, `mds_stores`), d'un
+  ordre plus faible qu'alors. Son effet n'est pas isolé.
+- Jeu de données : `data/synth-large/indexes/synth-large`, inchangé depuis le
+  2026-10-25 : 8 600 000 passages, 7 740 000 vivants, un passage par document,
+  modèle `synthetic-external`, 1 segment, `records.sqlite` de 3 758 346 240 octets,
+  SHA-256 `d07fd173b6199074…` (relevé à la main après la campagne ; la campagne du
+  2026-10-25 ne l'avait pas consigné).
+- Lots : `daily-synth-1000` (1 000 passages, 905 documents, 1 132 octets de texte
+  moyen) et `daily-synth-3000` (3 002 passages, 2 517 documents, 1 221 octets),
+  ceux du 2026-10-25, réutilisés tels quels (`data/mes08/batches/`, 17 Mo).
+- Configuration : 5 répétitions par lot, une attache par répétition sur un clone
+  APFS de l'index de base, cache chaud (le clone vient d'être écrit), aucun
+  préchauffage séparé — protocole du 2026-10-25 sans changement.
+
+### Protocole
+
+```sh
+# une fois, hors mesure : compiler le banc (profil `bench`)
+cargo build --release
+cargo bench -p crible --bench attach_cost --no-run
+
+# rejeu du seul index synth-large, sortie datée séparée
+MES08_ONLY=synth-large MES08_DAY=2026-10-26 \
+MES08_RAW="$PWD/data/mes08/replay-raw-2026-10-26" \
+    sh tools/bench/mes08/run.sh
+```
+
+`run.sh` est réutilisé avec trois variables d'environnement, toutes dans le script
+et aucune dans le banc : `MES08_ONLY` restreint la campagne à un index, pour ne pas
+rejouer les 52 à 68 s par attache de l'échantillon `mdenseon` ni exiger
+`ORT_DYLIB_PATH` ; `MES08_RAW` déplace le dossier brut, pour que le rejeu n'écrase
+ni `articles.json` ni `synth-large.json` du 2026-10-25 ; `MES08_DAY` nomme la date
+de campagne, parce que le défaut `date -u` désigne encore le 2026-10-25 à 00 h 46
+heure locale.
+
+### Résultats
+
+Attache complète, 5 répétitions, en millisecondes, sur 7 740 000 passages vivants.
+
+| Lot | p50 | p95 | p99 | min | max |
+|---|---|---|---|---|---|
+| 1 000 passages | **63** | 72 | 72 | 62 | 72 |
+| 3 002 passages | **143** | 147 | 147 | 141 | 147 |
+
+Décomposition par étape, p50 en millisecondes ; la part est celle du p50 de
+l'attache. Les durées d'étape viennent du rapport de production (`AttachDurations`)
+et sont arrondies à la milliseconde dans le JSON fusionné. La somme des cinq vaut
+64 ms pour la première ligne et 142 ms pour la seconde : la décomposition couvre
+tout l'appel, à 1 ms près, et il n'y a pas de « reste » significatif, comme le
+2026-10-25.
+
+| Lot | Attache | `validation` | `segment` | `transaction` | `manifest` | `snapshot` |
+|---|---|---|---|---|---|---|
+| 1 000 | 63 | 8 (12,7 %) | 19 (30,2 %) | 19 (30,2 %) | 8 (12,7 %) | **10 (15,9 %)** |
+| 3 002 | 143 | 19 (13,3 %) | 32 (22,4 %) | 55 (38,5 %) | 7 (4,9 %) | **29 (20,3 %)** |
+
+Part de l'étape `snapshot`, c'est-à-dire du commit de génération, et comparaison
+avec la campagne du 2026-10-25 :
+
+| Lot | Attache 10-25 | Attache 10-26 | Écart | `snapshot` 10-25 | `snapshot` 10-26 | Écart | Part 10-25 | Part 10-26 |
+|---|---|---|---|---|---|---|---|---|
+| 1 000 | 3 257 | **63** | −3 194 (−98,1 %) | 3 207 | **10** | −3 197 (−99,7 %) | 98,5 % | **15,9 %** |
+| 3 002 | 3 333 | **143** | −3 190 (−95,7 %) | 3 219 | **29** | −3 190 (−99,1 %) | 96,6 % | **20,3 %** |
+
+Compression des textes du lot, réplique hors attache, p50 de cinq répétitions, en
+millisecondes pour le lot entier :
+
+| Lot | Textes | Contexte réutilisé | Un contexte par texte | Gain |
+|---|---|---|---|---|
+| 1 000 | 1 000 | 12,10 | 47,00 | 34,9 (−74,3 %) |
+| 3 002 | 3 002 | 19,77 | 118,06 | 98,3 (−83,3 %) |
+
+Le maximum de RSS du processus de banc est de 566 Mio, contre 591 Mio le
+2026-10-25.
+
+Deux lectures immédiates :
+
+1. **L'attache ne paie plus la taille de l'index.** Elle passe de 3,26 à 0,063 s
+   pour 1 000 passages et de 3,33 à 0,143 s pour 3 002, et l'étape `snapshot`
+   tombe de 3 207 à 10 ms (−99,7 %) et de 3 219 à 29 ms (−99,1 %) : c'est la
+   disparition des deux balayages complets que MES-15 chiffrait à 2,92 s au § 10.5
+   de son rapport, et que le rejeu du 2026-10-26 de MES-15 ramène à 63,2 ms de
+   « reste » à 8,58 M.
+2. **L'étape `snapshot` suit désormais le lot, non l'index.** Elle valait 3 207 et
+   3 219 ms, plate en taille de lot (+0,4 %) le 2026-10-25 ; elle vaut 10 et 29 ms
+   (+190 %), soit ≈ 9,5 µs par passage ajouté, pour un travail par ligne ajoutée
+   qui reste non isolé. C'est le comportement attendu d'une dérivation bornée par
+   le delta : à 7,74 M passages vivants, elle ne dépend plus que de ce que
+   l'attache écrit.
+
+### Conclusion
+
+Ce que la mesure permet d'affirmer :
+
+1. **Sur `synth-large`, une attache quotidienne type ne dure plus quelques
+   secondes mais quelques dizaines à quelques centaines de millisecondes** :
+   63 ms pour 1 000 passages et 143 ms pour 3 002 (p50), contre 3 257 et 3 333 ms
+   le 2026-10-25. La part du commit de génération, 96,6 à 98,5 % le 2026-10-25,
+   tombe à 15,9 % et 20,3 %.
+2. **Les quatre autres étapes sont inchangées**, aux valeurs du 2026-10-25 :
+   `validation` 8 et 19 ms (7 et 19), `segment` 19 et 32 ms (19 et 33),
+   `transaction` 19 et 55 ms (18 et 55), `manifest` 8 et 7 ms (7 et 6). L'écart
+   est dans la dispersion de cinq répétitions.
+3. **Le gain de la tâche est celui de MES-15, vu par l'attache réelle** : −3,19 s
+   par attache aux deux tailles de lot, soit la quasi-totalité de ce que la
+   campagne du 2026-10-25 attribuait au commit.
+
+Ce que la mesure ne permet pas d'affirmer :
+
+- Rien sur l'échantillon Legifacile avec le modèle réel : la recette (`validation`,
+  51 à 66 s) n'est pas rejouée ici. L'extrapolation du 2026-10-25 (« ≈ 55 s pour
+  1 000 passages et ≈ 69 s pour 3 000, dont 93 à 96 % de recette ») n'est pas
+  infirmée, mais elle n'est pas vérifiée : sur `synth-large`, le modèle est
+  `external` et la recette ne tourne pas.
+- Rien sur un index à plusieurs centaines de segments, ni sur une attache
+  concurrente de lectures (INV-02) : l'index mesuré a un segment.
+- Rien sur le disque froid : chaque répétition part d'un clone qui vient d'être
+  écrit.
+- Rien sur le coût par ligne ajoutée de l'étape `snapshot` (≈ 9,5 µs par passage,
+  entre 1 000 et 3 002 passages) : ni sa cause, ni son comportement au-delà.
+- Rien sur la réplique de compression : elle vaut 12,10 ms pour 1 000 textes ici
+  contre 6,07 ms le 2026-10-25, à textes et niveaux identiques ; elle est hors du
+  chemin d'attache, l'écart n'est pas isolé et n'entre dans aucune conclusion.
+
+Cible ou budget : **il n'en existe aucun** pour MES-08 dans `docs/08`, `docs/03` ni
+`docs/04`. Le seul délai écrit reste `wait_timeout_ms` = 60 s (`docs/05`) : à
+143 ms, l'attache en consomme 0,24 %, contre 5,6 % avant la tâche. Avec le modèle
+réel, la recette resterait le terme dominant, comme le 2026-10-25 l'a montré sur
+l'échantillon ; ce rejeu ne le mesure pas.
+
+Recommandation, **à valider par le propriétaire** : aucune n'est formulée ici. La
+recommandation 1 du 2026-10-25 (ajouter les deux index SQLite) n'a plus d'objet
+pour le commit ; elle reste sans effet sur la recette, qui est un autre sujet.
+
+### Écarts au protocole
+
+- **La machine n'était pas au repos** (charge 1,59 puis 1,11), comme le
+  2026-10-25 ; la dispersion reste faible (1 000 passages : 62 à 72 ms ;
+  3 002 : 141 à 147 ms). Aucune valeur n'est retirée.
+- **Pas de préchauffage séparé**, comme le 2026-10-25 : chaque répétition part
+  d'un clone APFS neuf.
+- **Seul `synth-large` est rejoué** : la fiche ne demande pas l'échantillon, et
+  `MES08_ONLY` permet de l'exclure sans toucher au banc.
+- **Date des fichiers** : le lot et les points portent la date passée au banc
+  (`2026-10-26`) ; la campagne a tourné de 00 h 46 à 00 h 50, heure de Paris, soit
+  le 2026-10-25 en UTC (23 h 46 à 23 h 50). Le fichier fusionné porte la date
+  locale, `2026-10-26`.
+- **`run.sh` modifié** (trois variables d'environnement) ; le banc ne l'est pas.
+- **Les durées d'étape sont arrondies à la milliseconde** dans le JSON fusionné :
+  la somme des cinq étapes diffère de l'attache de 1 ms au plus sur les p50, et de
+  1,9 ms au plus sur une répétition brute (lot de 3 002), comme le 2026-10-25
+  (±6 ms).
+
+### Données brutes
+
+`docs/mesures/MES-08-duree-attache-quotidienne.2026-10-26.json` : les deux lots,
+5 répétitions chacun, les cinq durées d'étape par répétition, les deux répliques de
+compression, le maximum de RSS du processus. Les relevés de charge et le JSON de
+point sont dans `data/mes08/replay-raw-2026-10-26/` (gitignoré) ; ceux du
+2026-10-25 restent dans `data/mes08/raw/`, intacts.

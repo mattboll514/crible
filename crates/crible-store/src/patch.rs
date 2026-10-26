@@ -15,9 +15,9 @@
 //! `meta.generation = G+1`. No `segments`, no `passages`, no `batches`. Step 5
 //! then writes the manifest `G+1`, which repeats the segments of G, and step 6
 //! publishes the snapshot with the filter structures of the generation, copied
-//! on write. `updated_generation` is what selects the documents whose inherited
-//! fields are refreshed for their passages
-//! ([`crate::filters_index::FilterIndex::after_commit`]).
+//! on write. The `documents` rows this commit writes are the delta that selects
+//! the documents whose inherited fields are refreshed for their passages
+//! ([`crate::filters_index::FilterIndex::after_commit`], ADR-0066).
 //!
 //! # Input
 //!
