@@ -120,6 +120,7 @@ Proposé ──► Accepté ──► Remplacé par ADR-NNNN
 | [ADR-0064](0064-format-et-contenu-d-un-instantane.md) | Format et contenu d'un instantané (`snapshot.json`) | Accepté (les quatre décisions telles quelles ; accepté par anticipation le 2026-10-25, confirmé par le propriétaire le 2026-10-26) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0065](0065-instantane-hors-ligne-epoque-de-restauration-et-retention.md) | Instantané hors ligne, époque de restauration, cible et rétention | Accepté (les six décisions telles quelles ; accepté par anticipation le 2026-10-25, confirmé par le propriétaire le 2026-10-26) | 2026-10-25 (proposition et acceptation) |
 | [ADR-0066](0066-derivation-de-l-instantane-apres-commit-sans-balayage-complet.md) | Dérivation de l'instantané après commit sans balayage complet | Accepté (les quatre décisions telles que proposées : `after_commit` reçoit le delta écrit par la transaction, les deux index SQLite en recours seulement, tâche hors plan `BORNER-COUT-DU-COMMIT` en P3, chiffres du 2026-10-25 conservés et rejeu en section datée ; schéma et `format_version` inchangés) | 2026-10-26 (proposition et acceptation) |
+| [ADR-0067](0067-duree-de-la-recette-a-l-attache-et-echeance-de-wait-true.md) | Durée de la recette à l'attache et échéance de `?wait=true` | Proposé | 2026-10-26 |
 
 ## Questions ouvertes
 
