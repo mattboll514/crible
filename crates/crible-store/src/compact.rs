@@ -948,6 +948,7 @@ mod tests {
                 booleans: 0,
                 columns: 0,
             },
+            codes_memory: 0,
         }
     }
 

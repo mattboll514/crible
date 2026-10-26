@@ -4,6 +4,7 @@
 
 pub mod attach;
 pub mod batch_reader;
+pub mod codes;
 pub mod compact;
 pub mod export;
 pub mod filters_index;

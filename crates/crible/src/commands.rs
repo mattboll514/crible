@@ -691,6 +691,7 @@ fn print_state(name: &str, state: &IndexState) {
         memory.booleans,
         memory.columns
     );
+    println!("  codes: {} bytes", state.codes_memory);
 }
 
 /// Directory holding every index of an instance.

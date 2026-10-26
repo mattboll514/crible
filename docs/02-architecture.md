@@ -69,7 +69,7 @@ data/                                   # volume Docker nommé (mmap rapide)
       segments/<segment_id>/
         segment.json                    # iid_start, count, dims, checksums, generation, batch_id
         vectors.f16                     # n × d × 2 octets, fp16 little-endian (ou vectors.f32)
-        codes.bin                       # n × d/8 octets, codes binaires (dérivé)
+        codes.bin                       # count × ceil(dims/64) × 8 octets, codes binaires (dérivé ; ADR-0069)
       lexical/                          # index tantivy (dérivé)
       manifests/<generation>.json       # vue dérivée d'une génération
       cache/                            # bitmaps sérialisées, estampillées par génération (dérivé)
@@ -140,6 +140,7 @@ Une génération n'est créée que si au moins un document change réellement : 
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
 - Écrire le manifeste G s'il manque.
+- Reconstruire `codes.bin` des segments où il manque, depuis les `vectors.*` du segment, et le persister par fichier temporaire, fsync et renommage (ADR-0069). Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). La reconstruction ne crée ni génération ni époque. Elle n'a lieu qu'à l'ouverture en **écriture** : un segment ouvert en lecture seule construit les codes manquants en RAM et n'écrit rien dans l'époque.
 - Construire les bitmaps, ou charger le cache estampillé G.
 - Publier l'instantané.
 

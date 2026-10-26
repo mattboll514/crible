@@ -43,8 +43,9 @@
 //! [`GenerationStore::open`] restores the last committed generation and nothing
 //! else (INV-04): it reads `CURRENT_EPOCH`, opens SQLite, reads `meta`, removes
 //! every `tmp-*` entry and every segment directory absent from the `segments`
-//! table, rewrites the manifest of the current generation when it is missing,
-//! then publishes the snapshot.
+//! table, rebuilds the `codes.bin` a segment is missing (`ADR-0069`, decision 1),
+//! rewrites the manifest of the current generation when it is missing, then
+//! publishes the snapshot.
 //!
 //! # Fault injection
 //!
@@ -58,10 +59,14 @@
 //!
 //! # What the snapshot carries
 //!
-//! The snapshot carries the metadata of its segments and the filter structures
-//! of its generation ([`FilterIndex`]). It opens no segment, so it never pays
-//! the checksum read of `SegmentReader::open`: loading the vectors into the
-//! snapshot belongs to the dense search tasks.
+//! The snapshot carries the metadata of its segments, their **binary codes in
+//! RAM** and the filter structures of its generation ([`FilterIndex`])
+//! (`docs/02-architecture.md`, "Concurrence"; ADR-0043). It never opens a vector
+//! file: the codes are read from `codes.bin`, or quantized in RAM when the file
+//! is missing, so the snapshot never pays the checksum read of
+//! `SegmentReader::open`. The arrays are shared between successive snapshots by
+//! segment identifier: a segment is immutable, so a commit reuses the codes of
+//! every segment it keeps instead of reading them again.
 //!
 //! The filter structures are built from `records.sqlite` at creation and at
 //! startup, then derived generation by generation in copy on write by
@@ -81,6 +86,7 @@ use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::{Connection, Transaction};
 use serde_json::{Value, json};
 
+use crate::codes;
 use crate::filters_index::{CommitDelta, CreatedPassage, FilterIndex, FilterMemory};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
 use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
@@ -250,14 +256,35 @@ pub struct GenerationChange {
 /// A snapshot is never mutated: a commit builds a new one and publishes it, so
 /// a reader that took a snapshot keeps the generation it started on, even while
 /// another thread commits.
-#[derive(Debug)]
+///
+/// The snapshot holds the binary codes of its segments in RAM, as
+/// `docs/02-architecture.md` ("Concurrence") and ADR-0043 require. Each array is
+/// behind an [`Arc`], so a commit copies no code: it clones the arrays of the
+/// segments it keeps from the previous snapshot and loads only the new ones.
 pub struct Snapshot {
     generation: Generation,
     segments: Vec<SegmentMeta>,
+    /// Binary codes of `segments`, in the same order.
+    codes: Vec<Arc<Vec<u64>>>,
     filters: FilterIndex,
     /// Keep-alive of the epoch the snapshot reads: its strong count is what the
     /// reclaim of [`crate::compact::reclaim_epochs`] looks at (INV-14).
     lease: Arc<EpochLease>,
+}
+
+impl std::fmt::Debug for Snapshot {
+    /// Summarizes the code arrays: the largest field of a snapshot must not be
+    /// printed whole by a log line or an error message.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Snapshot")
+            .field("generation", &self.generation)
+            .field("segments", &self.segments)
+            .field("codes", &format_args!("{} bytes", self.codes_memory()))
+            .field("filters", &self.filters)
+            .field("lease", &self.lease)
+            .finish()
+    }
 }
 
 impl Snapshot {
@@ -313,6 +340,42 @@ impl Snapshot {
     #[must_use]
     pub fn filter_memory(&self) -> FilterMemory {
         self.filters.memory()
+    }
+
+    /// Bytes of RAM the binary codes of the generation hold: the sum of
+    /// `count × ceil(dims / 64) × 8` over its segments.
+    ///
+    /// Every code of the generation is counted, whether it was read from a
+    /// `codes.bin` or quantized in RAM at open because the file was missing
+    /// (`ADR-0069`, decisions 1 and 2), and a tombstoned passage keeps its code
+    /// until the compaction that drops it (`docs/02-architecture.md`,
+    /// "Suppressions, pierres tombales et compaction"). `crible inspect` reports
+    /// this figure.
+    #[must_use]
+    pub fn codes_memory(&self) -> u64 {
+        self.segments
+            .iter()
+            .map(|meta| codes::codes_len(meta.count, meta.dims))
+            .sum()
+    }
+
+    /// Binary codes of the segment `segment_id`, in RAM, one code after another
+    /// as `codes.bin` holds them, or `None` when the generation holds no such
+    /// segment.
+    ///
+    /// This is what the binary scan reads: the snapshot owns the array, so no
+    /// query touches the disk for it.
+    #[must_use]
+    pub fn codes_of(&self, segment_id: &str) -> Option<&[u64]> {
+        self.shared_codes(segment_id).map(|codes| codes.as_slice())
+    }
+
+    /// Code array of `segment_id` for the next snapshot to share, if any.
+    fn shared_codes(&self, segment_id: &str) -> Option<&Arc<Vec<u64>>> {
+        self.segments
+            .iter()
+            .position(|meta| meta.segment_id == segment_id)
+            .and_then(|index| self.codes.get(index))
     }
 }
 
@@ -542,6 +605,7 @@ impl GenerationStore {
         }
 
         recover(&records, index_dir, &epoch_dir)?;
+        rebuild_missing_codes(&records, &epoch_dir)?;
         let lease = Arc::new(EpochLease { epoch });
         let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
@@ -808,6 +872,7 @@ impl GenerationStore {
             dead_passages,
             segments: snapshot.segments().to_vec(),
             filter_memory: snapshot.filter_memory(),
+            codes_memory: snapshot.codes_memory(),
         })
     }
 }
@@ -833,6 +898,9 @@ pub struct IndexState {
     pub segments: Vec<SegmentMeta>,
     /// Estimated heap size of the filter structures.
     pub filter_memory: FilterMemory,
+    /// Bytes of RAM the binary codes of the generation hold, over every segment
+    /// of the generation (`ADR-0069`).
+    pub codes_memory: u64,
 }
 
 impl IndexState {
@@ -1135,6 +1203,25 @@ fn recover(records: &RecordStore, index_dir: &Path, epoch_dir: &Path) -> Result<
     Ok(())
 }
 
+/// Rebuilds every `codes.bin` the published epoch of `index_dir` is missing.
+///
+/// `ADR-0069`, decision 1: the "reconstruction job" of the segment task is the
+/// writer open. A missing `codes.bin` is rebuilt from the reference vectors of
+/// its segment and persisted atomically, and the rebuild creates neither a
+/// generation nor an epoch: the file is derived, invisible, and changes no
+/// search result. Only a write open runs this; a read-only open builds the
+/// missing codes in RAM and writes nothing under the epoch (decision 2).
+///
+/// A file of the wrong length is an [`ErrorCode::Internal`] error naming it
+/// (decision 3), not a file to overwrite.
+fn rebuild_missing_codes(records: &RecordStore, epoch_dir: &Path) -> Result<(), CribleError> {
+    let segments = segments_directory(epoch_dir);
+    for segment_id in records.segment_ids()? {
+        codes::rebuild_codes(&segments.join(&segment_id))?;
+    }
+    Ok(())
+}
+
 /// Removes every `tmp-*` entry of `dir`.
 fn remove_temporary_entries(dir: &Path) -> Result<(), CribleError> {
     let mut removed = false;
@@ -1205,18 +1292,25 @@ fn check_generation_matches(
 /// precision, then sorted by `iid_start`: a snapshot is read in iid order, and
 /// a restart produces the manifest in the same order as the commit that wrote
 /// it. The filter structures are rebuilt from every row of `passages` and
-/// `documents`, following `schema` (ADR-0018, ADR-0019). No vector file is
-/// opened here: the snapshot of this task holds metadata and filters, not
-/// mmaps.
+/// `documents`, following `schema` (ADR-0018, ADR-0019).
+///
+/// The binary codes are read from `codes.bin` into RAM. No vector file is opened
+/// here, so the snapshot does not pay the blake3 read of `SegmentReader::open`:
+/// the writer open rebuilds a missing `codes.bin` before this point
+/// (`rebuild_missing_codes`), and [`crate::codes::load_codes`] falls back to the
+/// vectors only for an index that a write open never touched.
 fn build_snapshot(
     records: &RecordStore,
     epoch_dir: &Path,
     schema: &Schema,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
+    let segments = segments_of(records, epoch_dir)?;
+    let codes = snapshot_codes(&segments, epoch_dir, None)?;
     Ok(Snapshot {
         generation: records.meta()?.generation,
-        segments: segments_of(records, epoch_dir)?,
+        segments,
+        codes,
         filters: FilterIndex::from_records(records.connection(), schema)?,
         lease,
     })
@@ -1250,12 +1344,45 @@ fn build_snapshot_after_commit(
     } else {
         FilterIndex::from_records(records.connection(), previous.filters().schema())?
     };
+    let segments = segments_of(records, epoch_dir)?;
+    // A segment is immutable: the arrays of the previous snapshot are reused
+    // through `Arc`, so a commit reads only the codes of the segments it adds.
+    let codes = snapshot_codes(&segments, epoch_dir, Some(previous))?;
     Ok(Snapshot {
         generation,
-        segments: segments_of(records, epoch_dir)?,
+        segments,
+        codes,
         filters,
         lease,
     })
+}
+
+/// Binary codes of `segments`, in the same order, shared with `previous` for
+/// every segment it already holds.
+///
+/// A segment never changes inside an epoch, so an array of the previous snapshot
+/// is the right one for the next: the clone of an [`Arc`] costs no read. The
+/// caller passes `previous` only when both snapshots read the same epoch; after a
+/// compaction the segments are new and the codes are read from the new epoch.
+fn snapshot_codes(
+    segments: &[SegmentMeta],
+    epoch_dir: &Path,
+    previous: Option<&Snapshot>,
+) -> Result<Vec<Arc<Vec<u64>>>, CribleError> {
+    let segments_dir = segments_directory(epoch_dir);
+    let mut codes = Vec::with_capacity(segments.len());
+    for meta in segments {
+        if let Some(shared) = previous.and_then(|snapshot| snapshot.shared_codes(&meta.segment_id))
+        {
+            codes.push(Arc::clone(shared));
+            continue;
+        }
+        codes.push(Arc::new(codes::load_codes(
+            &segments_dir.join(&meta.segment_id),
+            meta,
+        )?));
+    }
+    Ok(codes)
 }
 
 /// Metadata of the segments the reference state references, in `iid_start`
