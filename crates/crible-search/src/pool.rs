@@ -363,58 +363,58 @@ fn column_condition(
         FieldType::Integer => {
             if condition.operator == Operator::In {
                 let list = integer_list(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.integer(Iid::new(iid)),
                     |value| list.contains(&value),
-                ))
+                )
             } else {
                 let operand = integer_operand(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.integer(Iid::new(iid)),
                     |value| matches_scalar(condition.operator, value, operand),
-                ))
+                )
             }
         }
         FieldType::Float => {
             if condition.operator == Operator::In {
                 let list = float_list(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.float(Iid::new(iid)),
                     |value| list.contains(&value),
-                ))
+                )
             } else {
                 let operand = float_operand(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.float(Iid::new(iid)),
                     |value| matches_scalar(condition.operator, value, operand),
-                ))
+                )
             }
         }
         FieldType::Date => {
             if condition.operator == Operator::In {
                 let list = date_list(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.date_days(Iid::new(iid)),
                     |value| list.contains(&value),
-                ))
+                )
             } else {
                 let operand = date_operand(condition)?;
-                Ok(scan_column(
+                scan_column(
                     column.present(),
                     domain,
                     |iid| column.date_days(Iid::new(iid)),
                     |value| matches_scalar(condition.operator, value, operand),
-                ))
+                )
             }
         }
         FieldType::Keyword | FieldType::Bool => Err(inconsistent(
@@ -426,24 +426,37 @@ fn column_condition(
 
 /// Collects the identifiers of `present` (optionally restricted to `domain`)
 /// whose value satisfies the condition.
+///
+/// The result is built in ascending iid order, the order the bitmap is filled
+/// in, so that a value column is never inserted one identifier at a time
+/// (MES-14 § 5, `INSERER-POOL-EN-ORDRE`). A source that stopped handing
+/// ascending identifiers would be a bug of this module, not of the caller: it
+/// returns [`ErrorCode::Internal`] rather than a partially filled bitmap.
 fn scan_column<T>(
     present: &RoaringBitmap,
     domain: Option<&RoaringBitmap>,
     read: impl Fn(u32) -> Option<T>,
     keep: impl Fn(T) -> bool,
-) -> RoaringBitmap {
+) -> Result<RoaringBitmap, CribleError> {
     // One intersection, so the loop is bounded by |present ∩ domain| and not
     // by |present|: a reduced domain really shortens the scan (ADR-0018).
     let scan = domain.map_or_else(|| present.clone(), |domain| present & domain);
-    let mut result = RoaringBitmap::new();
-    for iid in scan.iter() {
-        if let Some(value) = read(iid)
-            && keep(value)
-        {
-            result.insert(iid);
-        }
-    }
-    result
+    let kept = scan.iter().filter_map(|iid| {
+        let value = read(iid)?;
+        keep(value).then_some(iid)
+    });
+    // `RoaringBitmap::insert` searches the value inside its container
+    // (`binary_search` then `Vec::insert`), a cost that grows with the result
+    // (MES-14 § 5). `from_sorted_iter` pushes at the end of the last container
+    // instead, which is only valid because `iter` walks the iids in ascending
+    // order; the error is kept rather than discarded, so a source that broke
+    // that order would surface instead of silently dropping iids.
+    RoaringBitmap::from_sorted_iter(kept).map_err(|error| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("the value column scan must hand ascending iids: {error}"),
+        )
+    })
 }
 
 /// True when `actual` satisfies the scalar `operator` against `operand`.

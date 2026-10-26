@@ -86,7 +86,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P4 | PLANIFIER-STRATEGIE | A-FAIRE | | |
 | P4 | REGROUPER-RESULTATS | A-FAIRE | | |
 | P4 | MESURER-FIDELITE-BINAIRE | A-FAIRE | | |
-| P4 | INSERER-POOL-EN-ORDRE | A-FAIRE | | Ajoutée par ADR-0046 (D1) |
+| P4 | INSERER-POOL-EN-ORDRE | FAIT | tache/INSERER-POOL-EN-ORDRE | Ajoutée par ADR-0046 (D1). `scan_column` (`crates/crible-search/src/pool.rs`) filtre les iid gardés sur l'itération croissante du domaine et construit la bitmap de résultat par `RoaringBitmap::from_sorted_iter` (ajout en fin), au lieu d'`insert` iid par iid ; il rend `Result` et une erreur `Internal` si l'ordre n'était pas croissant (branche défensive). Aucune structure, aucun format, aucune dépendance nouvelle. Tests d'abord par `@testeur` : 6 tests d'égalité avec une référence insérée iid par iid sur les cas de MES-14 (et un domaine issu d'un `$not`), contre-épreuve SQLite ; INV-07 complété d'une assertion de couverture des clauses d'intervalle. MES-14 rejouée le 2026-10-26 par `@mesureur` avant et après, mêmes fixtures et cas (§ 10 du rapport, `MES-14-cout-filtres-intervalles.2026-10-26.json`, `tools/bench/mes14/compact.py`) : à 8,58 M passages, −15,5 à −31,9 % en p50 sur les huit cas qui insèrent (`cat-03` ET `annee` 22,0 → 16,4 ms), insertion de 6,7 à 3,5 ns par iid gardé, parcours inchangé (8,9 ns par iid lu) ; le § 5 de 2026-10-22 surestimait le prix unitaire de l'insertion, le reste du surcoût d'un domaine creux est le parcours épars (hors périmètre) ; aucune clause sous 1 ms, ADR-0046 non rouvert. Relecture OK au 2e tour (tour 1 : `Result` d'`append` ignoré, pytest de `tools/` non lancé, trois mineurs du rapport, tous corrigés) ; garde-fou ADR-0037 sans écart aux deux tours. `cargo test` 560 verts / 22 ignorés, `tools/` 273 verts / 1 sauté ; fmt et clippy verts. Mineur restant dans NETTOYER-P4 |
 | P4 | ACCELERER-RECETTE | A-FAIRE | | Ajoutée par ADR-0067 (accepté le 2026-10-26), hors plan : ventilation de l'étape `validation` d'abord, encodage de la recette par lots seulement si le ré-encodage en dépasse la moitié |
 | P4 | MESURER-LATENCE-DENSE | A-FAIRE | | |
 | P4 | NETTOYER-P4 | A-FAIRE | | Hors plan, décision du propriétaire du 2026-10-26, sans fiche : corrections mineures relevées au fil de la phase, avant le rapport J4 ; contenu dans la section « Contenu de NETTOYER-P4 » ci-dessous |
@@ -272,6 +272,9 @@ Ouvert par l'orchestrateur le 2026-10-26, sur décision du propriétaire, et com
 - (RESCORER-FP16, `@dev`) `kernels::dot` refait le dispatch à chaque appel (environ 1 % d'un noyau à d = 768) ; une `dot_function()` résolue une fois, comme `hamming_function`.
 - (RESCORER-FP16, `@dev`) `SegmentReader::vector_f16` et `vector` allouent un `Vec` par passage scoré ; un tampon réutilisable, surtout pour EXACT sur un grand pool.
 - (RESCORER-FP16, `@dev`) `rescore` est séquentiel (N borné par `rescore_candidates`, 1 000) ; le paralléliser seulement si MES-03 le demande.
+
+**Outils et rapports de mesure**
+- (INSERER-POOL-EN-ORDRE, `@relecteur`) `tools/bench/mes14/compact.py:102-126` : la garde d'égalité des pools et des `scan_iids` avant/après ne porte que sur le premier tour ; une divergence limitée aux fichiers `round2-*` passerait sans échec. Étendre la garde aux seconds tours ou la déplacer dans `noise()`.
 
 ## Écarts à la conception
 
@@ -663,3 +666,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-26 | Début de RESCORER-FP16 : branche `tache/RESCORER-FP16` depuis `phase/P4-recherche-rapide` (`fb5c8f0`) ; pas de `@testeur` (aucun invariant cité) |
 | 2026-10-26 | RESCORER-FP16 : question de conception de `@dev` (égalité stricte avec EXACT contre produit scalaire des noyaux) ; verdicts `@architecte` ECART et NON-COUVERT ; ADR-0072 rédigé par `@greffier` et accepté par anticipation (clause arithmétique d'ADR-0045 remplacée, critère de la fiche précisé) |
 | 2026-10-26 | RESCORER-FP16 terminée : ADR-0072 accepté par anticipation (`bc72492`) ; relecture OK au 1er tour, garde-fou ADR-0037 sans écart ; 554 tests verts (286 sous `failpoints`) ; 4 mineurs et 3 pistes de performance reportés dans NETTOYER-P4 |
+| 2026-10-26 | Début d'INSERER-POOL-EN-ORDRE : branche `tache/INSERER-POOL-EN-ORDRE` depuis `phase/P4-recherche-rapide` (`4c7dd6c`) ; invariant cité INV-07, tests écrits d'abord par `@testeur` ; MES-14 relevée avant et après le changement par `@mesureur` |
+| 2026-10-26 | INSERER-POOL-EN-ORDRE terminée : construction par ajout en fin (`from_sorted_iter`) ; MES-14 rejouée avant et après (−15,5 à −31,9 % en p50 à 8,58 M) ; relecture OK au 2e tour, garde-fou ADR-0037 sans écart ; 560 tests verts, `tools/` 273 verts ; 1 mineur reporté dans NETTOYER-P4. Proposition de `@mesureur`, à soumettre au propriétaire au point de fin : la règle « 1 ms ≈ 40 000 à 110 000 iid lus » deviendrait « ≈ 53 000 à 114 000 » (non appliquée) |

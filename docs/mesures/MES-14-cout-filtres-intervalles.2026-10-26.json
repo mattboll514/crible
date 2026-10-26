@@ -1,0 +1,1560 @@
+{
+ "campaign": {
+  "measure": "MES-14",
+  "date": "2026-10-26",
+  "task": "INSERER-POOL-EN-ORDRE",
+  "before": "releve du 2026-10-26, code au commit 4c7dd6c sans la tache",
+  "after": "releve du 2026-10-26, scan_column avec RoaringBitmap::append",
+  "commit": "4c7dd6cb794f3f701b1562d15f81f7d5464f7761",
+  "pool_rs_sha256": "0aa8117cfec84f3653f3c0bd217478cc97de1cc6bd31ae81385f7299d8eeb690",
+  "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
+  "native": true,
+  "profile": "bench",
+  "repeats": 1000,
+  "warmup": 200,
+  "rounds": 2,
+  "dataset": "synth-small",
+  "dataset_checksum": "blake3:2d3d8265a8df350d816bccb5732fe338921d275cae5d091a96d0497646e58805",
+  "percentiles": "nearest rank, no interpolation",
+  "cache": "hot, every filter structure in RAM"
+ },
+ "fixtures": {
+  "synth-small": {
+   "records_sqlite_sha256": "75ea8430b0624c2788f18ca4c74c0c25ebbc2a12b3a6018934639510908bf6c8",
+   "records_sqlite_bytes": 3559424,
+   "live_passages": 9750,
+   "same_as_2026_10_22": false
+  },
+  "fixture-1m": {
+   "records_sqlite_sha256": "5ce1be32488c69560c86dfaa7bdad9443c6680211bfa40745ea083cbb142d4f4",
+   "records_sqlite_bytes": 213811200,
+   "live_passages": 1000000,
+   "same_as_2026_10_22": true
+  },
+  "fixture-8m58": {
+   "records_sqlite_sha256": "d53184ac6821267a07cdf030aa15370579f9695d729b1d5434b304e809d68c66",
+   "records_sqlite_bytes": 1849311232,
+   "live_passages": 8580000,
+   "same_as_2026_10_22": true
+  }
+ },
+ "points": [
+  {
+   "index": "synth-small",
+   "round": 1,
+   "live_passages": 9750,
+   "filter_memory_bytes": 571461,
+   "index_build_ns": 39206584,
+   "records_bytes": 3559424,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 585,
+     "scan_iids": 0,
+     "p50_ns": 417,
+     "p95_ns": 458,
+     "p99_ns": 459,
+     "min_ns": 375,
+     "max_ns": 500,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 1704,
+     "scan_iids": 0,
+     "p50_ns": 1042,
+     "p95_ns": 1042,
+     "p99_ns": 1084,
+     "min_ns": 1000,
+     "max_ns": 1125,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 2880,
+     "scan_iids": 9225,
+     "p50_ns": 138000,
+     "p95_ns": 151666,
+     "p99_ns": 161292,
+     "min_ns": 122208,
+     "max_ns": 167292,
+     "ns_per_iid_read_first_clause": 14.959
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 975,
+     "scan_iids": 9250,
+     "p50_ns": 116875,
+     "p95_ns": 120667,
+     "p99_ns": 124417,
+     "min_ns": 113750,
+     "max_ns": 126833,
+     "ns_per_iid_read_first_clause": 12.635
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 3655,
+     "scan_iids": 9350,
+     "p50_ns": 60708,
+     "p95_ns": 63333,
+     "p99_ns": 66000,
+     "min_ns": 59458,
+     "max_ns": 70458,
+     "ns_per_iid_read_first_clause": 6.493
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 495,
+     "scan_iids": 1618,
+     "p50_ns": 31750,
+     "p95_ns": 32500,
+     "p99_ns": 32917,
+     "min_ns": 31375,
+     "max_ns": 36542,
+     "ns_per_iid_read_first_clause": 19.623
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 155,
+     "scan_iids": 1612,
+     "p50_ns": 26917,
+     "p95_ns": 27208,
+     "p99_ns": 28708,
+     "min_ns": 26666,
+     "max_ns": 33417,
+     "ns_per_iid_read_first_clause": 16.698
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 185,
+     "scan_iids": 560,
+     "p50_ns": 10708,
+     "p95_ns": 10834,
+     "p99_ns": 11708,
+     "min_ns": 10500,
+     "max_ns": 19375,
+     "ns_per_iid_read_first_clause": 19.121
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 55,
+     "scan_iids": 560,
+     "p50_ns": 9500,
+     "p95_ns": 9667,
+     "p99_ns": 11250,
+     "min_ns": 9375,
+     "max_ns": 15542,
+     "ns_per_iid_read_first_clause": 16.964
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 9225,
+     "p50_ns": 45500,
+     "p95_ns": 45625,
+     "p99_ns": 46708,
+     "min_ns": 45333,
+     "max_ns": 51625,
+     "ns_per_iid_read_first_clause": 4.932
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 9225,
+     "scan_iids": 9225,
+     "p50_ns": 80250,
+     "p95_ns": 83750,
+     "p99_ns": 86125,
+     "min_ns": 79792,
+     "max_ns": 89417,
+     "ns_per_iid_read_first_clause": 8.699
+    }
+   ]
+  },
+  {
+   "index": "fixture-1m",
+   "round": 1,
+   "live_passages": 1000000,
+   "filter_memory_bytes": 45267765,
+   "index_build_ns": 2005608125,
+   "records_bytes": 213811200,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 62500,
+     "scan_iids": 0,
+     "p50_ns": 24333,
+     "p95_ns": 24500,
+     "p99_ns": 25459,
+     "min_ns": 24125,
+     "max_ns": 29084,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 179611,
+     "scan_iids": 0,
+     "p50_ns": 7250,
+     "p95_ns": 7417,
+     "p99_ns": 7542,
+     "min_ns": 6958,
+     "max_ns": 8583,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 289700,
+     "scan_iids": 949295,
+     "p50_ns": 15183750,
+     "p95_ns": 16402083,
+     "p99_ns": 17176334,
+     "min_ns": 14845166,
+     "max_ns": 32695375,
+     "ns_per_iid_read_first_clause": 15.995
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 105620,
+     "scan_iids": 949845,
+     "p50_ns": 8667125,
+     "p95_ns": 9432417,
+     "p99_ns": 9892167,
+     "min_ns": 8588458,
+     "max_ns": 30003750,
+     "ns_per_iid_read_first_clause": 9.125
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 382320,
+     "scan_iids": 950595,
+     "p50_ns": 7614125,
+     "p95_ns": 8252000,
+     "p99_ns": 10051417,
+     "min_ns": 7409542,
+     "max_ns": 35163041,
+     "ns_per_iid_read_first_clause": 8.01
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 51971,
+     "scan_iids": 170499,
+     "p50_ns": 3386417,
+     "p95_ns": 3419250,
+     "p99_ns": 3462333,
+     "min_ns": 3330458,
+     "max_ns": 3986000,
+     "ns_per_iid_read_first_clause": 19.862
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 18924,
+     "scan_iids": 170350,
+     "p50_ns": 1820583,
+     "p95_ns": 1873583,
+     "p99_ns": 1993292,
+     "min_ns": 1783125,
+     "max_ns": 2097958,
+     "ns_per_iid_read_first_clause": 10.687
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 17780,
+     "scan_iids": 59240,
+     "p50_ns": 1271792,
+     "p95_ns": 1340917,
+     "p99_ns": 1439042,
+     "min_ns": 1257708,
+     "max_ns": 1502083,
+     "ns_per_iid_read_first_clause": 21.468
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 6460,
+     "scan_iids": 59270,
+     "p50_ns": 699083,
+     "p95_ns": 711166,
+     "p99_ns": 737917,
+     "min_ns": 692083,
+     "max_ns": 819750,
+     "ns_per_iid_read_first_clause": 11.795
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 949295,
+     "p50_ns": 6139250,
+     "p95_ns": 6446333,
+     "p99_ns": 6814750,
+     "min_ns": 6110792,
+     "max_ns": 7819875,
+     "ns_per_iid_read_first_clause": 6.467
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 949295,
+     "scan_iids": 949295,
+     "p50_ns": 8437083,
+     "p95_ns": 9727541,
+     "p99_ns": 11204209,
+     "min_ns": 8349375,
+     "max_ns": 38417917,
+     "ns_per_iid_read_first_clause": 8.888
+    }
+   ]
+  },
+  {
+   "index": "fixture-8m58",
+   "round": 1,
+   "live_passages": 8580000,
+   "filter_memory_bytes": 387229133,
+   "index_build_ns": 18184112584,
+   "records_bytes": 1849311232,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 536250,
+     "scan_iids": 0,
+     "p50_ns": 210959,
+     "p95_ns": 217833,
+     "p99_ns": 228959,
+     "min_ns": 209583,
+     "max_ns": 247750,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 1541689,
+     "scan_iids": 0,
+     "p50_ns": 52208,
+     "p95_ns": 53916,
+     "p99_ns": 57875,
+     "min_ns": 50958,
+     "max_ns": 61709,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 2492350,
+     "scan_iids": 8148075,
+     "p50_ns": 160621750,
+     "p95_ns": 168213292,
+     "p99_ns": 171202959,
+     "min_ns": 158151000,
+     "max_ns": 176155083,
+     "ns_per_iid_read_first_clause": 19.713
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 907955,
+     "scan_iids": 8153090,
+     "p50_ns": 95542417,
+     "p95_ns": 100749250,
+     "p99_ns": 103642542,
+     "min_ns": 94448417,
+     "max_ns": 104629959,
+     "ns_per_iid_read_first_clause": 11.719
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 3262150,
+     "scan_iids": 8150880,
+     "p50_ns": 85999125,
+     "p95_ns": 91157125,
+     "p99_ns": 93081292,
+     "min_ns": 85379875,
+     "max_ns": 110691291,
+     "ns_per_iid_read_first_clause": 10.551
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 447324,
+     "scan_iids": 1463650,
+     "p50_ns": 33491708,
+     "p95_ns": 34163958,
+     "p99_ns": 35776708,
+     "min_ns": 33131500,
+     "max_ns": 47078209,
+     "ns_per_iid_read_first_clause": 22.882
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 163230,
+     "scan_iids": 1464826,
+     "p50_ns": 19305833,
+     "p95_ns": 20241167,
+     "p99_ns": 21185208,
+     "min_ns": 19163958,
+     "max_ns": 21346417,
+     "ns_per_iid_read_first_clause": 13.18
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 154800,
+     "scan_iids": 509230,
+     "p50_ns": 16430667,
+     "p95_ns": 18195167,
+     "p99_ns": 19085542,
+     "min_ns": 15514333,
+     "max_ns": 24381625,
+     "ns_per_iid_read_first_clause": 32.266
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 57290,
+     "scan_iids": 509750,
+     "p50_ns": 7767833,
+     "p95_ns": 8659167,
+     "p99_ns": 8913416,
+     "min_ns": 7524458,
+     "max_ns": 9494333,
+     "ns_per_iid_read_first_clause": 15.239
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 8148075,
+     "p50_ns": 71672084,
+     "p95_ns": 76506625,
+     "p99_ns": 77700916,
+     "min_ns": 71487833,
+     "max_ns": 79037167,
+     "ns_per_iid_read_first_clause": 8.796
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 8148075,
+     "scan_iids": 8148075,
+     "p50_ns": 100235958,
+     "p95_ns": 105028958,
+     "p99_ns": 107039750,
+     "min_ns": 98581292,
+     "max_ns": 121707666,
+     "ns_per_iid_read_first_clause": 12.302
+    }
+   ]
+  },
+  {
+   "index": "synth-small",
+   "round": 2,
+   "live_passages": 9750,
+   "filter_memory_bytes": 571461,
+   "index_build_ns": 23326333,
+   "records_bytes": 3559424,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 585,
+     "scan_iids": 0,
+     "p50_ns": 333,
+     "p95_ns": 334,
+     "p99_ns": 334,
+     "min_ns": 291,
+     "max_ns": 417,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 1704,
+     "scan_iids": 0,
+     "p50_ns": 792,
+     "p95_ns": 834,
+     "p99_ns": 875,
+     "min_ns": 709,
+     "max_ns": 917,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 2880,
+     "scan_iids": 9225,
+     "p50_ns": 131458,
+     "p95_ns": 138958,
+     "p99_ns": 147167,
+     "min_ns": 125916,
+     "max_ns": 254709,
+     "ns_per_iid_read_first_clause": 14.25
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 975,
+     "scan_iids": 9250,
+     "p50_ns": 114750,
+     "p95_ns": 124792,
+     "p99_ns": 129958,
+     "min_ns": 113459,
+     "max_ns": 142875,
+     "ns_per_iid_read_first_clause": 12.405
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 3655,
+     "scan_iids": 9350,
+     "p50_ns": 64458,
+     "p95_ns": 69375,
+     "p99_ns": 70333,
+     "min_ns": 59208,
+     "max_ns": 79167,
+     "ns_per_iid_read_first_clause": 6.894
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 495,
+     "scan_iids": 1618,
+     "p50_ns": 31500,
+     "p95_ns": 32875,
+     "p99_ns": 36625,
+     "min_ns": 31083,
+     "max_ns": 37750,
+     "ns_per_iid_read_first_clause": 19.468
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 155,
+     "scan_iids": 1612,
+     "p50_ns": 26584,
+     "p95_ns": 28666,
+     "p99_ns": 31500,
+     "min_ns": 26333,
+     "max_ns": 36000,
+     "ns_per_iid_read_first_clause": 16.491
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 185,
+     "scan_iids": 560,
+     "p50_ns": 10792,
+     "p95_ns": 11042,
+     "p99_ns": 12667,
+     "min_ns": 10583,
+     "max_ns": 15792,
+     "ns_per_iid_read_first_clause": 19.271
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 55,
+     "scan_iids": 560,
+     "p50_ns": 9416,
+     "p95_ns": 9541,
+     "p99_ns": 11041,
+     "min_ns": 9291,
+     "max_ns": 15959,
+     "ns_per_iid_read_first_clause": 16.814
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 9225,
+     "p50_ns": 45292,
+     "p95_ns": 47125,
+     "p99_ns": 50042,
+     "min_ns": 45125,
+     "max_ns": 64833,
+     "ns_per_iid_read_first_clause": 4.91
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 9225,
+     "scan_iids": 9225,
+     "p50_ns": 75667,
+     "p95_ns": 80667,
+     "p99_ns": 83083,
+     "min_ns": 75416,
+     "max_ns": 87334,
+     "ns_per_iid_read_first_clause": 8.202
+    }
+   ]
+  },
+  {
+   "index": "fixture-1m",
+   "round": 2,
+   "live_passages": 1000000,
+   "filter_memory_bytes": 45267765,
+   "index_build_ns": 2308075625,
+   "records_bytes": 213811200,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 62500,
+     "scan_iids": 0,
+     "p50_ns": 24417,
+     "p95_ns": 25542,
+     "p99_ns": 27584,
+     "min_ns": 24084,
+     "max_ns": 30041,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 179611,
+     "scan_iids": 0,
+     "p50_ns": 7083,
+     "p95_ns": 8250,
+     "p99_ns": 8708,
+     "min_ns": 6750,
+     "max_ns": 14417,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 289700,
+     "scan_iids": 949295,
+     "p50_ns": 15330583,
+     "p95_ns": 16446375,
+     "p99_ns": 16990042,
+     "min_ns": 14863625,
+     "max_ns": 31446334,
+     "ns_per_iid_read_first_clause": 16.149
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 105620,
+     "scan_iids": 949845,
+     "p50_ns": 8673208,
+     "p95_ns": 9338416,
+     "p99_ns": 9544167,
+     "min_ns": 8548625,
+     "max_ns": 9647291,
+     "ns_per_iid_read_first_clause": 9.131
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 382320,
+     "scan_iids": 950595,
+     "p50_ns": 7647208,
+     "p95_ns": 8187375,
+     "p99_ns": 8371292,
+     "min_ns": 7441416,
+     "max_ns": 8587417,
+     "ns_per_iid_read_first_clause": 8.045
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 51971,
+     "scan_iids": 170499,
+     "p50_ns": 3372084,
+     "p95_ns": 3648583,
+     "p99_ns": 3736041,
+     "min_ns": 3286625,
+     "max_ns": 3805458,
+     "ns_per_iid_read_first_clause": 19.778
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 18924,
+     "scan_iids": 170350,
+     "p50_ns": 1807375,
+     "p95_ns": 1956625,
+     "p99_ns": 2001625,
+     "min_ns": 1773000,
+     "max_ns": 2051875,
+     "ns_per_iid_read_first_clause": 10.61
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 17780,
+     "scan_iids": 59240,
+     "p50_ns": 1262625,
+     "p95_ns": 1400083,
+     "p99_ns": 1435583,
+     "min_ns": 1250833,
+     "max_ns": 1482125,
+     "ns_per_iid_read_first_clause": 21.314
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 6460,
+     "scan_iids": 59270,
+     "p50_ns": 696875,
+     "p95_ns": 757667,
+     "p99_ns": 770458,
+     "min_ns": 685875,
+     "max_ns": 801292,
+     "ns_per_iid_read_first_clause": 11.758
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 949295,
+     "p50_ns": 6137541,
+     "p95_ns": 6625667,
+     "p99_ns": 6744834,
+     "min_ns": 6107791,
+     "max_ns": 6872542,
+     "ns_per_iid_read_first_clause": 6.465
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 949295,
+     "scan_iids": 949295,
+     "p50_ns": 8419625,
+     "p95_ns": 9478291,
+     "p99_ns": 9888709,
+     "min_ns": 8349459,
+     "max_ns": 10037375,
+     "ns_per_iid_read_first_clause": 8.869
+    }
+   ]
+  },
+  {
+   "index": "fixture-8m58",
+   "round": 2,
+   "live_passages": 8580000,
+   "filter_memory_bytes": 387229133,
+   "index_build_ns": 17607943916,
+   "records_bytes": 1849311232,
+   "cases": [
+    {
+     "label": "keyword seul, categorie=cat-03",
+     "kind": "bitmap",
+     "filter": "{\"categorie\":\"cat-03\"}",
+     "pool_size": 536250,
+     "scan_iids": 0,
+     "p50_ns": 209709,
+     "p95_ns": 214208,
+     "p99_ns": 220708,
+     "min_ns": 208917,
+     "max_ns": 233000,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "keyword seul, partie=corps",
+     "kind": "bitmap",
+     "filter": "{\"partie\":\"corps\"}",
+     "pool_size": 1541689,
+     "scan_iids": 0,
+     "p50_ns": 51292,
+     "p95_ns": 52959,
+     "p99_ns": 56000,
+     "min_ns": 50000,
+     "max_ns": 61458,
+     "ns_per_iid_read_first_clause": null
+    },
+    {
+     "label": "integer seul, annee 2000..2010, domaine = vivants",
+     "kind": "integer",
+     "filter": "{\"annee\":{\"gte\":2000,\"lte\":2010}}",
+     "pool_size": 2492350,
+     "scan_iids": 8148075,
+     "p50_ns": 159835209,
+     "p95_ns": 167206917,
+     "p99_ns": 170747375,
+     "min_ns": 157547250,
+     "max_ns": 174495459,
+     "ns_per_iid_read_first_clause": 19.616
+    },
+    {
+     "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+     "kind": "date",
+     "filter": "{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}",
+     "pool_size": 907955,
+     "scan_iids": 8153090,
+     "p50_ns": 95473125,
+     "p95_ns": 99094750,
+     "p99_ns": 102395958,
+     "min_ns": 94412208,
+     "max_ns": 108186625,
+     "ns_per_iid_read_first_clause": 11.71
+    },
+    {
+     "label": "float seul, score > 0.6, domaine = vivants",
+     "kind": "float",
+     "filter": "{\"score\":{\"gt\":0.6}}",
+     "pool_size": 3262150,
+     "scan_iids": 8150880,
+     "p50_ns": 85839916,
+     "p95_ns": 88824292,
+     "p99_ns": 92181708,
+     "min_ns": 85132583,
+     "max_ns": 112908625,
+     "ns_per_iid_read_first_clause": 10.531
+    },
+    {
+     "label": "partie=corps ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 447324,
+     "scan_iids": 1463650,
+     "p50_ns": 33466250,
+     "p95_ns": 35547333,
+     "p99_ns": 36317500,
+     "min_ns": 32996416,
+     "max_ns": 42249625,
+     "ns_per_iid_read_first_clause": 22.865
+    },
+    {
+     "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"partie\":\"corps\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 163230,
+     "scan_iids": 1464826,
+     "p50_ns": 19250500,
+     "p95_ns": 19474833,
+     "p99_ns": 19763917,
+     "min_ns": 19121458,
+     "max_ns": 20161375,
+     "ns_per_iid_read_first_clause": 13.142
+    },
+    {
+     "label": "categorie=cat-03 ET annee 2000..2010",
+     "kind": "integer",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"annee\":{\"gte\":2000,\"lte\":2010}}]}",
+     "pool_size": 154800,
+     "scan_iids": 509230,
+     "p50_ns": 16193750,
+     "p95_ns": 17163458,
+     "p99_ns": 17851541,
+     "min_ns": 15543500,
+     "max_ns": 18623375,
+     "ns_per_iid_read_first_clause": 31.8
+    },
+    {
+     "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+     "kind": "date",
+     "filter": "{\"$and\":[{\"categorie\":\"cat-03\"},{\"date_publication\":{\"gte\":\"2000-01-01\",\"lte\":\"2003-12-31\"}}]}",
+     "pool_size": 57290,
+     "scan_iids": 509750,
+     "p50_ns": 7709875,
+     "p95_ns": 8140500,
+     "p99_ns": 8604208,
+     "min_ns": 7530917,
+     "max_ns": 9383417,
+     "ns_per_iid_read_first_clause": 15.125
+    },
+    {
+     "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":5000}}",
+     "pool_size": 0,
+     "scan_iids": 8148075,
+     "p50_ns": 71656125,
+     "p95_ns": 75074333,
+     "p99_ns": 76529875,
+     "min_ns": 71451708,
+     "max_ns": 86758292,
+     "ns_per_iid_read_first_clause": 8.794
+    },
+    {
+     "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+     "kind": "control",
+     "filter": "{\"annee\":{\"gte\":1900}}",
+     "pool_size": 8148075,
+     "scan_iids": 8148075,
+     "p50_ns": 100151708,
+     "p95_ns": 103763875,
+     "p99_ns": 105111750,
+     "min_ns": 97799542,
+     "max_ns": 110177750,
+     "ns_per_iid_read_first_clause": 12.291
+    }
+   ]
+  }
+ ],
+ "comparison": {
+  "synth-small": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "kind": "bitmap",
+    "pool_size": 585,
+    "scan_iids": 0,
+    "p50_before_ns": 417,
+    "p50_after_ns": 417,
+    "p95_before_ns": 458,
+    "p95_after_ns": 458,
+    "delta_p50_percent": 0.0,
+    "delta_p95_percent": 0.0
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "kind": "bitmap",
+    "pool_size": 1704,
+    "scan_iids": 0,
+    "p50_before_ns": 1042,
+    "p50_after_ns": 1042,
+    "p95_before_ns": 1042,
+    "p95_after_ns": 1042,
+    "delta_p50_percent": 0.0,
+    "delta_p95_percent": 0.0
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "kind": "integer",
+    "pool_size": 2880,
+    "scan_iids": 9225,
+    "p50_before_ns": 189417,
+    "p50_after_ns": 138000,
+    "p95_before_ns": 206667,
+    "p95_after_ns": 151666,
+    "delta_p50_percent": -27.14,
+    "delta_p95_percent": -26.61
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "kind": "date",
+    "pool_size": 975,
+    "scan_iids": 9250,
+    "p50_before_ns": 139333,
+    "p50_after_ns": 116875,
+    "p95_before_ns": 160834,
+    "p95_after_ns": 120667,
+    "delta_p50_percent": -16.12,
+    "delta_p95_percent": -24.97
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "kind": "float",
+    "pool_size": 3655,
+    "scan_iids": 9350,
+    "p50_before_ns": 75250,
+    "p50_after_ns": 60708,
+    "p95_before_ns": 77875,
+    "p95_after_ns": 63333,
+    "delta_p50_percent": -19.32,
+    "delta_p95_percent": -18.67
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 495,
+    "scan_iids": 1618,
+    "p50_before_ns": 40708,
+    "p50_after_ns": 31750,
+    "p95_before_ns": 41208,
+    "p95_after_ns": 32500,
+    "delta_p50_percent": -22.01,
+    "delta_p95_percent": -21.13
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 155,
+    "scan_iids": 1612,
+    "p50_before_ns": 31334,
+    "p50_after_ns": 26917,
+    "p95_before_ns": 32000,
+    "p95_after_ns": 27208,
+    "delta_p50_percent": -14.1,
+    "delta_p95_percent": -14.98
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 185,
+    "scan_iids": 560,
+    "p50_before_ns": 13959,
+    "p50_after_ns": 10708,
+    "p95_before_ns": 14250,
+    "p95_after_ns": 10834,
+    "delta_p50_percent": -23.29,
+    "delta_p95_percent": -23.97
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 55,
+    "scan_iids": 560,
+    "p50_before_ns": 10833,
+    "p50_after_ns": 9500,
+    "p95_before_ns": 10958,
+    "p95_after_ns": 9667,
+    "delta_p50_percent": -12.3,
+    "delta_p95_percent": -11.78
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "kind": "control",
+    "pool_size": 0,
+    "scan_iids": 9225,
+    "p50_before_ns": 49583,
+    "p50_after_ns": 45500,
+    "p95_before_ns": 50125,
+    "p95_after_ns": 45625,
+    "delta_p50_percent": -8.23,
+    "delta_p95_percent": -8.98
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "kind": "control",
+    "pool_size": 9225,
+    "scan_iids": 9225,
+    "p50_before_ns": 104875,
+    "p50_after_ns": 80250,
+    "p95_before_ns": 111417,
+    "p95_after_ns": 83750,
+    "delta_p50_percent": -23.48,
+    "delta_p95_percent": -24.83
+   }
+  ],
+  "fixture-1m": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "kind": "bitmap",
+    "pool_size": 62500,
+    "scan_iids": 0,
+    "p50_before_ns": 24375,
+    "p50_after_ns": 24333,
+    "p95_before_ns": 28542,
+    "p95_after_ns": 24500,
+    "delta_p50_percent": -0.17,
+    "delta_p95_percent": -14.16
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "kind": "bitmap",
+    "pool_size": 179611,
+    "scan_iids": 0,
+    "p50_before_ns": 7125,
+    "p50_after_ns": 7250,
+    "p95_before_ns": 8209,
+    "p95_after_ns": 7417,
+    "delta_p50_percent": 1.75,
+    "delta_p95_percent": -9.65
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "kind": "integer",
+    "pool_size": 289700,
+    "scan_iids": 949295,
+    "p50_before_ns": 17503459,
+    "p50_after_ns": 15183750,
+    "p95_before_ns": 18946542,
+    "p95_after_ns": 16402083,
+    "delta_p50_percent": -13.25,
+    "delta_p95_percent": -13.43
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "kind": "date",
+    "pool_size": 105620,
+    "scan_iids": 949845,
+    "p50_before_ns": 9746166,
+    "p50_after_ns": 8667125,
+    "p95_before_ns": 10169958,
+    "p95_after_ns": 9432417,
+    "delta_p50_percent": -11.07,
+    "delta_p95_percent": -7.25
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "kind": "float",
+    "pool_size": 382320,
+    "scan_iids": 950595,
+    "p50_before_ns": 8495375,
+    "p50_after_ns": 7614125,
+    "p95_before_ns": 8714666,
+    "p95_after_ns": 8252000,
+    "delta_p50_percent": -10.37,
+    "delta_p95_percent": -5.31
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 51971,
+    "scan_iids": 170499,
+    "p50_before_ns": 4270875,
+    "p50_after_ns": 3386417,
+    "p95_before_ns": 4423042,
+    "p95_after_ns": 3419250,
+    "delta_p50_percent": -20.71,
+    "delta_p95_percent": -22.69
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 18924,
+    "scan_iids": 170350,
+    "p50_before_ns": 2103709,
+    "p50_after_ns": 1820583,
+    "p95_before_ns": 2294000,
+    "p95_after_ns": 1873583,
+    "delta_p50_percent": -13.46,
+    "delta_p95_percent": -18.33
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 17780,
+    "scan_iids": 59240,
+    "p50_before_ns": 1702167,
+    "p50_after_ns": 1271792,
+    "p95_before_ns": 1910833,
+    "p95_after_ns": 1340917,
+    "delta_p50_percent": -25.28,
+    "delta_p95_percent": -29.83
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 6460,
+    "scan_iids": 59270,
+    "p50_before_ns": 807958,
+    "p50_after_ns": 699083,
+    "p95_before_ns": 878917,
+    "p95_after_ns": 711166,
+    "delta_p50_percent": -13.48,
+    "delta_p95_percent": -19.09
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "kind": "control",
+    "pool_size": 0,
+    "scan_iids": 949295,
+    "p50_before_ns": 6148500,
+    "p50_after_ns": 6139250,
+    "p95_before_ns": 6294458,
+    "p95_after_ns": 6446333,
+    "delta_p50_percent": -0.15,
+    "delta_p95_percent": 2.41
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "kind": "control",
+    "pool_size": 949295,
+    "scan_iids": 949295,
+    "p50_before_ns": 10710125,
+    "p50_after_ns": 8437083,
+    "p95_before_ns": 11041291,
+    "p95_after_ns": 9727541,
+    "delta_p50_percent": -21.22,
+    "delta_p95_percent": -11.9
+   }
+  ],
+  "fixture-8m58": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "kind": "bitmap",
+    "pool_size": 536250,
+    "scan_iids": 0,
+    "p50_before_ns": 211875,
+    "p50_after_ns": 210959,
+    "p95_before_ns": 228125,
+    "p95_after_ns": 217833,
+    "delta_p50_percent": -0.43,
+    "delta_p95_percent": -4.51
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "kind": "bitmap",
+    "pool_size": 1541689,
+    "scan_iids": 0,
+    "p50_before_ns": 51667,
+    "p50_after_ns": 52208,
+    "p95_before_ns": 56708,
+    "p95_after_ns": 53916,
+    "delta_p50_percent": 1.05,
+    "delta_p95_percent": -4.92
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "kind": "integer",
+    "pool_size": 2492350,
+    "scan_iids": 8148075,
+    "p50_before_ns": 194928000,
+    "p50_after_ns": 160621750,
+    "p95_before_ns": 205888083,
+    "p95_after_ns": 168213292,
+    "delta_p50_percent": -17.6,
+    "delta_p95_percent": -18.3
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "kind": "date",
+    "pool_size": 907955,
+    "scan_iids": 8153090,
+    "p50_before_ns": 115155042,
+    "p50_after_ns": 95542417,
+    "p95_before_ns": 121548542,
+    "p95_after_ns": 100749250,
+    "delta_p50_percent": -17.03,
+    "delta_p95_percent": -17.11
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "kind": "float",
+    "pool_size": 3262150,
+    "scan_iids": 8150880,
+    "p50_before_ns": 101798459,
+    "p50_after_ns": 85999125,
+    "p95_before_ns": 116120666,
+    "p95_after_ns": 91157125,
+    "delta_p50_percent": -15.52,
+    "delta_p95_percent": -21.5
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 447324,
+    "scan_iids": 1463650,
+    "p50_before_ns": 49174000,
+    "p50_after_ns": 33491708,
+    "p95_before_ns": 53262125,
+    "p95_after_ns": 34163958,
+    "delta_p50_percent": -31.89,
+    "delta_p95_percent": -35.86
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 163230,
+    "scan_iids": 1464826,
+    "p50_before_ns": 24862041,
+    "p50_after_ns": 19305833,
+    "p95_before_ns": 26322792,
+    "p95_after_ns": 20241167,
+    "delta_p50_percent": -22.35,
+    "delta_p95_percent": -23.1
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "kind": "integer",
+    "pool_size": 154800,
+    "scan_iids": 509230,
+    "p50_before_ns": 22044041,
+    "p50_after_ns": 16430667,
+    "p95_before_ns": 23940958,
+    "p95_after_ns": 18195167,
+    "delta_p50_percent": -25.46,
+    "delta_p95_percent": -24.0
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "kind": "date",
+    "pool_size": 57290,
+    "scan_iids": 509750,
+    "p50_before_ns": 9422875,
+    "p50_after_ns": 7767833,
+    "p95_before_ns": 11727542,
+    "p95_after_ns": 8659167,
+    "delta_p50_percent": -17.56,
+    "delta_p95_percent": -26.16
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "kind": "control",
+    "pool_size": 0,
+    "scan_iids": 8148075,
+    "p50_before_ns": 72241167,
+    "p50_after_ns": 71672084,
+    "p95_before_ns": 76697667,
+    "p95_after_ns": 76506625,
+    "delta_p50_percent": -0.79,
+    "delta_p95_percent": -0.25
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "kind": "control",
+    "pool_size": 8148075,
+    "scan_iids": 8148075,
+    "p50_before_ns": 127079459,
+    "p50_after_ns": 100235958,
+    "p95_before_ns": 142157083,
+    "p95_after_ns": 105028958,
+    "delta_p50_percent": -21.12,
+    "delta_p95_percent": -26.12
+   }
+  ]
+ },
+ "noise": {
+  "synth-small": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "noise_p50_percent": 20.14,
+    "noise_p95_percent": 27.07
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "noise_p50_percent": 24.09,
+    "noise_p95_percent": 23.99
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "noise_p50_percent": 6.47,
+    "noise_p95_percent": 8.38
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "noise_p50_percent": 12.26,
+    "noise_p95_percent": 13.37
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "noise_p50_percent": 6.18,
+    "noise_p95_percent": 18.99
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "noise_p50_percent": 0.82,
+    "noise_p95_percent": 5.87
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 2.52,
+    "noise_p95_percent": 15.88
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "noise_p50_percent": 4.79,
+    "noise_p95_percent": 6.72
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 5.39,
+    "noise_p95_percent": 23.2
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "noise_p50_percent": 5.29,
+    "noise_p95_percent": 17.96
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "noise_p50_percent": 5.71,
+    "noise_p95_percent": 7.29
+   }
+  ],
+  "fixture-1m": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "noise_p50_percent": 0.35,
+    "noise_p95_percent": 11.68
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "noise_p50_percent": 2.3,
+    "noise_p95_percent": 11.23
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "noise_p50_percent": 0.97,
+    "noise_p95_percent": 0.78
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "noise_p50_percent": 0.23,
+    "noise_p95_percent": 1.74
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "noise_p50_percent": 0.43,
+    "noise_p95_percent": 1.34
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "noise_p50_percent": 0.42,
+    "noise_p95_percent": 6.71
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 0.73,
+    "noise_p95_percent": 4.43
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "noise_p50_percent": 0.72,
+    "noise_p95_percent": 9.44
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 1.35,
+    "noise_p95_percent": 6.54
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "noise_p50_percent": 0.04,
+    "noise_p95_percent": 5.89
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "noise_p50_percent": 0.21,
+    "noise_p95_percent": 3.15
+   }
+  ],
+  "fixture-8m58": [
+   {
+    "label": "keyword seul, categorie=cat-03",
+    "noise_p50_percent": 0.85,
+    "noise_p95_percent": 3.45
+   },
+   {
+    "label": "keyword seul, partie=corps",
+    "noise_p50_percent": 1.75,
+    "noise_p95_percent": 7.05
+   },
+   {
+    "label": "integer seul, annee 2000..2010, domaine = vivants",
+    "noise_p50_percent": 0.49,
+    "noise_p95_percent": 0.81
+   },
+   {
+    "label": "date seul, date_publication 2000-01-01..2003-12-31, domaine = vivants",
+    "noise_p50_percent": 0.88,
+    "noise_p95_percent": 1.64
+   },
+   {
+    "label": "float seul, score > 0.6, domaine = vivants",
+    "noise_p50_percent": 0.61,
+    "noise_p95_percent": 7.62
+   },
+   {
+    "label": "partie=corps ET annee 2000..2010",
+    "noise_p50_percent": 0.69,
+    "noise_p95_percent": 4.05
+   },
+   {
+    "label": "partie=corps ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 1.16,
+    "noise_p95_percent": 3.79
+   },
+   {
+    "label": "categorie=cat-03 ET annee 2000..2010",
+    "noise_p50_percent": 3.39,
+    "noise_p95_percent": 5.67
+   },
+   {
+    "label": "categorie=cat-03 ET date_publication 2000-01-01..2003-12-31",
+    "noise_p50_percent": 1.8,
+    "noise_p95_percent": 12.99
+   },
+   {
+    "label": "controle: annee >= 5000, memes iid lus, aucun garde",
+    "noise_p50_percent": 0.43,
+    "noise_p95_percent": 1.87
+   },
+   {
+    "label": "controle: annee >= 1900, memes iid lus, tous gardes",
+    "noise_p50_percent": 0.08,
+    "noise_p95_percent": 7.25
+   }
+  ]
+ },
+ "controls": {
+  "note": "derived: both controls read the same set, only one keeps any iid; the difference of their p50 divided by the kept count is the cost of adding one iid to the result bitmap",
+  "reads": 8148075,
+  "kept": 8148075,
+  "read_ns_per_iid_before": 8.866,
+  "read_ns_per_iid_after": 8.796,
+  "insertion_ns_per_kept_before": 6.73,
+  "insertion_ns_per_kept_after": 3.506,
+  "insertion_term_ms_before": 54.838,
+  "insertion_term_ms_after": 28.564
+ },
+ "controls_1m": {
+  "note": "derived: both controls read the same set, only one keeps any iid; the difference of their p50 divided by the kept count is the cost of adding one iid to the result bitmap",
+  "reads": 949295,
+  "kept": 949295,
+  "read_ns_per_iid_before": 6.477,
+  "read_ns_per_iid_after": 6.467,
+  "insertion_ns_per_kept_before": 4.805,
+  "insertion_ns_per_kept_after": 2.421,
+  "insertion_term_ms_before": 4.562,
+  "insertion_term_ms_after": 2.298
+ }
+}
