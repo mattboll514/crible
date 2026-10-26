@@ -9,17 +9,23 @@ publish.workspace = true
 [dependencies]
 crible-core = { path = "../crible-core" }
 crible-store = { path = "../crible-store" }
+half.workspace = true
 rayon.workspace = true
 roaring.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+# NOYAUX-SIMD: `criterion` (the `kernels` bench) and `proptest` (the SIMD
+# against scalar checks) are both crates `docs/07-stack-et-deploiement.md` lists
+# (l. 48). The kernels themselves use `half`, already a regular dependency and
+# listed at l. 36, so the task adds no dependency outside `docs/07`.
 # INV-07 (`tests/inv_07_*.rs`) builds a real index, reads `records.sqlite` for
 # the SQL oracle, and generates random filters. `proptest`, `rusqlite` and
 # `tempfile` are the test crates `docs/07-stack-et-deploiement.md` lists
 # (l. 37 and 46), so no ADR is needed. The other crates the fixtures need
 # (`crible-core`, `crible-store`, `roaring`, `serde_json`) are already regular
 # dependencies and are therefore usable from the tests.
+criterion.workspace = true
 proptest.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
@@ -31,6 +37,13 @@ tempfile.workspace = true
 # added for it.
 [[bench]]
 name = "pool_filter"
+harness = false
+
+# NOYAUX-SIMD: `kernels` compares the scalar reference with the dispatched
+# SIMD kernel, for the word counts of production (12 words, 768 bits) and two
+# neighbours. It uses the criterion harness, so `harness = false`.
+[[bench]]
+name = "kernels"
 harness = false
 
 [lints]
