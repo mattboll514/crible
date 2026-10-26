@@ -1,11 +1,20 @@
 # ADR-0071 — Seuil entre parcours dense et parcours clairsemé du scan binaire
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-26 par délégation du propriétaire pour les trois premières tâches de P4, à confirmer au point de fin)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-26)
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour les trois premières tâches de P4, à confirmer au point de fin de la série. La décision est retenue telle que proposée : parcours dense quand le pool couvre au moins la moitié de la plage d'iid qu'il occupe, parcours clairsemé sinon ; règle fixe, sans réglage ni configuration.
+- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour les trois premières tâches de P4, confirmé par le propriétaire le 2026-10-26. La décision est retenue telle que proposée : parcours dense quand le pool couvre au moins la moitié de la plage d'iid qu'il occupe, parcours clairsemé sinon ; règle fixe, sans réglage ni configuration.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `SCANNER-POOL-BINAIRE` (phase P4), à partir du choix retenu par `@dev`
 - **Remplace** : —
+
+## Erratum du 2026-10-26
+
+Les numéros de ligne de `crates/crible-search/src/dense/binary.rs` cités dans la décision et dans les références ont dérivé depuis la proposition de cet ADR. Ils sont remplacés par des noms stables, vérifiés dans le fichier le 2026-10-26 : la fonction `traversal` porte le seuil, `top_k` choisit le parcours une fois par scan, et le test `dense_and_sparse_traversals_agree_with_a_full_sort` compare les deux parcours à un tri complet. Aucune décision ne change ; la correction est autorisée par le propriétaire le 2026-10-26.
+
+- **Avant** : `binary.rs:261-271` (le seuil) ; `binary.rs:126` (choix une fois par scan) ; `binary.rs:552` (test de comparaison au tri complet).
+- **Après** : fonction `traversal` (le seuil) ; dans `top_k`, l'endroit qui choisit le parcours une fois par scan ; test `dense_and_sparse_traversals_agree_with_a_full_sort` (comparaison au tri complet).
+
+Motif : ces renvois doivent rester valables quand le fichier évolue. Les numéros observés après dérive étaient 130, 266-274 et 576, ce qui montre que la citation par ligne ne tient pas d'une tâche à l'autre.
 
 ## Contexte
 
@@ -28,10 +37,10 @@ Les deux parcours diffèrent par leur coût, pas par leur résultat :
 
 Précisions :
 
-- la comparaison est `2 × taille du pool ≥ dernier iid − premier iid + 1` (`crates/crible-search/src/dense/binary.rs:261-271`) ;
-- la décision est prise **une fois par scan, sur le pool entier** (`binary.rs:126`), puis appliquée à toutes les tranches d'iid ; elle n'est pas recalculée par tranche ;
+- la comparaison est `2 × taille du pool ≥ dernier iid − premier iid + 1` (`crates/crible-search/src/dense/binary.rs`, fonction `traversal`) ;
+- la décision est prise **une fois par scan, sur le pool entier** (`crates/crible-search/src/dense/binary.rs`, dans `top_k`), puis appliquée à toutes les tranches d'iid ; elle n'est pas recalculée par tranche ;
 - un pool vide ne choisit pas de parcours : le scan rend une liste vide avant la décision ;
-- le seuil ne change que le coût, jamais le résultat. Les deux parcours sont comparés à un tri complet par Hamming, sur des pools de toutes densités, par le test `dense_and_sparse_traversals_agree_with_a_full_sort` (`binary.rs:552`).
+- le seuil ne change que le coût, jamais le résultat. Les deux parcours sont comparés à un tri complet par Hamming, sur des pools de toutes densités, par le test `dense_and_sparse_traversals_agree_with_a_full_sort`.
 
 Cet ADR ne fixe ni N, ni `exact_threshold`, ni le parallélisme du scan : ces choix relèvent de MES-01, Q-01 et de la fiche elle-même.
 
@@ -73,6 +82,6 @@ Aucun document de conception n'est modifié : `docs/03-recherche.md:51` traite d
 - Fiche `SCANNER-POOL-BINAIRE` : `docs/phases/P4-recherche-rapide.md:44-51`
 - `docs/03-recherche.md:45-47` : table des stratégies EXACT / BINARY ; `:51` : parallélisme ; `:138` : budget du scan binaire, renvoyant à MES-02
 - `docs/08-invariants-et-tests.md:67` : MES-02, latence du scan binaire selon la taille du pool
-- `crates/crible-search/src/dense/binary.rs:126` : choix une fois par scan ; `:261-271` : fonction `traversal` ; `:552` : test de comparaison au tri complet
+- `crates/crible-search/src/dense/binary.rs` : fonction `traversal` (le seuil) ; choix du parcours une fois par scan dans `top_k` ; test `dense_and_sparse_traversals_agree_with_a_full_sort` (comparaison au tri complet)
 - `AGENTS.md`, règles 4 (ADR pour tout seuil) et 12 (pas de configuration pour une valeur fixe)
 - ADR-0004 (codes binaires, scan du pool et rescoring), ADR-0069 (format de `codes.bin`), ADR-0070 (noyaux SIMD)

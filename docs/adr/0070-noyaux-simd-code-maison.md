@@ -1,11 +1,18 @@
 # ADR-0070 — Noyaux SIMD : code maison dans `crible-search::kernels`
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-26 par délégation du propriétaire pour les trois premières tâches de P4, à confirmer au point de fin)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-26)
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour les trois premières tâches de P4, à confirmer au point de fin de la série. La décision est retenue telle que proposée : code maison dans `crible-search::kernels` (modules `scalar`, `neon`, `x86`), intrinsèques NEON sur `aarch64`, AVX2 sur `x86_64`, repli scalaire et détection à l'exécution, sans aucune crate dédiée ; les micro-benchmarks sont consignés dans cet ADR.
+- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour les trois premières tâches de P4, confirmé par le propriétaire le 2026-10-26. La décision est retenue telle que proposée : code maison dans `crible-search::kernels` (modules `scalar`, `neon`, `x86`), intrinsèques NEON sur `aarch64`, AVX2 sur `x86_64`, repli scalaire et détection à l'exécution, sans aucune crate dédiée ; les micro-benchmarks sont consignés dans cet ADR.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `NOYAUX-SIMD` (phase P4), à partir du micro-benchmark et du choix retenus par `@dev`
 - **Remplace** : —
+
+## Erratum du 2026-10-26
+
+La décision 5 disait que `half` était « déjà une dépendance de `crible-search` ». C'est faux : `half` figurait dans `docs/07:36`, mais `crates/crible-search/Cargo.toml` ne le déclarait pas ; c'est la tâche `NOYAUX-SIMD` qui l'y ajoute (`crates/crible-search/Cargo.toml:12`). La phrase de la décision 5 est corrigée, et la même formulation l'est dans les conséquences. Le fond de la décision tient : `half` figure dans `docs/07`, donc aucune dépendance hors de `docs/07` n'est ajoutée. Aucune décision ne change ; la correction est autorisée par le propriétaire le 2026-10-26.
+
+- **Avant** : « `half` est déjà une dépendance de `crible-search` et figure en `docs/07:36`. »
+- **Après** : « `half` figure en `docs/07:36`, et la tâche `NOYAUX-SIMD` l'ajoute aux dépendances de `crible-search` (`crates/crible-search/Cargo.toml:12`). »
 
 ## Contexte
 
@@ -65,7 +72,7 @@ C'est le critère de la fiche. Le proptest compare chaque backend au scalaire �
 
 ### 5. Aucune dépendance hors de `docs/07`
 
-`half` est déjà une dépendance de `crible-search` et figure en `docs/07:36`. `criterion` et `proptest` passent en `dev-dependencies` et figurent en `docs/07:48`. Le noyau lui-même n'utilise que `std::arch` et `half` : aucune crate nouvelle, donc aucun ADR de dépendance.
+`half` figure en `docs/07:36`, et la tâche `NOYAUX-SIMD` l'ajoute aux dépendances de `crible-search` (`crates/crible-search/Cargo.toml:12`). `criterion` et `proptest` passent en `dev-dependencies` et figurent en `docs/07:48`. Le noyau lui-même n'utilise que `std::arch` et `half` : aucune crate nouvelle, donc aucun ADR de dépendance.
 
 ### 6. Les benchmarks sont consignés ici
 
@@ -97,7 +104,7 @@ Protocole : `cargo bench -p crible-search --bench kernels` en `--release`, régl
 ## Conséquences
 
 - **Positives** :
-  - aucune dépendance nouvelle : `half` était déjà là, `criterion` et `proptest` aussi ;
+  - aucune dépendance hors de `docs/07` : `half`, `criterion` et `proptest` y figurent ;
   - le produit scalaire, poste dominant du rescoring et de l'EXACT, va environ 4 fois plus vite que le scalaire sur la machine de développement ;
   - une seule implémentation par architecture, avec un repli scalaire qui garantit que le moteur tourne partout ;
   - le contrat de fidélité est explicite et testé : Hamming exact, produit scalaire à `1e-5`, sur chaque backend ;

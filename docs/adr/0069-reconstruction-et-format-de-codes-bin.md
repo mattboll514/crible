@@ -1,9 +1,9 @@
 # ADR-0069 — Reconstruction et format de `codes.bin`
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-26 par délégation du propriétaire, à confirmer au point de fin)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-26)
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire (« considère qu'il est auto-accepté, on regarde ensemble à la fin des 3 tâches »), à confirmer au point de fin de la série. Les six décisions sont retenues telles que proposées : reconstruction automatique à l'ouverture en écriture, construction en RAM seule à l'ouverture en lecture seule, absence de fichier qui n'est pas une erreur mais longueur fausse qui en est une, exclusion maintenue de l'instantané et de l'export, aucune sous-commande CLI en P4, format sans en-tête versionné par `format_version` de `segment.json`.
+- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire (« considère qu'il est auto-accepté, on regarde ensemble à la fin des 3 tâches »), confirmé par le propriétaire le 2026-10-26. Les six décisions sont retenues telles que proposées : reconstruction automatique à l'ouverture en écriture, construction en RAM seule à l'ouverture en lecture seule, absence de fichier qui n'est pas une erreur mais longueur fausse qui en est une, exclusion maintenue de l'instantané et de l'export, aucune sous-commande CLI en P4, format sans en-tête versionné par `format_version` de `segment.json`.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `QUANTIFIER-BINAIRE` (phase P4), à la suite d'une `QUESTION-CONCEPTION` remontée par `@testeur` avant `@dev` et des verdicts de `@architecte` du 2026-10-26
 - **Remplace** : —
 
