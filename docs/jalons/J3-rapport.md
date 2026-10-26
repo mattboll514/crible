@@ -2,12 +2,12 @@
 
 > Rédigé par l'agent `jalon` (commande `/jalon J3`). **Seul le propriétaire peut valider le jalon**, dans `docs/suivi.md`.
 
-- **Date** : 2026-10-26
-- **Branche de phase / commit** : `phase/P3-cycle-de-vie` / `b66fddf` (`merge: NETTOYER-P3`), arbre propre, branche **jamais poussée** (aucun run de CI distante pour P3)
+- **Date** : 2026-10-26 (rapport du matin, mis à jour le même jour après le run de CI distante)
+- **Branche de phase / commit** : `phase/P3-cycle-de-vie` / `9896b99` (`docs(adr): confirm ADR-0068 and the ADR-0063 erratum`), arbre propre, branche poussée par `@git` ; les contrôles locaux du § 2 ont été exécutés au commit `b66fddf` (`merge: NETTOYER-P3`), avant les seules modifications de documentation de `9896b99`
 - **Machine** : Mac15,12 (Apple M3, 8 cœurs, 24 Go de RAM), macOS 15.7.7 (24G720), arm64 ; Rust 1.99.1 (`cargo 1.99.1 (5f94df478 2026-08-27)`)
-- **Verdict de l'agent** : `PRET-POUR-VALIDATION` — sous deux conditions à la main du propriétaire, décrites au § 6 : confirmer ADR-0068, et faire exister un run de CI distante avant `/valider J3`.
+- **Verdict de l'agent** : `PRET-POUR-VALIDATION` — les deux conditions du matin sont levées (§ 6) ; il reste une étape de validation, à faire après la fusion dans `main` : constater le cache de modèle chaud (§ 6).
 
-Les trois points du jalon de la fiche P3 sont couverts sur cette machine : trois lots quotidiens puis une compaction donnent des résultats identiques (`synth-small` bit-identique, échantillon Legifacile à 1e-6), l'aller-retour export → import donne des résultats identiques sur les deux jeux, et un arrêt brutal à chacun des 12 points d'injection est suivi d'une reprise propre. Les cinq invariants nommés par le jalon (INV-03, INV-04, INV-08, INV-09, INV-14) sont verts, MES-07, MES-08 et MES-13 sont consignées sans cible dépassée, les 13 tâches de la phase sont `FAIT` et la démo se rejoue sans écart. **Rien n'a été poussé ni validé par cet agent** ; le point ouvert est la CI distante, qui n'a jamais vu le code de P3 (§ 6).
+Les trois points du jalon de la fiche P3 sont couverts sur cette machine : trois lots quotidiens puis une compaction donnent des résultats identiques (`synth-small` bit-identique, échantillon Legifacile à 1e-6), l'aller-retour export → import donne des résultats identiques sur les deux jeux, et un arrêt brutal à chacun des 12 points d'injection est suivi d'une reprise propre. Les cinq invariants nommés par le jalon (INV-03, INV-04, INV-08, INV-09, INV-14) sont verts, MES-07, MES-08 et MES-13 sont consignées sans cible dépassée, les 13 tâches de la phase sont `FAIT` et la démo se rejoue sans écart. Le run de CI distante `40351374130` est vert sur `9896b99`, `failpoints` compris (§ 2). **Rien n'a été validé par cet agent** ; seule reste l'étape de validation du cache de `main`, après la fusion (§ 6).
 
 ## 1. Tâches de la phase
 
@@ -47,14 +47,27 @@ Exécuté sur `phase/P3-cycle-de-vie`, au commit `b66fddf`, le 2026-10-26. Les c
 | Tests longs, avec ONNX Runtime | `ORT_DYLIB_PATH=… cargo test --locked --release -p crible --test inv_08_export_import_roundtrip --test inv_09_compaction_equivalence -- --include-ignored` | **14 passés, 0 échoué**, 1 868,81 s au total : binaire `inv_08` 1 283,17 s (11 tests), binaire `inv_09` 578,90 s (3 tests) |
 | Tests longs, avec ONNX Runtime | `ORT_DYLIB_PATH=… cargo test --locked --release -p crible --test recette_import -- --include-ignored` | **10 passés, 0 échoué**, 232,83 s |
 
+### CI distante (2026-10-26, run `40351374130`)
+
+Run du workflow `CI`, déclenché par le `push` de `phase/P3-cycle-de-vie` au commit `9896b99` (2026-10-26 15:38:53 UTC), **conclusion `success`** ; workflow `Model cache`, run `40351373844`, également `success` sur le même commit. Chiffres relevés par l'orchestrateur dans les journaux du run, non relancés ici :
+
+| Job | Fenêtre (UTC) | Résultat |
+|---|---|---|
+| `Rust` | 15:38:56 → 15:48:05 | fmt et clippy verts ; `cargo test --locked` **502 passés / 0 échec / 22 ignorés** ; étapes d'ADR-0068 « Lint the failpoint build » et « Test the failpoint build » vertes, **266 passés / 0 échec / 1 ignoré** ; client Python contre le binaire, **1 passé** |
+| `Rust with ONNX Runtime` | 15:38:56 → 15:47:49 | **521 passés / 0 échec / 0 ignoré / 3 filtrés** ; les trois filtres sont les tests de l'échantillon Legifacile, exclus par leur nom (ADR-0057, ADR-0062, ADR-0063) |
+| `Python` | 15:38:55 → 15:39:05 | **65 passés, 1 sauté** |
+| `Tools` | 15:38:55 → 15:41:25 | **264 passés, 10 sautés** |
+
+Les totaux distants concordent avec les totaux locaux de la table ci-dessus (502 et 266 tests Rust, 524 tests avec ONNX Runtime, 66 tests du client Python, 274 tests des outils). Les sauts diffèrent de la machine locale (`tools` : 1 en local, 10 en CI ; client Python : 0 en local, 1 en CI) ; aucun job ne porte d'échec, ce rapport ne conclut pas sur la cause de ces sauts.
+
 Précisions :
 
 - **22 ignorés** : les 20 d'avant P3 plus les deux tests de l'échantillon Legifacile ajoutés par ADR-0062 (`inv_09_…`) et ADR-0063 (`inv_08_…`), tous deux exclus de la CI par leur nom et rejoués ici (§ 2, dernière ligne). Sous `failpoints`, l'unique ignoré est `crash_child_entry`, le processus enfant des tests de panne, marqué `#[ignore]` par construction — **aucun test d'invariant n'est sauté**.
 - **Le défaut connu de P3 est fermé** : `attacher_lot::no_sqlite_write_follows_the_commit_point`, rouge sous `failpoints` depuis avant `COMPACTER-INDEX`, passe (point 1 de NETTOYER-P3). Aucun rouge ne subsiste sous `failpoints`.
 - **Les trois tests locaux de l'échantillon Legifacile tournent** : `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`, `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` et `inv_12_the_legifacile_sample_passes_the_acceptance_check` sont passés en `--release` avec `ORT_DYLIB_PATH` et les données locales. Leurs durées (1 283,17 s, 578,90 s et 232,83 s de binaire) sont relevées, pas bornées (ADR-0062).
 - **Aucun `uv sync` n'a été lancé** : `uv run --no-sync` partout dans `tools/`, pour ne pas retirer le groupe `export` ni la bibliothèque ONNX Runtime locale.
-- **Pas de run de CI distante** : voir le § 6. Tous les chiffres ci-dessus sont locaux.
-- Le total de 502 tests et celui de 266 tests sous `failpoints` concordent avec le suivi de NETTOYER-P3 (502 et 266) ; l'orchestrateur avait relevé 524 tests avec ONNX Runtime et 0 ignoré sur le workspace en `--release` le matin même, sur un commit antérieur aux corrections du tour 1.
+- **Run de CI distante vert** : le run `40351374130` porte sur `9896b99`, deux commits après `b66fddf`, dont les seules différences sont documentaires (statuts d'ADR-0068 et d'ADR-0063, `docs/adr/README.md`, `docs/suivi.md`). Les chiffres de la sous-section « CI distante » sont ceux des journaux du run ; les chiffres de la table sont locaux.
+- Le total de 502 tests et celui de 266 tests sous `failpoints` concordent avec le suivi de NETTOYER-P3 (502 et 266) et avec le run distant ; l'orchestrateur avait relevé 524 tests avec ONNX Runtime et 0 ignoré sur le workspace en `--release` le matin même, sur un commit antérieur aux corrections du tour 1.
 
 ## 3. Invariants de la phase
 
@@ -319,47 +332,42 @@ ADR créés ou modifiés entre la fusion de P2 (`5ad5eb8`) et `b66fddf`, d'aprè
 | ADR-0060 | Contrat du patch de métadonnées des documents | Accepté (2026-10-25) ; erratum du 2026-10-25 sur la forme de la CLI | Non |
 | ADR-0061 | Manifeste d'un lot exporté | Accepté (2026-10-25) | Non |
 | ADR-0062 | Second test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (2026-10-25) | Non ; appliqué, la durée est relevée ici et aucune borne n'est prescrite |
-| ADR-0063 | Troisième test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (2026-10-25 ; confirmé le 2026-10-26) ; **erratum du 2026-10-26 accepté par anticipation, à confirmer** | Non, mais la confirmation de l'erratum est une décision à prendre |
+| ADR-0063 | Troisième test local de l'échantillon Legifacile, exclu de la CI par son nom | Accepté (2026-10-25) ; erratum du 2026-10-26 **confirmé par le propriétaire le 2026-10-26** | Non |
 | ADR-0064 | Format et contenu d'un instantané | Accepté (2026-10-25, confirmé le 2026-10-26) | Non |
-| ADR-0065 | Instantané hors ligne, époque de restauration et rétention | Accepté (2026-10-25, confirmé le 2026-10-26) | Non ; un erratum est possible (§ 7) |
+| ADR-0065 | Instantané hors ligne, époque de restauration et rétention | Accepté (2026-10-25, confirmé le 2026-10-26) ; **laissé tel quel**, sans erratum (décision du propriétaire du 2026-10-26) | Non |
 | ADR-0066 | Dérivation de l'instantané après commit, sans balayage complet | Accepté (2026-10-26) | Non |
 | ADR-0067 | Durée de la recette à l'attache et échéance de `?wait=true` | Accepté (2026-10-26) | Non |
-| ADR-0068 | Construire et tester `crible-store` avec la feature `failpoints` en CI | **Accepté par anticipation** (2026-10-26, à confirmer au point de fin de NETTOYER-P3) | **Oui, à confirmer** : la phase applique l'ADR (deux étapes dans `ci.yml`, `docs/07` à jour) alors qu'il n'est pas encore accepté définitivement |
+| ADR-0068 | Construire et tester `crible-store` avec la feature `failpoints` en CI | **Accepté** (2026-10-26, confirmé par le propriétaire le 2026-10-26 ; statuts mis à jour au commit `9896b99`) | Non |
 
 ADR-0047 et ADR-0048, acceptés le 2026-10-22 avant l'ouverture de P3, sont appliqués par la phase (MES-13 en P3 et ordre des remèdes ; rejeu de MES-15 et compresseur zstd réutilisé).
 
-**Décisions à prendre par le propriétaire**, aucune n'étant une découverte de ce rapport : elles viennent de NETTOYER-P3 ou d'une relecture antérieure.
+**Décisions prises par le propriétaire le 2026-10-26** (les quatre points ouverts du rapport du matin, statuts appliqués par `@greffier` au commit `9896b99`) :
 
-1. **Confirmer ADR-0068** (accepté par anticipation le 2026-10-26). Sans confirmation, la phase valide une règle de CI que le propriétaire n'a pas encore entérinée.
-2. **Confirmer l'erratum d'ADR-0063** du 2026-10-26 (nom de test corrigé dans le corps, aucune décision changée).
-3. **Confirmer la borne du patch à 32 000 000 octets** (décision de la partie 6 de NETTOYER-P3, appliquée sans ADR nouveau) : `patch::MAX_BYTES = 32_000_000`, aligné sur « 32 Mo » d'ADR-0060, `docs/04` et `docs/05`, figé par un test.
-4. **Trancher la question d'un erratum d'ADR-0065** : les lignes 75 et 180 situent `INITIAL_EPOCH` à `crates/crible/src/commands.rs:67`, alors que la constante est désormais unique dans `crates/crible-store/src/generation.rs`. Laissé tel quel (un ADR accepté décrit l'état de sa date), sauf décision contraire.
+1. **ADR-0068 confirmé** : accepté sans réserve. La phase applique désormais une règle de CI entérinée, et le run `40351374130` exécute les deux étapes `failpoints` qu'elle prescrit (§ 2).
+2. **Erratum d'ADR-0063 confirmé** : le nom de test corrigé dans le corps est entériné ; aucune décision de l'ADR ne change.
+3. **Borne du patch à 32 000 000 octets confirmée** : `patch::MAX_BYTES = 32_000_000`, aligné sur « 32 Mo » d'ADR-0060, `docs/04` et `docs/05`, figé par un test. Aucun ADR nouveau n'est demandé.
+4. **ADR-0065 laissé tel quel, sans erratum** : les lignes 75 et 180 situent `INITIAL_EPOCH` dans `crates/crible/src/commands.rs:67` alors que la constante est désormais unique dans `crates/crible-store/src/generation.rs`. Un ADR accepté décrit l'état à sa date ; le propriétaire ne demande pas de correction.
 
-**Condition restante liée à la CI distante.** La branche `phase/P3-cycle-de-vie` n'a jamais été poussée : il n'existe **aucun run de CI pour le code de P3**. Deux conséquences, à lire avant `/valider J3` :
+**Aucune décision n'est en attente.** Aucun ADR de la phase n'est `Proposé`.
 
-- les deux étapes `failpoints` qu'ajoute ADR-0068 (`cargo clippy -p crible-store --all-targets --features failpoints -- -D warnings` et `cargo test -p crible-store --locked --features failpoints`) n'ont **jamais tourné en CI** : elles n'existent que dans le fichier et ont été rejouées en local (§ 2). Le job `rust-onnx` n'a pas non plus été exécuté sur le code de P3 (son dernier run vert, `40183664440`, est celui de `DURCIR-ARTEFACT-MODELE-EN-CI`, avant onze tâches, `NETTOYER-P3` comprise) ;
-- la fiche `DURCIR-ARTEFACT-MODELE-EN-CI` demande, « après la fusion de la phase seulement », que le cache de `main` soit constaté chaud au moment de `/valider J3` (premier passage planifié, `workflow_dispatch` sur `main`, ou le `push` de fusion s'il touche le manifeste). Ce constat dépend d'un push que **seul le propriétaire autorise** ; il n'a pas été fait ici.
-
-Recommandation, sans l'exécuter : pousser la branche de phase et attendre un run vert (job `Rust` avec les deux étapes `failpoints`, job `rust-onnx`) **avant** `/valider J3`, puis constater le cache de `main` après la fusion. Aucun run distant n'a été lancé par cet agent.
+**Étape de validation qui reste, après la fusion dans `main`.** La fiche `DURCIR-ARTEFACT-MODELE-EN-CI` demande, « après la fusion de la phase seulement », que le cache de modèle de `main` soit constaté chaud au moment de `/valider J3` (premier passage planifié, `workflow_dispatch` sur `main`, ou le `push` de fusion s'il touche le manifeste). Ce constat dépend de la fusion, que **seul le propriétaire autorise** : c'est une étape de la validation, pas une condition du verdict. La branche de phase, elle, a été poussée par `@git` et son run de CI est vert : les deux étapes `failpoints` d'ADR-0068 et le job `Rust with ONNX Runtime` ont vu ce code.
 
 ## 7. Écarts, idées, risques
 
-- **Écarts à la conception** : aucun écart ouvert pour P3. Les écarts constatés pendant la phase sont tous tranchés par un ADR `Accepté` (ADR-0060 à ADR-0068, plus ADR-0058 et ADR-0059), avec deux exceptions de forme : l'erratum d'ADR-0063 (à confirmer) et la borne du patch à 32 000 000 octets (décision de NETTOYER-P3, sans ADR nouveau). La table « Écarts à la conception » de `docs/suivi.md` ne porte aucune ligne P3 sans décision.
-- **Risque — aucun run de CI pour le code de P3.** Voir le § 6 : la branche de phase n'a jamais été poussée, donc ni les deux étapes `failpoints` d'ADR-0068 ni le job `rust-onnx` n'ont vu ce code. Les mêmes commandes passent en local (§ 2), mais une différence d'environnement (Ubuntu, toolchain de la CI, artefact du modèle) ne serait vue qu'au premier push.
+- **Écarts à la conception** : aucun écart ouvert pour P3. Les écarts constatés pendant la phase sont tous tranchés par un ADR `Accepté` (ADR-0060 à ADR-0068, plus ADR-0058 et ADR-0059) ; l'erratum d'ADR-0063 et la borne du patch à 32 000 000 octets sont confirmés par le propriétaire le 2026-10-26, et ADR-0065 est laissé tel quel. La table « Écarts à la conception » de `docs/suivi.md` ne porte aucune ligne P3 sans décision.
 - **Risque — la CI ne couvre pas les trois tests de l'échantillon Legifacile.** Ils restent locaux par décision (ADR-0062, ADR-0063) et n'ont été vus qu'ici et par l'orchestrateur. Une régression sur ces trois chemins ne serait vue qu'au prochain passage local.
 - **Risque — recette à l'attache et `wait_timeout_ms`.** Sur l'échantillon avec `mdenseon`, une attache de 3 002 passages dure 68,5 s, au-delà des 60 s de `wait_timeout_ms` (`docs/05`). ADR-0067 tranche (l'attache est déjà asynchrone, `?wait=true` rend `202` à l'échéance, critère ajouté à `FILE-D-ECRITURE-ET-JOBS` en P6) et ouvre `ACCELERER-RECETTE` en P4. Ce n'est pas un critère de J3, mais le serveur (P6) doit le tenir.
 - **Risque — coût de la compaction non décomposé.** 83,9 % du temps de compaction à 7,74 M passages reste hors des trois postes isolés (MES-07), et la mémoire de la compaction à 8,58 M passages n'est couverte par aucune mesure. À instruire en P9 (MES-07 rejouée), pas ici.
 - **Risque — reprise des époques non courantes.** `docs/02` ne traite que l'époque courante : une époque abandonnée avant la bascule (`epochs/tmp-*`) ou une époque restée après une panne post-bascule ne sont nettoyées qu'à la compaction suivante. `inv_04` prouve l'état et l'absence de fichier temporaire dans les dossiers contrôlés, mais la question de conception reste ouverte (« Idées hors périmètre », 2026-10-25, `COMPACTER-INDEX`).
 - **Idées hors périmètre** : la liste de `docs/suivi.md` porte trois candidats explicites pour un `NETTOYER-P4` (nommage de `prepare` dans MES-08, commentaire perdu sur `after_attach_documents`/`after_attach_passages`, `"indexes"` en dur dans `inv_08`/`inv_09`), plus les questions de conception réservées au serveur (verrou d'écrivain par index, `ReadPool` sur l'époque du snapshot, `adopt_epoch`, identifiants de `segment.json` d'une époque compactée) et les suites de mesure (MES-07, MES-08, `CommitDelta` en mémoire).
-- **Points à décider par le propriétaire** :
-  1. confirmer ADR-0068, l'erratum d'ADR-0063 et la borne du patch à 32 000 000 octets ; trancher l'erratum d'ADR-0065 (§ 6) ;
-  2. décider du push de la branche de phase et du run distant avant `/valider J3`, puis du constat du cache de `main` après la fusion (§ 6) ;
-  3. la validation du jalon lui-même, par `VALIDE` dans `docs/suivi.md`.
+- **Points pour le propriétaire** :
+  1. constater, après la fusion dans `main`, que le cache de modèle de `main` est chaud au moment de `/valider J3` (fiche `DURCIR-ARTEFACT-MODELE-EN-CI`, § 6) ;
+  2. la validation du jalon lui-même, par `VALIDE` dans `docs/suivi.md`.
 
 ## 8. Si le jalon n'est pas validé
 
-Aucun manque bloquant n'est constaté sur le code, les tests ou les mesures : les 13 tâches de P3 sont `FAIT`, les contrôles locaux sont verts (§ 2), les sept invariants cités par les fiches sont verts (§ 3), MES-07, MES-08 et MES-13 sont consignées sans dépassement de cible (§ 4) et la démo se rejoue sans écart (§ 5). Si le propriétaire refuse malgré tout la validation, les points restants deviennent des tâches `CORRIGER-…` dans `docs/phases/P3-cycle-de-vie.md` :
+Aucun manque bloquant n'est constaté sur le code, les tests ou les mesures : les 13 tâches de P3 sont `FAIT`, les contrôles locaux sont verts (§ 2) et le run de CI distante est vert (§ 2), les sept invariants cités par les fiches sont verts (§ 3), MES-07, MES-08 et MES-13 sont consignées sans dépassement de cible (§ 4) et la démo se rejoue sans écart (§ 5). Si le propriétaire refuse malgré tout la validation, les points restants deviennent des tâches `CORRIGER-…` dans `docs/phases/P3-cycle-de-vie.md` :
 
-- `CORRIGER-CI-P3` (si le run distant échoue) : corriger ce que la CI révèle, en particulier les deux étapes `failpoints` d'ADR-0068 et le job `rust-onnx` ; critère : tous les jobs verts sur la branche de phase, les deux étapes `failpoints` vertes et le job `rust-onnx` vert avec les trois tests locaux de l'échantillon exclus par leur nom.
+- `CORRIGER-CI-P3` : sans objet, le run `40351374130` est vert, `failpoints` compris. À rouvrir seulement si un run ultérieur échoue ; critère : tous les jobs verts sur la branche de phase, les deux étapes `failpoints` vertes et le job `Rust with ONNX Runtime` vert avec les trois tests locaux de l'échantillon exclus par leur nom.
 - `CORRIGER-DEMO-J3` (si un écart de démo est constaté au rejeu) : corriger ce rapport et, si le propriétaire le souhaite, en extraire un `docs/jalons/J3-demo.md` ; critère : chaque sortie annoncée est reproduite, hors valeurs déclarées variables (`took_ms`, durées).
-- `CORRIGER-DECISIONS-P3` (si le propriétaire veut fermer les décisions de forme) : appliquer les erratums d'ADR-0063 et d'ADR-0065 par `@greffier` et figer la borne du patch dans le document qui la nomme ; critère : plus aucun ADR en `accepté par anticipation` pour P3.
+- `CORRIGER-DECISIONS-P3` : sans objet, les quatre décisions sont prises (§ 6) ; il resterait à rouvrir cette tâche seulement si le propriétaire revenait sur ADR-0065, laissé tel quel. Critère : plus aucun ADR en `accepté par anticipation` pour P3 — déjà atteint.
