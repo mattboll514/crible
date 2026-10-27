@@ -164,6 +164,19 @@ enum Command {
         /// debug).
         #[arg(long)]
         exact: bool,
+        /// Regroup the results by document: `document`
+        /// (`group_by` of `docs/05-api.md`). `k` then counts documents.
+        #[arg(long, value_name = "document")]
+        group_by: Option<String>,
+        /// Passages returned per grouped document, from 1 to 5
+        /// (`passages_per_document` of `docs/05-api.md`); only acts with
+        /// `--group-by document`.
+        #[arg(long, default_value_t = 1)]
+        passages_per_document: usize,
+        /// Fuse the passages of identical content: `content`
+        /// (`dedup` of `docs/05-api.md`).
+        #[arg(long, value_name = "content")]
+        dedup: Option<String>,
         /// Output format: `json` (the response of `docs/05-api.md`, default) or
         /// `text` (readable report with a text excerpt).
         #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
@@ -248,6 +261,9 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             filter,
             k,
             exact,
+            group_by,
+            passages_per_document,
+            dedup,
             format,
         } => commands::search(&commands::SearchRequest {
             data: &data,
@@ -259,6 +275,9 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             filter: filter.as_deref(),
             k,
             exact,
+            group_by: group_by.as_deref(),
+            passages_per_document,
+            dedup: dedup.as_deref(),
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),

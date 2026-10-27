@@ -219,6 +219,24 @@ impl ExactSearcher {
     /// calls this method: the key reads would wait for it, and the pool would
     /// run out of connections.
     pub fn top_k(&self, query: &[f32], pool: &Pool, k: usize) -> Result<Vec<Hit>, CribleError> {
+        let candidates = self.top_k_candidates(query, pool, k)?;
+        candidates
+            .into_iter()
+            .map(|candidate| self.payload(candidate))
+            .collect()
+    }
+
+    /// Returns the `k` best candidates of `pool`, payload unread.
+    ///
+    /// This is [`ExactSearcher::top_k`] without the payload step: it is what
+    /// the regrouping step of `docs/03-recherche.md` (step 7) consumes, so that
+    /// only the candidates it keeps pay for their text and their fields.
+    pub fn top_k_candidates(
+        &self,
+        query: &[f32],
+        pool: &Pool,
+        k: usize,
+    ) -> Result<Vec<Scored>, CribleError> {
         let empty = pool.is_empty();
         let query = self.normalised_query(query, empty)?;
         if k == 0 || empty {
@@ -238,11 +256,7 @@ impl ExactSearcher {
         let mut candidates: Vec<Scored> = heaps.into_iter().flatten().collect();
         candidates.sort_unstable_by(|left, right| right.cmp(left));
         candidates.truncate(k);
-
-        candidates
-            .into_iter()
-            .map(|candidate| self.payload(candidate))
-            .collect()
+        Ok(candidates)
     }
 
     /// Validates `query` against the generation and returns it normalised.
@@ -361,6 +375,17 @@ impl ExactSearcher {
             .read_passage_key(iid)?
             .ok_or_else(|| internal("a passage of the pool has no passage row"))?;
         Ok(key.to_string())
+    }
+
+    /// Content digest of `iid`, read without its text and its fields.
+    ///
+    /// `dedup: content` compares it before the payload step, so a duplicate the
+    /// regrouping drops never has its text decompressed
+    /// (`docs/03-recherche.md`, step 7 before step 8).
+    pub(crate) fn passage_hash_of(&self, iid: Iid) -> Result<String, CribleError> {
+        self.records
+            .read_passage_hash(iid)?
+            .ok_or_else(|| internal("a passage of the pool has no passage row"))
     }
 
     /// Passage row of `iid`, payload included, through the read-only
