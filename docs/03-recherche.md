@@ -50,6 +50,7 @@ Détails :
 - **Code binaire** : le bit i vaut 1 si x_i > 0 (ADR-0004). Les requêtes sont codées de la même façon. La distance de Hamming est le popcount du XOR sur des mots `u64`. Un centrage préalable est à étudier (MES-12).
 - **Parallélisme** : le pool est découpé en tranches contiguës d'iid, une par thread rayon. Chaque thread garde son propre tas, puis les tas sont fusionnés.
 - **Sortie** : les `candidates_per_branch` meilleurs, avec leur cosinus. Ce nombre est augmenté quand il faut regrouper (voir plus bas).
+- **Nom de la stratégie** : elle vaut `"exact"` ou `"binary"` dans le plan de debug (ADR-0074). `search.scan: none` donne `"exact"`, comme `exact: true` et comme un pool de taille inférieure ou égale au seuil.
 - **Rangement physique** : à la compaction, les passages sont triés selon `cluster_by`. Un filtre sur ce champ parcourt alors une zone mémoire contiguë.
 
 Réglages de précision :
@@ -59,8 +60,12 @@ Réglages de précision :
 | `reference_precision` (`fp16` ou `fp32`) | figé à la création | `fp16` |
 | `search.scan` (`binary` ou `none` = toujours exact) | réglable | `binary` |
 | `search.rescore_candidates` (N) | réglable | 1000, à confirmer par MES-01 |
-| `search.exact_threshold` | réglable | égal à N |
+| `search.exact_threshold` | réglable | égal à N à la création de l'index, puis **matérialisé** (ADR-0074) |
 | `query_precision` (`[encoder].query_precision` : `int8` ou `fp32`) | réglable | `fp32` (ADR-0052) |
+
+`exact_threshold` et `rescore_candidates` sont deux leviers distincts (ADR-0074). Le seuil accepte tout entier de `0` à `u32::MAX`, sans autre borne et sans nouvelle erreur : `0` ne fait passer par EXACT qu'un pool vide, sauf `exact: true` ; `u32::MAX` fait toujours passer par EXACT. Un pool de taille **égale** au seuil passe par EXACT. La clé est **optionnelle** à la création de l'index : absente, elle prend la valeur de `rescore_candidates` à ce moment, et cette valeur est écrite dans la configuration stockée, puis relue comme une valeur explicite ; un `PATCH` de `rescore_candidates` ne la déplace pas.
+
+Sous BINARY, quand `k` (le nombre de résultats demandés par la branche dense) dépasse N, le scan garde `max(N, k)` candidats, tous rescorés, et le plan expose ce nombre effectif. Aucune erreur n'est rendue et il n'y a pas de repli sur EXACT.
 
 `query_precision` règle la précision d'encodage des requêtes. Le défaut est `fp32` : la session fp32 (plus d'1 Gio) est résidente dès la première requête, et la chaîne d'encodage est fidèle au modèle PyTorch à 1e-12 près (MES-04). `int8` reste une valeur acceptée, pour les comparaisons (MES-04), le repli et le diagnostic ; l'INT8 ne conserve que 79,2 % du top-10 exact du fp32, il n'est donc pas un mode de production (ADR-0052). Le cache LRU des requêtes est borné par `[limits].query_cache_entries`, 1 024 entrées par instance, et n'est jamais persisté.
 

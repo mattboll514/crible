@@ -7,10 +7,10 @@
 //! scan of the binary codes above the exact threshold ([`binary`]), the exact
 //! dot product below it ([`exact`]), and the rescoring of the candidates the
 //! scan kept ([`rescore`]). The binary scan chooses its dense or sparse
-//! traversal at the threshold of ADR-0071. The planner of
-//! `PLANIFIER-STRATEGIE` chooses between the two strategies in P4; until then,
-//! nothing here chooses a strategy: the caller decides and passes the pool to
-//! search.
+//! traversal at the threshold of ADR-0071. [`planner`] chooses between the two
+//! strategies from the search settings, the pool and the request option
+//! (ADR-0074), and runs the planned one: [`plan`] gives the choice, [`search`]
+//! executes it.
 //!
 //! Both strategies parallelise the same way (`docs/03-recherche.md`,
 //! "Parallélisme"): the pool is cut into contiguous windows of internal
@@ -33,7 +33,10 @@
 
 pub mod binary;
 pub mod exact;
+mod planner;
 pub mod rescore;
+
+pub use planner::{Plan, Strategy, plan, search};
 
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};

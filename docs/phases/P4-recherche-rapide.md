@@ -63,7 +63,7 @@
 - **Livrables** :
   - la sélection selon `exact_threshold` et `search.scan` ;
   - l'option `exact` ;
-  - la stratégie choisie, exposée dans le plan (pour le debug, P7) ;
+  - la stratégie choisie, exposée dans le plan (pour le debug, P7 ; valeurs `"exact"` et `"binary"`, ADR-0074) ;
   - le réglage par `PATCH` au niveau de la bibliothèque.
 - **Critères d'acceptation** :
   - **INV-06** : un pool sous le seuil donne un résultat identique à l'exact ;

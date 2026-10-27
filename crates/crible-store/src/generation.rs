@@ -130,7 +130,10 @@ pub const INITIAL_EPOCH: Epoch = Epoch::new(1);
 /// is written: a malformed configuration is refused with
 /// [`ErrorCode::InvalidRequest`] and leaves the directory untouched, rather than
 /// landing in an `index.json` that every later `open` and `create` would have to
-/// reject.
+/// reject. The stored form is the one of
+/// [`IndexConfig::materialised_json`]: a setting that has a default is written
+/// out, so a creation cannot leave an `index.json` whose effective threshold
+/// depends on a later `PATCH` (ADR-0074, decision 2).
 ///
 /// A directory holding any part of an index — `CURRENT_EPOCH`, an `epochs/`
 /// directory or a `records.sqlite` — is refused with the same code, naming what
@@ -140,16 +143,13 @@ pub const INITIAL_EPOCH: Epoch = Epoch::new(1);
 /// is not such a state: a creation that stopped before its first epoch left one,
 /// and nothing else exists, so replacing it loses nothing.
 pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), CribleError> {
-    IndexConfig::from_json_str(config_json)?;
+    let stored = IndexConfig::materialised_json(config_json)?;
     if let Some(present) = occupied_index_state(index_dir) {
         return Err(existing_index_error(index_dir, &present));
     }
     fs::create_dir_all(index_dir)
         .map_err(|error| io_error("create the index directory", index_dir, &error))?;
-    write_atomically(
-        &index_dir.join(INDEX_CONFIG_FILE_NAME),
-        config_json.as_bytes(),
-    )
+    write_atomically(&index_dir.join(INDEX_CONFIG_FILE_NAME), stored.as_bytes())
 }
 
 /// Part of an index that already occupies an index directory.

@@ -43,6 +43,7 @@ use crible_encode::{
     QueryEncoder, TokenCounter,
 };
 use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::search as dense_search;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
@@ -432,6 +433,9 @@ pub struct SearchRequest<'a> {
     pub filter: Option<&'a str>,
     /// Number of results, between 1 and 1000.
     pub k: usize,
+    /// Force the exact dense calculation (`exact` of the search request in
+    /// `docs/05-api.md`).
+    pub exact: bool,
     /// Output format.
     pub format: SearchFormat,
 }
@@ -450,6 +454,7 @@ impl std::fmt::Debug for SearchRequest<'_> {
             .field("model", &self.model)
             .field("filter", &self.filter.map(|_| "<redacted>"))
             .field("k", &self.k)
+            .field("exact", &self.exact)
             .field("format", &self.format)
             .finish()
     }
@@ -459,11 +464,13 @@ impl std::fmt::Debug for SearchRequest<'_> {
 ///
 /// The response follows the shape of `docs/05-api.md` ("Recherche : réponse"),
 /// with the fields P1 and `ENCODER-REQUETES` can fill: `results`, `pool_size`,
-/// `generation`, `took_ms` and `truncated_query`. The score is the cosine of the
-/// exact dense branch, hence `score_type: "cosine"`. `took_ms` is the total,
-/// from the entry of the command: it includes reading the index configuration,
-/// the vector or the text encoding, the filter, evaluating the pool, opening
-/// the readers and the scan itself.
+/// `generation`, `took_ms` and `truncated_query`. The dense branch runs the
+/// strategy [`crible_search::dense::plan`] chooses from `search.*`, the pool
+/// and `--exact` (ADR-0074), but both strategies score with the same cosine, so
+/// `score_type` is `"cosine"` either way. `took_ms` is the total, from the
+/// entry of the command: it includes reading the index configuration, the
+/// vector or the text encoding, the filter, evaluating the pool, opening the
+/// readers and the scan itself.
 ///
 /// `truncated_query` is the wire name of the `truncated` flag of
 /// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
@@ -513,7 +520,17 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let segments = snapshot.segments().to_vec();
     let searcher =
         scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
-    let hits = scan.install(|| searcher.top_k(&vector, &pool, request.k))?;
+    let hits = scan.install(|| {
+        dense_search(
+            &snapshot,
+            &searcher,
+            &pool,
+            &vector,
+            request.k,
+            &config.search,
+            request.exact,
+        )
+    })?;
     let took_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
     match request.format {
@@ -840,6 +857,7 @@ mod tests {
             model: None,
             filter: Some(r#"{"categorie": "SECRET-VALUE"}"#),
             k: 10,
+            exact: false,
             format: SearchFormat::Json,
         };
         let rendered = format!("{request:?}");
