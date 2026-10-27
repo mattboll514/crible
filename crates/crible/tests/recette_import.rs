@@ -26,6 +26,7 @@
 //! | `inv_12_the_acceptance_sample_is_deterministic_per_batch_id` | The sample is drawn from a seed derived from `batch_id`: the same `batch_id` samples the same passage, two `batch_id`s do not always sample the same one |
 //! | `inv_12_an_external_model_has_no_acceptance_check` | Fourth deliverable: an `external` model has no recipe, so a batch of arbitrary vectors is accepted and the report carries no acceptance statistics |
 //! | `inv_12_the_legifacile_sample_passes_the_acceptance_check` | First acceptance criterion on real data: the Legifacile sample (`data/legifacile-sample/`) with the real model (`data/models/mdenseon/`) passes the check |
+//! | `inv_12_the_reference_batch_acceptance_statistics_are_unchanged` | `ACCELERER-RECETTE` (ADR-0067) and INV-12: the `sample`, `min_cosine`, `p1` and `p50` of the reference batch are pinned to the values of the current re-encoding, to 1e-6 |
 //! | `inv_12_the_legifacile_sample_test_fails_without_its_prerequisites` | ADR-0057: the sample test fails, with the command that builds its data, instead of returning silently when the gitignored data is absent |
 //! | `the_no_prompt_fixture_vector_falls_below_the_acceptance_threshold` | Premise of the refusal test: the vector of the fake model encoded without the prompt really is under 0.999 |
 //! | `the_determinism_fixture_vectors_stay_above_the_threshold_and_differ` | Premise of the determinism test: the sixteen perturbed vectors are distinct and still above 0.999 |
@@ -1380,6 +1381,80 @@ fn inv_12_the_legifacile_sample_test_fails_without_its_prerequisites() {
     );
 }
 
+/// Name of the index the `dole` configuration of the sample creates.
+const REFERENCE_INDEX: &str = "dole";
+
+/// `batch_id` of the reference batch of the sample.
+const REFERENCE_BATCH_ID: &str = "legifacile-sample-dole-v1";
+
+/// Creates the `dole` index of the sample and attaches its reference batch,
+/// which must pass the acceptance check, then returns the fixture and the data
+/// root.
+///
+/// The `dole` configuration asks for 200 sampled passages and the threshold of
+/// ADR-0052, so the attach runs control 9 on 200 passages in fp32 with the real
+/// `mdenseon` graph: it needs ONNX Runtime and the gitignored data.
+fn attach_reference_batch(label: &str) -> (Fixture, PathBuf) {
+    let root = repository_root();
+    let paths = legifacile_sample_paths(&root).unwrap_or_else(|reason| panic!("{reason}"));
+
+    let fixture = prepare();
+    let data = fixture.data_root(label);
+    let output = crible(&[
+        "index",
+        "create",
+        "--data",
+        path(&data),
+        "--config",
+        path(&paths.config),
+    ]);
+    assert!(
+        output.status.success(),
+        "the index of the sample must be created: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = crible(&[
+        "attach",
+        "--data",
+        path(&data),
+        "--models",
+        path(&paths.models),
+        "--index",
+        REFERENCE_INDEX,
+        path(&paths.batch),
+    ]);
+    assert!(
+        output.status.success(),
+        "the reference batch of the sample must pass the acceptance check: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (fixture, data)
+}
+
+/// The persisted report of the reference batch, read from `batches.report`.
+fn reference_report(data: &Path) -> Value {
+    let records = data
+        .join("indexes")
+        .join(REFERENCE_INDEX)
+        .join("epochs")
+        .join(EPOCH.to_string())
+        .join("records.sqlite");
+    let connection = open_records(&records);
+    let report: String = connection
+        .query_row(
+            "SELECT report FROM batches WHERE batch_id = ?1",
+            [REFERENCE_BATCH_ID],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|error| {
+            panic!("the report of the sample attach must be readable: {error}")
+        });
+    serde_json::from_str(&report).unwrap_or_else(|error| {
+        panic!("the report of the sample attach must be valid JSON: {error}; got {report}")
+    })
+}
+
 /// The Legifacile sample passes the acceptance check with the real model: the
 /// `dole` batch (the smallest of the six) is attached, and the report's
 /// `min_cosine` is at or above 0.999.
@@ -1394,65 +1469,11 @@ fn inv_12_the_legifacile_sample_test_fails_without_its_prerequisites() {
 #[test]
 #[ignore = "needs data/legifacile-sample, data/models/mdenseon and ORT_DYLIB_PATH; run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test recette_import -- --ignored"]
 fn inv_12_the_legifacile_sample_passes_the_acceptance_check() {
-    let root = repository_root();
-    let paths = legifacile_sample_paths(&root).unwrap_or_else(|reason| panic!("{reason}"));
-    let config = paths.config;
-    let batch = paths.batch;
-    let models = paths.models;
-
-    let fixture = prepare();
-    let data = fixture.data_root("legifacile");
     // The configuration of the sample is the one of the task: `dole` asks for
     // 200 sampled passages and the threshold of ADR-0052.
-    let output = crible(&[
-        "index",
-        "create",
-        "--data",
-        path(&data),
-        "--config",
-        path(&config),
-    ]);
-    assert!(
-        output.status.success(),
-        "the index of the sample must be created: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let (_fixture, data) = attach_reference_batch("legifacile");
 
-    let output = crible(&[
-        "attach",
-        "--data",
-        path(&data),
-        "--models",
-        path(&models),
-        "--index",
-        "dole",
-        path(&batch),
-    ]);
-    assert!(
-        output.status.success(),
-        "the dol batch of the sample must pass the acceptance check: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let records = data
-        .join("indexes")
-        .join("dole")
-        .join("epochs")
-        .join(EPOCH.to_string())
-        .join("records.sqlite");
-    let connection = open_records(&records);
-    let report: String = connection
-        .query_row(
-            "SELECT report FROM batches WHERE batch_id = ?1",
-            ["legifacile-sample-dole-v1"],
-            |row| row.get(0),
-        )
-        .unwrap_or_else(|error| {
-            panic!("the report of the sample attach must be readable: {error}")
-        });
-    let report: Value = serde_json::from_str(&report).unwrap_or_else(|error| {
-        panic!("the report of the sample attach must be valid JSON: {error}")
-    });
+    let report = reference_report(&data);
     let acceptance = acceptance(&report);
     assert_eq!(
         acceptance.get("sample").and_then(Value::as_u64),
@@ -1464,5 +1485,77 @@ fn inv_12_the_legifacile_sample_passes_the_acceptance_check() {
         minimum >= MIN_COSINE,
         "the production vectors of the sample must stay above {MIN_COSINE} (MES-04 measured \
          0.9999604 as the minimum of 600 passages): {acceptance}"
+    );
+}
+
+// --- INV-12: the statistics of the reference batch are pinned ---
+
+/// Number of passages the `dole` configuration re-encodes.
+const REFERENCE_SAMPLE: u64 = 200;
+
+/// `min_cosine` of the reference batch, as the current single-passage
+/// re-encoding produces it.
+const REFERENCE_MIN_COSINE: f64 = 0.999_990_936_268_044_8;
+
+/// `p1` of the reference batch.
+const REFERENCE_P1: f64 = 0.999_993_805_578_104_4;
+
+/// `p50` of the reference batch.
+const REFERENCE_P50: f64 = 0.999_998_319_575_621_6;
+
+/// Tolerance of the pinned statistics: the criterion of `ACCELERER-RECETTE`
+/// states that they are unchanged at 1e-6.
+const REFERENCE_TOLERANCE: f64 = 1e-6;
+
+/// The acceptance statistics of the reference batch — `sample`, `min_cosine`,
+/// `p1` and `p50` — are the ones of the current re-encoding, to 1e-6.
+///
+/// This is the criterion of `ACCELERER-RECETTE`: batching the 200 re-encodings
+/// of the check by sorted length adds padding and an attention mask to the
+/// graph inputs, and the verdict must not move. The pinned values are the whole
+/// distribution of the sample, so a padding that shifts a single cosine out of
+/// the tolerance fails here, `min_cosine` first since it is the one compared to
+/// `acceptance_min_cosine` (INV-12).
+///
+/// The values were read from the report of the current code on 2026-10-27
+/// (macOS arm64, ONNX Runtime 1.31.0, `mdenseon` fp32 of ADR-0050,
+/// `legifacile-sample-dole-v1`). The task measured the same order of magnitude
+/// in MES-04 for the 600 passages of the sample: minimum 0.9999604, p1
+/// 0.9999935, median 0.9999983.
+#[test]
+#[ignore = "needs data/legifacile-sample, data/models/mdenseon and ORT_DYLIB_PATH; run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test recette_import -- --ignored"]
+fn inv_12_the_reference_batch_acceptance_statistics_are_unchanged() {
+    let (_fixture, data) = attach_reference_batch("reference");
+
+    let report = reference_report(&data);
+    let acceptance = acceptance(&report);
+
+    assert_eq!(
+        acceptance.get("sample").and_then(Value::as_u64),
+        Some(REFERENCE_SAMPLE),
+        "the recipe must keep its sample of {REFERENCE_SAMPLE} passages (INV-12, ADR-0052); \
+         changing it would change what the check proves: {acceptance}"
+    );
+
+    for (key, pinned) in [
+        ("min_cosine", REFERENCE_MIN_COSINE),
+        ("p1", REFERENCE_P1),
+        ("p50", REFERENCE_P50),
+    ] {
+        let measured = statistic(acceptance, key);
+        assert!(
+            (measured - pinned).abs() <= REFERENCE_TOLERANCE,
+            "the acceptance statistic '{key}' of the reference batch must stay at {pinned} \
+             within {REFERENCE_TOLERANCE}; got {measured} (measured: {acceptance})"
+        );
+    }
+
+    // The threshold itself is part of the contract: a batched re-encoding that
+    // pulled `min_cosine` under 0.999 would refuse the reference batch outright,
+    // so the attach above could not have succeeded (INV-12).
+    assert!(
+        statistic(acceptance, "min_cosine") >= MIN_COSINE,
+        "the reference batch must stay above acceptance_min_cosine = {MIN_COSINE} \
+         (INV-12): {acceptance}"
     );
 }

@@ -16,6 +16,7 @@ des jeux synthétiques et la référence exacte de la phase P1.
 | `bench/mes00/` | Campagne de mesure de la référence pgvector (MES-00), indépendante de P1. |
 | `bench/mes04/` | Campagne de mesure de la parité de l'encodeur (MES-04) : préparation des requêtes, référence PyTorch, comparaison ONNX et analyse. |
 | `bench/mes15/` | Campagne de mesure du coût d'un commit de génération (MES-15) : `run.sh` (pilote complet) et `merge.py` (fusion des données brutes). |
+| `bench/accelere-recette/` | Campagne de ventilation de l'étape `validation` d'un attache (`ACCELERER-RECETTE`, MES-08) : `run.sh` (chargement fp32, postes, encadrement) et `merge.py` (tableaux du rapport). |
 
 Les identifiants, les options et les clés JSON sont en anglais ; ce README est
 en français, comme les documents de `docs/`.

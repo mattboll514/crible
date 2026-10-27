@@ -7,6 +7,8 @@
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur. Origine : tâche `MESURER-CYCLE-DE-VIE` (phase P3), campagne de MES-08 du 2026-10-25, point de fin avec le propriétaire du 2026-10-26, faits établis par `@architecte` le 2026-10-26
 - **Remplace** : —
 
+> **Note ajoutée le 2026-10-27, sans modification de la décision.** L'issue du second temps de la décision 3 est tranchée par **ADR-0073** : la ventilation a montré que les 200 ré-encodages font 88,0 % et 89,0 % de `validation`, la condition de l'encodage par lots était donc remplie, mais la mesure des tailles de lot ne montre aucun gain (le temps croît avec la taille de lot, et les lignes d'un lot ne s'exécutent pas en parallèle avec les défauts d'ONNX Runtime). Le code du livrable (b) est retiré et la recette reste encodée un passage à la fois ; les fils et réglages d'ONNX Runtime se revoient en conteneur en P8. La décision 3 reste celle qui est écrite ci-dessous : elle a ouvert les deux temps, elle ne promettait pas le gain.
+
 ## Contexte
 
 ### Ce que la mesure du 2026-10-25 dit
