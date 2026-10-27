@@ -203,6 +203,8 @@ Avec `debug: true`, la réponse ajoute :
 }
 ```
 
+`dense_strategy` vaut `"exact"` ou `"binary"` (ADR-0074) : `"exact"` pour un pool de taille inférieure ou égale à `exact_threshold`, pour `exact: true` et pour `search.scan: none` ; `"binary"` sinon. Sous `"binary"`, `rescore_candidates` est le nombre **effectif** de candidats rescorés : il vaut `max(N, k)`, donc `k` quand la branche dense demande plus de résultats que N.
+
 Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 
 ```json
