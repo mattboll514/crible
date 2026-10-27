@@ -47,7 +47,7 @@ Choix de la stratégie :
 | `exact: true` dans la requête | **EXACT** sur tout le pool, quelle que soit sa taille (référence pour l'éval et le debug) |
 
 Détails :
-- **Code binaire** : le bit i vaut 1 si x_i > 0 (ADR-0004). Les requêtes sont codées de la même façon. La distance de Hamming est le popcount du XOR sur des mots `u64`. Un centrage préalable est à étudier (MES-12).
+- **Code binaire** : le bit i vaut 1 si x_i > 0 (ADR-0004). Les requêtes sont codées de la même façon. La distance de Hamming est le popcount du XOR sur des mots `u64`. Un centrage préalable est à étudier (MES-12) ; son protocole de mesure — variante principale, contrôle du harnais, absence de changement du format — est fixé par ADR-0076, et son adoption par défaut demanderait un ADR qui remplace ADR-0069, décision 6.
 - **Parallélisme** : le pool est découpé en tranches contiguës d'iid, une par thread rayon. Chaque thread garde son propre tas, puis les tas sont fusionnés.
 - **Sortie** : les `candidates_per_branch` meilleurs, avec leur cosinus. Ce nombre est augmenté quand il faut regrouper (voir plus bas) ; la règle est calculée par la couche de recherche partagée, pas par la CLI (ADR-0075).
 - **Nom de la stratégie** : elle vaut `"exact"` ou `"binary"` dans le plan de debug (ADR-0074). `search.scan: none` donne `"exact"`, comme `exact: true` et comme un pool de taille inférieure ou égale au seuil.
