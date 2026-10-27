@@ -85,9 +85,9 @@
 - **Objectif** : MES-01 et MES-12, puis le choix de N.
 - **Dépend de** : PLANIFIER-STRATEGIE, CONSTITUER-ECHANTILLON-LEGIFACILE
 - **À lire** : `08-invariants-et-tests.md` (cibles) ; `docs/mesures/README.md`.
-- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index. **Précisé par ADR-0076** (accepté par anticipation le 2026-10-27) : recall@10 au niveau du passage et recouvrement@10 au niveau du document, cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près ; BINARY forcé par `search.exact_threshold = 0` sur des copies des index ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée.
+- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index. **Précisé par ADR-0076** (accepté par anticipation le 2026-10-27) : recall@10 au niveau du passage et recouvrement@10 au niveau du document, cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près ; BINARY forcé par `search.exact_threshold = 0` sur des copies des index ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée. **Précisé par ADR-0078** (2026-10-27) : le N par défaut retenu vaut 5000, seule valeur qui atteint la cible dans les deux campagnes et pour toutes les structures.
 - **Critères d'acceptation** :
-  - le rapport contient une recommandation de N et de centrage ;
+  - le rapport contient une recommandation de N et de centrage (rendue : N = 5000, sans centrage, ADR-0078) ;
   - la cible est atteinte, ou bien le rapport propose un levier (scoring asymétrique) à faire valider.
 - **Invariants / mesures** : MES-01, MES-12.
 
@@ -131,7 +131,7 @@
 - **Objectif** : MES-02, MES-03 et MES-09.
 - **Dépend de** : PLANIFIER-STRATEGIE
 - **Livrables** :
-  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud. **Précisé par ADR-0077** (accepté par anticipation le 2026-10-27) : le point « tous les passages » vaut **7,74 M vivants** et non 8,6 M, le jeu portant 860 000 passages morts (MES-07) ; les pools sont construits par un harnais, contigus et dispersés, avec contre-contrôle par la CLI ; N ∈ {1000, 2000, 5000}, BINARY forcé par `search.exact_threshold = 0` sur des copies de mesure ; le froid ne concerne que le rescoring, ses vecteurs fp16 étant en mmap, et il se mesure par copies non cachées (`F_NOCACHE`, `mincore`) ;
+  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud. **Précisé par ADR-0077** (accepté par anticipation le 2026-10-27) : le point « tous les passages » vaut **7,74 M vivants** et non 8,6 M, le jeu portant 860 000 passages morts (MES-07) ; les pools sont construits par un harnais, contigus et dispersés, avec contre-contrôle par la CLI ; N ∈ {1000, 2000, 5000}, BINARY forcé par `search.exact_threshold = 0` sur des copies de mesure ; le froid ne concerne que le rescoring, ses vecteurs fp16 étant en mmap, et il se mesure par copies non cachées (`F_NOCACHE`, `mincore`) ; **Précisé par ADR-0078** : le défaut vaut N = 5000, et les lignes de rescoring de `docs/03-recherche.md` portent désormais les mesures à N = 1000 et à N = 5000 ;
   - la RAM réelle (RSS), en natif sur le Mac. **Précisé par ADR-0077** : trois états (index ouvert, après une passe de requêtes, session fp32 à part), mémoire anonyme et adossée à des fichiers séparées, comparaison au tableau de `docs/02-architecture.md:202-219`.
 - **Critères d'acceptation** : les protocoles sont reproductibles et les chiffres sont comparés au budget de `03-recherche.md`.
 - **Invariants / mesures** : MES-02, MES-03, MES-09.

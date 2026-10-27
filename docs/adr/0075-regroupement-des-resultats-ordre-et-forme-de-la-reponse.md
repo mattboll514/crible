@@ -1,11 +1,13 @@
 # ADR-0075 — Regroupement des résultats : ordre de `dedup` et `group_by`, sur-échantillonnage, forme de la réponse et `k` de la branche dense
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série REGROUPER-RESULTATS, MESURER-FIDELITE-BINAIRE, MESURER-LATENCE-DENSE ; confirmation du propriétaire attendue à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27)
 - **Date** : 2026-10-27 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série REGROUPER-RESULTATS, MESURER-FIDELITE-BINAIRE, MESURER-LATENCE-DENSE ; la confirmation du propriétaire est attendue à la fin de la série. Les quatre décisions sont retenues telles que proposées par `@architecte` et choisies par l'orchestrateur : `dedup` s'applique avant `group_by`, sur toute la liste sur-échantillonnée, avec recomplètement ; la règle de sur-échantillonnage vit dans `crible-search` ; la réponse reste une liste plate d'entrées de passage où `k` compte des documents et où les entrées d'un document sont consécutives ; sous BINARY, le scan garde `max(N, candidates_per_branch)` candidats.
+- **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série REGROUPER-RESULTATS, MESURER-FIDELITE-BINAIRE, MESURER-LATENCE-DENSE, puis confirmé par le propriétaire le 2026-10-27. Les quatre décisions sont retenues telles que proposées par `@architecte` et choisies par l'orchestrateur : `dedup` s'applique avant `group_by`, sur toute la liste sur-échantillonnée, avec recomplètement ; la règle de sur-échantillonnage vit dans `crible-search` ; la réponse reste une liste plate d'entrées de passage où `k` compte des documents et où les entrées d'un document sont consécutives ; sous BINARY, le scan garde `max(N, candidates_per_branch)` candidats.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `REGROUPER-RESULTATS` (phase P4), à partir des verdicts de `@architecte` sur l'implémentation de `@dev` ; les options sont retenues par l'orchestrateur par délégation
 - **Remplace** : —
+
+**Erratum du 2026-10-27 (ajouté à la confirmation, sans réécriture du corps).** Les renvois de code du corps sont périmés : les éléments cités sont désormais en `crates/crible-search/src/group.rs:158` (`candidates_per_branch`), `:185` (`group`), `:218` (`dedup_by_content`) et `:255` (`keep_documents`), et non en `:136`, `:157`, `:189` et `:213-240`. Le point « à surveiller » sur la contiguïté des entrées d'un document est **levé** : l'implémentation finale de `keep_documents` regroupe les candidats par document puis aplatit les groupes, et le test `grouped_entries_of_a_document_are_consecutive` (`crates/crible-search/tests/regrouper_resultats.rs`) couvre la contrainte de la décision 3. Le reste du corps est inchangé.
 
 ## Contexte
 

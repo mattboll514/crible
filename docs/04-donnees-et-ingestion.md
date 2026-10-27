@@ -25,8 +25,8 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
   "lexical":    { "enabled": true, "language": "fr", "positions": false },
   "search": {
     "scan": "binary",
-    "rescore_candidates": 1000,
-    "exact_threshold": 1000,
+    "rescore_candidates": 5000,
+    "exact_threshold": 5000,
     "candidates_per_branch": 100,
     "fusion": { "method": "rrf" }
   },

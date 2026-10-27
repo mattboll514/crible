@@ -194,7 +194,7 @@ Avec `debug: true`, la réponse ajoute :
 
 ```json
 "debug": {
-  "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 1000,
+  "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 5000,
             "candidates_per_branch": 100, "fusion": "rrf", "group_by": null },
   "timings_ms": { "validate": 0.1, "encode": 23.4, "filter": 0.6, "dense": 9.8,
                   "lexical": 6.1, "fusion": 0.1, "group": 0.0, "fetch": 1.2, "total": 41.7 },

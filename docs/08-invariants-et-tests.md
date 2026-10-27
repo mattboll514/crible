@@ -82,6 +82,6 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 ## Cibles chiffrées
 
 Les cibles de latence et de rappel sont fixées **après MES-00** et consignées dans `docs/suivi.md` (section « Cibles »). Règles :
-- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut, **en moyenne sur toutes les requêtes** et au niveau du passage. Les valeurs par structure sont rapportées et toute structure sous 0,99 est signalée et expliquée ; le recouvrement@10 au niveau du document est rapporté sans cible (ADR-0076). À confirmer ou ajuster après MES-01, avec l'accord du propriétaire.
+- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut (N = 5000, ADR-0078), **en moyenne sur toutes les requêtes** et au niveau du passage. Les valeurs par structure sont rapportées et toute structure sous 0,99 est signalée et expliquée ; le recouvrement@10 au niveau du document est rapporté sans cible (ADR-0076). La cible est atteinte sur l'échantillon (MES-01) ; sa confirmation à 8,58 M passages est renvoyée à P9.
 - **Rappel** : au moins égal à pgvector (MES-00) sur le jeu de référence.
 - **Latence** : p95 au plus égal à pgvector (MES-00) à l'échelle de Legifacile, sur le Mac mini en conteneur.

@@ -59,7 +59,7 @@ Réglages de précision :
 |---|---|---|
 | `reference_precision` (`fp16` ou `fp32`) | figé à la création | `fp16` |
 | `search.scan` (`binary` ou `none` = toujours exact) | réglable | `binary` |
-| `search.rescore_candidates` (N) | réglable | 1000, à confirmer par MES-01 |
+| `search.rescore_candidates` (N) | réglable | `5000` par défaut (ADR-0078) |
 | `search.exact_threshold` | réglable | égal à N à la création de l'index, puis **matérialisé** (ADR-0074) |
 | `query_precision` (`[encoder].query_precision` : `int8` ou `fp32`) | réglable | `fp32` (ADR-0052) |
 
@@ -141,10 +141,13 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 | Filtre (bitmaps) | < 1 ms | MES-14 |
 | Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
 | Scan binaire : 8,6 M / pool de 1 M | 20 à 80 ms / quelques ms | MES-02 |
-| Rescoring de N = 1000 | < 1 ms à chaud, ~10 ms à froid | MES-03 |
+| Rescoring, N = 1000 | 29,8 ms p50 et 90,5 ms p95 à chaud ; 179,0 ms p50 à froid pour le moteur entier, 85,0 ms pour le produit scalaire seul (MES-03) | MES-03 |
+| Rescoring, N = 5000 (défaut, ADR-0078) | 61,1 ms p50 et 186,9 ms p95 à chaud ; 177,5 ms p50 à froid pour le produit scalaire seul, 258,3 ms pour le moteur entier sur une série contaminée (MES-03) | MES-03 |
 | Branche lexicale | à mesurer | MES-06 |
 | Payload (k = 10) | ~1 ms | — |
 
 ADR-0046 sépare les deux lignes : la valeur d'intervalle est **mesurée, pas une cible**, et le dépassement est assumé dans les budgets de bout en bout.
 
-Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000} — la ligne à N = 1000 reste celle du tableau —, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. Les estimations du tableau ne changent pas : elles seront remplacées par MES-02 et MES-03, puis vérifiées en conteneur en P8.
+Les deux lignes de rescoring remplacent le budget indicatif « < 1 ms à chaud, ~10 ms à froid » par les mesures de MES-03, à N = 1000 et au défaut N = 5000 (ADR-0078). Le dépassement est **assumé au profit de la fidélité** : la cible réelle est la latence de `08-invariants-et-tests.md`, p95 au plus égal à pgvector, mesurée en P8 et P9. Le coût des clés au rescoring, distinct des produits scalaires, relève d'un ADR séparé.
+
+Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000}, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. La ligne du scan binaire n'est pas touchée par ADR-0078 : son protocole est celui d'ADR-0077 et ses chiffres ceux de MES-02, vérifiés en conteneur en P8.
