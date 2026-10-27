@@ -9,8 +9,8 @@
 //! References: `docs/phases/P4-recherche-rapide.md` (`SCANNER-POOL-BINAIRE`,
 //! criteria "égal à un tri complet par Hamming sur `synth-small`" and
 //! "égalités départagées par iid"), `docs/03-recherche.md` ("Branche dense",
-//! strategy BINARY and "Parallélisme"), ADR-0004, ADR-0069 and ADR-0071 (the
-//! threshold between the two traversals of the scan).
+//! strategy BINARY and "Parallélisme"), ADR-0004, ADR-0069, ADR-0081 (a single
+//! traversal of the scan) and ADR-0082 (the segment cursor).
 //!
 //! # Oracle
 //!
@@ -28,9 +28,9 @@
 //!   through a filter (full, dense, sparse, empty) and control the codes, which
 //!   is what the tie-break test needs.
 //!
-//! Both traversals of the scan (dense and sparse) are compared with the oracle
-//! by `crates/crible-search/src/dense/binary.rs`, on the same pool and with a
-//! forced traversal; here the public entry point picks the traversal itself.
+//! The scan itself is compared with the oracle by
+//! `crates/crible-search/src/dense/binary.rs`, on the same pool; here the public
+//! entry point is scanned through the `Pool` a filter builds.
 
 mod common;
 
@@ -154,6 +154,76 @@ fn query_code() -> Vec<u64> {
     quantize(&vector)
 }
 
+/// Sizes of the segments of the cursor fixture, in identifier order.
+///
+/// They are deliberately unequal, and include a segment of one passage, one of
+/// a thousand and one that some pools below never enter: a segment cursor that
+/// advances with the pool iterator has to cross every one of those boundaries
+/// (ADR-0081, decision 2; ADR-0082, decision 1).
+const CURSOR_SEGMENT_SIZES: [u32; 5] = [1, 3, 64, 1_000, 7];
+
+/// Fixture whose segments hold [`CURSOR_SEGMENT_SIZES`] passages, hence the
+/// identifier ranges `0..1`, `1..4`, `4..68`, `68..1_068` and `1_068..1_075`.
+///
+/// One document carries every passage of one segment and its identifier is
+/// `S<index>`: a `fonds` condition keeps a whole segment or none of it, and a
+/// `rang` condition keeps chosen positions inside a segment, which is how the
+/// tests below select pools that skip whole segments or stop on their edges.
+fn unequal_segments() -> DenseFixture {
+    let mut fixture = DenseFixture::create(DIMS);
+    let mut seed = 0_u32;
+    for (index, size) in CURSOR_SEGMENT_SIZES.iter().enumerate() {
+        let doc_id = format!("S{index}");
+        let samples: Vec<Sample> = (0..*size)
+            .map(|ord| {
+                let sample = Sample::new(&doc_id, ord, vector(seed));
+                seed += 1;
+                sample
+            })
+            .collect();
+        fixture.add_generation(&samples);
+    }
+    fixture
+}
+
+/// Checks that the cursor fixture has the segment layout its tests claim.
+fn assert_cursor_segment_shape(snapshot: &Snapshot) {
+    let segments = snapshot.segments();
+    assert_eq!(
+        segments.len(),
+        CURSOR_SEGMENT_SIZES.len(),
+        "the cursor fixture must have one segment per declared size"
+    );
+    let mut start = 0_u32;
+    for (index, (segment, size)) in segments.iter().zip(CURSOR_SEGMENT_SIZES).enumerate() {
+        assert_eq!(
+            segment.iid_start.get(),
+            start,
+            "segment {index} must start at identifier {start}"
+        );
+        assert_eq!(
+            segment.count, size,
+            "segment {index} must hold {size} passages"
+        );
+        start += size;
+    }
+}
+
+/// Runs the public scan on a fixed worker count, so the partitioning of the
+/// pool is reproducible.
+fn scan_on_workers(
+    snapshot: &Snapshot,
+    pool: &Pool,
+    query_code: &[u64],
+    n: usize,
+    workers: usize,
+) -> Vec<Candidate> {
+    ScanPool::new(workers)
+        .unwrap_or_else(|error| panic!("a {workers}-worker scan pool must be buildable: {error}"))
+        .install(|| top_k(snapshot, pool, query_code, n))
+        .unwrap_or_else(|error| panic!("the {workers}-worker scan must succeed: {error}"))
+}
+
 // --- Tests ---
 
 /// The scan equals a full Hamming sort on every shape of pool: full, dense,
@@ -261,6 +331,129 @@ fn the_result_does_not_depend_on_the_thread_count() {
             "case {case}: one worker and four workers must give the same answer"
         );
     }
+}
+
+// --- Segment cursor: unequal segments ---
+
+/// The scan of pools laid out across segments of very unequal sizes equals a
+/// full Hamming sort.
+///
+/// The pools cover every case ADR-0081 and ADR-0082 name: the whole live set,
+/// which crosses every segment boundary; two pools that skip whole segments,
+/// one dense and one sparse; a sparse pool spread over the five segments; and a
+/// sparse pool that never enters the segment of one passage. Each is scanned on
+/// one worker and on three, because a window boundary can fall inside a segment
+/// and the segment lookup must agree there too.
+#[test]
+fn a_pool_across_unequal_segments_matches_a_full_hamming_sort() {
+    let fixture = unequal_segments();
+    let snapshot = fixture.snapshot();
+    assert_cursor_segment_shape(&snapshot);
+    let query_code = query_code();
+
+    let cases = [
+        ("the whole live set", match_all()),
+        (
+            "the dense pool that skips S0 and S4",
+            filter("{\"fonds\": {\"in\": [\"S1\", \"S3\"]}}"),
+        ),
+        (
+            "the sparse pool that skips S1 and S3",
+            filter("{\"fonds\": {\"in\": [\"S0\", \"S2\", \"S4\"]}}"),
+        ),
+        (
+            "a sparse pool crossing every boundary",
+            filter("{\"rang\": {\"lte\": 2}}"),
+        ),
+        (
+            "a sparse pool that never enters the one-passage segment",
+            filter("{\"rang\": 1}"),
+        ),
+    ];
+
+    for (case, (name, filter)) in cases.iter().enumerate() {
+        let pool = fixture.pool(filter);
+        let mut expected = full_sort(&snapshot, DIMS, &pool, &query_code);
+        expected.truncate(10);
+        for workers in [1, 3] {
+            let got = scan_on_workers(&snapshot, &pool, &query_code, 10, workers);
+            assert_eq!(
+                as_pairs(&got),
+                expected,
+                "case {case} ({name}, {} passages, {workers} worker(s)) must equal a full \
+                 Hamming sort",
+                pool.len()
+            );
+        }
+    }
+}
+
+/// A pool made only of segment edges equals a full Hamming sort: the first and
+/// last identifier of a segment, the first identifier of every segment, and a
+/// last identifier alone.
+///
+/// These are the identifiers where a segment cursor starts, has to move on, or
+/// stops, so an off-by-one in the cursor shows here first.
+#[test]
+fn a_pool_limited_to_segment_borders_matches_a_full_hamming_sort() {
+    let fixture = unequal_segments();
+    let snapshot = fixture.snapshot();
+    assert_cursor_segment_shape(&snapshot);
+    let query_code = query_code();
+
+    let cases = [
+        (
+            "the first and last identifier of S2 and S3",
+            filter("{\"fonds\": {\"in\": [\"S2\", \"S3\"]}, \"rang\": {\"in\": [0, 63, 999]}}"),
+        ),
+        (
+            "the first identifier of every segment",
+            filter("{\"rang\": 0}"),
+        ),
+        (
+            "the last identifier of a segment alone",
+            filter("{\"fonds\": \"S4\", \"rang\": 6}"),
+        ),
+        (
+            "the last identifier of the thousand-passage segment",
+            filter("{\"fonds\": \"S3\", \"rang\": 999}"),
+        ),
+    ];
+
+    for (case, (name, filter)) in cases.iter().enumerate() {
+        let pool = fixture.pool(filter);
+        let mut expected = full_sort(&snapshot, DIMS, &pool, &query_code);
+        expected.truncate(10);
+        assert_eq!(
+            as_pairs(&scan_on_workers(&snapshot, &pool, &query_code, 10, 1)),
+            expected,
+            "case {case} ({name}) must equal a full Hamming sort"
+        );
+    }
+}
+
+/// An `n` above a multi-segment pool returns the whole pool, in the order of a
+/// full sort.
+#[test]
+fn n_above_a_multi_segment_pool_returns_the_whole_pool() {
+    let fixture = unequal_segments();
+    let snapshot = fixture.snapshot();
+    assert_cursor_segment_shape(&snapshot);
+    let query_code = query_code();
+    let pool = fixture.pool(&filter("{\"fonds\": {\"in\": [\"S0\", \"S1\", \"S3\"]}}"));
+    let expected = full_sort(&snapshot, DIMS, &pool, &query_code);
+
+    let got = scan_on_workers(&snapshot, &pool, &query_code, 10_000, 3);
+    assert_eq!(
+        got.len(),
+        usize::try_from(pool.len()).unwrap_or(usize::MAX),
+        "the scan must return the whole pool when n exceeds it"
+    );
+    assert_eq!(
+        as_pairs(&got),
+        expected,
+        "the whole pool must come back in the order of a full Hamming sort"
+    );
 }
 
 /// A query code whose length is not `ceil(dims / 64)` words is an invalid

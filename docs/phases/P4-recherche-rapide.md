@@ -45,8 +45,8 @@
 - **Objectif** : obtenir le top-N par distance de Hamming sur le pool.
 - **Dépend de** : QUANTIFIER-BINAIRE, NOYAUX-SIMD, EVALUER-FILTRES
 - **À lire** : `03-recherche.md` (branche dense : parallélisme).
-- **Livrables** : un parcours du pool par tranches d'iid sur le pool rayon, avec un tas par thread, puis la fusion des tas. Si le pool est dense, on itère sur les codes contigus en testant la bitmap. S'il est clairsemé, on itère sur la bitmap.
-- **Précisé par ADR-0081** (accepté le 2026-10-27) : le livrable ci-dessus demande deux parcours selon la densité ; ADR-0081 les ramène à un seul, le parcours clairsemé sur l'itérateur trié de la bitmap du pool. La correction de la fiche est faite par la tâche `UNIFIER-PARCOURS-SCAN`, en P4 avant J4, après une mesure multi-segments ; la décision et non le livrable fait foi d'ici là.
+- **Livrables** : un parcours du pool par tranches d'iid sur le pool rayon, avec un tas par thread, puis la fusion des tas. Un seul parcours : le pool est suivi par l'itérateur trié de sa bitmap, et un curseur de segment avance avec lui en O(1) amorti, sans recherche binaire par iid (ADR-0081, ADR-0082).
+- **Précisé par ADR-0081** (accepté le 2026-10-27) : le livrable d'origine demandait deux parcours selon la densité ; ADR-0081 les ramène à un seul, le parcours clairsemé sur l'itérateur trié de la bitmap du pool. **Corrigé par `UNIFIER-PARCOURS-SCAN`** (2026-10-27) : le livrable ci-dessus décrit désormais ce seul parcours, et le curseur de segment qu'ADR-0082 rend obligatoire.
 - **Critères d'acceptation** :
   - le résultat est égal à un tri complet par Hamming sur `synth-small` ;
   - les égalités de score sont départagées de façon déterministe (par iid).

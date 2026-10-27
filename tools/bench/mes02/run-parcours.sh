@@ -5,6 +5,14 @@
 # traversals of the binary scan, forced on the same pool and the same queries,
 # dense then sparse, pair after pair.
 #
+# Since ADR-0081 (task `UNIFIER-PARCOURS-SCAN`) the harness has a single
+# traversal: `cross` measures it and `agree` compares it with a full Hamming
+# sort. This recipe describes the two-traversal campaign of the 2026-10-27 and
+# must run with the binary of commit `e7d4e08`, the last one with the density
+# rule; the A/B of ADR-0082 runs the same `cross` and `agree` command lines on
+# both binaries and compares their documents. By default that binary is the
+# archived one of `data/ab-old` (see `run-ab.sh`); `HARNESS=...` overrides it.
+#
 # It is a recipe, not an authority: every command is also spelled out in the
 # report `docs/mesures/MES-02-parcours-dense-clairseme.md`. Run it from the
 # repository root, in `--release`, with no other heavy load on the machine.
@@ -47,8 +55,21 @@ mkdir -p "$RAW"
     ps -A -o %cpu=,comm= | sort -rn | head -8
 } > "$RAW/conditions-parcours-start.txt"
 
-cargo build --release --example dense_latency
-HARNESS="$ROOT/target/release/examples/dense_latency"
+# The binary of this campaign is the harness of commit `e7d4e08`, built outside
+# the working tree (see `run-ab.sh`): since ADR-0081 the tree has a single
+# traversal, and its documents carry no `traversal_automatic` nor
+# `pairs[].dense/sparse`, which the analysers of this directory refuse. Override
+# it with `HARNESS=/path/to/dense_latency` to measure with another build.
+HARNESS=${HARNESS:-$ROOT/data/ab-old/target/release/examples/dense_latency}
+if [ ! -x "$HARNESS" ]; then
+    echo "missing harness '$HARNESS': build the binary of commit e7d4e08 first:" >&2
+    echo "  mkdir -p data/ab-old/src" >&2
+    echo "  git archive e7d4e08 | tar -x -C data/ab-old/src" >&2
+    echo "  cd data/ab-old/src" >&2
+    echo "  CARGO_TARGET_DIR=$ROOT/data/ab-old/target cargo build --release --example dense_latency" >&2
+    echo "or set HARNESS to the binary you want to measure with" >&2
+    exit 1
+fi
 INDEX="--data $DATA --index synth-large --vectors $DATA/queries.f32"
 
 # 1. N = 5000 (ADR-0078): the density band of ADR-0071, plus the two pools of

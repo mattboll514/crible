@@ -6,11 +6,11 @@
 //! `docs/03-recherche.md` ("Branche dense") splits the branch by strategy: the
 //! scan of the binary codes above the exact threshold ([`binary`]), the exact
 //! dot product below it ([`exact`]), and the rescoring of the candidates the
-//! scan kept ([`rescore`]). The binary scan chooses its dense or sparse
-//! traversal at the threshold of ADR-0071. The planner chooses between the two
-//! strategies from the search settings, the pool and the request option
-//! (ADR-0074), and runs the planned one: [`plan`] gives the choice, [`search`]
-//! executes it.
+//! scan kept ([`rescore`]). The binary scan has a single traversal, the sparse
+//! walk of the pool bitmap with a segment cursor (ADR-0081, ADR-0082). The
+//! planner chooses between the two strategies from the search settings, the
+//! pool and the request option (ADR-0074), and runs the planned one: [`plan`]
+//! gives the choice, [`search`] executes it.
 //!
 //! Both strategies parallelise the same way (`docs/03-recherche.md`,
 //! "Parallélisme"): the pool is cut into contiguous windows of internal

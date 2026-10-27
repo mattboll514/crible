@@ -17,6 +17,15 @@
 # (precedent MES-13), and it anchors the replica to the engine with the
 # `compare` mode. The only index it opens is a **measurement copy** whose
 # `search.exact_threshold` is 0, so every point runs BINARY.
+#
+# Since ADR-0081 the binary scan has a single traversal (task
+# `UNIFIER-PARCOURS-SCAN`): the two forced series of step 3 no longer exist in
+# the current tree. This recipe reproduces the campaign of the 2026-10-27 and
+# must run with the binary of commit `e7d4e08`, the last one that carries the
+# density rule; ADR-0082's A/B runs `cross` and `agree` with the same command
+# line on that binary and on the current one, and compares their documents.
+# By default the harness is the archived binary of `e7d4e08` (`data/ab-old`, see
+# `run-ab.sh`), not a build of this tree; `HARNESS=...` overrides it.
 
 set -eu
 
@@ -65,15 +74,35 @@ fi
 # 2. The 300 query vectors of ADR-0077 decision 4, with their SHA-256.
 (cd "$TOOLS" && uv run --no-sync python bench/mes02/mes02_queries.py)
 
-cargo build --release --example dense_latency
-HARNESS="$ROOT/target/release/examples/dense_latency"
+# The CLI opened in step 5 is the engine's, built from this tree; the harness is
+# not, see the block below.
+cargo build --release --bin crible
+
+# The binary of this campaign is the harness of commit `e7d4e08`, built outside
+# the working tree (see `run-ab.sh`): since ADR-0081 the tree has a single
+# traversal, and its documents carry no `traversal_automatic` nor
+# `pairs[].dense/sparse`, which the analysers of this directory refuse. Override
+# it with `HARNESS=/path/to/dense_latency` to measure with another build.
+HARNESS=${HARNESS:-$ROOT/data/ab-old/target/release/examples/dense_latency}
+if [ ! -x "$HARNESS" ]; then
+    echo "missing harness '$HARNESS': build the binary of commit e7d4e08 first:" >&2
+    echo "  mkdir -p data/ab-old/src" >&2
+    echo "  git archive e7d4e08 | tar -x -C data/ab-old/src" >&2
+    echo "  cd data/ab-old/src" >&2
+    echo "  CARGO_TARGET_DIR=$ROOT/data/ab-old/target cargo build --release --example dense_latency" >&2
+    echo "or set HARNESS to the binary you want to measure with" >&2
+    exit 1
+fi
 INDEX="--data $DATA --index synth-large --vectors $DATA/queries.f32"
 
 # 3. Scan: 1 k, 10 k, 100 k, 1 M, all live; contiguous and dispersed; 3 passes.
 "$HARNESS" scan $INDEX --out "$RAW/scan-main.json"
 "$HARNESS" scan $INDEX --sizes all --out "$RAW/scan-all.json"
-"$HARNESS" scan $INDEX --force-traversal dense --out "$RAW/scan-forced-dense.json"
-"$HARNESS" scan $INDEX --force-traversal sparse --out "$RAW/scan-forced-sparse.json"
+# The two forced series of the 2026-10-27 campaign (`scan-forced-dense.json`,
+# `scan-forced-sparse.json`) belong to the two-traversal code that ADR-0071
+# described. ADR-0081 removed the second traversal, so the harness no longer
+# accepts `--force-traversal`: replay those two files with the binary of commit
+# `e7d4e08`, the last one that carries the density rule.
 
 # 4. EXACT reference at the switching point (pool equal to N, k = 100).
 "$HARNESS" exact $INDEX --out "$RAW/exact.json"
