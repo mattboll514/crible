@@ -3,7 +3,7 @@
 **But** : passer d'un calcul exact partout au **scan binaire suivi d'un rescoring fp16**, choisir la stratégie selon la taille du pool, puis regrouper par document. On garantit la fidélité par la mesure.
 
 **Jalon J4** :
-- MES-01 atteint la cible de fidélité (recall@10 contre l'exact, par défaut au moins 0,99) ;
+- MES-01 atteint la cible de fidélité (recall@10 contre l'exact, par défaut au moins 0,99, en moyenne globale selon ADR-0076) ;
 - MES-02, MES-03, MES-09 et MES-12 sont consignées ;
 - le N par défaut est choisi et validé (Q-01) ;
 - INV-06 est toujours vert ;
@@ -85,7 +85,7 @@
 - **Objectif** : MES-01 et MES-12, puis le choix de N.
 - **Dépend de** : PLANIFIER-STRATEGIE, CONSTITUER-ECHANTILLON-LEGIFACILE
 - **À lire** : `08-invariants-et-tests.md` (cibles) ; `docs/mesures/README.md`.
-- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index.
+- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index. **Précisé par ADR-0076** (accepté par anticipation le 2026-10-27) : recall@10 au niveau du passage et recouvrement@10 au niveau du document, cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près ; BINARY forcé par `search.exact_threshold = 0` sur des copies des index ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée.
 - **Critères d'acceptation** :
   - le rapport contient une recommandation de N et de centrage ;
   - la cible est atteinte, ou bien le rapport propose un levier (scoring asymétrique) à faire valider.

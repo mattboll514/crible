@@ -101,7 +101,7 @@ crible eval --index articles --queries golden.jsonl --modes dense,lexical,hybrid
 `expected` est facultatif.
 
 **Mesures produites, pour chaque mode** :
-- **fidélité de l'approximation** : recall@k et recouvrement@k du pipeline normal contre le même pipeline en `exact: true` ;
+- **fidélité de l'approximation** : recall@k et recouvrement@k du pipeline normal contre le même pipeline en `exact: true` ; les deux définitions — recall@k au niveau du passage, recouvrement@k au niveau du document — sont fixées par ADR-0076 et s'appliquent ici comme aux mesures de P4 ;
 - **qualité** : si `expected` est fourni, recall@k, MRR et nDCG@k ;
 - **latence** : p50, p95 et p99 par étape ;
 - les requêtes qui régressent par rapport à un rapport précédent (option `--baseline`).

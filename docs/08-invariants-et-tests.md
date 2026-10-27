@@ -63,7 +63,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | # | Question | Phase |
 |---|---|---|
 | MES-00 | Référence pgvector actuelle : rappel et latence p50/p95 sur le jeu de requêtes de Legifacile | P0 |
-| MES-01 | Rappel du scan binaire + rescoring contre l'exact (mDenseOn, 768 dimensions), selon N → choix du N par défaut | P4 |
+| MES-01 | Rappel du scan binaire + rescoring contre l'exact (mDenseOn, 768 dimensions), selon N → choix du N par défaut. Métriques, agrégation et protocole fixés par ADR-0076 | P4 |
 | MES-02 | Latence du scan binaire selon la taille du pool (1 k → 8,6 M) | P4, puis P8 en conteneur |
 | MES-03 | Latence du rescoring fp16, à froid et à chaud | P4 |
 | MES-04 | Parité de l'encodeur : ONNX fp32 et INT8 contre PyTorch (cosinus, rappel) | P2 |
@@ -74,7 +74,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-09 | RAM réelle (RSS) en régime, par index | P4, P8 |
 | MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut | P5 |
 | MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`) | P5 |
-| MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
+| MES-12 | Codes binaires : signe brut contre signe après centrage. Centrage mesuré hors moteur, par un harnais contrôlé au bit près (ADR-0076) | P4 |
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
 | MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
@@ -82,6 +82,6 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 ## Cibles chiffrées
 
 Les cibles de latence et de rappel sont fixées **après MES-00** et consignées dans `docs/suivi.md` (section « Cibles »). Règles :
-- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut. À confirmer ou ajuster après MES-01, avec l'accord du propriétaire.
+- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut, **en moyenne sur toutes les requêtes** et au niveau du passage. Les valeurs par structure sont rapportées et toute structure sous 0,99 est signalée et expliquée ; le recouvrement@10 au niveau du document est rapporté sans cible (ADR-0076). À confirmer ou ajuster après MES-01, avec l'accord du propriétaire.
 - **Rappel** : au moins égal à pgvector (MES-00) sur le jeu de référence.
 - **Latence** : p95 au plus égal à pgvector (MES-00) à l'échelle de Legifacile, sur le Mac mini en conteneur.
