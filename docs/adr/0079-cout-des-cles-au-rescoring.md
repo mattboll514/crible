@@ -3,6 +3,7 @@
 - **Statut** : Accepté (décision du propriétaire le 2026-10-27, tel que proposé)
 - **Date** : 2026-10-27 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
+- **Décision** : accepté tel que proposé le 2026-10-27. La mise en œuvre se fait par une tâche de **P4, avant le jalon J4** : `REDUIRE-COUT-DES-CLES` ; ses voisines sont `GROUPER-LECTURES-VECTEURS` (ADR-0080) et `UNIFIER-PARCOURS-SCAN` (ADR-0081).
 - **Proposé par** : agent greffier, sur demande du propriétaire, à partir de la mesure MES-03 (`docs/mesures/MES-03-latence-rescoring.md`) et de l'analyse de `@architecte` reprise par l'orchestrateur
 - **Remplace** : —
 

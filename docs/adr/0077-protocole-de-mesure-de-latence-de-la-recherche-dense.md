@@ -84,6 +84,7 @@ Ce qui n'est **pas** décidé ici : la valeur de N par défaut, qui fera l'objet
   - si la proportion de pages déjà résidentes dépasse largement zéro sur la série `F_NOCACHE`, la copie n'est pas réellement froide et la série secondaire devient la seule référence ;
   - si la mémoire adossée à des fichiers approche le RSS total, la lecture du tableau de `docs/02:202-219` devra être corrigée par un ADR ;
   - si le rescoring à N = 5000 dépasse le budget de bout en bout, le N par défaut ne pourra pas être 5000 sans un autre levier, et le choix se fera dans l'ADR de Q-01.
+  - **Note du 2026-10-27 (ADR-0081, accepté)** : ADR-0081 retire le seuil de densité d'ADR-0071 et retient un seul parcours du scan binaire, le clairsemé, sous condition d'une **mesure multi-segments**. Cette mesure se fait par passes alternées sur une copie compactée (environ 8 segments de 1 M passages) et sur une copie multi-attaches, même pool, même plage, N = 5000, 300 requêtes, 3 paires. Si le clairsemé perd plus de quelques pour cent sur 8 segments, le remède est un curseur de segment, pas le retour du parcours dense. Le protocole fixé ici — N, nombre de requêtes, percentiles, séries froides — n'est pas modifié par cette note.
 
 ## Alternatives écartées
 

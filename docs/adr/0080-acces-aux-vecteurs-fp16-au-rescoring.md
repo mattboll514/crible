@@ -1,8 +1,9 @@
 # ADR-0080 — Accès aux vecteurs fp16 au rescoring
 
-- **Statut** : Proposé
-- **Date** : 2026-10-27
+- **Statut** : Accepté (décision du propriétaire le 2026-10-27, tel que proposé)
+- **Date** : 2026-10-27 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
+- **Décision** : accepté tel que proposé le 2026-10-27. La mise en œuvre se fait par une tâche de **P4, avant le jalon J4** : `GROUPER-LECTURES-VECTEURS` ; ses voisines sont `REDUIRE-COUT-DES-CLES` (ADR-0079) et `UNIFIER-PARCOURS-SCAN` (ADR-0081).
 - **Proposé par** : agent greffier, sur demande du propriétaire, à partir de la mesure MES-03 (`docs/mesures/MES-03-latence-rescoring.md`), de la mesure MES-09 (`docs/mesures/MES-09-ram-reelle.md`) et de l'analyse de `@architecte` reprise par l'orchestrateur
 - **Remplace** : —
 
@@ -68,7 +69,7 @@ Le coût des **clés**, qui appartient à ADR-0079 ; la valeur de `rescore_candi
 
 ## Décision
 
-> Statut **Proposé** : ce qui suit est la décision **proposée**, à trancher par le propriétaire. Rien n'est appliqué aux documents de conception tant que l'ADR n'est pas accepté.
+> Statut **Accepté** (décision du propriétaire le 2026-10-27, tel que proposé) : les précisions ci-dessous font la décision ; leur mise en œuvre demande la tâche `GROUPER-LECTURES-VECTEURS` (P4, avant J4).
 
 **La décision proposée est de retenir la lecture groupée et parallèle des N lignes avant le calcul (option 1), de mesurer `madvise(MADV_RANDOM)` dans la même campagne comme contrôle bon marché (option 2), et de garder le `pread` groupé (option 9) en repli. Les vecteurs en RAM, `mlock` et la quantification int8 du rescoring restent écartés en l'état.**
 

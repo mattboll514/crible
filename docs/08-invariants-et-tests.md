@@ -65,7 +65,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-00 | Référence pgvector actuelle : rappel et latence p50/p95 sur le jeu de requêtes de Legifacile | P0 |
 | MES-01 | Rappel du scan binaire + rescoring contre l'exact (mDenseOn, 768 dimensions), selon N → choix du N par défaut. Métriques, agrégation et protocole fixés par ADR-0076 | P4 |
 | MES-02 | Latence du scan binaire selon la taille du pool (1 k → 8,6 M). Protocole fixé par ADR-0077 : pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, BINARY forcé par `search.exact_threshold = 0`, parcours dense et clairsemé rapportés | P4, puis P8 en conteneur |
-| MES-03 | Latence du rescoring fp16, à froid et à chaud. Protocole fixé par ADR-0077 : N ∈ {1000, 2000, 5000}, froid par copies non cachées (`F_NOCACHE`, `mincore`) ; le scan n'a pas d'état froid, ses codes étant en RAM | P4 |
+| MES-03 | Latence du rescoring fp16, à froid et à chaud. Protocole fixé par ADR-0077 : N ∈ {1000, 2000, 5000}, froid par copies non cachées (`F_NOCACHE`, `mincore`) ; le scan n'a pas d'état froid, ses codes étant en RAM. Rejouée en conteneur par la tâche `MESURER-EN-CONTENEUR-MAC` (P8) | P4, P8 |
 | MES-04 | Parité de l'encodeur : ONNX fp32 et INT8 contre PyTorch (cosinus, rappel) | P2 |
 | MES-05 | Latence d'encodage d'une requête sur CPU (natif, puis en conteneur) | P2, P8 |
 | MES-06 | tantivy : taille d'index (avec ou sans positions), durée de construction, latence BM25 filtrée selon le pool | P5 |

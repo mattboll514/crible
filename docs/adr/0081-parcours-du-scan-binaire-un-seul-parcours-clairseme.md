@@ -1,10 +1,11 @@
 # ADR-0081 — Parcours du scan binaire : un seul parcours clairsemé
 
-- **Statut** : Proposé
-- **Date** : 2026-10-27
+- **Statut** : Accepté (décision du propriétaire le 2026-10-27, tel que proposé)
+- **Date** : 2026-10-27 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
+- **Décision** : accepté tel que proposé le 2026-10-27. La mise en œuvre se fait par une tâche de **P4, avant le jalon J4** : `UNIFIER-PARCOURS-SCAN` ; ses voisines sont `REDUIRE-COUT-DES-CLES` (ADR-0079) et `GROUPER-LECTURES-VECTEURS` (ADR-0080).
 - **Proposé par** : agent greffier, sur demande du propriétaire, à partir de la campagne MES-02 du 2026-10-27 (`docs/mesures/MES-02-parcours-dense-clairseme.md`, commit `17fc786`) et de l'analyse de `@architecte`
-- **Remplace** : — (ADR-0071 devient caduc si cet ADR est accepté ; son statut n'est pas modifié tant que le propriétaire n'a pas tranché)
+- **Remplace** : ADR-0071
 
 ## Contexte
 
@@ -95,7 +96,9 @@ Ce qui n'est **pas** décidé ici : une règle de seuil par taille de pool (opti
 
 ## Documents à modifier après acceptation
 
-Rien n'est appliqué ici : cet ADR est `Proposé` et le propriétaire seul tranche. Les modifications ci-dessous sont **listées**, pas faites.
+Rien n'a été appliqué au moment de la proposition : cet ADR était `Proposé` et le propriétaire seul tranche.
+
+**Application du 2026-10-27.** L'ADR est accepté ce jour. Ce qui a été appliqué : le statut d'ADR-0071, la ligne d'index, la phrase de `docs/03-recherche.md`, et une note « Précisé par ADR-0081 » sur la fiche `SCANNER-POOL-BINAIRE` (le livrable n'est pas réécrit : la fiche est celle d'une tâche `FAIT`, sa correction appartient à `UNIFIER-PARCOURS-SCAN`) ; le renvoi de la section « À surveiller » d'ADR-0077 est écrit sous forme de note datée. Les renvois d'ADR-0079 et d'ADR-0080 ne sont pas écrits : le propriétaire ne les a pas demandés.
 
 | Document | Modification prévue |
 |---|---|

@@ -1,6 +1,6 @@
 # ADR-0071 — Seuil entre parcours dense et parcours clairsemé du scan binaire
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-26)
+- **Statut** : Remplacé par ADR-0081 (décision du propriétaire le 2026-10-27)
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour les trois premières tâches de P4, confirmé par le propriétaire le 2026-10-26. La décision est retenue telle que proposée : parcours dense quand le pool couvre au moins la moitié de la plage d'iid qu'il occupe, parcours clairsemé sinon ; règle fixe, sans réglage ni configuration.
