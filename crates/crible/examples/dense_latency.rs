@@ -25,6 +25,13 @@
 //! dense_latency scan      --data D --index I --vectors Q --out O [--sizes …]
 //!                         [--shapes contiguous,dispersed] [--ns 1000,2000,5000]
 //!                         [--passes 3] [--seed S] [--force-traversal …]
+//! dense_latency cross     --data D --index I --vectors Q --out O [--pairs 3]
+//!                         [--ns 5000] [--seed S] [--sizes 1000000,all]
+//!                         [--densities 10,25,40,50,60,75]
+//!                         [--spans 1000000,7740000]
+//! dense_latency agree     --data D --index I --vectors Q --out O [--queries 5]
+//!                         [--ns 5000] [--seed S] [--sizes …] [--densities …]
+//!                         [--spans …]
 //! dense_latency rescore   --data D --index I --vectors Q --out O --ns … [--passes 3]
 //!                         [--cold] [--displace-gb G] [--displace-source P …]
 //!                         [--dot-only] [--dot-vectors-file F]
@@ -71,10 +78,9 @@ use serde_json::{Value, json};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().collect();
-    let mode = arguments
-        .get(1)
-        .cloned()
-        .ok_or("usage: dense_latency <scan|rescore|exact|compare|rss|copy-nocache> …")?;
+    let mode = arguments.get(1).cloned().ok_or(
+        "usage: dense_latency <scan|cross|agree|rescore|exact|compare|rss|copy-nocache> …",
+    )?;
     match mode.as_str() {
         "copy-nocache" => {
             let source = PathBuf::from(required(&arguments, "--src")?);
@@ -89,6 +95,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let opened = Opened::open(&data, &index)?;
             match mode.as_str() {
                 "scan" => scan_mode(&arguments, &opened, &out)?,
+                "cross" => cross_mode(&arguments, &opened, &out)?,
+                "agree" => agree_mode(&arguments, &opened, &out)?,
                 "rescore" => rescore_mode(&arguments, &opened, &out)?,
                 "exact" => exact_mode(&arguments, &opened, &out)?,
                 "compare" => compare_mode(&arguments, &opened, &out)?,
@@ -449,24 +457,98 @@ fn pool_contiguous(live: &RoaringBitmap, size: usize) -> RoaringBitmap {
 fn pool_dispersed(live: &RoaringBitmap, size: usize, seed: u64) -> RoaringBitmap {
     let total = usize::try_from(live.len()).unwrap_or(0);
     let size = size.min(total);
+    let mut draw = Draw::new(seed);
     let mut chosen: HashSet<usize> = HashSet::with_capacity(size);
-    let mut state = seed | 1;
-    let mut next = || {
-        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    };
     while chosen.len() < size {
-        let draw = next() % total as u64;
-        chosen.insert(usize::try_from(draw).unwrap_or(0));
+        let position = usize::try_from(draw.next() % total as u64).unwrap_or(0);
+        chosen.insert(position);
     }
     let mut pool = RoaringBitmap::new();
     for (position, iid) in live.iter().enumerate() {
         if chosen.contains(&position) {
             pool.insert(iid);
         }
+    }
+    pool
+}
+
+/// Deterministic generator shared by the constructed pools.
+struct Draw {
+    state: u64,
+}
+
+impl Draw {
+    fn new(seed: u64) -> Self {
+        Self { state: seed | 1 }
+    }
+
+    fn next(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+
+/// A pool drawn in one window of identifiers, at a given density.
+///
+/// ADR-0071 measures the density of a pool as `pool size / iid span`. MES-02
+/// only produced pools at the two ends (a contiguous window of live passages,
+/// about 90 %, and a draw over the whole live set, about 0.1 %), so the density
+/// band that the 50 % rule separates was never measured. This builder fills it:
+/// it takes `fraction` of the identifiers of a window of `span` identifiers,
+/// chosen among the live ones, uniformly.
+///
+/// `synth-large` holds about 90 % live passages, so a fraction above that is not
+/// constructible in any window; the pool then takes every live passage of the
+/// window and the caller reports the density it actually reached.
+fn pool_window(live: &[u32], span: usize, fraction: f64, seed: u64) -> RoaringBitmap {
+    let total = live.len();
+    let last_live = live.last().copied().unwrap_or(0);
+    let limit = usize::try_from(last_live).unwrap_or(0) + 1;
+    let span = span.clamp(1, limit);
+    let max_start = limit - span;
+    let mut draw = Draw::new(seed);
+    let mut candidates = vec![0_usize, max_start];
+    for _ in 0..8 {
+        candidates.push(usize::try_from(draw.next() % (max_start as u64 + 1)).unwrap_or(0));
+    }
+    let window = |start: usize| -> (usize, usize) {
+        let lo = live.partition_point(|iid| usize::try_from(*iid).unwrap_or(usize::MAX) < start);
+        let hi =
+            live.partition_point(|iid| usize::try_from(*iid).unwrap_or(usize::MAX) < start + span);
+        (lo, hi)
+    };
+    let wanted = ((fraction * span as f64).round() as usize).clamp(1, total.max(1));
+    // The first candidate window that holds enough live passages, so a draw is
+    // never short of its target density; the widest window is the fallback.
+    let start = candidates
+        .iter()
+        .copied()
+        .find(|start| window(*start).1 - window(*start).0 >= wanted)
+        .or_else(|| {
+            candidates.into_iter().max_by_key(|start| {
+                let (lo, hi) = window(*start);
+                hi - lo
+            })
+        })
+        .unwrap_or(0);
+    let (lo, hi) = window(start);
+    let needed = wanted.min(hi - lo);
+    let mut pool = RoaringBitmap::new();
+    let mut selected = 0_usize;
+    let mut slots = hi - lo;
+    for iid in live.iter().take(hi).skip(lo) {
+        let remaining = needed - selected;
+        if remaining == 0 {
+            break;
+        }
+        if draw.next() % (slots as u64) < remaining as u64 {
+            pool.insert(*iid);
+            selected += 1;
+        }
+        slots -= 1;
     }
     pool
 }
@@ -858,6 +940,386 @@ fn scan_mode(
         report["points"].as_array().map_or(0, Vec::len),
         queries.len(),
         passes,
+        out.display()
+    );
+    Ok(())
+}
+
+// ----------------------------------------------------------------- cross ------
+
+/// One pool of the alternating campaign.
+struct CrossPoint {
+    label: String,
+    kind: &'static str,
+    requested_span: u64,
+    pool: RoaringBitmap,
+}
+
+/// Builds the pools of a campaign, in the order `sizes` then `spans × densities`.
+///
+/// `cross` and `agree` share it, so the control compares the traversals on
+/// exactly the pools the campaign measured: same seed, same window, same draw.
+fn cross_points(
+    live: &RoaringBitmap,
+    live_ids: &[u32],
+    sizes: &str,
+    spans: &str,
+    densities: &str,
+    seed: u64,
+) -> Result<Vec<CrossPoint>, Box<dyn std::error::Error>> {
+    let mut points: Vec<CrossPoint> = Vec::new();
+    for size_text in sizes.split(',') {
+        let size_text = size_text.trim();
+        if size_text.is_empty() {
+            continue;
+        }
+        if size_text == "all" {
+            let (first, last) = match (live.min(), live.max()) {
+                (Some(first), Some(last)) => (first, last),
+                _ => (0, 0),
+            };
+            points.push(CrossPoint {
+                label: "full".to_owned(),
+                kind: "full",
+                requested_span: u64::from(last) - u64::from(first) + 1,
+                pool: live.clone(),
+            });
+            continue;
+        }
+        let size: usize = size_text.parse()?;
+        points.push(CrossPoint {
+            label: format!("contiguous-{size}"),
+            kind: "contiguous",
+            requested_span: 0,
+            pool: pool_contiguous(live, size),
+        });
+    }
+    for span_text in spans.split(',') {
+        let span_text = span_text.trim();
+        if span_text.is_empty() {
+            continue;
+        }
+        let span: usize = span_text.parse()?;
+        for density_text in densities.split(',') {
+            let density_text = density_text.trim();
+            if density_text.is_empty() {
+                continue;
+            }
+            let percent: f64 = density_text.parse()?;
+            points.push(CrossPoint {
+                label: format!("density-{span}-{density_text}"),
+                kind: "density",
+                requested_span: span as u64,
+                pool: pool_window(live_ids, span, percent / 100.0, seed),
+            });
+        }
+    }
+    if points.is_empty() {
+        return Err("no pool: pass --sizes and/or --spans".into());
+    }
+    Ok(points)
+}
+
+/// Alternating campaign of ADR-0071: both forced traversals, on the same pool
+/// and the same queries, dense then sparse, pair after pair.
+///
+/// MES-02 measured each traversal once, in its own process, and could not tell
+/// a difference between the traversals from the difference between two runs.
+/// This mode removes that ambiguity: every pair runs the two traversals back to
+/// back on the same query vectors, after a separate warm-up pass of each, so the
+/// spread of the pairs is the dispersion of the measurement itself.
+///
+/// The order inside a pair is **fixed** — dense first, then sparse — so the two
+/// traversals never swap places; see `agree` for the check that they return the
+/// same candidates, and the report for the bias that order introduces.
+fn cross_mode(
+    arguments: &[String],
+    opened: &Opened,
+    out: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let vectors_path = PathBuf::from(required(arguments, "--vectors")?);
+    let pairs: usize = optional(arguments, "--pairs")
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(3);
+    let seed: u64 = optional(arguments, "--seed")
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(2026);
+    let ns = optional(arguments, "--ns").unwrap_or_else(|| "5000".into());
+    let densities =
+        optional(arguments, "--densities").unwrap_or_else(|| "10,25,40,50,60,75".into());
+    let spans = optional(arguments, "--spans").unwrap_or_else(|| "1000000,7740000".into());
+    let sizes = optional(arguments, "--sizes").unwrap_or_default();
+
+    let snapshot = opened.snapshot();
+    let metas = snapshot.segments();
+    let dims = metas.first().ok_or("the index holds no segment")?.dims as usize;
+    let queries = read_matrix(&vectors_path, dims)?;
+    let live = snapshot.filters().live().clone();
+    let live_len = usize::try_from(live.len())?;
+    let live_ids: Vec<u32> = live.iter().collect();
+    let codes = codes_of(&snapshot);
+    let query_codes: Vec<Vec<u64>> = queries.iter().map(|query| quantize(query)).collect();
+    let k = opened.config.search.candidates_per_branch as usize;
+
+    // Pools first, so the document lists them even if a later pass fails.
+    let points = cross_points(&live, &live_ids, &sizes, &spans, &densities, seed)?;
+
+    let scan_pool = ScanPool::new(opened.threads)?;
+    let mut measured = Vec::with_capacity(points.len());
+    for point in &points {
+        let pool = &point.pool;
+        let pool_len = pool.len() as u32;
+        let (first, last) = match (pool.min(), pool.max()) {
+            (Some(first), Some(last)) => (first, last),
+            _ => (0, 0),
+        };
+        let span = u64::from(last) - u64::from(first) + 1;
+        let automatic = traversal_of(pool, pool_len);
+        let plan = plan(&opened.config.search, pool_len, k, false);
+        for n_text in ns.split(',') {
+            let n: usize = n_text.trim().parse()?;
+            let n = n.max(k);
+            // Warm-up: one pass of each traversal, kept apart from the pairs.
+            let mut warmup: Vec<(Traversal, Vec<f64>)> = Vec::new();
+            for traversal in [Traversal::Dense, Traversal::Sparse] {
+                let mut durations = Vec::with_capacity(query_codes.len());
+                for query_code in &query_codes {
+                    let started = Instant::now();
+                    let candidates = scan_pool
+                        .install(|| scan_replica(&codes, pool, pool_len, query_code, n, traversal));
+                    durations.push(started.elapsed().as_secs_f64() * 1e6);
+                    std::hint::black_box(candidates.len());
+                }
+                warmup.push((traversal, durations));
+            }
+            // The pairs: dense, sparse, dense, sparse, on the same queries.
+            let mut detail = Vec::with_capacity(pairs);
+            let mut dense_all: Vec<f64> = Vec::with_capacity(query_codes.len() * pairs);
+            let mut sparse_all: Vec<f64> = Vec::with_capacity(query_codes.len() * pairs);
+            for pair in 1..=pairs {
+                let mut per_traversal: Vec<(Traversal, Vec<f64>)> = Vec::new();
+                for traversal in [Traversal::Dense, Traversal::Sparse] {
+                    let mut durations = Vec::with_capacity(query_codes.len());
+                    for query_code in &query_codes {
+                        let started = Instant::now();
+                        let candidates = scan_pool.install(|| {
+                            scan_replica(&codes, pool, pool_len, query_code, n, traversal)
+                        });
+                        durations.push(started.elapsed().as_secs_f64() * 1e6);
+                        std::hint::black_box(candidates.len());
+                    }
+                    per_traversal.push((traversal, durations));
+                }
+                let dense = &per_traversal[0].1;
+                let sparse = &per_traversal[1].1;
+                dense_all.extend_from_slice(dense);
+                sparse_all.extend_from_slice(sparse);
+                detail.push(json!({
+                    "pair": pair,
+                    "dense": summarise(dense),
+                    "sparse": summarise(sparse),
+                    "dense_us": dense.clone(),
+                    "sparse_us": sparse.clone(),
+                }));
+            }
+            let warmup_json = |traversal: Traversal| -> Value {
+                match warmup.iter().find(|(which, _)| *which == traversal) {
+                    Some((_, durations)) => json!({
+                        "summary": summarise(durations),
+                        "durations_us": durations,
+                    }),
+                    None => Value::Null,
+                }
+            };
+            measured.push(json!({
+                "label": point.label,
+                "kind": point.kind,
+                "requested_span": point.requested_span,
+                "size": pool_len,
+                "span": span,
+                "density": pool_len as f64 / span as f64,
+                "n": n,
+                "first_iid": first,
+                "last_iid": last,
+                "traversal_automatic": automatic.as_str(),
+                "plan": plan.strategy.as_str(),
+                "pairs_count": pairs,
+                "queries": queries.len(),
+                "warmup": {
+                    "dense": warmup_json(Traversal::Dense),
+                    "sparse": warmup_json(Traversal::Sparse),
+                },
+                "pairs": detail,
+                "dense": {
+                    "durations_us": dense_all,
+                    "summary": summarise(&dense_all),
+                },
+                "sparse": {
+                    "durations_us": sparse_all,
+                    "summary": summarise(&sparse_all),
+                },
+            }));
+        }
+    }
+
+    let report = json!({
+        "kind": "cross",
+        "index": opened.index,
+        "dims": dims,
+        "threads": opened.threads,
+        "live_passages": live_len,
+        "vectors": vectors_path.display().to_string(),
+        "queries": queries.len(),
+        "points": measured,
+    });
+    fs::write(out, serde_json::to_vec(&report)?)?;
+    println!(
+        "cross: {} points, {} queries, {} pairs, wrote {}",
+        report["points"].as_array().map_or(0, Vec::len),
+        queries.len(),
+        pairs,
+        out.display()
+    );
+    Ok(())
+}
+
+// ----------------------------------------------------------------- agree ------
+
+/// Control of the campaign: both traversals must return the same candidates.
+///
+/// A defect in the replica of either traversal would change the work measured
+/// without changing anything visible, and the campaign would compare two
+/// different computations. Production answers that question for its own scan by
+/// `dense_and_sparse_traversals_agree_with_a_full_sort`; the harness checks the
+/// cheap part of it on **every pool of the campaign**: same candidates, same
+/// distances, same order, for a handful of queries.
+///
+/// The control reads the codes and the pool exactly as `cross` does — same
+/// builder, same seed — so a pool whose traversals agree here is a pool the
+/// campaign measured on valid ground.
+fn agree_mode(
+    arguments: &[String],
+    opened: &Opened,
+    out: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let vectors_path = PathBuf::from(required(arguments, "--vectors")?);
+    let seed: u64 = optional(arguments, "--seed")
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(2026);
+    let ns = optional(arguments, "--ns").unwrap_or_else(|| "5000".into());
+    let densities =
+        optional(arguments, "--densities").unwrap_or_else(|| "10,25,40,50,60,75".into());
+    let spans = optional(arguments, "--spans").unwrap_or_else(|| "1000000,7740000".into());
+    let sizes = optional(arguments, "--sizes").unwrap_or_default();
+    let checked: usize = optional(arguments, "--queries")
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(5);
+
+    let snapshot = opened.snapshot();
+    let metas = snapshot.segments();
+    let dims = metas.first().ok_or("the index holds no segment")?.dims as usize;
+    let queries = read_matrix(&vectors_path, dims)?;
+    let live = snapshot.filters().live().clone();
+    let live_len = usize::try_from(live.len())?;
+    let live_ids: Vec<u32> = live.iter().collect();
+    let codes = codes_of(&snapshot);
+    let query_codes: Vec<Vec<u64>> = queries.iter().map(|query| quantize(query)).collect();
+    let k = opened.config.search.candidates_per_branch as usize;
+    let points = cross_points(&live, &live_ids, &sizes, &spans, &densities, seed)?;
+    let scan_pool = ScanPool::new(opened.threads)?;
+
+    let mut checked_points = Vec::with_capacity(points.len());
+    for point in &points {
+        let pool = &point.pool;
+        let pool_len = pool.len() as u32;
+        let (first, last) = match (pool.min(), pool.max()) {
+            (Some(first), Some(last)) => (first, last),
+            _ => (0, 0),
+        };
+        let span = u64::from(last) - u64::from(first) + 1;
+        for n_text in ns.split(',') {
+            let n_text = n_text.trim();
+            if n_text.is_empty() {
+                continue;
+            }
+            let n: usize = n_text.parse()?;
+            let n = n.max(k);
+            let mut different = 0_usize;
+            let mut first_difference: Option<Value> = None;
+            for (index, query_code) in query_codes.iter().take(checked).enumerate() {
+                let dense = scan_pool.install(|| {
+                    scan_replica(&codes, pool, pool_len, query_code, n, Traversal::Dense)
+                });
+                let sparse = scan_pool.install(|| {
+                    scan_replica(&codes, pool, pool_len, query_code, n, Traversal::Sparse)
+                });
+                if dense != sparse {
+                    different += 1;
+                    if first_difference.is_none() {
+                        let position = dense
+                            .iter()
+                            .zip(&sparse)
+                            .position(|(left, right)| left != right)
+                            .unwrap_or(dense.len().min(sparse.len()));
+                        first_difference = Some(json!({
+                            "query": index,
+                            "position": position,
+                            "dense": dense.get(position).map(|c| json!({
+                                "iid": c.iid.get(),
+                                "distance": c.distance,
+                            })),
+                            "sparse": sparse.get(position).map(|c| json!({
+                                "iid": c.iid.get(),
+                                "distance": c.distance,
+                            })),
+                            "lengths": [dense.len(), sparse.len()],
+                        }));
+                    }
+                }
+            }
+            checked_points.push(json!({
+                "label": point.label,
+                "kind": point.kind,
+                "size": pool_len,
+                "span": span,
+                "density": pool_len as f64 / span as f64,
+                "n": n,
+                "queries_checked": query_codes.len().min(checked),
+                "identical": different == 0,
+                "queries_different": different,
+                "first_difference": first_difference,
+            }));
+        }
+    }
+
+    let identical = checked_points
+        .iter()
+        .all(|point| point["identical"] == Value::Bool(true));
+    let report = json!({
+        "kind": "agree",
+        "index": opened.index,
+        "dims": dims,
+        "threads": opened.threads,
+        "live_passages": live_len,
+        "vectors": vectors_path.display().to_string(),
+        "queries_checked": query_codes.len().min(checked),
+        "pools_checked": checked_points.len(),
+        "identical": identical,
+        "points": checked_points,
+    });
+    fs::write(out, serde_json::to_vec(&report)?)?;
+    println!(
+        "agree: {} points, {}/{} identical, wrote {}",
+        report["pools_checked"].as_u64().unwrap_or(0),
+        checked_points
+            .iter()
+            .filter(|point| point["identical"] == Value::Bool(true))
+            .count(),
+        checked_points.len(),
         out.display()
     );
     Ok(())

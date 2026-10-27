@@ -234,3 +234,18 @@ complet la dépasse. Les deux écarts viennent d'une exécution unique de chaque
 une série alternée (dense, clairsemé, dense, clairsemé) sur ces deux pools, soit laisser la règle en
 l'état en la déclarant non mesurée sur ces points. Le second cas est celui qu'ADR-0077 a explicitement
 mis sous surveillance ; ne pas l'instruire laisserait cette surveillance ouverte sans réponse.
+
+## Complément du 2026-10-27 — parcours dense et clairsemé, passes alternées
+
+La proposition ci-dessus a été instruite le même jour par une campagne dédiée, hors plan, sur la
+même copie de mesure : `docs/mesures/MES-02-parcours-dense-clairseme.md` (artefact
+`MES-02-parcours-dense-clairseme.2026-10-27.json`, mode `cross` du harnais `dense_latency`, recette
+`tools/bench/mes02/run-parcours.sh`). Elle exécute les deux parcours **en alternance** dans une même
+paire, après une passe d'échauffement séparée, sur des pools construits à densité donnée (10, 25,
+40, 50, 60, 75 et 90 % de plage d'iid, à 1 M et 7,74 M d'iid) et sur les deux pools de cette campagne,
+à N = 5000 et, sur ces deux pools, à N = 1000.
+
+Résultat : **le clairsemé n'est jamais plus lent que le dense** sur les 18 points ; l'inversion du pool
+complet est confirmée (−19,2 % à N = 5000, −21,7 % à N = 1000), et celle de 1 M contigu se réduit à un
+match nul à N = 1000 puis à −5,6 % à N = 5000. La conclusion sur le seuil d'ADR-0071, et la
+proposition qui en découle, sont dans ce rapport dédié ; ce complément ne les reprend pas.
