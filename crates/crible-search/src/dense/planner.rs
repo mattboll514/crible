@@ -34,6 +34,12 @@
 //! is what the debug output reports, and it differs from `N` only when `k`
 //! exceeds it.
 //!
+//! [`search_grouped`] is the entry point of the pipeline: it asks for
+//! `candidates_per_branch(k, grouping)` candidates, regroups them with
+//! [`crate::group::group`] (step 7 of `docs/03-recherche.md`), and reads the
+//! payload of the survivors only (step 8). [`search`] is the same branch without
+//! over-sampling, for a caller that supplies its own candidate count.
+//!
 //! Under `EXACT`, nothing is rescored, so the plan carries `N` as configured:
 //! the plan then describes the settings the strategy runs with, which is what
 //! `docs/05-api.md` reports beside `dense_strategy`.
@@ -50,8 +56,10 @@ use crible_core::error::CribleError;
 use crible_store::codes::quantize;
 use crible_store::generation::Snapshot;
 
+use super::Scored;
 use super::binary;
 use super::exact::{ExactSearcher, Hit};
+use crate::group::Grouping;
 use crate::pool::Pool;
 
 /// Strategy the dense branch runs for one query.
@@ -141,9 +149,32 @@ pub fn search(
     search: &SearchConfig,
     exact: bool,
 ) -> Result<Vec<Hit>, CribleError> {
+    let candidates = candidates(snapshot, searcher, pool, query, k, search, exact)?;
+    candidates
+        .into_iter()
+        .map(|candidate| searcher.payload(candidate))
+        .collect()
+}
+
+/// Runs the dense branch of one query with the planned strategy and returns its
+/// `k` best candidates, payload unread.
+///
+/// This is the candidate step of [`search`], separated so that the regrouping
+/// step of `docs/03-recherche.md` (step 7) can run between the ranking and the
+/// payload step (step 8): only the candidates [`crate::group::group`] keeps pay for their
+/// text and their fields.
+pub fn candidates(
+    snapshot: &Snapshot,
+    searcher: &ExactSearcher,
+    pool: &Pool,
+    query: &[f32],
+    k: usize,
+    search: &SearchConfig,
+    exact: bool,
+) -> Result<Vec<Scored>, CribleError> {
     let plan = plan(search, pool.len(), k, exact);
     if plan.strategy == Strategy::Exact {
-        return searcher.top_k(query, pool, k);
+        return searcher.top_k_candidates(query, pool, k);
     }
 
     let normalised = searcher.normalised_query(query, pool.is_empty())?;
@@ -155,9 +186,67 @@ pub fn search(
         usize::try_from(plan.rescore_candidates).unwrap_or(usize::MAX),
     )?;
     let rescored = searcher.rescore(query, &candidates)?;
-    rescored
+    Ok(rescored.into_iter().take(k).collect())
+}
+
+/// The dense part of one search request, as the regrouping entry point takes
+/// it.
+///
+/// It carries the query vector, the number of results the API asks for (`k`,
+/// which counts documents when the request groups), the `exact` option that
+/// forces the exact strategy, and the regrouping options
+/// (`docs/05-api.md`, "Recherche : requête").
+#[derive(Debug, Clone, Copy)]
+pub struct DenseQuery<'a> {
+    /// Query vector, raw: both strategies normalise it.
+    pub vector: &'a [f32],
+    /// Number of results the request asks for; the number of **documents** when
+    /// [`DenseQuery::grouping`] groups by document.
+    pub k: usize,
+    /// `exact: true` forces the exact calculation whatever the pool holds.
+    pub exact: bool,
+    /// Regrouping options of the request; [`Grouping::none`] regroups nothing.
+    pub grouping: &'a Grouping,
+}
+
+/// Runs the dense branch of one query as the input of the regrouping step.
+///
+/// The branch is asked for `candidates_per_branch(k, grouping)` candidates
+/// instead of `k` (`docs/03-recherche.md`, "Sur-échantillonnage"), because
+/// deduplication and grouping drop some of them. The candidates are then
+/// regrouped by [`crate::group::group`], and only the survivors reach the
+/// payload step.
+///
+/// The over-sampled count is also the `k` of [`plan`], so under `BINARY` the
+/// scan keeps `max(N, candidates_per_branch)` candidates and all of them are
+/// rescored (ADR-0074, decision 4; ADR-0075, decision 4): no second rule
+/// decides the rescoring.
+///
+/// [`Grouping::none`] asks for `max(k, 100)` candidates and keeps the first
+/// `k` of them, which is the same answer as [`search`] for the same query.
+pub fn search_grouped(
+    snapshot: &Snapshot,
+    searcher: &ExactSearcher,
+    pool: &Pool,
+    request: &DenseQuery<'_>,
+    search: &SearchConfig,
+) -> Result<Vec<Hit>, CribleError> {
+    request.grouping.validate()?;
+    let requested = crate::group::candidates_per_branch(request.k, request.grouping);
+    let candidates = candidates(
+        snapshot,
+        searcher,
+        pool,
+        request.vector,
+        requested,
+        search,
+        request.exact,
+    )?;
+    let grouped = crate::group::group(candidates, request.k, request.grouping, |iid| {
+        searcher.passage_hash_of(iid)
+    })?;
+    grouped
         .into_iter()
-        .take(k)
         .map(|candidate| searcher.payload(candidate))
         .collect()
 }

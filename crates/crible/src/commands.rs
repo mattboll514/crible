@@ -43,7 +43,8 @@ use crible_encode::{
     QueryEncoder, TokenCounter,
 };
 use crible_search::dense::exact::{ExactSearcher, Hit};
-use crible_search::dense::search as dense_search;
+use crible_search::dense::{DenseQuery, search_grouped as dense_search_grouped};
+use crible_search::group::Grouping;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
@@ -436,6 +437,15 @@ pub struct SearchRequest<'a> {
     /// Force the exact dense calculation (`exact` of the search request in
     /// `docs/05-api.md`).
     pub exact: bool,
+    /// Regrouping by document (`group_by` of `docs/05-api.md`): `document`, or
+    /// none.
+    pub group_by: Option<&'a str>,
+    /// Passages returned per grouped document, from 1 to 5
+    /// (`passages_per_document` of `docs/05-api.md`).
+    pub passages_per_document: usize,
+    /// Fusion of identical passages (`dedup` of `docs/05-api.md`): `content`,
+    /// or none.
+    pub dedup: Option<&'a str>,
     /// Output format.
     pub format: SearchFormat,
 }
@@ -455,9 +465,53 @@ impl std::fmt::Debug for SearchRequest<'_> {
             .field("filter", &self.filter.map(|_| "<redacted>"))
             .field("k", &self.k)
             .field("exact", &self.exact)
+            .field("group_by", &self.group_by)
+            .field("passages_per_document", &self.passages_per_document)
+            .field("dedup", &self.dedup)
             .field("format", &self.format)
             .finish()
     }
+}
+
+/// Regrouping options of one `crible search`, from its flags.
+///
+/// `docs/05-api.md` publishes `group_by: "document"` and `dedup: "content"` as
+/// the only non-null values, `passages_per_document` from 1 to 5, and
+/// `invalid_request` for a parameter out of bounds. The message names the value
+/// the flag accepts, never the text of a query or a filter value.
+///
+/// `passages_per_document` only acts on grouped results (`docs/05-api.md`, "Passages
+/// renvoyés par document regroupé"), so it has no effect without `--group-by`;
+/// its own domain is checked either way, so a request that leaves it is refused
+/// even when nothing is grouped.
+fn grouping_of(request: &SearchRequest<'_>) -> Result<Grouping, CribleError> {
+    let by_document = match request.group_by {
+        None => false,
+        Some("document") => true,
+        Some(other) => {
+            return Err(CribleError::new(
+                ErrorCode::InvalidRequest,
+                format!("group_by must be \"document\" or absent, got {other:?}"),
+            ));
+        }
+    };
+    let dedup_content = match request.dedup {
+        None => false,
+        Some("content") => true,
+        Some(other) => {
+            return Err(CribleError::new(
+                ErrorCode::InvalidRequest,
+                format!("dedup must be \"content\" or absent, got {other:?}"),
+            ));
+        }
+    };
+    let grouping = Grouping {
+        by_document,
+        passages_per_document: request.passages_per_document,
+        dedup_content,
+    };
+    grouping.validate()?;
+    Ok(grouping)
 }
 
 /// `crible search --data <dir> --index <i> (--vector-file <file> | --query <text>)`.
@@ -475,6 +529,13 @@ impl std::fmt::Debug for SearchRequest<'_> {
 /// `truncated_query` is the wire name of the `truncated` flag of
 /// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
 /// mapping.
+///
+/// `--group-by`, `--passages-per-document` and `--dedup` are the regrouping of
+/// `docs/03-recherche.md` ("Regroupement") and `REGROUPER-RESULTATS`: the dense
+/// branch is asked for over-sampled candidates, the regrouping runs before the
+/// payload step, and `k` counts documents when `--group-by document` is set. A
+/// grouped document may then take up to `--passages-per-document` results in
+/// the flat `results` list of `docs/05-api.md`.
 ///
 /// `--format json` (the default) prints that response; `--format text` prints
 /// the readable report of [`print_search_text`] instead, for the J2 demo.
@@ -514,6 +575,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     let snapshot = store.snapshot();
     let pool = Pool::evaluate(snapshot.filters(), &filter)?;
+    let grouping = grouping_of(request)?;
     let scan = ScanPool::new(0)?;
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
@@ -521,14 +583,17 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let searcher =
         scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
     let hits = scan.install(|| {
-        dense_search(
+        dense_search_grouped(
             &snapshot,
             &searcher,
             &pool,
-            &vector,
-            request.k,
+            &DenseQuery {
+                vector: &vector,
+                k: request.k,
+                exact: request.exact,
+                grouping: &grouping,
+            },
             &config.search,
-            request.exact,
         )
     })?;
     let took_ms = started.elapsed().as_secs_f64() * 1_000.0;
@@ -858,6 +923,9 @@ mod tests {
             filter: Some(r#"{"categorie": "SECRET-VALUE"}"#),
             k: 10,
             exact: false,
+            group_by: None,
+            passages_per_document: 1,
+            dedup: None,
             format: SearchFormat::Json,
         };
         let rendered = format!("{request:?}");

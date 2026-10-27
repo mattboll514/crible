@@ -7,7 +7,7 @@
 //! scan of the binary codes above the exact threshold ([`binary`]), the exact
 //! dot product below it ([`exact`]), and the rescoring of the candidates the
 //! scan kept ([`rescore`]). The binary scan chooses its dense or sparse
-//! traversal at the threshold of ADR-0071. [`planner`] chooses between the two
+//! traversal at the threshold of ADR-0071. The planner chooses between the two
 //! strategies from the search settings, the pool and the request option
 //! (ADR-0074), and runs the planned one: [`plan`] gives the choice, [`search`]
 //! executes it.
@@ -36,7 +36,7 @@ pub mod exact;
 mod planner;
 pub mod rescore;
 
-pub use planner::{Plan, Strategy, plan, search};
+pub use planner::{DenseQuery, Plan, Strategy, candidates, plan, search, search_grouped};
 
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};

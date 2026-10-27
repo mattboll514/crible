@@ -104,6 +104,10 @@ pub struct Sample {
     pub text: String,
     /// Reference vector of the passage, written in fp16.
     pub vector: Vec<f32>,
+    /// Content digest of the passage; the default of `(doc_id, ord)` when
+    /// `None`. `dedup: content` compares it, so a test that wants two passages
+    /// of identical content sets the same digest on both.
+    passage_hash: Option<String>,
 }
 
 impl Sample {
@@ -117,6 +121,7 @@ impl Sample {
             passage_fields: json!({ "rang": ord }),
             text: format!("{doc_id}#{ord} text"),
             vector,
+            passage_hash: None,
         }
     }
 
@@ -138,6 +143,14 @@ impl Sample {
     #[must_use]
     pub fn with_text(mut self, text: &str) -> Self {
         self.text = text.to_owned();
+        self
+    }
+
+    /// Replaces the content digest of the passage, which `dedup: content`
+    /// compares instead of the text.
+    #[must_use]
+    pub fn with_passage_hash(mut self, hash: &str) -> Self {
+        self.passage_hash = Some(hash.to_owned());
         self
     }
 }
@@ -258,7 +271,10 @@ impl DenseFixture {
                 doc_id: sample.doc_id.clone(),
                 ord: sample.ord,
                 text: sample.text.clone(),
-                passage_hash: format!("blake3:passage-{}-{}", sample.doc_id, sample.ord),
+                passage_hash: sample
+                    .passage_hash
+                    .clone()
+                    .unwrap_or_else(|| format!("blake3:passage-{}-{}", sample.doc_id, sample.ord)),
                 fields: sample.passage_fields.clone(),
                 segment_id: segment_id.clone(),
                 created_generation: generation,
