@@ -57,6 +57,6 @@
 ### MESURER-EN-CONTENEUR-MAC
 - **Objectif** : les chiffres réels dans l'environnement de production.
 - **Dépend de** : DEFINIR-VOLUMES-ET-CONFIG
-- **Livrables** : MES-02, MES-05 et MES-09 refaites dans Docker sur le Mac mini, avec la RAM de la VM indiquée, et comparées aux mesures natives. Un compte rendu en cas d'écart important.
-- **Critères d'acceptation** : les rapports sont consignés ; une recommandation de RAM pour la VM Docker est faite.
-- **Invariants / mesures** : MES-02, MES-05, MES-09.
+- **Livrables** : MES-02, MES-05 et MES-09 refaites dans Docker sur le Mac mini, avec la RAM de la VM indiquée, et comparées aux mesures natives. Un compte rendu en cas d'écart important. **Cas de mesure ajouté le 2026-10-27 (ADR-0073, ADR-0052 décision 3)** : la recette de l'attache (contrôle 9), avec les fils et réglages d'ONNX Runtime en conteneur. Mesurer le coût par jeton ré-encodé et le temps de ré-encodage des 200 passages tirés pour une taille de lot de 1 et pour une taille supérieure (B = 4 et 8 suffisent), avec le protocole de MES-08, campagne du 2026-10-27 (tailles entrelacées, trois tours, encadrement par B = 1, test de linéarité sur copies du plus long passage). But : savoir si un parallélisme entre lignes apparaît avec les cœurs et le voisinage du conteneur, ce que le Mac de développement n'a pas montré (8 copies coûtent 8,05 à 8,08 fois un appel seul). Aucun réglage n'est retenu sans cette mesure, et changer de fournisseur d'exécution ou ré-exporter le graphe demande un nouvel ADR.
+- **Critères d'acceptation** : les rapports sont consignés ; une recommandation de RAM pour la VM Docker est faite ; le coût par jeton de la recette et l'effet d'une taille de lot supérieure à 1 y sont chiffrés, avec la taille de lot retenue ou le constat qu'aucune ne l'emporte.
+- **Invariants / mesures** : MES-02, MES-05, MES-09 ; MES-08 (volet recette et tailles de lot).
