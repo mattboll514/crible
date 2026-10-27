@@ -1,9 +1,9 @@
 # ADR-0074 — Planification de la stratégie dense : seuil exact, valeur par défaut, nom de la stratégie et k au-delà de N
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE ; à confirmer par le propriétaire au point de fin)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27)
 - **Date** : 2026-10-27 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE, à confirmer par le propriétaire au point de fin. Les cinq décisions sont retenues telles que proposées : le domaine du seuil exact va de `0` à `u32::MAX` sans autre borne ; `exact_threshold` devient optionnelle dans `index.json` et sa valeur par défaut, égale à `rescore_candidates`, est **matérialisée** à la création de l'index ; `dense_strategy` vaut `"exact"` ou `"binary"` ; sous BINARY, le scan garde `max(N, k)` candidats, tous rescorés ; un pool de taille égale au seuil passe par EXACT, et le glossaire est aligné sur cette lecture.
+- **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE, confirmé par le propriétaire le 2026-10-27. Les cinq décisions sont retenues telles que proposées, sans erratum : le domaine du seuil exact va de `0` à `u32::MAX` sans autre borne ; `exact_threshold` devient optionnelle dans `index.json` et sa valeur par défaut, égale à `rescore_candidates`, est **matérialisée** à la création de l'index ; `dense_strategy` vaut `"exact"` ou `"binary"` ; sous BINARY, le scan garde `max(N, k)` candidats, tous rescorés ; un pool de taille égale au seuil passe par EXACT, et le glossaire est aligné sur cette lecture.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `PLANIFIER-STRATEGIE` (phase P4), à partir des questions de `@testeur` et des verdicts de `@architecte` ; les options sont retenues par l'orchestrateur par délégation
 - **Remplace** : —
 

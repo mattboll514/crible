@@ -1,9 +1,9 @@
 # ADR-0072 — Un seul calcul du produit scalaire pour EXACT et le rescoring
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-26, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE ; à confirmer par le propriétaire au point de fin)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-26, confirmé par le propriétaire le 2026-10-27)
 - **Date** : 2026-10-26 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
-- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE, à confirmer par le propriétaire au point de fin. La décision est retenue telle que proposée, c'est-à-dire l'option A de `@dev`, recommandée par `@architecte` : un seul chemin de calcul du produit scalaire, partagé par EXACT et par le rescoring, avec `kernels::dot` pour une référence fp16 et une fonction scalaire unique accumulée en `f64` pour une référence fp32 ; la clause arithmétique d'ADR-0045 est remplacée, le reste d'ADR-0045 est inchangé.
+- **Décision** : accepté par anticipation le 2026-10-26, par délégation du propriétaire pour la série RESCORER-FP16, INSERER-POOL-EN-ORDRE, ACCELERER-RECETTE, PLANIFIER-STRATEGIE, confirmé par le propriétaire le 2026-10-27. La décision est retenue telle que proposée, sans erratum, c'est-à-dire l'option A de `@dev`, recommandée par `@architecte` : un seul chemin de calcul du produit scalaire, partagé par EXACT et par le rescoring, avec `kernels::dot` pour une référence fp16 et une fonction scalaire unique accumulée en `f64` pour une référence fp32 ; la clause arithmétique d'ADR-0045 est remplacée, le reste d'ADR-0045 est inchangé.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `RESCORER-FP16` (phase P4), à partir d'une question de conception de `@dev` et du verdict de `@architecte`
 - **Remplace** : ADR-0045 (sa clause arithmétique seulement : « le calcul du moteur ne change pas : il reste en f32, dans l'ordre des composantes »)
 
