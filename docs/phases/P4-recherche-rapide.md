@@ -74,9 +74,9 @@
 - **Objectif** : `group_by: document`, `passages_per_document` et `dedup: content`.
 - **Dépend de** : PLANIFIER-STRATEGIE
 - **À lire** : `03-recherche.md` (regroupement).
-- **Livrables** : le sur-échantillonnage (`clamp(k × 20, 200, 1000)` quand on regroupe), le regroupement, et la fusion des passages identiques par `passage_hash`.
+- **Livrables** : le sur-échantillonnage (`clamp(k × 20, 200, 1000)` quand on regroupe), le regroupement, et la fusion des passages identiques par `passage_hash`. **Précisé par ADR-0075** (accepté par anticipation le 2026-10-27) : `dedup` s'applique avant `group_by`, sur toute la liste sur-échantillonnée, et le regroupement se recomplète depuis les candidats restants ; la règle de sur-échantillonnage vit dans `crible-search`, la CLI ne passant que `k` et les options de la requête ; la réponse reste une liste plate d'entrées de passage, où `k` compte des documents et où les entrées d'un document sont consécutives ; sous BINARY, le scan garde `max(N, candidates_per_branch)` candidats.
 - **Critères d'acceptation** :
-  - on obtient k documents distincts ;
+  - on obtient k documents distincts, ou moins quand les candidats sur-échantillonnés sont épuisés, sans erreur ;
   - le meilleur passage de chaque document est conservé ;
   - les doublons de contenu sont fusionnés ;
   - des tests couvrent un document qui a plusieurs passages dans le top.

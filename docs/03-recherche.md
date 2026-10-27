@@ -49,7 +49,7 @@ Choix de la stratégie :
 Détails :
 - **Code binaire** : le bit i vaut 1 si x_i > 0 (ADR-0004). Les requêtes sont codées de la même façon. La distance de Hamming est le popcount du XOR sur des mots `u64`. Un centrage préalable est à étudier (MES-12).
 - **Parallélisme** : le pool est découpé en tranches contiguës d'iid, une par thread rayon. Chaque thread garde son propre tas, puis les tas sont fusionnés.
-- **Sortie** : les `candidates_per_branch` meilleurs, avec leur cosinus. Ce nombre est augmenté quand il faut regrouper (voir plus bas).
+- **Sortie** : les `candidates_per_branch` meilleurs, avec leur cosinus. Ce nombre est augmenté quand il faut regrouper (voir plus bas) ; la règle est calculée par la couche de recherche partagée, pas par la CLI (ADR-0075).
 - **Nom de la stratégie** : elle vaut `"exact"` ou `"binary"` dans le plan de debug (ADR-0074). `search.scan: none` donne `"exact"`, comme `exact: true` et comme un pool de taille inférieure ou égale au seuil.
 - **Rangement physique** : à la compaction, les passages sont triés selon `cluster_by`. Un filtre sur ce champ parcourt alors une zone mémoire contiguë.
 
@@ -65,7 +65,7 @@ Réglages de précision :
 
 `exact_threshold` et `rescore_candidates` sont deux leviers distincts (ADR-0074). Le seuil accepte tout entier de `0` à `u32::MAX`, sans autre borne et sans nouvelle erreur : `0` ne fait passer par EXACT qu'un pool vide, sauf `exact: true` ; `u32::MAX` fait toujours passer par EXACT. Un pool de taille **égale** au seuil passe par EXACT. La clé est **optionnelle** à la création de l'index : absente, elle prend la valeur de `rescore_candidates` à ce moment, et cette valeur est écrite dans la configuration stockée, puis relue comme une valeur explicite ; un `PATCH` de `rescore_candidates` ne la déplace pas.
 
-Sous BINARY, quand `k` (le nombre de résultats demandés par la branche dense) dépasse N, le scan garde `max(N, k)` candidats, tous rescorés, et le plan expose ce nombre effectif. Aucune erreur n'est rendue et il n'y a pas de repli sur EXACT.
+Sous BINARY, quand `k` (le nombre de résultats demandés par la branche dense, soit `candidates_per_branch` quand la requête regroupe ; ADR-0074, ADR-0075) dépasse N, le scan garde `max(N, k)` candidats, tous rescorés, et le plan expose ce nombre effectif. Aucune erreur n'est rendue et il n'y a pas de repli sur EXACT.
 
 `query_precision` règle la précision d'encodage des requêtes. Le défaut est `fp32` : la session fp32 (plus d'1 Gio) est résidente dès la première requête, et la chaîne d'encodage est fidèle au modèle PyTorch à 1e-12 près (MES-04). `int8` reste une valeur acceptée, pour les comparaisons (MES-04), le repli et le diagnostic ; l'INT8 ne conserve que 79,2 % du top-10 exact du fp32, il n'est donc pas un mode de production (ADR-0052). Le cache LRU des requêtes est borné par `[limits].query_cache_entries`, 1 024 entrées par instance, et n'est jamais persisté.
 
@@ -92,7 +92,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 
 ## Fusion (mode `hybrid`)
 
-- **Les deux branches utilisent le même pool** (INV-05). Chacune sort ses `candidates_per_branch` meilleurs résultats.
+- **Les deux branches utilisent le même pool** (INV-05). Chacune sort ses `candidates_per_branch` meilleurs résultats, calculés par la même règle partagée (ADR-0075).
 - **`rrf`** : score = Σ 1 / (60 + rang), avec un rang qui commence à 1.
 - **`relative_score`** :
   - chaque branche est normalisée min-max sur ses propres candidats ;
@@ -104,12 +104,12 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 
 ## Regroupement
 
-- **`group_by: "document"`** : on garde le meilleur passage de chaque document. `passages_per_document` (1 par défaut, 5 au maximum) ajoute d'autres passages du même document qui ont aussi matché.
-- **`dedup: "content"`** : les passages qui ont le même `passage_hash` sont fusionnés, et on garde le meilleur.
-- **Sur-échantillonnage** :
+- **Ordre** (ADR-0075) : `dedup: "content"` d'abord, puis `group_by: "document"`, après la fusion et avant la lecture des payloads, sur la liste des candidats sur-échantillonnés. La fusion retire les copies une fois, et le regroupement se recomplète depuis les candidats restants ; l'ordre inverse supprimerait le représentant d'un document. Quand les candidats sont épuisés avant `k` documents, la réponse en contient moins, sans erreur.
+- **`group_by: "document"`** : on garde le meilleur passage de chaque document, et `passages_per_document` (1 par défaut, 5 au maximum) ajoute d'autres passages du même document qui ont aussi matché. `k` compte alors des documents : la réponse reste une liste plate, avec au plus `k` documents distincts et au plus `k × passages_per_document` entrées, les entrées d'un document étant consécutives et les documents rangés par leur meilleur passage (ADR-0075).
+- **`dedup: "content"`** : les passages qui ont le même `passage_hash` sont fusionnés, et on garde le meilleur selon l'ordre de tri en place (score décroissant, puis clé croissante).
+- **Sur-échantillonnage** : la règle est calculée dans la couche de recherche partagée, là où se construit la planification ; la CLI et le serveur ne passent que `k` et les options de la requête.
   - quand on regroupe, `candidates_per_branch = clamp(k × 20, 200, 1000)` (la règle actuelle de Legifacile) ;
   - sinon, `max(k, 100)`.
-- **Ordre** : le regroupement s'applique après la fusion et avant la lecture des payloads.
 
 ## Recherche multi-index
 
