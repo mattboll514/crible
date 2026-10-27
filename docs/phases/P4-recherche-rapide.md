@@ -131,7 +131,7 @@
 - **Objectif** : MES-02, MES-03 et MES-09.
 - **Dépend de** : PLANIFIER-STRATEGIE
 - **Livrables** :
-  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud ;
-  - la RAM réelle (RSS), en natif sur le Mac.
+  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud. **Précisé par ADR-0077** (accepté par anticipation le 2026-10-27) : le point « tous les passages » vaut **7,74 M vivants** et non 8,6 M, le jeu portant 860 000 passages morts (MES-07) ; les pools sont construits par un harnais, contigus et dispersés, avec contre-contrôle par la CLI ; N ∈ {1000, 2000, 5000}, BINARY forcé par `search.exact_threshold = 0` sur des copies de mesure ; le froid ne concerne que le rescoring, ses vecteurs fp16 étant en mmap, et il se mesure par copies non cachées (`F_NOCACHE`, `mincore`) ;
+  - la RAM réelle (RSS), en natif sur le Mac. **Précisé par ADR-0077** : trois états (index ouvert, après une passe de requêtes, session fp32 à part), mémoire anonyme et adossée à des fichiers séparées, comparaison au tableau de `docs/02-architecture.md:202-219`.
 - **Critères d'acceptation** : les protocoles sont reproductibles et les chiffres sont comparés au budget de `03-recherche.md`.
 - **Invariants / mesures** : MES-02, MES-03, MES-09.

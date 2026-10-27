@@ -146,3 +146,5 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 | Payload (k = 10) | ~1 ms | — |
 
 ADR-0046 sépare les deux lignes : la valeur d'intervalle est **mesurée, pas une cible**, et le dépassement est assumé dans les budgets de bout en bout.
+
+Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000} — la ligne à N = 1000 reste celle du tableau —, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. Les estimations du tableau ne changent pas : elles seront remplacées par MES-02 et MES-03, puis vérifiées en conteneur en P8.
