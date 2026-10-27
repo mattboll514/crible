@@ -1,7 +1,7 @@
 # ADR-0079 — Coût des clés au rescoring
 
-- **Statut** : Proposé
-- **Date** : 2026-10-27
+- **Statut** : Accepté (décision du propriétaire le 2026-10-27, tel que proposé)
+- **Date** : 2026-10-27 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire, à partir de la mesure MES-03 (`docs/mesures/MES-03-latence-rescoring.md`) et de l'analyse de `@architecte` reprise par l'orchestrateur
 - **Remplace** : —
@@ -60,9 +60,9 @@ L'**accès aléatoire aux vecteurs fp16** : 1 536 octets par vecteur, lus à la 
 
 ## Décision
 
-> Statut **Proposé** : ce qui suit est la décision **proposée**, à trancher par le propriétaire. Rien n'est appliqué aux documents de conception tant que l'ADR n'est pas accepté.
+> Statut **Accepté** (décision du propriétaire le 2026-10-27, tel que proposé). Les précisions ci-dessous font la décision ; leur mise en œuvre demande une tâche à créer, et rien n'est encore codé.
 
-**La décision proposée est de traiter le coût des clés dans cet ordre : d'abord un profil et deux mesures neutres (e), puis la lecture des clés après le tri par score (b), puis la lecture des clés par lot (a). Les clés en RAM (c) et la colonne de clés en mmap (d) sont écartées pour l'instant, et rejugées après le profil.**
+**La décision est de traiter le coût des clés dans cet ordre : d'abord un profil et deux mesures neutres (e), puis la lecture des clés après le tri par score (b), puis la lecture des clés par lot (a). Les clés en RAM (c) et la colonne de clés en mmap (d) sont écartées pour l'instant, et rejugées après le profil.**
 
 Précisions :
 
