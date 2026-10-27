@@ -7,9 +7,11 @@
 //! `docs/phases/P4-recherche-rapide.md` (`MESURER-LATENCE-DENSE`), **ADR-0077**
 //! (protocol: N ∈ {1000, 2000, 5000}, pools built by the harness at 1 k, 10 k,
 //! 100 k, 1 M and all live passages, contiguous and dispersed, cold measured by
-//! uncached copies with `mincore`), ADR-0071 (dense or sparse traversal of the
-//! scan), ADR-0074 (strategy and `exact_threshold`), ADR-0072 (one dot product
-//! for the exact strategy and the rescoring).
+//! uncached copies with `mincore`), ADR-0071 (removed by ADR-0081: the scan has
+//! a single traversal), ADR-0081 (a single sparse traversal of the scan and the
+//! `cross`/`agree` campaign), ADR-0082 (the segment cursor and the A/B
+//! verification), ADR-0074 (strategy and `exact_threshold`), ADR-0072 (one dot
+//! product for the exact strategy and the rescoring).
 //!
 //! This example is a harness, not production code, and it changes nothing in
 //! `crates/*/src/`. It exists because the engine exposes no way to build a
@@ -24,11 +26,12 @@
 //! ```text
 //! dense_latency scan      --data D --index I --vectors Q --out O [--sizes …]
 //!                         [--shapes contiguous,dispersed] [--ns 1000,2000,5000]
-//!                         [--passes 3] [--seed S] [--force-traversal …]
+//!                         [--passes 3] [--seed S]
 //! dense_latency cross     --data D --index I --vectors Q --out O [--pairs 3]
 //!                         [--ns 5000] [--seed S] [--sizes 1000000,all]
 //!                         [--densities 10,25,40,50,60,75]
 //!                         [--spans 1000000,7740000]
+//!                         (single traversal: `--pairs P` is P passes, ADR-0081)
 //! dense_latency agree     --data D --index I --vectors Q --out O [--queries 5]
 //!                         [--ns 5000] [--seed S] [--sizes …] [--densities …]
 //!                         [--spans …]
@@ -44,8 +47,9 @@
 //! ```
 //!
 //! The replica of the scan follows `crates/crible-search/src/dense/binary.rs`
-//! line for line: the same windows (`dense::windows`), the same traversal rule
-//! (ADR-0071), the same bounded heap and the same `kernels::hamming_function`.
+//! line for line: the same windows (`dense::windows`), the same single sparse
+//! traversal with its segment cursor (ADR-0081, ADR-0082), the same bounded heap
+//! and the same `kernels::hamming_function`.
 //! The replica of the exact scoring follows `ExactSearcher::score_slice`: one
 //! bounded heap per window, the production dot product (`kernels::dot` for a
 //! stored `f16` row), no key read, since a random corpus produces no exact tie
@@ -196,32 +200,33 @@ impl Codes<'_> {
     }
 }
 
-/// Traversal of one scan (`docs/03`, ADR-0071).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Traversal {
-    Dense,
-    Sparse,
+/// Replica of `binary::SegmentCursor`: the segment of each live identifier,
+/// followed by a cursor that only moves forward (ADR-0081, ADR-0082).
+struct SegmentCursor<'a> {
+    segments: &'a [Codes<'a>],
+    position: Option<usize>,
 }
 
-impl Traversal {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Dense => "dense",
-            Self::Sparse => "sparse",
-        }
+impl<'a> SegmentCursor<'a> {
+    /// Positions the cursor on the last segment that begins at or before `iid`.
+    fn before(segments: &'a [Codes<'a>], iid: u32) -> Self {
+        let position = segments
+            .partition_point(|segment| segment.iid_start <= iid)
+            .checked_sub(1);
+        Self { segments, position }
     }
-}
 
-/// Replica of `binary::traversal`: dense while the pool covers half its range.
-fn traversal_of(pool: &RoaringBitmap, pool_len: u32) -> Traversal {
-    let (Some(first), Some(last)) = (pool.min(), pool.max()) else {
-        return Traversal::Sparse;
-    };
-    let span = u64::from(last) - u64::from(first) + 1;
-    if u64::from(pool_len) * 2 >= span {
-        Traversal::Dense
-    } else {
-        Traversal::Sparse
+    /// Segment holding `iid`, or `None` when no segment covers it.
+    fn segment_of(&mut self, iid: u32) -> Option<&'a Codes<'a>> {
+        let segments = self.segments;
+        loop {
+            let index = self.position?;
+            let segment = &segments[index];
+            if u64::from(iid) < segment.end() {
+                return (u64::from(iid) >= u64::from(segment.iid_start)).then_some(segment);
+            }
+            self.position = index.checked_add(1).filter(|next| *next < segments.len());
+        }
     }
 }
 
@@ -258,7 +263,6 @@ struct Scan<'a> {
     words: usize,
     query_code: &'a [u64],
     n: usize,
-    traversal: Traversal,
     hamming: fn(&[u64], &[u64]) -> u64,
 }
 
@@ -310,56 +314,25 @@ impl Scan<'_> {
             self.n
                 .min(usize::try_from(pool.len()).unwrap_or(usize::MAX)),
         );
-        match self.traversal {
-            Traversal::Dense => {
-                for segment in self.segments {
-                    let start = u64::from(segment.iid_start);
-                    let first = start.max(u64::from(from));
-                    let last = segment.end().min(u64::from(to) + 1);
-                    if first >= last {
-                        continue;
-                    }
-                    let span = usize::try_from(last - first).unwrap_or(usize::MAX);
-                    for position in 0..span {
-                        let iid = (first + position as u64) as u32;
-                        if !pool.contains(iid) {
-                            continue;
-                        }
-                        if let Some(code) = segment.code(iid, self.words) {
-                            offer(
-                                &mut heap,
-                                (self.hamming)(self.query_code, code),
-                                iid,
-                                self.n,
-                            );
-                        }
-                    }
-                }
+        let mut live = pool.iter();
+        live.advance_to(from);
+        let mut cursor = SegmentCursor::before(self.segments, from);
+        for iid in live {
+            if iid > to {
+                break;
             }
-            Traversal::Sparse => {
-                let mut live = pool.iter();
-                live.advance_to(from);
-                for iid in live {
-                    if iid > to {
-                        break;
-                    }
-                    let position = self
-                        .segments
-                        .partition_point(|segment| segment.iid_start <= iid);
-                    if let Some(segment) = position
-                        .checked_sub(1)
-                        .and_then(|index| self.segments.get(index))
-                        && let Some(code) = segment.code(iid, self.words)
-                    {
-                        offer(
-                            &mut heap,
-                            (self.hamming)(self.query_code, code),
-                            iid,
-                            self.n,
-                        );
-                    }
-                }
-            }
+            let Some(segment) = cursor.segment_of(iid) else {
+                continue;
+            };
+            let Some(code) = segment.code(iid, self.words) else {
+                continue;
+            };
+            offer(
+                &mut heap,
+                (self.hamming)(self.query_code, code),
+                iid,
+                self.n,
+            );
         }
         heap.into_iter()
             .map(|Reverse(candidate)| candidate)
@@ -374,7 +347,6 @@ fn scan_replica(
     pool_len: u32,
     query_code: &[u64],
     n: usize,
-    traversal: Traversal,
 ) -> Vec<Candidate> {
     if n == 0 || pool.is_empty() {
         return Vec::new();
@@ -384,7 +356,6 @@ fn scan_replica(
         words: query_code.len(),
         query_code,
         n,
-        traversal,
         hamming: kernels::hamming_function(),
     };
     let ranges = windows(pool, pool_len, rayon::current_num_threads().max(1));
@@ -493,12 +464,13 @@ impl Draw {
 
 /// A pool drawn in one window of identifiers, at a given density.
 ///
-/// ADR-0071 measures the density of a pool as `pool size / iid span`. MES-02
-/// only produced pools at the two ends (a contiguous window of live passages,
-/// about 90 %, and a draw over the whole live set, about 0.1 %), so the density
-/// band that the 50 % rule separates was never measured. This builder fills it:
-/// it takes `fraction` of the identifiers of a window of `span` identifiers,
-/// chosen among the live ones, uniformly.
+/// The density ADR-0071 defined as `pool size / iid span` is still the label of
+/// these pools, although ADR-0081 removed the traversal rule that read it.
+/// MES-02 only produced pools at the two ends (a contiguous window of live
+/// passages, about 90 %, and a draw over the whole live set, about 0.1 %), so
+/// the density band that the rule separated was never measured. This builder
+/// fills it: it takes `fraction` of the identifiers of a window of `span`
+/// identifiers, chosen among the live ones, uniformly.
 ///
 /// `synth-large` holds about 90 % live passages, so a fraction above that is not
 /// constructible in any window; the pool then takes every live passage of the
@@ -830,7 +802,6 @@ fn scan_mode(
         .map(|value| value.parse())
         .transpose()?
         .unwrap_or(2026);
-    let forced = optional(arguments, "--force-traversal");
     let sizes =
         optional(arguments, "--sizes").unwrap_or_else(|| "1000,10000,100000,1000000,all".into());
     let shapes = optional(arguments, "--shapes").unwrap_or_else(|| "contiguous,dispersed".into());
@@ -868,58 +839,41 @@ fn scan_mode(
             let pool = build_pool(&live, size, shape, seed);
             let pool_len = pool.len() as u32;
             let planned = plan(&opened.config.search, pool_len, k, false);
-            let automatic = traversal_of(&pool, pool_len);
             let (first, last) = match (pool.min(), pool.max()) {
                 (Some(first), Some(last)) => (first, last),
                 _ => (0, 0),
             };
             for n_text in ns.split(',') {
                 let n: usize = n_text.trim().parse()?;
-                for traversal in match forced.as_deref() {
-                    Some("dense") => vec![Traversal::Dense],
-                    Some("sparse") => vec![Traversal::Sparse],
-                    Some(other) => return Err(format!("unknown traversal '{other}'").into()),
-                    None => vec![automatic],
-                } {
-                    let mut durations = Vec::with_capacity(queries.len() * passes);
-                    for _ in 0..passes {
-                        for query_code in &query_codes {
-                            let started = Instant::now();
-                            let candidates = scan_pool.install(|| {
-                                scan_replica(
-                                    &codes,
-                                    &pool,
-                                    pool_len,
-                                    query_code,
-                                    n.max(k),
-                                    traversal,
-                                )
-                            });
-                            let micros = started.elapsed().as_secs_f64() * 1e6;
-                            durations.push(micros);
-                            std::hint::black_box(candidates.len());
-                        }
+                let mut durations = Vec::with_capacity(queries.len() * passes);
+                for _ in 0..passes {
+                    for query_code in &query_codes {
+                        let started = Instant::now();
+                        let candidates = scan_pool.install(|| {
+                            scan_replica(&codes, &pool, pool_len, query_code, n.max(k))
+                        });
+                        let micros = started.elapsed().as_secs_f64() * 1e6;
+                        durations.push(micros);
+                        std::hint::black_box(candidates.len());
                     }
-                    points.push(json!({
-                        "size": pool_len,
-                        "requested_size": size,
-                        "shape": shape.as_str(),
-                        "n": n.max(k),
-                        "traversal": traversal.as_str(),
-                        "traversal_automatic": automatic.as_str(),
-                        "traversal_forced": forced.is_some(),
-                        "plan": planned.strategy.as_str(),
-                        "rescore_candidates": planned.rescore_candidates,
-                        "first_iid": first,
-                        "last_iid": last,
-                        "span": u64::from(last) - u64::from(first) + 1,
-                        "passes": passes,
-                        "queries": queries.len(),
-                        "durations_us": durations,
-                        "summary": summarise(&durations),
-                        "pass_summaries": per_pass(&durations, passes, queries.len()),
-                    }));
                 }
+                points.push(json!({
+                    "size": pool_len,
+                    "requested_size": size,
+                    "shape": shape.as_str(),
+                    "n": n.max(k),
+                    "traversal": "sparse",
+                    "plan": planned.strategy.as_str(),
+                    "rescore_candidates": planned.rescore_candidates,
+                    "first_iid": first,
+                    "last_iid": last,
+                    "span": u64::from(last) - u64::from(first) + 1,
+                    "passes": passes,
+                    "queries": queries.len(),
+                    "durations_us": durations,
+                    "summary": summarise(&durations),
+                    "pass_summaries": per_pass(&durations, passes, queries.len()),
+                }));
             }
         }
     }
@@ -957,8 +911,8 @@ struct CrossPoint {
 
 /// Builds the pools of a campaign, in the order `sizes` then `spans × densities`.
 ///
-/// `cross` and `agree` share it, so the control compares the traversals on
-/// exactly the pools the campaign measured: same seed, same window, same draw.
+/// `cross` and `agree` share it, so the control checks the scan on exactly the
+/// pools the campaign measured: same seed, same window, same draw.
 fn cross_points(
     live: &RoaringBitmap,
     live_ids: &[u32],
@@ -1020,18 +974,20 @@ fn cross_points(
     Ok(points)
 }
 
-/// Alternating campaign of ADR-0071: both forced traversals, on the same pool
-/// and the same queries, dense then sparse, pair after pair.
+/// Alternating campaign of ADR-0081: the engine's single traversal, on the same
+/// pool and the same queries, pass after pass.
 ///
-/// MES-02 measured each traversal once, in its own process, and could not tell
-/// a difference between the traversals from the difference between two runs.
-/// This mode removes that ambiguity: every pair runs the two traversals back to
-/// back on the same query vectors, after a separate warm-up pass of each, so the
-/// spread of the pairs is the dispersion of the measurement itself.
+/// The campaign of the 2026-10-27 ran the dense and the sparse traversal back to
+/// back and alternated their order inside a pair (ADR-0081, decision 3). ADR-0081
+/// then removed the second traversal: there is nothing left to alternate, and
+/// `--pairs P` now runs P passes of the one traversal — as many passes as each
+/// side of an old pair — after a warm-up pass kept apart from them.
 ///
-/// The order inside a pair is **fixed** — dense first, then sparse — so the two
-/// traversals never swap places; see `agree` for the check that they return the
-/// same candidates, and the report for the bias that order introduces.
+/// ADR-0082 keeps this mode as the A/B driver. The binary of `e7d4e08` (the
+/// density rule) and the binary of the single traversal take the same command
+/// line and print the same keys of a point; the old document names the traversal
+/// its rule chose in `traversal_automatic`, and the A/B reads the series of that
+/// traversal, point by point, against the `sparse` series of the new document.
 fn cross_mode(
     arguments: &[String],
     opened: &Opened,
@@ -1076,63 +1032,38 @@ fn cross_mode(
             _ => (0, 0),
         };
         let span = u64::from(last) - u64::from(first) + 1;
-        let automatic = traversal_of(pool, pool_len);
         let plan = plan(&opened.config.search, pool_len, k, false);
         for n_text in ns.split(',') {
             let n: usize = n_text.trim().parse()?;
             let n = n.max(k);
-            // Warm-up: one pass of each traversal, kept apart from the pairs.
-            let mut warmup: Vec<(Traversal, Vec<f64>)> = Vec::new();
-            for traversal in [Traversal::Dense, Traversal::Sparse] {
+            // Warm-up: one pass, kept apart from the measured passes.
+            let mut warmup = Vec::with_capacity(query_codes.len());
+            for query_code in &query_codes {
+                let started = Instant::now();
+                let candidates =
+                    scan_pool.install(|| scan_replica(&codes, pool, pool_len, query_code, n));
+                warmup.push(started.elapsed().as_secs_f64() * 1e6);
+                std::hint::black_box(candidates.len());
+            }
+            // The measured passes: same queries, same pool, one after another.
+            let mut detail = Vec::with_capacity(pairs);
+            let mut all: Vec<f64> = Vec::with_capacity(query_codes.len() * pairs);
+            for pass in 1..=pairs {
                 let mut durations = Vec::with_capacity(query_codes.len());
                 for query_code in &query_codes {
                     let started = Instant::now();
-                    let candidates = scan_pool
-                        .install(|| scan_replica(&codes, pool, pool_len, query_code, n, traversal));
+                    let candidates =
+                        scan_pool.install(|| scan_replica(&codes, pool, pool_len, query_code, n));
                     durations.push(started.elapsed().as_secs_f64() * 1e6);
                     std::hint::black_box(candidates.len());
                 }
-                warmup.push((traversal, durations));
-            }
-            // The pairs: dense, sparse, dense, sparse, on the same queries.
-            let mut detail = Vec::with_capacity(pairs);
-            let mut dense_all: Vec<f64> = Vec::with_capacity(query_codes.len() * pairs);
-            let mut sparse_all: Vec<f64> = Vec::with_capacity(query_codes.len() * pairs);
-            for pair in 1..=pairs {
-                let mut per_traversal: Vec<(Traversal, Vec<f64>)> = Vec::new();
-                for traversal in [Traversal::Dense, Traversal::Sparse] {
-                    let mut durations = Vec::with_capacity(query_codes.len());
-                    for query_code in &query_codes {
-                        let started = Instant::now();
-                        let candidates = scan_pool.install(|| {
-                            scan_replica(&codes, pool, pool_len, query_code, n, traversal)
-                        });
-                        durations.push(started.elapsed().as_secs_f64() * 1e6);
-                        std::hint::black_box(candidates.len());
-                    }
-                    per_traversal.push((traversal, durations));
-                }
-                let dense = &per_traversal[0].1;
-                let sparse = &per_traversal[1].1;
-                dense_all.extend_from_slice(dense);
-                sparse_all.extend_from_slice(sparse);
+                all.extend_from_slice(&durations);
                 detail.push(json!({
-                    "pair": pair,
-                    "dense": summarise(dense),
-                    "sparse": summarise(sparse),
-                    "dense_us": dense.clone(),
-                    "sparse_us": sparse.clone(),
+                    "pass": pass,
+                    "sparse": summarise(&durations),
+                    "sparse_us": durations,
                 }));
             }
-            let warmup_json = |traversal: Traversal| -> Value {
-                match warmup.iter().find(|(which, _)| *which == traversal) {
-                    Some((_, durations)) => json!({
-                        "summary": summarise(durations),
-                        "durations_us": durations,
-                    }),
-                    None => Value::Null,
-                }
-            };
             measured.push(json!({
                 "label": point.label,
                 "kind": point.kind,
@@ -1143,22 +1074,18 @@ fn cross_mode(
                 "n": n,
                 "first_iid": first,
                 "last_iid": last,
-                "traversal_automatic": automatic.as_str(),
+                "traversal": "sparse",
                 "plan": plan.strategy.as_str(),
                 "pairs_count": pairs,
                 "queries": queries.len(),
                 "warmup": {
-                    "dense": warmup_json(Traversal::Dense),
-                    "sparse": warmup_json(Traversal::Sparse),
+                    "summary": summarise(&warmup),
+                    "durations_us": warmup,
                 },
                 "pairs": detail,
-                "dense": {
-                    "durations_us": dense_all,
-                    "summary": summarise(&dense_all),
-                },
                 "sparse": {
-                    "durations_us": sparse_all,
-                    "summary": summarise(&sparse_all),
+                    "durations_us": all,
+                    "summary": summarise(&all),
                 },
             }));
         }
@@ -1170,6 +1097,12 @@ fn cross_mode(
         "dims": dims,
         "threads": opened.threads,
         "live_passages": live_len,
+        "segments": metas.len(),
+        "segment_counts": metas.iter().map(|meta| meta.count).collect::<Vec<u32>>(),
+        "segment_iid_starts": metas
+            .iter()
+            .map(|meta| meta.iid_start.get())
+            .collect::<Vec<u32>>(),
         "vectors": vectors_path.display().to_string(),
         "queries": queries.len(),
         "points": measured,
@@ -1187,18 +1120,65 @@ fn cross_mode(
 
 // ----------------------------------------------------------------- agree ------
 
-/// Control of the campaign: both traversals must return the same candidates.
+/// Full Hamming sort of the pool: the oracle of the `agree` control.
 ///
-/// A defect in the replica of either traversal would change the work measured
-/// without changing anything visible, and the campaign would compare two
-/// different computations. Production answers that question for its own scan by
-/// `dense_and_sparse_traversals_agree_with_a_full_sort`; the harness checks the
-/// cheap part of it on **every pool of the campaign**: same candidates, same
-/// distances, same order, for a handful of queries.
+/// The distance is recomputed here with `u64::count_ones`, without
+/// `kernels::hamming_function`, and the segment of an identifier comes from a
+/// binary search per identifier — the pre-ADR-0082 lookup — so the oracle shares
+/// no code path with the replica it checks. The order is the one of the scan:
+/// ascending distance, then ascending internal identifier.
+fn full_sort(
+    segments: &[Codes<'_>],
+    pool: &RoaringBitmap,
+    query_code: &[u64],
+    n: usize,
+) -> Vec<Candidate> {
+    let words = query_code.len();
+    let mut candidates: Vec<Candidate> = pool
+        .iter()
+        .filter_map(|iid| {
+            let position = segments.partition_point(|segment| segment.iid_start <= iid);
+            let segment = position
+                .checked_sub(1)
+                .and_then(|index| segments.get(index))?;
+            if u64::from(iid) >= segment.end() {
+                return None;
+            }
+            let code = segment.code(iid, words)?;
+            let distance = query_code
+                .iter()
+                .zip(code)
+                .map(|(left, right)| u64::from((left ^ right).count_ones()))
+                .sum();
+            Some(Candidate {
+                iid: Iid::new(iid),
+                distance,
+            })
+        })
+        .collect();
+    candidates.sort_unstable_by(|left, right| right.cmp(left));
+    candidates.truncate(n);
+    candidates
+}
+
+/// Control of the campaign: the replica must equal a full Hamming sort.
+///
+/// A defect in the replica of the traversal would change the work measured
+/// without changing anything visible, and the campaign would report the latency
+/// of a computation nobody runs. Production answers that question for its own
+/// scan by `the_scan_agrees_with_a_full_sort`; the harness makes the same claim
+/// on **every pool of the campaign**, for a handful of queries: same candidates,
+/// same distances, same order (ADR-0081, decision 5).
+///
+/// Since ADR-0081 there is one traversal, so there is no second one to compare
+/// with; this control is the stronger claim, and it closes the A/B control of
+/// ADR-0082 between the two binaries: the old document proves its dense and
+/// sparse traversals agree, the new one proves its single traversal equals a full
+/// sort, and both cover the same pools — hence the same candidates.
 ///
 /// The control reads the codes and the pool exactly as `cross` does — same
-/// builder, same seed — so a pool whose traversals agree here is a pool the
-/// campaign measured on valid ground.
+/// builder, same seed — so a pool that agrees here is a pool the campaign
+/// measured on valid ground.
 fn agree_mode(
     arguments: &[String],
     opened: &Opened,
@@ -1251,32 +1231,29 @@ fn agree_mode(
             let mut different = 0_usize;
             let mut first_difference: Option<Value> = None;
             for (index, query_code) in query_codes.iter().take(checked).enumerate() {
-                let dense = scan_pool.install(|| {
-                    scan_replica(&codes, pool, pool_len, query_code, n, Traversal::Dense)
-                });
-                let sparse = scan_pool.install(|| {
-                    scan_replica(&codes, pool, pool_len, query_code, n, Traversal::Sparse)
-                });
-                if dense != sparse {
+                let replica =
+                    scan_pool.install(|| scan_replica(&codes, pool, pool_len, query_code, n));
+                let oracle = full_sort(&codes, pool, query_code, n);
+                if replica != oracle {
                     different += 1;
                     if first_difference.is_none() {
-                        let position = dense
+                        let position = replica
                             .iter()
-                            .zip(&sparse)
+                            .zip(&oracle)
                             .position(|(left, right)| left != right)
-                            .unwrap_or(dense.len().min(sparse.len()));
+                            .unwrap_or(replica.len().min(oracle.len()));
                         first_difference = Some(json!({
                             "query": index,
                             "position": position,
-                            "dense": dense.get(position).map(|c| json!({
+                            "replica": replica.get(position).map(|c| json!({
                                 "iid": c.iid.get(),
                                 "distance": c.distance,
                             })),
-                            "sparse": sparse.get(position).map(|c| json!({
+                            "full_sort": oracle.get(position).map(|c| json!({
                                 "iid": c.iid.get(),
                                 "distance": c.distance,
                             })),
-                            "lengths": [dense.len(), sparse.len()],
+                            "lengths": [replica.len(), oracle.len()],
                         }));
                     }
                 }
@@ -1305,6 +1282,8 @@ fn agree_mode(
         "dims": dims,
         "threads": opened.threads,
         "live_passages": live_len,
+        "segments": metas.len(),
+        "segment_counts": metas.iter().map(|meta| meta.count).collect::<Vec<u32>>(),
         "vectors": vectors_path.display().to_string(),
         "queries_checked": query_codes.len().min(checked),
         "pools_checked": checked_points.len(),
@@ -1358,7 +1337,6 @@ fn rescore_mode(
     let codes = codes_of(&snapshot);
     let query_codes: Vec<Vec<u64>> = queries.iter().map(|query| quantize(query)).collect();
     let k = opened.config.search.candidates_per_branch as usize;
-    let traversal = traversal_of(&live, live_len);
     let scan_pool = ScanPool::new(opened.threads)?;
     // ADR-0077, decision 1: a figure is kept only if the plan returns `binary`.
     // The pool does not change during the run, so one plan covers every point,
@@ -1382,9 +1360,9 @@ fn rescore_mode(
         let n: usize = n_text.trim().parse()?;
         let mut per_query = Vec::with_capacity(queries.len());
         for query_code in &query_codes {
-            per_query.push(scan_pool.install(|| {
-                scan_replica(&codes, &live, live_len, query_code, n.max(k), traversal)
-            }));
+            per_query.push(
+                scan_pool.install(|| scan_replica(&codes, &live, live_len, query_code, n.max(k))),
+            );
         }
         candidate_sets.push(per_query);
     }
@@ -1508,7 +1486,7 @@ fn rescore_mode(
         points.push(json!({
             "n": n,
             "candidates": candidate_sets[position].first().map_or(0, Vec::len),
-            "traversal": traversal.as_str(),
+            "traversal": "sparse",
             "plan": dense_plan.strategy.as_str(),
             "plan_candidates": dense_plan.rescore_candidates,
             "cold": cold,
@@ -1740,18 +1718,9 @@ fn compare_mode(
     let codes = codes_of(&snapshot);
     let query_code = quantize(query);
     let k = opened.config.search.candidates_per_branch as usize;
-    let traversal = traversal_of(pool.bitmap(), pool.len());
     let scan_pool = ScanPool::new(opened.threads)?;
-    let candidates = scan_pool.install(|| {
-        scan_replica(
-            &codes,
-            pool.bitmap(),
-            pool.len(),
-            &query_code,
-            n.max(k),
-            traversal,
-        )
-    });
+    let candidates = scan_pool
+        .install(|| scan_replica(&codes, pool.bitmap(), pool.len(), &query_code, n.max(k)));
 
     let searcher = opened.searcher()?;
     let search = opened.config.search.clone();
@@ -1786,7 +1755,7 @@ fn compare_mode(
         "index": opened.index,
         "filter": filter_text,
         "pool_size": pool.len(),
-        "traversal": traversal.as_str(),
+        "traversal": "sparse",
         "plan": planned.strategy.as_str(),
         "n": n.max(k),
         "top": top,

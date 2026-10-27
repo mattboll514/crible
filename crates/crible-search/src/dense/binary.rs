@@ -5,8 +5,8 @@
 //! References: `docs/phases/P4-recherche-rapide.md` (`SCANNER-POOL-BINAIRE`),
 //! `docs/03-recherche.md` ("Branche dense", strategy BINARY and "Parallélisme"),
 //! ADR-0004 (bit `i` is 1 when `x_i > 0`), ADR-0069 (the `codes.bin` layout),
-//! ADR-0070 (the runtime dispatch of the kernels) and ADR-0071 (the threshold
-//! between the dense and the sparse traversal).
+//! ADR-0070 (the runtime dispatch of the kernels), ADR-0081 (a single traversal
+//! of the scan) and ADR-0082 (the segment cursor).
 //!
 //! # What the scan computes
 //!
@@ -21,25 +21,22 @@
 //! in RAM (`QUANTIFIER-BINAIRE`), never from a segment reader: a second copy
 //! would cost 0.82 GB at the scale of Legifacile.
 //!
-//! # Dense or sparse traversal
+//! # A single traversal
 //!
-//! `docs/03-recherche.md` describes both traversals but fixes no threshold
-//! between them: the `exact_threshold` of the strategy table selects EXACT
-//! against BINARY, not one traversal of the binary scan against the other.
-//! ADR-0071 fixes that threshold, with no setting:
+//! The scan walks the sorted iterator of the pool bitmap and reads the code of
+//! each live identifier. `docs/03-recherche.md` describes that single traversal,
+//! and ADR-0071's density rule is gone: MES-02 measured the sparse walk against
+//! the dense one on every point of its campaign, and the sparse walk won or tied
+//! throughout (ADR-0081). Keeping a second traversal for a gain no measurement
+//! shows would be code without a figure. The single traversal changes nothing in
+//! the answer; the tests compare it to a full sort.
 //!
-//! - **dense** when the pool covers at least **half** of the identifier range it
-//!   spans, that is `2 × pool_len ≥ last − first + 1`: the scan walks the
-//!   contiguous codes and tests the pool bitmap for each identifier of that
-//!   range;
-//! - **sparse** otherwise: the scan walks the pool bitmap and reads the code of
-//!   each live identifier.
-//!
-//! The decision is taken once per scan, on the whole pool, then applied to every
-//! window (ADR-0071). The ratio is a cost heuristic, not a measured optimum:
-//! MES-02 is the measure that could replace it, through a new ADR. The choice
-//! changes the cost only, never the result; both traversals are compared to a
-//! full sort in the tests.
+//! The segment of a passage comes from a cursor that advances with the sorted
+//! identifiers ([`SegmentCursor`], ADR-0081 decision 2, ADR-0082 decision 1).
+//! The former lookup cost a binary search in the segment table per live
+//! passage — 0.93 to 1.03 ns per passage at 100 segments, measured in MES-02 —
+//! and the cursor pays one step per segment instead: it is positioned once per
+//! window, with a binary search, then only moves forward.
 //!
 //! # Parallelism and the kernel
 //!
@@ -127,15 +124,7 @@ pub fn top_k(
     if n == 0 || pool.is_empty() {
         return Ok(Vec::new());
     }
-    let traversal = traversal(pool.bitmap(), pool.len());
-    scan(
-        &segments,
-        pool.bitmap(),
-        pool.len(),
-        query_code,
-        n,
-        traversal,
-    )
+    scan(&segments, pool.bitmap(), pool.len(), query_code, n)
 }
 
 /// Binary codes of one segment, checked once per scan.
@@ -242,36 +231,55 @@ fn prepare<'a>(
     Ok(segments)
 }
 
-/// Traversal of the pool: the contiguous codes, or the pool bitmap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Traversal {
-    /// Walk the codes of the identifier range and test the pool bitmap.
-    Dense,
-    /// Walk the pool bitmap and read the code of each live identifier.
-    Sparse,
+/// Segment holding the identifiers of one window, followed by a cursor.
+///
+/// The identifiers of a window arrive in ascending order from the pool bitmap,
+/// and so do the segments, so a cursor that only moves forward answers in O(1)
+/// amortised per identifier, where a binary search per identifier cost 0.93 to
+/// 1.03 ns per live passage at 100 segments (MES-02). The cursor is positioned
+/// once per window, with a binary search; after that it never moves backwards
+/// (ADR-0081, decision 2; ADR-0082, decision 1).
+struct SegmentCursor<'a> {
+    /// Codes of the generation, sorted by first identifier.
+    segments: &'a [SegmentCodes<'a>],
+    /// Segment the cursor has reached, `None` when it is past the last one.
+    position: Option<usize>,
 }
 
-/// Chooses the traversal of one scan.
-///
-/// The dense traversal pays one bitmap test per identifier of the window,
-/// whether live or not, and reads the codes of the live identifiers in memory
-/// order. The sparse one pays one bitmap step per live passage, plus one segment
-/// lookup and one random code read per passage. Dense is therefore kept while
-/// the pool covers at least half of the range it spans; below that, the number
-/// of dead identifiers tested would exceed the number of codes read.
-///
-/// The threshold is the one ADR-0071 fixes, decided once per scan on the whole
-/// pool: `2 × pool_len ≥ last − first + 1`. MES-02 is the measure that could
-/// replace it, through a new ADR.
-fn traversal(pool: &RoaringBitmap, pool_len: u32) -> Traversal {
-    let (Some(first), Some(last)) = (pool.min(), pool.max()) else {
-        return Traversal::Sparse;
-    };
-    let span = u64::from(last) - u64::from(first) + 1;
-    if u64::from(pool_len) * 2 >= span {
-        Traversal::Dense
-    } else {
-        Traversal::Sparse
+impl<'a> SegmentCursor<'a> {
+    /// Positions the cursor for the first identifier of a window.
+    ///
+    /// This is the only binary search of the window: the cursor starts on the
+    /// last segment that begins at or before `iid`, or before the first segment
+    /// when none does. A monotonic caller must then offer the identifiers in
+    /// ascending order, which the pool bitmap iterator does.
+    fn before(segments: &'a [SegmentCodes<'a>], iid: u32) -> Self {
+        let position = segments
+            .partition_point(|segment| segment.iid_start <= iid)
+            .checked_sub(1);
+        Self { segments, position }
+    }
+
+    /// Segment holding `iid`, or the corruption error when none does.
+    ///
+    /// The cursor advances only over segments that ended before `iid`, so a
+    /// caller offering ascending identifiers pays one step per segment. An
+    /// identifier in a gap between two segments, or past the last one, is
+    /// refused with the same error as the segment table being wrong.
+    fn segment_of(&mut self, iid: u32) -> Result<&'a SegmentCodes<'a>, CribleError> {
+        let segments = self.segments;
+        loop {
+            let index = self.position.ok_or_else(uncovered)?;
+            let segment = &segments[index];
+            if u64::from(iid) < segment.end() {
+                return if u64::from(iid) >= u64::from(segment.iid_start) {
+                    Ok(segment)
+                } else {
+                    Err(uncovered())
+                };
+            }
+            self.position = index.checked_add(1).filter(|next| *next < segments.len());
+        }
     }
 }
 
@@ -282,14 +290,12 @@ fn scan(
     pool_len: u32,
     query_code: &[u64],
     n: usize,
-    traversal: Traversal,
 ) -> Result<Vec<Candidate>, CribleError> {
     let scan = Scan {
         segments,
         words: query_code.len(),
         query_code,
         n,
-        traversal,
         hamming: kernels::hamming_function(),
     };
     let ranges = windows(pool, pool_len, rayon::current_num_threads().max(1));
@@ -315,8 +321,6 @@ struct Scan<'a> {
     query_code: &'a [u64],
     /// Number of candidates kept per window.
     n: usize,
-    /// Traversal chosen for the whole scan.
-    traversal: Traversal,
     /// Hamming implementation, resolved once for the scan.
     hamming: fn(&[u64], &[u64]) -> u64,
 }
@@ -333,61 +337,15 @@ impl<'a> Scan<'a> {
             self.n
                 .min(usize::try_from(pool.len()).unwrap_or(usize::MAX)),
         );
-        match self.traversal {
-            Traversal::Dense => self.dense_window(pool, from, to, &mut heap)?,
-            Traversal::Sparse => self.sparse_window(pool, from, to, &mut heap)?,
-        }
+        self.sparse_window(pool, from, to, &mut heap)?;
         Ok(heap
             .into_iter()
             .map(|Reverse(candidate)| candidate)
             .collect())
     }
 
-    /// Walks the contiguous codes of the window and tests the pool bitmap.
-    ///
-    /// The number of live identifiers met is compared with the rank of the pool
-    /// over the same range: a pool identifier that no segment covers would be
-    /// skipped silently here, and the sparse traversal would refuse it.
-    fn dense_window(
-        &self,
-        pool: &RoaringBitmap,
-        from: u32,
-        to: u32,
-        heap: &mut BinaryHeap<Reverse<Candidate>>,
-    ) -> Result<(), CribleError> {
-        let mut live = 0_u64;
-        for segment in self.segments {
-            let start = u64::from(segment.iid_start);
-            let first = start.max(u64::from(from));
-            let last = segment.end().min(u64::from(to) + 1);
-            if first >= last {
-                continue;
-            }
-            let span = usize::try_from(last - first).unwrap_or(usize::MAX);
-            for position in 0..span {
-                // `first + position < segment.end() <= 2^32`, so the cast is exact.
-                let iid = (first + position as u64) as u32;
-                if !pool.contains(iid) {
-                    continue;
-                }
-                live += 1;
-                let code = segment.code(iid, self.words).ok_or_else(|| {
-                    internal("a live passage has no binary code in the generation")
-                })?;
-                offer(heap, self.distance(code), iid, self.n);
-            }
-        }
-        let before = from.checked_sub(1).map_or(0, |value| pool.rank(value));
-        let expected = pool.rank(to) - before;
-        if live != expected {
-            return Err(internal(
-                "the pool holds an identifier that no segment of the generation covers",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Walks the pool bitmap and reads the code of each live identifier.
+    /// Walks the pool bitmap of the window and reads the code of each live
+    /// identifier, following the segments with a cursor.
     fn sparse_window(
         &self,
         pool: &RoaringBitmap,
@@ -397,11 +355,12 @@ impl<'a> Scan<'a> {
     ) -> Result<(), CribleError> {
         let mut live = pool.iter();
         live.advance_to(from);
+        let mut cursor = SegmentCursor::before(self.segments, from);
         for iid in live {
             if iid > to {
                 break;
             }
-            let segment = self.segment_of(iid)?;
+            let segment = cursor.segment_of(iid)?;
             let code = segment
                 .code(iid, self.words)
                 .ok_or_else(|| internal("a live passage has no binary code in the generation"))?;
@@ -413,25 +372,6 @@ impl<'a> Scan<'a> {
     /// Distance between the query code and one passage code.
     fn distance(&self, code: &[u64]) -> u64 {
         (self.hamming)(self.query_code, code)
-    }
-
-    /// Segment holding `iid`.
-    fn segment_of(&self, iid: u32) -> Result<&'a SegmentCodes<'a>, CribleError> {
-        let position = self
-            .segments
-            .partition_point(|segment| segment.iid_start <= iid);
-        let segment = position
-            .checked_sub(1)
-            .and_then(|index| self.segments.get(index))
-            .ok_or_else(|| {
-                internal("the pool holds an identifier that no segment of the generation covers")
-            })?;
-        if u64::from(iid) >= segment.end() {
-            return Err(internal(
-                "the pool holds an identifier that no segment of the generation covers",
-            ));
-        }
-        Ok(segment)
     }
 }
 
@@ -463,9 +403,15 @@ fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message)
 }
 
+/// Error raised when the pool holds an identifier no segment of the generation
+/// covers: a gap between two segments, or an identifier past the last one.
+fn uncovered() -> CribleError {
+    internal("the pool holds an identifier that no segment of the generation covers")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Candidate, Scan, SegmentCodes, Traversal, scan, traversal};
+    use super::{Candidate, Scan, SegmentCodes, SegmentCursor, scan};
     use roaring::RoaringBitmap;
 
     /// Deterministic generator, so a failing case is reproducible.
@@ -532,7 +478,29 @@ mod tests {
         ]
     }
 
-    /// Full sort by Hamming distance: the oracle of the two traversals.
+    /// Five segments of 1, 3, 64, 1,000 and 7 codes, filled with
+    /// pseudo-random bits: the identifier ranges `0..1`, `1..4`, `4..68`,
+    /// `68..1_068` and `1_068..1_075`.
+    fn build_unequal<'a>(codes: &'a [u64]) -> Vec<SegmentCodes<'a>> {
+        const SIZES: [u32; 5] = [1, 3, 64, 1_000, 7];
+        let width = super::words_per_code(DIMS);
+        let mut segments = Vec::with_capacity(SIZES.len());
+        let mut start = 0_u32;
+        let mut offset = 0_usize;
+        for count in SIZES {
+            let end = offset + usize::try_from(count).unwrap_or(0) * width;
+            segments.push(SegmentCodes {
+                iid_start: start,
+                count,
+                codes: &codes[offset..end],
+            });
+            start += count;
+            offset = end;
+        }
+        segments
+    }
+
+    /// Full sort by Hamming distance: the oracle of the scan.
     fn brute_force(
         segments: &[SegmentCodes<'_>],
         pool: &RoaringBitmap,
@@ -573,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn dense_and_sparse_traversals_agree_with_a_full_sort() {
+    fn the_scan_agrees_with_a_full_sort() {
         let (a, b, c) = segments();
         let segments = build(&a, &b, &c);
         let mut generator = Lcg(11);
@@ -582,14 +550,12 @@ mod tests {
         for pool in pools() {
             let pool_len = u32::try_from(pool.len()).unwrap_or(u32::MAX);
             let expected = brute_force(&segments, &pool, &query_code, 10);
-            for traversal in [Traversal::Dense, Traversal::Sparse] {
-                let got = scan(&segments, &pool, pool_len, &query_code, 10, traversal)
-                    .unwrap_or_else(|error| panic!("{traversal:?} must scan: {error}"));
-                assert_eq!(
-                    got, expected,
-                    "{traversal:?} must return the top 10 of a full sort"
-                );
-            }
+            let got = scan(&segments, &pool, pool_len, &query_code, 10)
+                .unwrap_or_else(|error| panic!("the scan must run: {error}"));
+            assert_eq!(
+                got, expected,
+                "the single traversal must return the top 10 of a full sort"
+            );
         }
     }
 
@@ -600,30 +566,23 @@ mod tests {
         let query_code = [3_u64, 1, 2];
 
         // The first pool covers both sides of the gap, so its identifiers are
-        // not contiguous; it is dense enough to be walked through the codes.
+        // not contiguous; the second one is sparse on both sides of the same
+        // gap. Both cross the boundary of the cursor.
         let bridging: RoaringBitmap = (0..100).chain(150..250).collect();
-        // The second one is sparse on both sides of the same gap.
         let sparse: RoaringBitmap = (0..100)
             .filter(|iid| iid % 10 == 0)
             .chain((150..250).filter(|iid| iid % 10 == 0))
             .collect();
 
-        for (pool, chosen) in [(bridging, Traversal::Dense), (sparse, Traversal::Sparse)] {
+        for pool in [bridging, sparse] {
             let pool_len = u32::try_from(pool.len()).unwrap_or(u32::MAX);
-            assert_eq!(
-                traversal(&pool, pool_len),
-                chosen,
-                "the case must exercise the {chosen:?} traversal"
-            );
             let full = brute_force(&segments, &pool, &query_code, 10);
-            for traversal in [Traversal::Dense, Traversal::Sparse] {
-                let got = scan(&segments, &pool, pool_len, &query_code, 10, traversal)
-                    .unwrap_or_else(|error| panic!("{traversal:?} must scan: {error}"));
-                assert_eq!(
-                    got, full,
-                    "{traversal:?} must match the full sort across the gap"
-                );
-            }
+            let got = scan(&segments, &pool, pool_len, &query_code, 10)
+                .unwrap_or_else(|error| panic!("the scan must run: {error}"));
+            assert_eq!(
+                got, full,
+                "the scan must match the full sort across the gap"
+            );
         }
     }
 
@@ -634,25 +593,23 @@ mod tests {
         let query_code = [0_u64; 3];
 
         // `120` falls in the gap, `300` past the last segment: neither is
-        // covered by a code, and the two traversals must refuse both the same
-        // way rather than skip one silently.
+        // covered by a code, and the scan must refuse both rather than skip one
+        // silently.
         for pool in [
             std::iter::once(120_u32).collect::<RoaringBitmap>(),
             std::iter::once(300_u32).collect::<RoaringBitmap>(),
         ] {
             let pool_len = u32::try_from(pool.len()).unwrap_or(u32::MAX);
-            for traversal in [Traversal::Dense, Traversal::Sparse] {
-                let error = scan(&segments, &pool, pool_len, &query_code, 10, traversal)
-                    .err()
-                    .unwrap_or_else(|| {
-                        panic!("{traversal:?} must refuse an identifier outside the segments")
-                    });
-                assert_eq!(
-                    error.code(),
-                    super::ErrorCode::Internal,
-                    "{traversal:?} must report a corrupted generation"
-                );
-            }
+            let error = scan(&segments, &pool, pool_len, &query_code, 10)
+                .err()
+                .unwrap_or_else(|| {
+                    panic!("the scan must refuse an identifier outside the segments")
+                });
+            assert_eq!(
+                error.code(),
+                super::ErrorCode::Internal,
+                "the scan must report a corrupted generation"
+            );
         }
     }
 
@@ -664,56 +621,103 @@ mod tests {
         let pool: RoaringBitmap = (0..300).filter(|iid| iid % 17 == 0).collect();
         let pool_len = u32::try_from(pool.len()).unwrap_or(u32::MAX);
 
-        for traversal in [Traversal::Dense, Traversal::Sparse] {
-            let none = scan(&segments, &pool, pool_len, &query_code, 0, traversal)
-                .unwrap_or_else(|error| panic!("{traversal:?} must scan: {error}"));
-            assert!(
-                none.is_empty(),
-                "{traversal:?} must return no candidate when n is zero"
-            );
-            let got = scan(&segments, &pool, pool_len, &query_code, 1_000, traversal)
-                .unwrap_or_else(|error| panic!("{traversal:?} must scan: {error}"));
-            assert_eq!(
-                got.len(),
-                usize::try_from(pool.len()).unwrap_or(usize::MAX),
-                "{traversal:?} must return the whole pool when n exceeds it"
-            );
-            assert_eq!(
-                got,
-                brute_force(&segments, &pool, &query_code, 1_000),
-                "{traversal:?} must match the full sort"
-            );
-        }
+        let none = scan(&segments, &pool, pool_len, &query_code, 0)
+            .unwrap_or_else(|error| panic!("the scan must run: {error}"));
+        assert!(
+            none.is_empty(),
+            "the scan must return no candidate when n is zero"
+        );
+        let got = scan(&segments, &pool, pool_len, &query_code, 1_000)
+            .unwrap_or_else(|error| panic!("the scan must run: {error}"));
+        assert_eq!(
+            got.len(),
+            usize::try_from(pool.len()).unwrap_or(usize::MAX),
+            "the scan must return the whole pool when n exceeds it"
+        );
+        assert_eq!(
+            got,
+            brute_force(&segments, &pool, &query_code, 1_000),
+            "the scan must match the full sort"
+        );
     }
 
     #[test]
-    fn the_traversal_follows_the_density_of_the_pool() {
-        let full: RoaringBitmap = (0..1_000).collect();
-        assert_eq!(
-            traversal(&full, 1_000),
-            Traversal::Dense,
-            "a full pool is walked through its contiguous codes"
-        );
+    fn the_segment_cursor_follows_unequal_segments() {
+        let mut generator = Lcg(13);
+        let words = 1_075 * super::words_per_code(DIMS);
+        let codes: Vec<u64> = (0..words).map(|_| generator.next()).collect();
+        let unequal = build_unequal(&codes);
 
-        let half: RoaringBitmap = (0..1_000).filter(|iid| iid % 2 == 0).collect();
+        // A window that starts in the middle of the thousand-code segment: the
+        // single binary search of the window lands there, not on the first one.
+        let mut cursor = SegmentCursor::before(&unequal, 500);
+        let segment = cursor
+            .segment_of(500)
+            .unwrap_or_else(|error| panic!("500 must be covered: {error}"));
         assert_eq!(
-            traversal(&half, u32::try_from(half.len()).unwrap_or(u32::MAX)),
-            Traversal::Dense,
-            "half is the boundary of the dense traversal"
+            segment.iid_start, 68,
+            "the cursor must land inside segment 3"
         );
+        assert_eq!(segment.count, 1_000);
 
-        let sparse: RoaringBitmap = (0..1_000).filter(|iid| iid % 3 == 0).collect();
-        assert_eq!(
-            traversal(&sparse, u32::try_from(sparse.len()).unwrap_or(u32::MAX)),
-            Traversal::Sparse,
-            "a pool below half of its range is walked through its bitmap"
-        );
+        // Ascending identifiers: the cursor advances one segment at a time and
+        // must not move back.
+        for (iid, start) in [
+            (501_u32, 68_u32),
+            (1_067, 68),
+            (1_068, 1_068),
+            (1_074, 1_068),
+        ] {
+            let segment = cursor
+                .segment_of(iid)
+                .unwrap_or_else(|error| panic!("{iid} must be covered: {error}"));
+            assert_eq!(
+                segment.iid_start, start,
+                "the cursor must hold the segment of {iid}"
+            );
+        }
 
-        assert_eq!(
-            traversal(&RoaringBitmap::new(), 0),
-            Traversal::Sparse,
-            "an empty pool has no range to walk"
-        );
+        // Whole segments are skipped in one step: from the first identifier to
+        // the last segment, and back to a fresh cursor at the very beginning.
+        let mut cursor = SegmentCursor::before(&unequal, 0);
+        let first = cursor
+            .segment_of(0)
+            .unwrap_or_else(|error| panic!("0 must be covered: {error}"));
+        assert_eq!(first.iid_start, 0);
+        assert_eq!(first.count, 1, "the first segment holds one code");
+        let last = cursor
+            .segment_of(1_074)
+            .unwrap_or_else(|error| panic!("1_074 must be covered: {error}"));
+        assert_eq!(last.iid_start, 1_068, "the cursor must cross the whole gap");
+
+        // Segment edges: the last identifier of a segment belongs to it, and
+        // the next one belongs to its successor.
+        let mut cursor = SegmentCursor::before(&unequal, 0);
+        for (iid, start) in [(0_u32, 0_u32), (1, 1), (4, 4), (68, 68), (1_068, 1_068)] {
+            let segment = cursor
+                .segment_of(iid)
+                .unwrap_or_else(|error| panic!("{iid} must be covered: {error}"));
+            assert_eq!(
+                segment.iid_start, start,
+                "identifier {iid} starts a segment"
+            );
+        }
+
+        // An identifier in a gap, and one past the last segment, are refused.
+        let (a, b, _) = segments();
+        let gapped = build_with_gap(&a, &b);
+        for iid in [120_u32, 300] {
+            let mut cursor = SegmentCursor::before(&gapped, iid);
+            let error = cursor
+                .segment_of(iid)
+                .err()
+                .unwrap_or_else(|| panic!("{iid} must be refused"));
+            assert_eq!(
+                error.code(),
+                super::ErrorCode::Internal,
+                "an uncovered identifier is a corrupted generation"
+            );
+        }
     }
 
     #[test]
@@ -725,7 +729,6 @@ mod tests {
             words: 3,
             query_code: &[0, 0, 0],
             n: 3,
-            traversal: Traversal::Sparse,
             hamming: crate::kernels::hamming_function(),
         };
         let pool: RoaringBitmap = (0..300).collect();
