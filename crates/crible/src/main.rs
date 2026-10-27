@@ -159,6 +159,11 @@ enum Command {
         /// Number of results, between 1 and 1000.
         #[arg(long, default_value_t = 10)]
         k: usize,
+        /// Force the exact dense search, whatever the size of the pool
+        /// (`exact` of the search request in `docs/05-api.md`; evaluation and
+        /// debug).
+        #[arg(long)]
+        exact: bool,
         /// Output format: `json` (the response of `docs/05-api.md`, default) or
         /// `text` (readable report with a text excerpt).
         #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
@@ -242,6 +247,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             model,
             filter,
             k,
+            exact,
             format,
         } => commands::search(&commands::SearchRequest {
             data: &data,
@@ -252,6 +258,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             model: model.as_deref(),
             filter: filter.as_deref(),
             k,
+            exact,
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),

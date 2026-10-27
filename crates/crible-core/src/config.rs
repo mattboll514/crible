@@ -5,7 +5,8 @@
 //!
 //! References: `docs/04-donnees-et-ingestion.md`, section "Configuration d'un
 //! index" and "Ce qui est figé, ce qui est réglable"; ADR-0030; ADR-0031;
-//! ADR-0054 (bounds of the acceptance settings); INV-16
+//! ADR-0054 (bounds of the acceptance settings); ADR-0074 (the exact threshold
+//! is optional at creation and materialised); INV-16
 //! (`docs/08-invariants-et-tests.md`).
 
 use std::collections::BTreeMap;
@@ -397,7 +398,12 @@ pub struct SearchConfig {
     pub scan: ScanStrategy,
     /// Number of candidates re-scored exactly.
     pub rescore_candidates: u32,
-    /// Pool size below which the search is always exact.
+    /// Pool size up to which (inclusive) the search is exact.
+    ///
+    /// Optional in `index.json`: absent, it takes the value of
+    /// `rescore_candidates` at the creation of the index, and the creation
+    /// writes that value out (ADR-0074, decision 2). A later `PATCH` of
+    /// `rescore_candidates` therefore does not move it.
     pub exact_threshold: u32,
     /// Candidates kept by each branch before fusion.
     pub candidates_per_branch: u32,
@@ -419,13 +425,18 @@ impl SearchConfig {
                 "fusion",
             ],
         )?;
+        let rescore_candidates = json::u32_member(object, path, "rescore_candidates")?;
         Ok(Self {
             scan: ScanStrategy::parse(
                 json::member(object, path, "scan")?,
                 &format!("{path}.scan"),
             )?,
-            rescore_candidates: json::u32_member(object, path, "rescore_candidates")?,
-            exact_threshold: json::u32_member(object, path, "exact_threshold")?,
+            rescore_candidates,
+            // ADR-0074, decision 2: absent, the threshold takes the value of N
+            // at the creation of the index. The creation writes that value into
+            // `index.json`, so a stored configuration always names it.
+            exact_threshold: optional_u32(object, path, "exact_threshold")?
+                .unwrap_or(rescore_candidates),
             candidates_per_branch: json::u32_member(object, path, "candidates_per_branch")?,
             fusion: FusionConfig::from_value(
                 json::member(object, path, "fusion")?,
@@ -575,6 +586,43 @@ impl IndexConfig {
                 json::member(object, "$", "compaction")?,
                 "$.compaction",
             )?,
+        })
+    }
+
+    /// Returns the stored form of a configuration: every setting that has a
+    /// default is written out, so `index.json` is self-descriptive.
+    ///
+    /// `search.exact_threshold` is the only such setting today (ADR-0074,
+    /// decision 2): absent, it takes the value of `search.rescore_candidates`,
+    /// and the creation writes that value into the file, so a later `PATCH` of
+    /// N cannot move the stored threshold. A configuration that already names
+    /// the key is returned **verbatim**, so a creation never reformats a file
+    /// it does not have to complete.
+    pub fn materialised_json(raw: &str) -> Result<String, CribleError> {
+        let value: Value = serde_json::from_str(raw)
+            .map_err(|error| json::invalid(format!("invalid configuration JSON: {error}")))?;
+        let config = Self::from_value(&value)?;
+        let named = value
+            .get("search")
+            .and_then(Value::as_object)
+            .is_some_and(|search| search.contains_key("exact_threshold"));
+        if named {
+            return Ok(raw.to_owned());
+        }
+        let mut completed = value;
+        let search = completed
+            .get_mut("search")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| json::invalid("expected an object at $.search"))?;
+        search.insert(
+            "exact_threshold".to_owned(),
+            Value::from(config.search.exact_threshold),
+        );
+        serde_json::to_string_pretty(&completed).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!("cannot serialize the materialised configuration: {error}"),
+            )
         })
     }
 }

@@ -379,7 +379,10 @@ impl ExactSearcher {
     /// fields. A missing document row is not an inconsistency: the document may
     /// have been removed after the snapshot was taken, and the result then
     /// carries its passage fields only (ADR-0043, option A, without marker).
-    fn payload(&self, candidate: Scored) -> Result<Hit, CribleError> {
+    ///
+    /// The planned binary strategy calls it too, after the rescoring, so both
+    /// strategies build their results the same way.
+    pub(crate) fn payload(&self, candidate: Scored) -> Result<Hit, CribleError> {
         let passage = self.passage_of(candidate.iid)?;
         let document = self.records.read_document(&passage.doc_id)?;
         Ok(Hit {
