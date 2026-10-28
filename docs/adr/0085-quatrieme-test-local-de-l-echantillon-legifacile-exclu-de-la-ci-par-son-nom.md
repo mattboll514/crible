@@ -1,8 +1,9 @@
 # ADR-0085 — Quatrième test local de l'échantillon Legifacile, exclu de la CI par son nom
 
-- **Statut** : Proposé
-- **Date** : 2026-10-28
+- **Statut** : Accepté (décision du propriétaire le 2026-10-28, option (1a) telle que proposée)
+- **Date** : 2026-10-28 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-28, option (1a) telle que proposée. Un quatrième test de l'échantillon Legifacile, `inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, reste local ; la CI l'exclut par son nom, avec un quatrième `--skip` explicite dans la commande du job `rust-onnx`. Aucun autre test n'est exclu, aucune règle générale d'exclusion n'est créée, et le corps d'ADR-0057, d'ADR-0062 et d'ADR-0063 n'est pas modifié.
 - **Proposé par** : agent greffier, sur demande du propriétaire, à la suite du run de CI distante `40665513025` et du verdict `ECART` de `@architecte` du 2026-10-28. Tâche d'origine : `ACCELERER-RECETTE` (phase P4, commit `c62e82f`), dont le test est la cause du run rouge.
 - **Remplace** : — (complète ADR-0057, ADR-0062 et ADR-0063, qui restent en vigueur et `Accepté` ; aucun de leurs corps n'est modifié, comme ADR-0059 puis ADR-0063 l'ont déjà fait pour ADR-0057)
 

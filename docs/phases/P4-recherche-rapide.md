@@ -119,6 +119,7 @@
   - (c) le rejeu de MES-08, comparé à la campagne du 2026-10-25.
   - Les résultats des contrôles remis à l'orchestrateur pour `docs/suivi.md`, qui reste tenu par lui.
 - **Issue du livrable (b), note du 2026-10-27 (ADR-0073)** : il a été codé une fois la condition remplie (les 200 ré-encodages font 88,0 % et 89,0 % de `validation`), puis **mesuré et retiré**. Le temps de ré-encodage croît avec la taille de lot sur les deux lots (+3,6 % à +21,5 % dès B = 4), et huit copies du plus long passage coûtent 8,05 à 8,08 fois un appel seul : avec les défauts d'ONNX Runtime, les lignes d'un lot ne s'exécutent pas en parallèle. La recette reste donc encodée **un passage à la fois**, et aucune taille de lot ne subsiste dans le code. La mesure est consignée dans MES-08, campagne du 2026-10-27. Voir ADR-0073.
+- **Note du 2026-10-28, après acceptation d'ADR-0085** : le test `inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, écrit en application de la décision 2 d'ADR-0073 pour épingler les statistiques de la recette (`sample`, `min_cosine`, `p1`, `p50`) à `1e-6`, reste **local**. Depuis `ADR-0085`, la CI l'exclut par son nom, avec un quatrième `--skip` explicite, parce que ses données dérivent de la production (ADR-0032) et n'existent pas en CI. Les critères ci-dessus ne sont pas réécrits : ce test reste la preuve d'INV-12 à chaque jalon, et `ADR-0085` fait foi pour ce décompte.
 - **Critères d'acceptation** :
   - la ventilation est mesurée et reproductible : les postes de l'étape `validation` sont chiffrés pour les deux tailles de lot, et leur somme retrouve la durée de `validation` de la campagne du 2026-10-25 à la variabilité de la mesure près ;
   - si (b) est fait : un test prouve que le cosinus de **chaque** passage de la recette, encodé par lots, égale celui du même passage encodé seul à **1e-6** près ; et les statistiques de la recette d'un lot de référence (`sample`, `min_cosine`, `p1`, `p50`) sont inchangées à **1e-6** ;
@@ -196,3 +197,19 @@
   - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` verts ; build `--release` pour la mesure.
 - **Invariants / mesures** : INV-06 ; MES-03, MES-09.
 - **Hors périmètre** : le format des segments et `format_version` (ADR-0006, ADR-0069), et une quantification du rescoring ; les vecteurs en RAM et `mlock` (écarts à la règle de mémoire de `docs/02-architecture.md:204` et `:213`) ; le préchargement `MADV_WILLNEED` et l'ordre physique selon `cluster_by` ; le préchauffage à l'ouverture (ADR-0047) ; la valeur de `rescore_candidates` (ADR-0078) ; les cibles de latence en conteneur et le protocole de froid sous Linux, qui appartiennent à P8.
+
+### EXCLURE-QUATRIEME-TEST-ECHANTILLON
+- **Ajoutée par** : ADR-0085, accepté le 2026-10-28, hors plan initial. Elle applique la décision de l'ADR dans la CI distante, après le run `40665513025` (2026-10-28), rouge dans le job `Rust with ONNX Runtime` sur `data/legifacile-sample/configs/dole.json` absent. Elle se fait en P4, avant la validation de J4.
+- **Objectif** : rendre la CI verte sans toucher au code ni au contrat des tests, en excluant par son nom le quatrième test local de l'échantillon Legifacile.
+- **Dépend de** : ACCELERER-RECETTE, dont le test est la cause du run rouge.
+- **À lire** : `adr/0085-quatrieme-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md` (décision 1, « Modifications à appliquer après acceptation », `.github/workflows/ci.yml`) ; ADR-0057, ADR-0062 et ADR-0063 (les trois exclusions précédentes, qui ne changent pas) ; ADR-0032 (aucune donnée de production en CI) ; `docs/07-stack-et-deploiement.md` (« CI (GitHub Actions) ») ; `docs/08-invariants-et-tests.md` (« Sauts de test ») ; `.github/workflows/ci.yml`.
+- **Livrables** :
+  - dans `.github/workflows/ci.yml`, à l'étape `Test with ONNX Runtime` du job `Rust with ONNX Runtime`, un quatrième `--skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, à la suite des trois déjà présents ;
+  - le commentaire qui précède l'étape, « The three Legifacile sample tests … (ADR-0057, ADR-0062, ADR-0063) », passe à **quatre** tests et cite `ADR-0085`.
+- **Critères d'acceptation** :
+  - le workflow et `docs/07-stack-et-deploiement.md` nomment les **mêmes quatre** tests, dans la même commande ;
+  - en local, la commande de l'étape, jouée sans l'échantillon, laisse passer tous les tests ; en particulier `inv_12_the_legifacile_sample_test_fails_without_its_prerequisites` reste **exécuté** et vert, puisqu'il prouve l'échec bruyant d'un test de l'échantillon privé de ses prérequis ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` sont verts ;
+  - la CI distante est verte au prochain push de la branche de phase.
+- **Aucun invariant cité** : la tâche ne change ni le comportement du moteur, ni le contrat de la recette, ni la preuve d'INV-12, qui reste le passage local du test exclu.
+- **Hors périmètre** : le code Rust et les tests, `crates/crible/tests/recette_import.rs` compris ; une règle générale d'exclusion (motif commun, feature Cargo, variable d'environnement, `cfg`) ; la publication, la reconstitution ou la réduction de l'échantillon Legifacile ; le `timeout-minutes`, le cache et le téléchargement du modèle ; les documents `docs/01` à `docs/08` hors les modifications déjà appliquées avec cet ADR, et `docs/suivi.md`, tenu par l'orchestrateur.
