@@ -148,3 +148,89 @@ mesure, soit **2,20 à 2,30 Gio pour une instance qui sert**, en notant qu'ils v
 (10 colonnes de valeurs, aucun index lexical). Le jour où Legifacile comptera ses champs d'intervalle,
 le chiffre des colonnes devra être recalculé à 34 Mo par colonne, et un index lexical ajoutera la part
 mmap de tantivy (MES-06).
+
+## Lecture groupée des vecteurs au rescoring (ADR-0080) — 2026-10-28
+
+- **Tâche** : `GROUPER-LECTURES-VECTEURS` (P4). Contrôle de RSS exigé par la décision 6 d'ADR-0080 :
+  prouver que l'option 1 (lecture groupée et parallèle des N lignes `f16` dans un tampon transitoire)
+  **ne fait pas grossir la mémoire possédée**. Le détail de la campagne est dans la section datée de
+  `docs/mesures/MES-03-latence-rescoring.md` du même jour.
+- **Commit** : `07a82d773db3245e6fc680b48baabe61fbd4ac21`, branche
+  `tache/GROUPER-LECTURES-VECTEURS`, avec les modifications **non commitées** de l'arbre
+  (`crates/crible-search/src/dense/rescore.rs`, `crates/crible-store/src/segment.rs`).
+- **Machine** : MacBook Air M3, 8 cœurs, **24 Go**, macOS 15.7.7 (24G720), APFS, **natif**. Au moment
+  de cette série, la machine était plus chargée que pendant la campagne du 2026-10-27 : **swap occupé
+  7,2 à 7,7 Gio**, `mediaanalysisd`, Lightroom et `mds_stores` actifs. C'est ce qui explique les
+  écarts de répartition entre RSS et swap d'un état à l'autre, et cela ne change pas l'empreinte.
+- **Jeu de données** : `data/mes02/indexes/synth-large`, copie de mesure **en lecture seule**,
+  **7 740 000 vivants**, un segment de 8 600 000 vecteurs `f16` (13 209 600 000 octets, mappés en
+  lecture), `records.sqlite` de 3 758 346 240 octets. Codes binaires : 825 600 000 octets. Bitmaps et
+  colonnes : 361 661 936 octets. Mêmes valeurs que la campagne du 2026-10-27, donc les chiffres sont
+  comparables à mémoire possédée égale.
+
+### Protocole
+
+Deux variantes mesurées, `base` (`HEAD`) et `grouped` (option 1), par le même harnais `dense_latency
+rss` que MES-09, sur **300 requêtes à N = 1000, une passe**, plus un échantillonnage de RSS pendant
+l'exécution du rescoring à N = 5000 :
+
+```
+data/grouper-vecteurs/bin/base/dense_latency rss --data data/mes02 --index synth-large \
+    --vectors data/mes02/queries.f32 --passes 1 --out data/grouper-vecteurs/raw/rss-base.json
+data/grouper-vecteurs/bin/grouped/dense_latency rss --data data/mes02 --index synth-large \
+    --vectors data/mes02/queries.f32 --passes 1 --out data/grouper-vecteurs/raw/rss-grouped.json
+data/grouper-vecteurs/bin/grouped/rescore_ab measure --data data/mes02 --index synth-large \
+    --vectors data/mes02/queries.f32 --ns 5000 --passes 1 --queries 30 --sample-rss \
+    --out data/grouper-vecteurs/raw/rss-run-grouped-5000.json
+```
+
+Trois états, lus par `/usr/bin/vmmap -summary` sur le processus lui-même et complétés par `ps -o
+rss=`, comme dans la campagne du 2026-10-27 : **après l'ouverture** (instantané chargé, aucune
+requête), **après la construction du searcher** (codes binaires en RAM), **après la passe** (régime).
+**Mémoire anonyme = RSS de `ps` − pages `mapped file` de `vmmap`** ; l'empreinte (`Physical
+footprint`) est rapportée à côté, parce qu'elle reste stable quand des pages partent au swap.
+
+### Résultats
+
+| État | variante | RSS | anonyme | pages de fichier | swap | empreinte |
+|---|---|---:|---:|---:|---:|---:|
+| après l'ouverture | `base` | 1 148 Mio | 1 148 Mio | 0 Mio | 0 Mio | 1 126 Mio |
+| après l'ouverture | `grouped` | 859 Mio | 859 Mio | 0 Mio | 290 Mio | 1 126 Mio |
+| après le searcher | `base` | 445 Mio | 445 Mio | 0 Mio | 646 Mio | 1 126 Mio |
+| après le searcher | `grouped` | 41 Mio | 41 Mio | 0 Mio | 1 107 Mio | 1 126 Mio |
+| après la passe | `base` | 4 938 Mio | **842 Mio** | 4 096 Mio | 316 Mio | **1 126 Mio** |
+| après la passe | `grouped` | 4 943 Mio | **847 Mio** | 4 096 Mio | 325 Mio | **1 126 Mio** |
+
+**La mémoire possédée ne bouge pas.** À l'état de régime, l'anonyme vaut 842 Mio pour `base` et
+847 Mio pour `grouped` — 5 Mio d'écart, soit 0,6 %, à comparer aux 316 et 325 Mio de swap : la
+différence est dans le bruit de la pression mémoire, pas dans une allocation. L'empreinte physique est
+**identique au Mio près, 1 126 Mio (1,10 Gio) dans les six états**, y compris quand le RSS chute à
+41 Mio parce que 1 107 Mio sont partis au swap. C'est la même lecture que la campagne du 2026-10-27 :
+seule l'empreinte est stable, et un dimensionnement qui compterait le RSS total (4 938 Mio, dont
+4 096 Mio de pages de fichier reprenables) se tromperait d'un facteur 4.
+
+Le tampon transitoire de l'option 1 — **7,7 Mio à N = 5000** (5 000 × 1 536 octets) — n'est pas
+visible dans ces chiffres, et la section le déclare : il est libéré avant le tri, donc absent de
+l'état « après la passe », et l'échantillonnage de `ps` pendant une exécution de 30 requêtes à
+N = 5000 ne le résout pas. Les maxima relevés valent 2 975 Mio pour `base` et 2 992 Mio pour
+`grouped`, au-dessus d'un premier échantillon de 720 et 1 074 Mio : l'écart de 17 Mio est dominé par
+la croissance des pages de fichier (2 255 et 1 918 Mio), et **la mesure ne sépare pas l'anonyme du
+fichier à cette résolution** (période 100 ms, 37 et 19 échantillons). La preuve demandée par
+ADR-0080 porte sur la mémoire possédée, et elle est faite ; la trace du tampon dans le RSS anonyme
+reste établie par le code, pas par cette mesure.
+
+### Conclusion
+
+- **La variante groupée ne coûte pas de mémoire possédée** : 847 Mio d'anonyme contre 842 pour `base`
+  après une passe de 300 requêtes à N = 1000, et **1 126 Mio d'empreinte dans les deux cas**.
+- **Les chiffres de dimensionnement de MES-09 restent valables** : 1,10 à 1,12 Gio possédés par index
+  de 7,74 M passages servis par `synth-large`, auxquels s'ajoutent 4,10 Gio de pages de fichier que
+  le système peut reprendre — et qui expliquent la latence froide mesurée dans MES-03.
+- **Le tampon de 7,7 Mio n'est pas mesuré**, seulement borné par le code et par sa taille de calcul.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la mémoire d'un index à plusieurs segments, après compaction, ni celle d'un index lexical ;
+- le RSS en conteneur (P8) ;
+- la trace du tampon transitoire dans le RSS anonyme, non résolue par `ps` sous 2 Gio de croissance
+  de pages de fichier.

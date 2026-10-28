@@ -570,17 +570,46 @@ impl SegmentReader {
     /// [`Self::vector`] refuses it.
     pub fn vector_f16(&self, iid: Iid) -> Result<Vec<f16>, CribleError> {
         let index = self.index_or_error(iid)?;
-        if self.meta.precision != ReferencePrecision::Fp16 {
-            return Err(CribleError::new(
-                ErrorCode::Internal,
-                format!(
-                    "segment {} stores {} components where f16 components were asked for",
-                    self.meta.segment_id,
-                    precision_name(self.meta.precision)
-                ),
-            ));
-        }
+        self.check_f16_precision()?;
         decode_vector_f16(self.row_bytes(index)?)
+    }
+
+    /// Copies the reference vector of `iid` into `out`, as the `f16` components
+    /// the segment stores.
+    ///
+    /// This is [`Self::vector_f16`] without the allocation: the caller owns the
+    /// buffer, so a batched read can fill one buffer with many rows and free it
+    /// once, instead of paying one `Vec` per row (ADR-0080, decision 2). The
+    /// components are the same bytes, decoded the same way, so the kernel reads
+    /// exactly what [`Self::vector_f16`] would have handed it.
+    ///
+    /// `out` must hold exactly one component per dimension of the segment: a
+    /// buffer of another length is an [`ErrorCode::Internal`] error, because the
+    /// caller and the segment then disagree on the row width. The `fp32`
+    /// reference and the identifier outside the range are refused exactly as
+    /// [`Self::vector_f16`] refuses them.
+    pub fn vector_f16_into(&self, iid: Iid, out: &mut [f16]) -> Result<(), CribleError> {
+        let index = self.index_or_error(iid)?;
+        self.check_f16_precision()?;
+        decode_vector_f16_into(self.row_bytes(index)?, out)
+    }
+
+    /// Refuses an `fp32` segment to a caller that asks for `f16` components.
+    ///
+    /// No lossless conversion to `f16` exists, so an `fp32` segment answering an
+    /// `f16` read contradicts the metadata of the segment the caller opened.
+    fn check_f16_precision(&self) -> Result<(), CribleError> {
+        if self.meta.precision == ReferencePrecision::Fp16 {
+            return Ok(());
+        }
+        Err(CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "segment {} stores {} components where f16 components were asked for",
+                self.meta.segment_id,
+                precision_name(self.meta.precision)
+            ),
+        ))
     }
 
     /// Returns the binary code of `iid`: `ceil(dims / 64)` words, bit `i` set
@@ -1048,6 +1077,18 @@ fn encode_component(buffer: &mut Vec<u8>, precision: ReferencePrecision, value: 
 /// and `row_bytes` guarantee `dims` two-byte components, so the iterator never
 /// meets a short chunk.
 fn decode_vector_f16(bytes: &[u8]) -> Result<Vec<f16>, CribleError> {
+    let mut vector = vec![f16::ZERO; bytes.len() / 2];
+    decode_vector_f16_into(bytes, &mut vector)?;
+    Ok(vector)
+}
+
+/// Decodes a whole vector of `f16` components into a caller-owned buffer.
+///
+/// The caller checks the precision first: [`decode_vector_f16`] and `row_bytes`
+/// guarantee `dims` two-byte components, so the iterator never meets a short
+/// chunk. A buffer that does not hold exactly the components of the row is the
+/// caller's error, and is refused rather than silently truncated.
+fn decode_vector_f16_into(bytes: &[u8], out: &mut [f16]) -> Result<(), CribleError> {
     let (chunks, remainder) = bytes.as_chunks::<2>();
     if !remainder.is_empty() {
         return Err(CribleError::new(
@@ -1058,10 +1099,20 @@ fn decode_vector_f16(bytes: &[u8]) -> Result<Vec<f16>, CribleError> {
             ),
         ));
     }
-    Ok(chunks
-        .iter()
-        .map(|chunk| f16::from_bits(u16::from_le_bytes(*chunk)))
-        .collect())
+    if chunks.len() != out.len() {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            format!(
+                "a stored fp16 row holds {} components where the destination buffer holds {}",
+                chunks.len(),
+                out.len()
+            ),
+        ));
+    }
+    for (slot, chunk) in out.iter_mut().zip(chunks) {
+        *slot = f16::from_bits(u16::from_le_bytes(*chunk));
+    }
+    Ok(())
 }
 
 /// Name of a reference precision, as the configuration writes it.
