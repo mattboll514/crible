@@ -505,7 +505,7 @@ fn binary_pool_with_n_below_the_pool_returns_the_best_rescored_candidates() {
         "the scan must keep the N candidates the test asked for"
     );
     let rescored = searcher
-        .rescore(&query, &candidates)
+        .rescore(&query, &candidates, 5)
         .unwrap_or_else(|error| panic!("the rescoring must succeed: {error}"));
     let expected: Vec<(String, u32)> = rescored
         .iter()
@@ -655,7 +655,7 @@ fn a_binary_plan_keeps_max_of_n_and_k_candidates_and_returns_k_results() {
         "the scan must keep the max(N, k) candidates the plan reports"
     );
     let rescored = searcher
-        .rescore(&query, &candidates)
+        .rescore(&query, &candidates, k)
         .unwrap_or_else(|error| panic!("the rescoring must succeed: {error}"));
     let expected: Vec<(String, u32)> = rescored
         .iter()

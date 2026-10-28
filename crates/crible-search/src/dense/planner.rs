@@ -185,7 +185,12 @@ pub fn candidates(
         &code,
         usize::try_from(plan.rescore_candidates).unwrap_or(usize::MAX),
     )?;
-    let rescored = searcher.rescore(query, &candidates)?;
+    // `k` is what the caller consumes, so it is what the rescoring must cover:
+    // it reads the keys of the `k` best candidates and of the group of equal
+    // score that straddles them, and no other (ADR-0079, decision 3). The list it
+    // returns can be longer than `k` by that group, whose keys are ordered, so the
+    // truncation below keeps the smallest keys.
+    let rescored = searcher.rescore(query, &candidates, k)?;
     Ok(rescored.into_iter().take(k).collect())
 }
 

@@ -1,0 +1,658 @@
+{
+  "kind": "MES-03-profile",
+  "task": "REDUIRE-COUT-DES-CLES",
+  "date": "2026-10-27",
+  "commit": "1b1f28300159865b95d60bf95a93e2d97bd381e8",
+  "tool": "/usr/bin/sample, 20 s at 1 ms, on crates/crible/examples/rescore_profile.rs",
+  "build": "CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release --example rescore_profile",
+  "data": "data/mes02/indexes/synth-large, generation 2, epoch 1, 7740000 live passages, fp16, 768 dims",
+  "raw": "data/mes03/profile-*.json, sample-rescore-*.txt, order-*.json (gitignored)",
+  "warm_method": "untimed warm-up passes over the same queries, then one sampled loop; a point is warm when its run records warmup_passes > 0",
+  "points": [
+    {
+      "state": "froid",
+      "description": "cold state, 300 queries, one pass over the queries",
+      "source": "profile-1000.json",
+      "n": 1000,
+      "run": {
+        "n": 1000,
+        "k": 100,
+        "queries": 300,
+        "iterations": 186,
+        "ms_p50": 156.495708,
+        "ms_p95": 178.24337500000001,
+        "candidates_min": 1000,
+        "candidates_max": 1000,
+        "warmup_passes": 0,
+        "warmup_pass_ms": []
+      },
+      "total_samples": 15716,
+      "unattributed_samples": 0,
+      "seconds_sampled": 20,
+      "sample_interval_ms": 1,
+      "posts": [
+        {
+          "post": "key read: page reads (b-tree, pread)",
+          "samples": 9125,
+          "share": 0.580618,
+          "ms_p50": 90.8643
+        },
+        {
+          "post": "vector copy and decode (f16)",
+          "samples": 6220,
+          "share": 0.395775,
+          "ms_p50": 61.9371
+        },
+        {
+          "post": "key read: statement preparation",
+          "samples": 129,
+          "share": 0.008208,
+          "ms_p50": 1.2845
+        },
+        {
+          "post": "key read: locks",
+          "samples": 96,
+          "share": 0.006108,
+          "ms_p50": 0.9559
+        },
+        {
+          "post": "key read: row decoding and other",
+          "samples": 70,
+          "share": 0.004454,
+          "ms_p50": 0.697
+        },
+        {
+          "post": "dot product",
+          "samples": 33,
+          "share": 0.0021,
+          "ms_p50": 0.3286
+        },
+        {
+          "post": "key read: key formatting and String",
+          "samples": 19,
+          "share": 0.001209,
+          "ms_p50": 0.1892
+        },
+        {
+          "post": "other rescoring",
+          "samples": 10,
+          "share": 0.000636,
+          "ms_p50": 0.0996
+        },
+        {
+          "post": "key read: reset and finalize",
+          "samples": 8,
+          "share": 0.000509,
+          "ms_p50": 0.0797
+        },
+        {
+          "post": "outside the rescoring",
+          "samples": 5,
+          "share": 0.000318,
+          "ms_p50": 0.0498
+        },
+        {
+          "post": "sort",
+          "samples": 1,
+          "share": 6.4e-05,
+          "ms_p50": 0.01
+        }
+      ],
+      "groups": {
+        "key read": {
+          "samples": 9447,
+          "share": 0.601107
+        },
+        "vector copy and decode (f16)": {
+          "samples": 6220,
+          "share": 0.395775
+        },
+        "dot product": {
+          "samples": 33,
+          "share": 0.0021
+        },
+        "sort": {
+          "samples": 1,
+          "share": 6.4e-05
+        },
+        "other rescoring": {
+          "samples": 10,
+          "share": 0.000636
+        },
+        "outside the rescoring": {
+          "samples": 5,
+          "share": 0.000318
+        }
+      },
+      "order": {
+        "ascending_iid_pairs": 294478,
+        "descending_iid_pairs": 5222,
+        "distance_inversions": 0,
+        "distinct_iids": 294449,
+        "iid_inversions": 5222,
+        "mean_iid_step": 1601.9032165498832,
+        "pairs": 299700,
+        "queries": 300
+      }
+    },
+    {
+      "state": "froid",
+      "description": "cold state, 300 queries, one pass over the queries",
+      "source": "profile-5000.json",
+      "n": 5000,
+      "run": {
+        "n": 5000,
+        "k": 100,
+        "queries": 300,
+        "iterations": 38,
+        "ms_p50": 739.433542,
+        "ms_p95": 802.18125,
+        "candidates_min": 5000,
+        "candidates_max": 5000,
+        "warmup_passes": 0,
+        "warmup_pass_ms": []
+      },
+      "total_samples": 15729,
+      "unattributed_samples": 0,
+      "seconds_sampled": 20,
+      "sample_interval_ms": 1,
+      "posts": [
+        {
+          "post": "key read: page reads (b-tree, pread)",
+          "samples": 9942,
+          "share": 0.632081,
+          "ms_p50": 467.3818
+        },
+        {
+          "post": "vector copy and decode (f16)",
+          "samples": 5438,
+          "share": 0.345731,
+          "ms_p50": 255.645
+        },
+        {
+          "post": "key read: statement preparation",
+          "samples": 132,
+          "share": 0.008392,
+          "ms_p50": 6.2054
+        },
+        {
+          "post": "key read: locks",
+          "samples": 96,
+          "share": 0.006103,
+          "ms_p50": 4.513
+        },
+        {
+          "post": "key read: row decoding and other",
+          "samples": 55,
+          "share": 0.003497,
+          "ms_p50": 2.5856
+        },
+        {
+          "post": "key read: key formatting and String",
+          "samples": 23,
+          "share": 0.001462,
+          "ms_p50": 1.0812
+        },
+        {
+          "post": "dot product",
+          "samples": 17,
+          "share": 0.001081,
+          "ms_p50": 0.7992
+        },
+        {
+          "post": "key read: reset and finalize",
+          "samples": 10,
+          "share": 0.000636,
+          "ms_p50": 0.4701
+        },
+        {
+          "post": "other rescoring",
+          "samples": 10,
+          "share": 0.000636,
+          "ms_p50": 0.4701
+        },
+        {
+          "post": "outside the rescoring",
+          "samples": 5,
+          "share": 0.000318,
+          "ms_p50": 0.2351
+        },
+        {
+          "post": "sort",
+          "samples": 1,
+          "share": 6.4e-05,
+          "ms_p50": 0.047
+        }
+      ],
+      "groups": {
+        "key read": {
+          "samples": 10258,
+          "share": 0.652171
+        },
+        "vector copy and decode (f16)": {
+          "samples": 5438,
+          "share": 0.345731
+        },
+        "dot product": {
+          "samples": 17,
+          "share": 0.001081
+        },
+        "sort": {
+          "samples": 1,
+          "share": 6.4e-05
+        },
+        "other rescoring": {
+          "samples": 10,
+          "share": 0.000636
+        },
+        "outside the rescoring": {
+          "samples": 5,
+          "share": 0.000318
+        }
+      },
+      "order": {
+        "ascending_iid_pairs": 1492689,
+        "descending_iid_pairs": 7011,
+        "distance_inversions": 0,
+        "distinct_iids": 1364934,
+        "iid_inversions": 7011,
+        "mean_iid_step": 432.9887037407481,
+        "pairs": 1499700,
+        "queries": 300
+      }
+    },
+    {
+      "state": "chaud, campagne (300 requêtes)",
+      "description": "warm-up passes then a sampled loop, 300 queries as in ADR-0077",
+      "source": "profile-warm-1000.json",
+      "n": 1000,
+      "run": {
+        "n": 1000,
+        "k": 100,
+        "queries": 300,
+        "iterations": 657,
+        "ms_p50": 51.372875,
+        "ms_p95": 57.864458,
+        "candidates_min": 1000,
+        "candidates_max": 1000,
+        "warmup_passes": 4,
+        "warmup_pass_ms": [
+          150.22970899999999,
+          75.68825,
+          54.948875,
+          50.181125
+        ]
+      },
+      "total_samples": 15675,
+      "unattributed_samples": 0,
+      "seconds_sampled": 20,
+      "sample_interval_ms": 1,
+      "posts": [
+        {
+          "post": "key read: page reads (b-tree, pread)",
+          "samples": 14587,
+          "share": 0.93059,
+          "ms_p50": 47.8071
+        },
+        {
+          "post": "key read: locks",
+          "samples": 318,
+          "share": 0.020287,
+          "ms_p50": 1.0422
+        },
+        {
+          "post": "key read: statement preparation",
+          "samples": 286,
+          "share": 0.018246,
+          "ms_p50": 0.9373
+        },
+        {
+          "post": "key read: row decoding and other",
+          "samples": 228,
+          "share": 0.014545,
+          "ms_p50": 0.7472
+        },
+        {
+          "post": "vector copy and decode (f16)",
+          "samples": 109,
+          "share": 0.006954,
+          "ms_p50": 0.3572
+        },
+        {
+          "post": "dot product",
+          "samples": 53,
+          "share": 0.003381,
+          "ms_p50": 0.1737
+        },
+        {
+          "post": "key read: key formatting and String",
+          "samples": 46,
+          "share": 0.002935,
+          "ms_p50": 0.1508
+        },
+        {
+          "post": "key read: reset and finalize",
+          "samples": 19,
+          "share": 0.001212,
+          "ms_p50": 0.0623
+        },
+        {
+          "post": "outside the rescoring",
+          "samples": 13,
+          "share": 0.000829,
+          "ms_p50": 0.0426
+        },
+        {
+          "post": "other rescoring",
+          "samples": 10,
+          "share": 0.000638,
+          "ms_p50": 0.0328
+        },
+        {
+          "post": "sort",
+          "samples": 6,
+          "share": 0.000383,
+          "ms_p50": 0.0197
+        }
+      ],
+      "groups": {
+        "key read": {
+          "samples": 15484,
+          "share": 0.987815
+        },
+        "vector copy and decode (f16)": {
+          "samples": 109,
+          "share": 0.006954
+        },
+        "dot product": {
+          "samples": 53,
+          "share": 0.003381
+        },
+        "sort": {
+          "samples": 6,
+          "share": 0.000383
+        },
+        "other rescoring": {
+          "samples": 10,
+          "share": 0.000638
+        },
+        "outside the rescoring": {
+          "samples": 13,
+          "share": 0.000829
+        }
+      },
+      "order": {
+        "ascending_iid_pairs": 294478,
+        "descending_iid_pairs": 5222,
+        "distance_inversions": 0,
+        "distinct_iids": 294449,
+        "iid_inversions": 5222,
+        "mean_iid_step": 1601.9032165498832,
+        "pairs": 299700,
+        "queries": 300
+      }
+    },
+    {
+      "state": "chaud, campagne (300 requêtes)",
+      "description": "warm-up passes then a sampled loop, 300 queries as in ADR-0077",
+      "source": "profile-warm-5000.json",
+      "n": 5000,
+      "run": {
+        "n": 5000,
+        "k": 100,
+        "queries": 300,
+        "iterations": 61,
+        "ms_p50": 548.169208,
+        "ms_p95": 659.657334,
+        "candidates_min": 5000,
+        "candidates_max": 5000,
+        "warmup_passes": 2,
+        "warmup_pass_ms": [
+          637.469708,
+          500.768667
+        ]
+      },
+      "total_samples": 15720,
+      "unattributed_samples": 0,
+      "seconds_sampled": 20,
+      "sample_interval_ms": 1,
+      "posts": [
+        {
+          "post": "key read: page reads (b-tree, pread)",
+          "samples": 9268,
+          "share": 0.589567,
+          "ms_p50": 323.1827
+        },
+        {
+          "post": "vector copy and decode (f16)",
+          "samples": 6002,
+          "share": 0.381807,
+          "ms_p50": 209.2946
+        },
+        {
+          "post": "key read: statement preparation",
+          "samples": 150,
+          "share": 0.009542,
+          "ms_p50": 5.2306
+        },
+        {
+          "post": "key read: locks",
+          "samples": 124,
+          "share": 0.007888,
+          "ms_p50": 4.324
+        },
+        {
+          "post": "key read: row decoding and other",
+          "samples": 84,
+          "share": 0.005344,
+          "ms_p50": 2.9291
+        },
+        {
+          "post": "dot product",
+          "samples": 34,
+          "share": 0.002163,
+          "ms_p50": 1.1856
+        },
+        {
+          "post": "key read: key formatting and String",
+          "samples": 21,
+          "share": 0.001336,
+          "ms_p50": 0.7323
+        },
+        {
+          "post": "other rescoring",
+          "samples": 16,
+          "share": 0.001018,
+          "ms_p50": 0.5579
+        },
+        {
+          "post": "key read: reset and finalize",
+          "samples": 15,
+          "share": 0.000954,
+          "ms_p50": 0.5231
+        },
+        {
+          "post": "sort",
+          "samples": 3,
+          "share": 0.000191,
+          "ms_p50": 0.1046
+        },
+        {
+          "post": "outside the rescoring",
+          "samples": 3,
+          "share": 0.000191,
+          "ms_p50": 0.1046
+        }
+      ],
+      "groups": {
+        "key read": {
+          "samples": 9662,
+          "share": 0.614631
+        },
+        "vector copy and decode (f16)": {
+          "samples": 6002,
+          "share": 0.381807
+        },
+        "dot product": {
+          "samples": 34,
+          "share": 0.002163
+        },
+        "sort": {
+          "samples": 3,
+          "share": 0.000191
+        },
+        "other rescoring": {
+          "samples": 16,
+          "share": 0.001018
+        },
+        "outside the rescoring": {
+          "samples": 3,
+          "share": 0.000191
+        }
+      },
+      "order": {
+        "ascending_iid_pairs": 1492689,
+        "descending_iid_pairs": 7011,
+        "distance_inversions": 0,
+        "distinct_iids": 1364934,
+        "iid_inversions": 7011,
+        "mean_iid_step": 432.9887037407481,
+        "pairs": 1499700,
+        "queries": 300
+      }
+    },
+    {
+      "state": "chaud, résidente (40 requêtes)",
+      "description": "working set small enough to stay resident, same queries at every iteration",
+      "source": "profile-warm-1000-q40.json",
+      "n": 1000,
+      "run": {
+        "n": 1000,
+        "k": 100,
+        "queries": 40,
+        "iterations": 3973,
+        "ms_p50": 4.773666,
+        "ms_p95": 45.062917,
+        "candidates_min": 1000,
+        "candidates_max": 1000,
+        "warmup_passes": 6,
+        "warmup_pass_ms": [
+          136.862666,
+          4.906292,
+          6.907875,
+          4.799958,
+          4.682292,
+          4.599125
+        ]
+      },
+      "total_samples": 15637,
+      "unattributed_samples": 0,
+      "seconds_sampled": 20,
+      "sample_interval_ms": 1,
+      "posts": [
+        {
+          "post": "key read: page reads (b-tree, pread)",
+          "samples": 10721,
+          "share": 0.685617,
+          "ms_p50": 3.2729
+        },
+        {
+          "post": "key read: statement preparation",
+          "samples": 1509,
+          "share": 0.096502,
+          "ms_p50": 0.4607
+        },
+        {
+          "post": "key read: locks",
+          "samples": 1448,
+          "share": 0.092601,
+          "ms_p50": 0.442
+        },
+        {
+          "post": "key read: row decoding and other",
+          "samples": 799,
+          "share": 0.051097,
+          "ms_p50": 0.2439
+        },
+        {
+          "post": "vector copy and decode (f16)",
+          "samples": 461,
+          "share": 0.029481,
+          "ms_p50": 0.1407
+        },
+        {
+          "post": "key read: key formatting and String",
+          "samples": 233,
+          "share": 0.014901,
+          "ms_p50": 0.0711
+        },
+        {
+          "post": "dot product",
+          "samples": 201,
+          "share": 0.012854,
+          "ms_p50": 0.0614
+        },
+        {
+          "post": "key read: reset and finalize",
+          "samples": 125,
+          "share": 0.007994,
+          "ms_p50": 0.0382
+        },
+        {
+          "post": "other rescoring",
+          "samples": 59,
+          "share": 0.003773,
+          "ms_p50": 0.018
+        },
+        {
+          "post": "outside the rescoring",
+          "samples": 51,
+          "share": 0.003261,
+          "ms_p50": 0.0156
+        },
+        {
+          "post": "sort",
+          "samples": 30,
+          "share": 0.001919,
+          "ms_p50": 0.0092
+        }
+      ],
+      "groups": {
+        "key read": {
+          "samples": 14835,
+          "share": 0.948711
+        },
+        "vector copy and decode (f16)": {
+          "samples": 461,
+          "share": 0.029481
+        },
+        "dot product": {
+          "samples": 201,
+          "share": 0.012854
+        },
+        "sort": {
+          "samples": 30,
+          "share": 0.001919
+        },
+        "other rescoring": {
+          "samples": 59,
+          "share": 0.003773
+        },
+        "outside the rescoring": {
+          "samples": 51,
+          "share": 0.003261
+        }
+      },
+      "order": {
+        "ascending_iid_pairs": 39258,
+        "descending_iid_pairs": 702,
+        "distance_inversions": 0,
+        "distinct_iids": 39902,
+        "iid_inversions": 702,
+        "mean_iid_step": 1599.7357357357357,
+        "pairs": 39960,
+        "queries": 40
+      }
+    }
+  ]
+}
