@@ -81,13 +81,15 @@
 - **À lire** : `03-recherche.md` (fusion, pipeline).
 - **Livrables** :
   - les deux branches exécutées en parallèle sur le même pool ;
-  - les deux fusions : `rrf` (constante 60) et `relative_score` (min-max, α) ;
+  - les deux fusions : `rrf` (constante 60) et `relative_score` (min-max, α), avec la règle de la branche constante et le domaine de `alpha` (ADR-0090) ;
   - le rang et le score de chaque branche conservés pour chaque résultat ;
   - le `score_type` ;
   - les modes `dense`, `lexical` et `hybrid` dans la CLI.
 - **Critères d'acceptation** :
   - des tests unitaires de fusion sur des listes connues ;
   - un document présent dans une seule branche est traité correctement ;
+  - une branche dont tous les candidats ont le même score, y compris une branche à un seul candidat, donne 1 à chacun d'eux, et une branche vide ne contribue rien (ADR-0090) ;
+  - `alpha` hors de `[0, 1]`, `NaN` ou infini est refusé en `invalid_request` (400) à la création de l'index, au `PATCH` et par requête (ADR-0090) ;
   - le regroupement s'applique bien après la fusion.
 
 ### MESURER-LEXICAL

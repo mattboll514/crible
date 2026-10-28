@@ -100,8 +100,8 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 - **Les deux branches utilisent le même pool** (INV-05). Chacune sort ses `candidates_per_branch` meilleurs résultats, calculés par la même règle partagée (ADR-0075).
 - **`rrf`** : score = Σ 1 / (60 + rang), avec un rang qui commence à 1.
 - **`relative_score`** :
-  - chaque branche est normalisée min-max sur ses propres candidats ;
-  - score fusionné = α·dense + (1−α)·lexical ;
+  - chaque branche est normalisée min-max sur ses propres candidats, et **une branche constante** — tous ses candidats au même score, y compris une branche à un seul candidat — donne la valeur normalisée **1** à chacun d'eux ; une branche sans candidat ne contribue rien (ADR-0090). Une branche constante à 0 rendrait indiscernable « présent » de « absent » ;
+  - score fusionné = α·dense + (1−α)·lexical, avec `alpha ∈ [0, 1]`, bornes comprises, et une valeur finie ; toute autre valeur est refusée en `invalid_request` (400), à la création de l'index, au `PATCH` et par requête (ADR-0090). α = 0 sert le lexical seul, α = 1 le dense seul ;
   - un document absent d'une branche y vaut 0.
 - **Défaut par index** : `rrf`, qui n'a rien à régler. On peut le changer par requête, et choisir le réglage par défaut avec MES-10.
 - **Pour le debug**, on conserve le rang et le score de chaque résultat dans chaque branche.

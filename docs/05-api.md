@@ -28,7 +28,7 @@ Format unique :
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente ou inconnue |
 | `forbidden` | 403 | Rôle insuffisant |
@@ -160,7 +160,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `mode` | `dense` · `lexical` · `hybrid` | `hybrid` si le lexical est activé, sinon `dense` | Branches à exécuter |
 | `filter` | objet | aucun | Voir la grammaire ci-dessus |
 | `k` | 1 à 1000 | 10 | Nombre de résultats ; sous `group_by: "document"`, nombre de documents distincts (ADR-0075) |
-| `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride |
+| `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride ; `alpha ∈ [0, 1]`, bornes comprises et valeur finie, refusé en `invalid_request` hors de ce domaine (ADR-0090) |
 | `group_by` | `"document"` ou null | null | Regroupement par document |
 | `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé ; il est validé même sans `group_by`, où il est sans effet (ADR-0075) |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |

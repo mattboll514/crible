@@ -71,6 +71,14 @@ Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la con
 
 Aucune autre valeur n'est acceptée, et aucune normalisation n'est faite en silence : `"FR"`, `"Fr"`, `" fr"`, `"français"`, `"French"` et `""` sont refusés avec `invalid_request` (400). La valeur stockée dans `index.json` est donc toujours la forme canonique. La table d'ADR-0086 nomme pour chaque code la variante tantivy, la présence du stemmer et celle d'une liste de mots vides : `ar`, `el`, `ro`, `ta` et `tr` n'en ont pas, et leur chaîne d'analyse omet `StopWordFilter`. Un `PATCH` accepté sur ce réglage déclenche un job de reconstruction du lexical, comme les autres réglages de `lexical.*`.
 
+Parmi les réglages de `search`, `fusion` a lui aussi un **domaine** depuis ADR-0090 :
+
+| Réglage | Domaine | Défaut |
+|---|---|---|
+| `search.fusion.alpha` | `∈ [0, 1]`, bornes comprises, valeur finie | aucun : `fusion` vaut `rrf` par défaut, et `alpha` n'est lu qu'avec `method: "relative_score"`, où il reste obligatoire |
+
+Une valeur hors de ce domaine — négative, supérieure à 1, `NaN` ou infinie — est refusée avec `invalid_request` (400), avec un message qui nomme le chemin JSON fautif. Le refus vaut aux trois points d'entrée du réglage : la création de l'index, le `PATCH` de `search.fusion` et la requête (`fusion.alpha`), où le code d'erreur est celui du « paramètre hors bornes » de `docs/05`. Un seul contrôle vit dans `crible-core`, appelé depuis `FusionConfig::from_value` sur le modèle de `check_lexical_language`, et il est réutilisé tel quel pour la requête.
+
 Parmi les réglages de `search`, `exact_threshold` est **optionnelle** dans `index.json` (ADR-0074). Absente à la création de l'index, elle prend la valeur de `rescore_candidates` à ce moment, et cette valeur est écrite dans la configuration stockée : elle se lit ensuite comme une valeur explicite. Un `PATCH` ultérieur de `rescore_candidates` ne déplace pas le seuil ; seul un `PATCH` de `exact_threshold` le change. Ce réglage n'a pas de domaine au sens d'`ingest.*` : tout entier de `0` à `u32::MAX` est accepté, sans nouvelle erreur.
 
 ## Le modèle
