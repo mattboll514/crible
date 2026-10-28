@@ -55,7 +55,7 @@ use std::path::{Path, PathBuf};
 
 use arrow::array::{Array, FixedSizeBinaryArray, RecordBatch, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, SchemaRef};
-use crible_core::batch::{BatchManifest, classify_files, parse_checksum};
+use crible_core::batch::{BatchManifest, VectorDtype, classify_files, parse_checksum};
 use crible_core::config::{FieldLevel, FieldType, IndexConfig, ReferencePrecision, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::ModelConfig;
@@ -730,11 +730,11 @@ pub(crate) fn vector_width(dims: u32, precision: ReferencePrecision) -> usize {
 }
 
 /// Wire name of a vector precision, for error messages.
+///
+/// The single definition of the wire name is [`VectorDtype::as_str`], which the
+/// batch manifest already writes: the store does not repeat the mapping.
 fn precision_name(precision: ReferencePrecision) -> &'static str {
-    match precision {
-        ReferencePrecision::Fp16 => "fp16",
-        ReferencePrecision::Fp32 => "fp32",
-    }
+    VectorDtype::from_reference_precision(precision).as_str()
 }
 
 /// Decodes one little-endian component; nothing is read through a

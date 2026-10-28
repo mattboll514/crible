@@ -49,8 +49,8 @@
 //!
 //! # The delta of a commit
 //!
-//! [`FilterIndex::after_commit`] receives the delta the transaction has just
-//! written, as [`CommitDelta`] (ADR-0066): the passages it created, the
+//! `FilterIndex::after_commit` receives the delta the transaction has just
+//! written, as `CommitDelta` (ADR-0066): the passages it created, the
 //! documents whose row it rewrote, the passages it tombstoned, and the
 //! documents it removed. Re-reading those rows by generation stamp
 //! (`created_generation`, `updated_generation`) would make the commit cost a
@@ -68,7 +68,7 @@
 //!
 //! # Update in copy on write
 //!
-//! [`FilterIndex::after_commit`] derives the structures of generation G+1 from
+//! `FilterIndex::after_commit` derives the structures of generation G+1 from
 //! those of G plus that delta. Each bitmap sits behind an `Arc`, and each column
 //! is a sequence of `Arc` blocks, so a value no change touches is shared
 //! between the two generations instead of being copied: a reader holding the
@@ -187,7 +187,7 @@ pub(crate) struct CommitDelta {
 /// The filter structures of one generation.
 ///
 /// Built by [`FilterIndex::from_records`] at creation and at startup, then
-/// derived one generation at a time by [`FilterIndex::after_commit`].
+/// derived one generation at a time by `FilterIndex::after_commit`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FilterIndex {
     schema: Schema,

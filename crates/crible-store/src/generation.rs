@@ -33,7 +33,7 @@
 //! prepares them: a segment stays invisible until step 1 references it, which
 //! is what makes an abandoned one an orphan that recovery removes.
 //!
-//! [`GenerationStore::commit_with_rows`] runs the same protocol and lets the
+//! `GenerationStore::commit_with_rows` runs the same protocol and lets the
 //! caller append its own rows (the attach writes the `batches` row there) to
 //! step 1, still inside the single commit point. It also returns the time spent
 //! in each of its post-write steps, which the attach reports (`docs/04`).
@@ -61,16 +61,21 @@
 //!
 //! The snapshot carries the metadata of its segments, their **binary codes in
 //! RAM** and the filter structures of its generation ([`FilterIndex`])
-//! (`docs/02-architecture.md`, "Concurrence"; ADR-0043). It never opens a vector
-//! file: the codes are read from `codes.bin`, or quantized in RAM when the file
-//! is missing, so the snapshot never pays the checksum read of
-//! `SegmentReader::open`. The arrays are shared between successive snapshots by
-//! segment identifier: a segment is immutable, so a commit reuses the codes of
-//! every segment it keeps instead of reading them again.
+//! (`docs/02-architecture.md`, "Concurrence"; ADR-0043). While `codes.bin` is
+//! present — the normal state, because the writer open rebuilds it — the codes
+//! are read from that file and no vector file is opened, so the snapshot pays no
+//! checksum read of `SegmentReader::open`. A missing file has one fallback, in
+//! `crate::codes::load_codes`: the reference vectors are read through a
+//! `SegmentReader`, checksum included, and quantized in RAM. A read-only open
+//! takes that fallback for an index no write open has rebuilt yet (ADR-0069,
+//! decision 2), and writes nothing. The arrays are shared between successive
+//! snapshots of the same epoch by segment identifier: a segment is immutable, so
+//! a commit reuses the codes of every segment it keeps, and a shared array is
+//! used only after its length is checked against the segment metadata.
 //!
 //! The filter structures are built from `records.sqlite` at creation and at
 //! startup, then derived generation by generation in copy on write by
-//! [`FilterIndex::after_commit`] (ADR-0018, ADR-0019). The schema that describes
+//! `FilterIndex::after_commit` (ADR-0018, ADR-0019). The schema that describes
 //! which field is indexed, and how, therefore reaches the store when it is
 //! created or opened: the reference state holds the values, not the schema.
 
@@ -565,12 +570,16 @@ impl GenerationStore {
         })
     }
 
-    /// Opens an existing index and runs the recovery of INV-04, then publishes
-    /// the snapshot of the committed generation.
+    /// Opens an existing index for a **write** and runs the recovery of INV-04,
+    /// then publishes the snapshot of the committed generation.
     ///
     /// Recovery removes every `tmp-*` entry and every segment directory SQLite
-    /// does not reference, and rewrites the manifest of the current generation
-    /// when it is missing. It is idempotent: a second open changes nothing.
+    /// does not reference, rewrites the manifest of the current generation
+    /// when it is missing, and rebuilds every `codes.bin` a segment is missing
+    /// (`ADR-0069`, decision 1). It is idempotent: a second open changes
+    /// nothing. A caller that only reads uses
+    /// [`GenerationStore::open_read_only`], which does the same recovery without
+    /// writing a `codes.bin`.
     ///
     /// `schema` is the schema of the index configuration, as for
     /// [`GenerationStore::create`]: the filter structures of the committed
@@ -585,6 +594,35 @@ impl GenerationStore {
     /// and is refused with [`ErrorCode::InvalidRequest`], before anything is
     /// removed from it.
     pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
+        Self::open_index(index_dir, schema, true)
+    }
+
+    /// Opens an existing index for a **read**: same recovery as
+    /// [`GenerationStore::open`], but no derived **segment** file is written
+    /// under the epoch.
+    ///
+    /// The only difference is the reconstruction of `codes.bin`
+    /// (`ADR-0069`, decision 1), which only a write open runs: here a missing
+    /// file stays missing, and `crate::codes::load_codes` quantizes the codes
+    /// from the reference vectors into RAM. A read therefore never writes a
+    /// segment file of the epoch it reads (`ADR-0056`; `ADR-0069`, decision 2),
+    /// which is what `crible search` and `crible inspect` require. Recovery still
+    /// removes the `tmp-*` entries and the unreferenced segments, and still
+    /// rewrites a **missing manifest**, as it does for the write open (the
+    /// manifest is a derived file of the generation, not of a segment): that
+    /// behaviour is not changed here.
+    pub fn open_read_only(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
+        Self::open_index(index_dir, schema, false)
+    }
+
+    /// Shared body of [`GenerationStore::open`] and
+    /// [`GenerationStore::open_read_only`]: `rebuild_codes` is the only
+    /// difference between the two.
+    fn open_index(
+        index_dir: &Path,
+        schema: &Schema,
+        rebuild_codes: bool,
+    ) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
         check_declared_schema(index_dir, schema)?;
         let epoch_dir = epoch_directory(index_dir, epoch);
@@ -605,7 +643,9 @@ impl GenerationStore {
         }
 
         recover(&records, index_dir, &epoch_dir)?;
-        rebuild_missing_codes(&records, &epoch_dir)?;
+        if rebuild_codes {
+            rebuild_missing_codes(&records, &epoch_dir)?;
+        }
         let lease = Arc::new(EpochLease { epoch });
         let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
@@ -1154,9 +1194,11 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CribleError> {
 /// Every `tmp-*` entry is removed, including a residual `tmp-<segment_id>` that
 /// would make [`SegmentWriter::create`](crate::segment::SegmentWriter) fail on
 /// the next attempt with the same identifier, and a residual
-/// `tmp-CURRENT_EPOCH` that an interrupted creation left in `index_dir`. Every
-/// segment directory absent from the `segments` table is removed too: SQLite
-/// never referenced it, so it belongs to a generation that was never committed
+/// `tmp-CURRENT_EPOCH` that an interrupted creation left in `index_dir`. The
+/// `tmp-codes.bin` of a referenced segment is removed too: it lives inside the
+/// segment directory, which the sweep of `segments/` does not enter. Every
+/// segment directory absent from the `segments` table is removed: SQLite never
+/// referenced it, so it belongs to a generation that was never committed
 /// (ADR-0016).
 ///
 /// The caller has read `CURRENT_EPOCH` before calling this, so a directory that
@@ -1192,6 +1234,9 @@ fn recover(records: &RecordStore, index_dir: &Path, epoch_dir: &Path) -> Result<
         };
         let temporary = name.starts_with(TEMPORARY_PREFIX);
         if !temporary && referenced.iter().any(|id| id == name) {
+            // A referenced segment stays, but an interrupted rebuild may have
+            // left its `tmp-codes.bin` inside it.
+            codes::remove_temporary_codes(&path)?;
             continue;
         }
         remove_entry(&path)?;
@@ -1294,11 +1339,14 @@ fn check_generation_matches(
 /// it. The filter structures are rebuilt from every row of `passages` and
 /// `documents`, following `schema` (ADR-0018, ADR-0019).
 ///
-/// The binary codes are read from `codes.bin` into RAM. No vector file is opened
-/// here, so the snapshot does not pay the blake3 read of `SegmentReader::open`:
-/// the writer open rebuilds a missing `codes.bin` before this point
-/// (`rebuild_missing_codes`), and [`crate::codes::load_codes`] falls back to the
-/// vectors only for an index that a write open never touched.
+/// The binary codes are read from `codes.bin` into RAM, through
+/// `crate::codes::load_codes`. As long as that file is present no vector file
+/// is opened here, so the snapshot does not pay the blake3 read of
+/// `SegmentReader::open`: the writer open rebuilds a missing `codes.bin` before
+/// this point (`rebuild_missing_codes`). When the file is missing — an index a
+/// write open never touched, or a read-only open after a restore — the same
+/// loader reads the reference vectors through a `SegmentReader`, checksum
+/// included, and quantizes them in RAM.
 fn build_snapshot(
     records: &RecordStore,
     epoch_dir: &Path,
@@ -1306,7 +1354,7 @@ fn build_snapshot(
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     let segments = segments_of(records, epoch_dir)?;
-    let codes = snapshot_codes(&segments, epoch_dir, None)?;
+    let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, None)?;
     Ok(Snapshot {
         generation: records.meta()?.generation,
         segments,
@@ -1347,7 +1395,7 @@ fn build_snapshot_after_commit(
     let segments = segments_of(records, epoch_dir)?;
     // A segment is immutable: the arrays of the previous snapshot are reused
     // through `Arc`, so a commit reads only the codes of the segments it adds.
-    let codes = snapshot_codes(&segments, epoch_dir, Some(previous))?;
+    let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, Some(previous))?;
     Ok(Snapshot {
         generation,
         segments,
@@ -1361,18 +1409,25 @@ fn build_snapshot_after_commit(
 /// every segment it already holds.
 ///
 /// A segment never changes inside an epoch, so an array of the previous snapshot
-/// is the right one for the next: the clone of an [`Arc`] costs no read. The
-/// caller passes `previous` only when both snapshots read the same epoch; after a
-/// compaction the segments are new and the codes are read from the new epoch.
+/// is the right one for the next: the clone of an [`Arc`] costs no read. Two
+/// guards make the sharing safe rather than assumed. The previous snapshot must
+/// read **the same epoch** as `epoch`: identifiers are only unique inside an
+/// epoch, and after a compaction the same identifier may name another segment.
+/// And the shared array must hold `count × words_per_code(dims)` words, the
+/// length the segment metadata declares; an array of another length is not the
+/// one this segment needs, so it is read again instead of shared.
 fn snapshot_codes(
     segments: &[SegmentMeta],
     epoch_dir: &Path,
+    epoch: Epoch,
     previous: Option<&Snapshot>,
 ) -> Result<Vec<Arc<Vec<u64>>>, CribleError> {
     let segments_dir = segments_directory(epoch_dir);
+    let shareable = previous.filter(|snapshot| snapshot.epoch() == epoch);
     let mut codes = Vec::with_capacity(segments.len());
     for meta in segments {
-        if let Some(shared) = previous.and_then(|snapshot| snapshot.shared_codes(&meta.segment_id))
+        if let Some(shared) = shareable.and_then(|snapshot| snapshot.shared_codes(&meta.segment_id))
+            && Some(shared.len()) == expected_code_words(meta)
         {
             codes.push(Arc::clone(shared));
             continue;
@@ -1383,6 +1438,18 @@ fn snapshot_codes(
         )?));
     }
     Ok(codes)
+}
+
+/// Number of `u64` words the codes of `meta` hold:
+/// `count × words_per_code(dims)`.
+///
+/// `None` when the product does not fit in a `usize`: no segment that opened
+/// can reach it, and the caller then reads the codes again instead of sharing
+/// an array whose length it cannot compare.
+fn expected_code_words(meta: &SegmentMeta) -> Option<usize> {
+    usize::try_from(meta.count)
+        .ok()?
+        .checked_mul(codes::words_per_code(meta.dims))
 }
 
 /// Metadata of the segments the reference state references, in `iid_start`
@@ -1460,7 +1527,7 @@ mod tests {
         CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationChange, GenerationStore,
         INDEX_CONFIG_FILE_NAME, RECORDS_FILE_NAME, read_current_epoch,
     };
-    use crible_core::config::Schema;
+    use crible_core::config::{ReferencePrecision, Schema};
     use crible_core::error::ErrorCode;
     use crible_core::ids::{Epoch, Generation, Iid};
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
@@ -2383,6 +2450,65 @@ mod tests {
             ErrorCode::InvalidRequest,
             "wrong error code: {}",
             error.message()
+        );
+    }
+
+    /// The codes of a snapshot of another epoch are never shared, even when the
+    /// segment identifier matches and the array has the right length: an
+    /// identifier is only unique inside one epoch.
+    ///
+    /// The length guard is not reachable from the public API — a shared array is
+    /// always built from the metadata of the same segment — so only the epoch
+    /// guard has a test; the length check stays the defensive half.
+    #[test]
+    fn snapshot_codes_does_not_share_arrays_across_epochs() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let store = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .expect("the index is created");
+        let epoch_dir = super::epoch_directory(&index, Epoch::new(1));
+        let segments = super::segments_directory(&epoch_dir);
+        fs::create_dir_all(&segments).expect("the segments directory is created");
+        let spec = crate::segment::SegmentSpec {
+            segment_id: "seg-shared".to_owned(),
+            iid_start: Iid::new(0),
+            dims: 64,
+            generation: Generation::new(1),
+            batch_id: "batch-shared".to_owned(),
+            precision: ReferencePrecision::Fp16,
+        };
+        let mut writer = crate::segment::SegmentWriter::create(&segments, spec)
+            .expect("the segment writer starts");
+        let mut vector = vec![0.0_f32; 64];
+        vector[0] = 1.0;
+        writer.append(&vector).expect("the vector is appended");
+        let meta = writer.finish().expect("the segment is committed");
+
+        // A snapshot of another epoch holding the same identifier and an array
+        // of the right length, but all zeros: sharing it would be visible.
+        let base = store.snapshot();
+        let previous = super::Snapshot {
+            generation: base.generation(),
+            segments: vec![meta.clone()],
+            codes: vec![std::sync::Arc::new(vec![0_u64])],
+            filters: base.filters().clone(),
+            lease: std::sync::Arc::new(super::EpochLease {
+                epoch: Epoch::new(2),
+            }),
+        };
+
+        let shared = super::snapshot_codes(
+            std::slice::from_ref(&meta),
+            &epoch_dir,
+            Epoch::new(1),
+            Some(&previous),
+        )
+        .expect("the codes of the epoch are read");
+        assert_eq!(
+            shared[0].as_slice(),
+            &[1_u64],
+            "the codes of another epoch must not be shared"
         );
     }
 }

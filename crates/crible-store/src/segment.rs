@@ -52,6 +52,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use crible_core::batch::VectorDtype;
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Generation, Iid};
@@ -445,12 +446,17 @@ impl SegmentReader {
     /// verify its blake3 checksum, as the segment task requires ("a corrupted
     /// checksum is detected at open time"). At the scale of Legifacile that is
     /// about 13 GB per open. The policy is unchanged here: the generation
-    /// snapshot reads the metadata through `read_meta` and the binary codes from
-    /// `codes.bin`, and opens no vector file, so it never pays that cost. The
-    /// compaction and the export open segments only for their vectors, and the
-    /// codes stay unloaded. Deferring the verification itself (once per
-    /// generation, or only on recovery) stays an open question for a later
-    /// decision.
+    /// snapshot reads the metadata through `read_meta` and the binary codes
+    /// through `crate::codes::load_codes`, which reads `codes.bin` without
+    /// opening any vector file, so it never pays that cost while the file is
+    /// present. A **caller that opens this reader** pays it, by design: the
+    /// compaction and the export read reference vectors. `open` loads no code
+    /// array; only `SegmentReader::codes_words` does, on its first call, and a
+    /// caller that never asks for codes never pays for them. The loaded snapshot
+    /// of the process already holds the codes of every segment, including for
+    /// `crible export`, which builds the full snapshot of the generation.
+    /// Deferring the verification itself (once per generation, or only on
+    /// recovery) stays an open question for a later decision.
     pub fn open(segment_dir: &Path) -> Result<Self, CribleError> {
         let meta = read_meta(segment_dir)?;
         let precision = meta.precision;
@@ -620,6 +626,14 @@ impl SegmentReader {
     /// was missing (`ADR-0069`, decisions 1 and 2). An identifier outside the
     /// range of the segment is an [`ErrorCode::Internal`] error, for the same
     /// reason as [`Self::vector`].
+    ///
+    /// **The `Snapshot` owns the codes in production.** The binary scan reads
+    /// them through [`Snapshot::codes_of`](crate::generation::Snapshot::codes_of),
+    /// which holds one array per segment for the whole request (ADR-0043). No
+    /// production path calls this accessor: it exists for the `INV-15` tests,
+    /// which check the code of one `iid` of one segment directory, and it is
+    /// public for them only. A production caller would build a second copy of the
+    /// codes, one per reader, which the snapshot already avoids.
     pub fn codes(&self, iid: Iid) -> Result<&[u64], CribleError> {
         let Some(index) = self.index_of(iid) else {
             let end = u64::from(self.meta.iid_start.get()) + u64::from(self.meta.count);
@@ -685,17 +699,12 @@ impl SegmentReader {
     /// Loads the codes of the segment: from `codes.bin` when it is present,
     /// quantized from the mapped vectors otherwise.
     fn load_codes(&self) -> Result<Vec<u64>, CribleError> {
-        let path = self.segment_dir.join(CODES_FILE_NAME);
-        match fs::metadata(&path) {
-            Ok(_) => codes::read_codes_bin(&path, self.meta.count, self.meta.dims),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => self.quantize_vectors(),
-            Err(error) => Err(io_error("inspect the binary codes file", &path, &error)),
-        }
+        codes::load_codes(&self.segment_dir, &self.meta)
     }
 
     /// Quantizes every reference vector of the segment, in RAM, without writing
     /// anything under the epoch (`ADR-0069`, decision 2).
-    fn quantize_vectors(&self) -> Result<Vec<u64>, CribleError> {
+    pub(crate) fn quantize_vectors(&self) -> Result<Vec<u64>, CribleError> {
         let count = usize::try_from(self.meta.count).map_err(|_| {
             CribleError::new(
                 ErrorCode::Internal,
@@ -1116,11 +1125,12 @@ fn decode_vector_f16_into(bytes: &[u8], out: &mut [f16]) -> Result<(), CribleErr
 }
 
 /// Name of a reference precision, as the configuration writes it.
+///
+/// The single definition of the wire name is [`VectorDtype::as_str`]
+/// (`crates/crible-core/src/batch.rs`), which `manifest.json` already writes:
+/// the store does not repeat the mapping.
 fn precision_name(precision: ReferencePrecision) -> &'static str {
-    match precision {
-        ReferencePrecision::Fp16 => "fp16",
-        ReferencePrecision::Fp32 => "fp32",
-    }
+    VectorDtype::from_reference_precision(precision).as_str()
 }
 
 /// Decodes a whole vector from little-endian components.
@@ -1438,6 +1448,115 @@ mod tests {
 
         let error = reader
             .vector_f16(Iid::new(7))
+            .expect_err("an identifier outside the segment must be refused");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("outside the range"),
+            "the message must name the range: {}",
+            error.message()
+        );
+    }
+
+    /// The buffer form fills exactly the components [`SegmentReader::vector_f16`]
+    /// returns, so a batched read hands the kernel the same values.
+    #[test]
+    fn vector_f16_into_fills_the_buffer_like_vector_f16() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0], vec![-2.0, 0.0, 0.125, 3.0]],
+            4,
+            ReferencePrecision::Fp16,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let mut out = [half::f16::ZERO; 4];
+        reader
+            .vector_f16_into(Iid::new(1), &mut out)
+            .expect("the second row must fit the buffer");
+        assert_eq!(
+            out,
+            reader
+                .vector_f16(Iid::new(1))
+                .expect("the allocated form is readable")
+                .as_slice(),
+            "the buffer form must decode the same components"
+        );
+    }
+
+    /// A destination buffer of another length makes the caller and the segment
+    /// disagree on the row width: refused, never truncated or padded.
+    #[test]
+    fn vector_f16_into_refuses_a_buffer_of_another_length() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0]],
+            4,
+            ReferencePrecision::Fp16,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let mut out = [half::f16::ZERO; 3];
+        let error = reader
+            .vector_f16_into(Iid::new(0), &mut out)
+            .expect_err("a buffer of three components must not take a row of four");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("destination buffer"),
+            "the message must name the destination buffer: {}",
+            error.message()
+        );
+    }
+
+    /// An `fp32` segment refuses the buffer form exactly as the allocating form:
+    /// no lossless conversion to `f16` exists.
+    #[test]
+    fn vector_f16_into_refuses_an_fp32_segment() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0]],
+            4,
+            ReferencePrecision::Fp32,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let mut out = [half::f16::ZERO; 4];
+        let error = reader
+            .vector_f16_into(Iid::new(0), &mut out)
+            .expect_err("an fp32 reference has no f16 components to copy");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("fp32") && error.message().contains("f16"),
+            "the message must name both precisions: {}",
+            error.message()
+        );
+    }
+
+    /// A foreign identifier is refused by the buffer form, before the buffer is
+    /// looked at.
+    #[test]
+    fn vector_f16_into_refuses_a_foreign_iid() {
+        let (_dir, path) = write_segment(
+            &[vec![0.5_f32, -1.0, 0.25, 0.0]],
+            4,
+            ReferencePrecision::Fp16,
+        );
+        let reader = SegmentReader::open(&path).expect("the segment opens");
+
+        let mut out = [half::f16::ZERO; 4];
+        let error = reader
+            .vector_f16_into(Iid::new(7), &mut out)
             .expect_err("an identifier outside the segment must be refused");
         assert_eq!(
             error.code(),

@@ -99,7 +99,7 @@
 //!
 //! An `fp32` reference has no grouped path: its rows are wider, its calculation
 //! is already scalar, and ADR-0080 only decides the `f16` access. Those segments
-//! keep the per-candidate read of [`cosine`].
+//! keep the per-candidate read of `cosine`.
 
 use std::ops::Range;
 

@@ -21,8 +21,8 @@
 //! `codes.bin` or built in RAM because the file was missing (`ADR-0069`,
 //! decisions 1 and 2): an index restored from a snapshot, which never carries
 //! `codes.bin`, must report the same memory as the index it came from.
-//! `inspect` itself opens the index in write mode, so the recovery rebuilds the
-//! missing files before `state()` is read.
+//! `inspect` opens the index in read mode, so it never writes a missing
+//! `codes.bin`: the codes are quantized in RAM and the figure is the same.
 //!
 //! Assumed output of `crible inspect`, one line after the `bitmaps:` line:
 //!
@@ -30,10 +30,9 @@
 //!   codes: 384000 bytes
 //! ```
 //!
-//! Assumed API behind it: `Snapshot::codes_memory(&self) -> u64`, the sum of
+//! API behind it: `Snapshot::codes_memory(&self) -> u64`, the sum of
 //! `crible_store::codes::codes_len(count, dims)` over the segments of the
-//! generation, exposed as `IndexState::codes_memory: u64`. This file does not
-//! compile against that API until `@dev` provides it.
+//! generation, exposed as `IndexState::codes_memory: u64`.
 
 mod common;
 
@@ -166,6 +165,75 @@ fn inspect_reports_codes_memory_matching_written_codes() {
         "inspect must print the RAM held by the codes, {CODE_BYTES} bytes per passage \
          of {DIMS} dimensions (segments: {counts:?})"
     );
+}
+
+/// Every `codes.bin` the attached index holds, for the test that removes them.
+#[allow(clippy::panic)]
+fn codes_files(data: &Path) -> Vec<PathBuf> {
+    let epochs = data.join("indexes").join("synth-small").join("epochs");
+    let mut paths = Vec::new();
+    let entries = fs::read_dir(&epochs)
+        .unwrap_or_else(|error| panic!("{} must be listable: {error}", epochs.display()));
+    for entry in entries {
+        let entry =
+            entry.unwrap_or_else(|error| panic!("an epoch entry must be readable: {error}"));
+        let segments = entry.path().join("segments");
+        if !segments.is_dir() {
+            continue;
+        }
+        let segments = fs::read_dir(&segments)
+            .unwrap_or_else(|error| panic!("{} must be listable: {error}", segments.display()));
+        for segment in segments {
+            let segment =
+                segment.unwrap_or_else(|error| panic!("a segment entry must be readable: {error}"));
+            let codes = segment.path().join("codes.bin");
+            if codes.is_file() {
+                paths.push(codes);
+            }
+        }
+    }
+    paths
+}
+
+/// `inspect` is a read of the store (ADR-0056): it reports the codes memory of
+/// an index whose `codes.bin` are missing, without writing them back
+/// (`ADR-0069`, decision 2).
+#[test]
+fn inspect_does_not_write_a_missing_codes_file() {
+    let dataset = synth_root();
+    require_synth(&dataset);
+    let (_temp, data, models) = prepare_data();
+
+    let before = inspect_one_batch(&data, &models, &dataset);
+    let (memory, counts) = codes_line(&before);
+
+    let files = codes_files(&data);
+    assert!(
+        !files.is_empty(),
+        "the attached batch must have written at least one codes.bin"
+    );
+    for file in &files {
+        fs::remove_file(file).unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+    }
+
+    let after = run(&["inspect", "--data", path(&data), "--index", "synth-small"]);
+    let (memory_after, counts_after) = codes_line(&after);
+    assert_eq!(
+        memory_after, memory,
+        "inspect must report the same codes memory whether the codes come from the file \
+         or from the vectors"
+    );
+    assert_eq!(
+        counts_after, counts,
+        "inspect must report the same segments as before"
+    );
+    for file in &files {
+        assert!(
+            !file.exists(),
+            "inspect must not rebuild {}: a read writes nothing under the epoch",
+            file.display()
+        );
+    }
 }
 
 #[test]

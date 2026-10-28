@@ -102,6 +102,7 @@ use arrow::array::{
     StringArray, UInt32Array,
 };
 use crible_core::batch::BatchMode;
+use crible_core::batch::VectorDtype;
 use crible_core::config::{
     FieldLevel, FieldType, IndexConfig, IngestConfig, ReferencePrecision, Schema,
 };
@@ -1333,11 +1334,11 @@ fn decode_vector(bytes: &[u8], precision: ReferencePrecision) -> Result<Vec<f32>
 }
 
 /// Wire name of a precision for error messages.
+///
+/// The single definition of the wire name is [`VectorDtype::as_str`], which the
+/// batch manifest already writes: the store does not repeat the mapping.
 fn precision_name(precision: ReferencePrecision) -> &'static str {
-    match precision {
-        ReferencePrecision::Fp16 => "fp16",
-        ReferencePrecision::Fp32 => "fp32",
-    }
+    VectorDtype::from_reference_precision(precision).as_str()
 }
 
 /// Borrows one required non-null string value.

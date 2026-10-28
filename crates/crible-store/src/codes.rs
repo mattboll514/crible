@@ -43,10 +43,15 @@ use std::path::Path;
 
 use crible_core::error::{CribleError, ErrorCode};
 
+use crate::generation::stop_at_failpoint;
 use crate::segment::{self, SegmentReader, io_error, sync_directory};
 
 /// Name of the binary-code file of a segment directory.
 pub const CODES_FILE_NAME: &str = "codes.bin";
+
+/// Failpoint step of an interrupted rebuild, read from `CRIBLE_FAILPOINT` in a
+/// `failpoints` build (`ADR-0069`; see [`rebuild_codes`]).
+pub(crate) const CODES_REBUILD_FAILPOINT: &str = "codes_rebuild_before_rename";
 
 /// Prefix of the temporary file a rebuild writes before its rename.
 ///
@@ -155,12 +160,17 @@ pub(crate) fn verify_codes_len(
 
 /// Loads the codes of one segment for a snapshot.
 ///
+/// This is the only loader of the store: the reader of a segment and the
+/// snapshot both call it, so the choice "`codes.bin` present, read it; absent,
+/// quantize" is written once, here.
+///
 /// When `codes.bin` is present the file is read directly and the vector file is
 /// never opened: a snapshot does not pay the blake3 read of
 /// [`SegmentReader::open`]. A missing file is quantized from the reference
 /// vectors, in RAM (`ADR-0069`, decision 2): only an index written outside this
 /// build, or a restored one that a write open has not rebuilt yet, reaches that
-/// path.
+/// path. The quantized array is returned directly, never copied out of a reader,
+/// so the fallback holds one array in memory and not two.
 pub(crate) fn load_codes(
     segment_dir: &Path,
     meta: &segment::SegmentMeta,
@@ -169,8 +179,7 @@ pub(crate) fn load_codes(
     match fs::metadata(&path) {
         Ok(_) => read_codes_bin(&path, meta.count, meta.dims),
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            let reader = SegmentReader::open(segment_dir)?;
-            Ok(reader.codes_words()?.to_vec())
+            SegmentReader::open(segment_dir)?.quantize_vectors()
         }
         Err(error) => Err(io_error("inspect the binary codes file", &path, &error)),
     }
@@ -188,14 +197,20 @@ pub(crate) fn load_codes(
 /// This is the reconstruction the writer open runs: it creates neither a
 /// generation nor an epoch, and it does not change a single result, since the
 /// file is the quantized form of the very vectors it is built from.
+///
+/// With the `failpoints` cargo feature, and only with it, the rebuild stops at
+/// `CRIBLE_FAILPOINT=codes_rebuild_before_rename`: the temporary file is written
+/// and the rename has not happened, which is the crash ADR-0069 announces. The
+/// panic is the expected outcome of the test of that crash; the next recovery
+/// removes the temporary file (see `remove_temporary_codes`).
 pub fn rebuild_codes(segment_dir: &Path) -> Result<u64, CribleError> {
     let meta = segment::read_meta(segment_dir)?;
     let expected = codes_len(meta.count, meta.dims);
     let path = segment_dir.join(CODES_FILE_NAME);
     let temporary = segment_dir.join(format!("{TEMPORARY_PREFIX}{CODES_FILE_NAME}"));
     // A rebuild interrupted between its write and its rename leaves this file
-    // behind; the recovery of the epoch does not look inside a segment
-    // directory, so it is removed here, where a rebuild always passes.
+    // behind; the recovery of the epoch removes it too, for every referenced
+    // segment, but a rebuild that runs first must not write next to it.
     remove_temporary_file(&temporary)?;
     match fs::metadata(&path) {
         Ok(metadata) => {
@@ -210,6 +225,9 @@ pub fn rebuild_codes(segment_dir: &Path) -> Result<u64, CribleError> {
             // the writer is the one that persists them here.
             let reader = SegmentReader::open(segment_dir)?;
             write_codes_file(&temporary, reader.codes_words()?)?;
+            // The crash test of ADR-0069 stops here: the file is written, the
+            // rename has not happened, so the segment holds a `tmp-codes.bin`.
+            stop_at_failpoint(CODES_REBUILD_FAILPOINT);
             fs::rename(&temporary, &path).map_err(|error| {
                 io_error("rename the rebuilt binary codes file", &temporary, &error)
             })?;
@@ -218,6 +236,19 @@ pub fn rebuild_codes(segment_dir: &Path) -> Result<u64, CribleError> {
         }
         Err(error) => Err(io_error("inspect the binary codes file", &path, &error)),
     }
+}
+
+/// Removes the temporary file an interrupted rebuild of `segment_dir` left,
+/// ignoring an absent one.
+///
+/// The recovery of the epoch removes every `tmp-*` entry of `segments/`,
+/// `manifests/` and the index directory, but a `tmp-codes.bin` lives **inside**
+/// a segment directory, which that sweep does not enter. [`rebuild_codes`] calls
+/// this before writing, and [`crate::generation`] recovery calls it for every
+/// referenced segment, so an interrupted rebuild leaves nothing behind even when
+/// no later rebuild passes.
+pub(crate) fn remove_temporary_codes(segment_dir: &Path) -> Result<(), CribleError> {
+    remove_temporary_file(&segment_dir.join(format!("{TEMPORARY_PREFIX}{CODES_FILE_NAME}")))
 }
 
 /// Removes the temporary file of a rebuild, ignoring an absent one.

@@ -33,8 +33,7 @@
 //! therefore refused once, at the segment, never twice with two values that
 //! could disagree.
 //!
-//! Assumed API of the future `crible_store::codes` module (these tests do not
-//! compile until `@dev` provides it):
+//! API of `crible_store::codes` used by these tests:
 //!
 //! ```ignore
 //! /// Name of the binary-code file of a segment directory.
@@ -451,7 +450,7 @@ fn inv_15_attach_quantizes_the_stored_value() {
     // 1e-9 is positive as an `f32` but underflows to +0 once stored in fp16
     // (subnormal minimum 2^-25 ≈ 2.98e-08). The bit must stay clear: a bit the
     // reader never sees would make the rebuild from the stored vectors write
-    // another `codes.bin` than the attach did (ADR-0069, decision 5).
+    // another `codes.bin` than the attach did (ADR-0069, decision 6).
     let dir = tempfile::tempdir().expect("temporary directory");
     let mut writer =
         writer(dir.path(), DIMS).expect("the fixture writer starts in a temporary directory");
