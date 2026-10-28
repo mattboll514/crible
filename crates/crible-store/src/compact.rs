@@ -500,7 +500,21 @@ fn write_new_epoch(
             .map_err(|error| records::database_error("commit the new epoch", &error))?;
     }
 
-    rebuild_lexical(staging)?;
+    // Step 3 of `docs/02-architecture.md`: tantivy is rebuilt from the stored
+    // texts, here, inside the epoch before it is renamed into place and before
+    // `CURRENT_EPOCH` names it (`RECONSTRUIRE-LEXICAL`). The commit of the new
+    // epoch marks `meta.passage_change_generation` at `generation`, so the
+    // payload written here is at least the marker (`ADR-0088`, decision 8). An
+    // epoch without a passage gets no `lexical/`: the branch appears with the
+    // first passage (`docs/02`, step 4).
+    if !order.is_empty() && index_config.lexical.enabled {
+        crate::generation::rebuild_lexical_index(
+            &records,
+            staging,
+            &index_config.lexical,
+            generation,
+        )?;
+    }
     // The connection must be closed before the directory is renamed: SQLite
     // derives the names of `records.sqlite-wal` and `-shm` from the path it was
     // opened with, and closing checkpoints the WAL into the database.
@@ -631,16 +645,6 @@ fn verify_epoch(
         )));
     }
     Ok(records)
-}
-
-/// Placeholder of the rebuild of the lexical index of the new epoch.
-///
-/// Step 3 of `docs/02-architecture.md` has tantivy rebuilt from the stored texts.
-/// Tantivy arrives in P5 (`RECHERCHER-LEXICAL`): the hook does nothing in P3, and
-/// P5 fills it here, at the step the design names. The epoch directory is the one
-/// the new database and its segments already live in.
-fn rebuild_lexical(_epoch_dir: &Path) -> Result<(), CribleError> {
-    Ok(())
 }
 
 /// The epoch that follows `epoch`, refusing an exhausted counter.

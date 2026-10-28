@@ -274,6 +274,48 @@ pub fn compact_index(data: &Path, index: &str) -> Result<(), CribleError> {
     Ok(())
 }
 
+/// `crible rebuild-lexical --data <dir> --index <i>`.
+///
+/// Rebuilds the lexical index of the committed epoch from the texts
+/// `records.sqlite` stores (`RECONSTRUIRE-LEXICAL`, `docs/03`, "Branche lexicale",
+/// "Reconstruction"). The job exists because a change of the analysis chain —
+/// `lexical.language` or `lexical.positions` — changes no text: the generations
+/// and the payload of the last tantivy commit stay such that `M ≤ Gt ≤ G`, so the
+/// recovery of a write open has nothing to repair (`ADR-0088`, decision 2), and
+/// only an explicit rebuild applies the new chain.
+///
+/// The command opens the index for **writing**, as every reconstruction of a
+/// derived directory does (`ADR-0069`, `ADR-0087`), then rebuilds. It publishes
+/// no generation, no epoch and no manifest: the reference state is unchanged, and
+/// the rebuilt index carries the same generation as its payload. Running it twice
+/// leaves the same index.
+///
+/// An epoch that never carried a passage has nothing to rebuild and gains no
+/// `lexical/` directory (`docs/02`, step 4): the command says so instead of
+/// reporting a rebuild that wrote nothing.
+pub fn rebuild_lexical(data: &Path, index: &str) -> Result<(), CribleError> {
+    let name = path_component(index, "index name")?;
+    let (index_dir, config) = load_index(data, name)?;
+    let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
+    let state = store.state()?;
+    let generation = crible_store::generation::rebuild_lexical(&mut store)?;
+    if state.live_passages == 0 {
+        println!(
+            "index '{}': nothing to rebuild, the reference state at generation {} holds no live \
+             passage",
+            name,
+            generation.get(),
+        );
+    } else {
+        println!(
+            "index '{}': lexical index rebuilt from the reference state at generation {}",
+            name,
+            generation.get(),
+        );
+    }
+    Ok(())
+}
+
 /// `crible export --data <dir> --models <dir> --exchange <dir> --index <i>`.
 ///
 /// Writes a `replace_all` batch of the live data of the published generation

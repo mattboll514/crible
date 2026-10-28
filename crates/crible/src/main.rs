@@ -79,6 +79,17 @@ enum Command {
         #[arg(long)]
         index: String,
     },
+    /// Rebuild the lexical index of the committed epoch from the stored texts
+    /// (`RECONSTRUIRE-LEXICAL`): the job to run when the analysis chain of
+    /// `lexical.language` or `lexical.positions` changes.
+    RebuildLexical {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+    },
     /// Take a coherent snapshot of an epoch into the exchange root (ADR-0064,
     /// ADR-0065). Offline: stop the server first.
     Snapshot {
@@ -238,6 +249,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
         Command::Compact { data, index } => commands::compact_index(&data, &index),
+        Command::RebuildLexical { data, index } => commands::rebuild_lexical(&data, &index),
         Command::Snapshot {
             data,
             exchange,
