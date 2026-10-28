@@ -1138,6 +1138,18 @@ impl ReadPool {
         self.with_connection(|connection| passage_by_iid(connection, iid))
     }
 
+    /// Reads the internal identifier of the passage `key`, or `None` when the
+    /// reference state holds no such passage.
+    ///
+    /// This is the reverse of [`ReadPool::read_passage_key`], for a caller that
+    /// designates a passage by its external key — `explain` does
+    /// (`docs/05-api.md`, `docs/06-observabilite.md`) — and needs the internal
+    /// identifier to reach the derived structures. An identifier read here never
+    /// leaves the engine (INV-01).
+    pub(crate) fn read_passage_iid(&self, key: &PassageKey) -> Result<Option<Iid>, CribleError> {
+        self.with_connection(|connection| passage_iid_by_key(connection, key))
+    }
+
     /// Reads one document by external identifier, or `None` when it is unknown.
     pub fn read_document(&self, doc_id: &str) -> Result<Option<DocumentRecord>, CribleError> {
         self.with_connection(|connection| document_by_id(connection, doc_id))
@@ -1702,6 +1714,28 @@ pub(crate) fn passage_key_by_iid(
         )
     })?;
     Ok(Some(PassageKey::new(doc_id, ord)))
+}
+
+/// Reads the internal identifier of one passage, the query "passage iid by key".
+///
+/// The key `doc_id#ord` designates one passage of a document, and the pair is
+/// unique by construction (`docs/01`), so a second row would be an
+/// inconsistency: `query_row` then fails and the caller receives an
+/// [`ErrorCode::Internal`] error rather than an arbitrary one of the two.
+pub(crate) fn passage_iid_by_key(
+    connection: &Connection,
+    key: &PassageKey,
+) -> Result<Option<Iid>, CribleError> {
+    let row = connection
+        .query_row(
+            "SELECT iid FROM passages WHERE doc_id = ?1 AND ord = ?2",
+            params![key.doc_id().as_str(), i64::from(key.ord())],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| database_error("read a passage identifier", &error))?;
+    row.map(|iid| from_sql_u32(iid, "iid").map(Iid::new))
+        .transpose()
 }
 
 /// Reads the content digest of one passage, the query "passage hash by iid".
