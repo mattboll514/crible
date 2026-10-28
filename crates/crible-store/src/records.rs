@@ -63,11 +63,12 @@ const BUSY_TIMEOUT_MS: u64 = 1000;
 /// `INSERT OR IGNORE` create the row exactly once.
 const SCHEMA: [&str; 7] = [
     "CREATE TABLE IF NOT EXISTS meta (
-         id             INTEGER PRIMARY KEY CHECK (id = 1),
-         generation     INTEGER NOT NULL DEFAULT 0,
-         epoch          INTEGER NOT NULL DEFAULT 0,
-         format_version INTEGER NOT NULL,
-         next_iid       INTEGER NOT NULL DEFAULT 0
+         id                       INTEGER PRIMARY KEY CHECK (id = 1),
+         generation               INTEGER NOT NULL DEFAULT 0,
+         epoch                    INTEGER NOT NULL DEFAULT 0,
+         format_version           INTEGER NOT NULL,
+         next_iid                 INTEGER NOT NULL DEFAULT 0,
+         passage_change_generation INTEGER
      )",
     "CREATE TABLE IF NOT EXISTS batches (
          batch_id        TEXT PRIMARY KEY,
@@ -188,6 +189,15 @@ pub struct PassageRecord {
 /// `next_iid` is the first internal identifier the next attach may hand out:
 /// an iid is never reused within an epoch (`docs/02-architecture.md`,
 /// "Identifiants").
+///
+/// `passage_change_generation` is the last generation that created or killed a
+/// passage in the epoch, `0` when the epoch never carried one (`ADR-0088`). The
+/// lexical index of the epoch is up to date for `G` when
+/// `passage_change_generation ≤ Gt ≤ G`, where `Gt` is the payload of its last
+/// tantivy commit, so a generation that changes no passage text — a metadata
+/// patch — leaves it untouched. `None` means the column is absent from the
+/// database, or holds `NULL`: an epoch written before P5 was opened for writing,
+/// whose state the lexical branch cannot certify (`ADR-0088`, decision 4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Meta {
     /// Generation last committed by [`RecordStore::begin`] callers.
@@ -196,6 +206,9 @@ pub(crate) struct Meta {
     pub epoch: Epoch,
     /// First internal identifier still free in this epoch.
     pub next_iid: u32,
+    /// Last generation that created or killed a passage, or `None` when the
+    /// marker is not certified.
+    pub passage_change_generation: Option<Generation>,
 }
 
 /// Owner of the reference database of an epoch, and the only writer of it.
@@ -230,8 +243,9 @@ impl RecordStore {
         }
         connection
             .execute(
-                "INSERT OR IGNORE INTO meta (id, generation, epoch, format_version, next_iid)
-                 VALUES (1, 0, 0, ?1, 0)",
+                "INSERT OR IGNORE INTO meta
+                     (id, generation, epoch, format_version, next_iid, passage_change_generation)
+                 VALUES (1, 0, 0, ?1, 0, 0)",
                 params![i64::from(FORMAT_VERSION)],
             )
             .map_err(|error| database_error("record the format version", &error))?;
@@ -431,34 +445,80 @@ impl RecordStore {
             .transaction()
             .map_err(|error| database_error("open the commit transaction", &error))
     }
+
+    /// Completes the `passage_change_generation` marker of an epoch created
+    /// before P5 (`ADR-0088`, decision 4).
+    ///
+    /// The column is added when it is absent, then the marker is computed once
+    /// from the rows `passages` holds and written in the same transaction. That
+    /// changes no generation, no manifest and no visible state: the marker
+    /// describes rows the reference state already committed. A read-only open
+    /// never calls this method, because it writes nothing into the epoch
+    /// (ADR-0056, ADR-0087).
+    pub(crate) fn ensure_passage_change_generation(&mut self) -> Result<(), CribleError> {
+        if has_passage_change_generation(&self.connection)? {
+            return Ok(());
+        }
+        let transaction = self
+            .connection
+            .transaction()
+            .map_err(|error| database_error("open the schema completion transaction", &error))?;
+        transaction
+            .execute(ADD_PASSAGE_CHANGE_GENERATION, [])
+            .map_err(|error| database_error("add the passage change marker", &error))?;
+        let marker = passage_change_generation(&transaction)?;
+        transaction
+            .execute(
+                "UPDATE meta SET passage_change_generation = ?1 WHERE id = 1",
+                params![to_sql_u64(marker.get(), "passage_change_generation")?],
+            )
+            .map_err(|error| database_error("complete the passage change marker", &error))?;
+        transaction
+            .commit()
+            .map_err(|error| database_error("commit the passage change marker", &error))
+    }
 }
 
 /// Reads the `meta` row, which [`RecordStore::create`] always writes.
+///
+/// `passage_change_generation` is read by name on `SELECT *`: a database written
+/// before P5 does not have the column, and SQLite then reports the name as
+/// unknown, which is read as `NULL` (`ADR-0088`, decision 4 — the column is
+/// additive, and `format_version` stays 1). The same read reports `NULL` for a
+/// row the column was never completed on. Reading by name keeps the commit path
+/// free of a schema query: the marker is one column of the row this statement
+/// already visits.
 pub(crate) fn read_meta(connection: &Connection) -> Result<Meta, CribleError> {
     let row = connection
-        .query_row(
-            "SELECT generation, epoch, next_iid FROM meta WHERE id = 1",
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                ))
-            },
-        )
+        .query_row("SELECT * FROM meta WHERE id = 1", [], |row| {
+            let generation: i64 = row.get("generation")?;
+            let epoch: i64 = row.get("epoch")?;
+            let next_iid: i64 = row.get("next_iid")?;
+            let marker = match row.get::<_, Option<i64>>("passage_change_generation") {
+                Ok(marker) => marker,
+                // The column is absent: an epoch this build never opened for
+                // writing, whose marker is not certified.
+                Err(rusqlite::Error::InvalidColumnName(_)) => None,
+                Err(error) => return Err(error),
+            };
+            Ok((generation, epoch, next_iid, marker))
+        })
         .optional()
         .map_err(|error| database_error("read meta", &error))?;
-    let Some((generation, epoch, next_iid)) = row else {
+    let Some((generation, epoch, next_iid, passage_change_generation)) = row else {
         return Err(CribleError::new(
             ErrorCode::Internal,
             "meta is empty: the records database has no generation row",
         ));
     };
+    let passage_change_generation = passage_change_generation
+        .map(|marker| from_sql_u64(marker, "passage_change_generation").map(Generation::new))
+        .transpose()?;
     Ok(Meta {
         generation: Generation::new(from_sql_u64(generation, "generation")?),
         epoch: Epoch::new(from_sql_u32(epoch, "epoch")?),
         next_iid: from_sql_u32(next_iid, "next_iid")?,
+        passage_change_generation,
     })
 }
 
@@ -927,6 +987,80 @@ pub(crate) fn advance_meta(
         ));
     }
     Ok(())
+}
+
+/// Records, inside the transaction of a generation, that it created or killed a
+/// passage (`ADR-0088`, decision 3).
+///
+/// The write is atomic with the commit point (ADR-0016): the lexical index of
+/// the epoch is up to date for a generation when this marker is at most the
+/// payload of its last tantivy commit, so a marker the commit did not write
+/// would certify an index that missed a passage. The caller writes it exactly
+/// when the generation creates a live passage or tombstones one.
+pub(crate) fn mark_passage_change(
+    transaction: &Transaction<'_>,
+    generation: Generation,
+) -> Result<(), CribleError> {
+    let changed = transaction
+        .execute(
+            "UPDATE meta SET passage_change_generation = ?1 WHERE id = 1",
+            params![to_sql_u64(generation.get(), "passage_change_generation")?],
+        )
+        .map_err(|error| {
+            database_error(
+                "record the passage change in the commit transaction",
+                &error,
+            )
+        })?;
+    if changed != 1 {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            "meta has no row, so the passage change cannot be recorded",
+        ));
+    }
+    Ok(())
+}
+
+/// The marker an epoch whose `passage_change_generation` was never written must
+/// carry, read from the rows `passages` holds.
+///
+/// The last generation that created a passage or made one die is the maximum of
+/// `created_generation` and `dead_since_gen`: a compaction renumbers the
+/// identifiers but keeps those two columns, so the marker stays conservative
+/// after one. `0` when the epoch carries no passage (`ADR-0088`, decision 4).
+pub(crate) fn passage_change_generation(
+    connection: &Connection,
+) -> Result<Generation, CribleError> {
+    let (created, dead): (Option<i64>, Option<i64>) = connection
+        .query_row(
+            "SELECT max(created_generation), max(dead_since_gen) FROM passages",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| database_error("read the passage generations", &error))?;
+    let mut latest = Generation::new(0);
+    for value in [created, dead].into_iter().flatten() {
+        latest = latest.max(Generation::new(from_sql_u64(value, "passage generation")?));
+    }
+    Ok(latest)
+}
+
+/// DDL adding the marker to a database created before P5 (`ADR-0088`,
+/// decision 4): a nullable column, so `format_version` stays 1.
+const ADD_PASSAGE_CHANGE_GENERATION: &str =
+    "ALTER TABLE meta ADD COLUMN passage_change_generation INTEGER";
+
+/// True when the `meta` table of the database holds the marker column.
+fn has_passage_change_generation(connection: &Connection) -> Result<bool, CribleError> {
+    let count: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM pragma_table_info('meta')
+             WHERE name = 'passage_change_generation'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| database_error("inspect the meta schema", &error))?;
+    Ok(count > 0)
 }
 
 /// Bounded pool of **read-only** connections on one `records.sqlite` file.
@@ -1436,6 +1570,109 @@ pub(crate) fn passage_by_iid(
         .optional()
         .map_err(|error| database_error("read a passage", &error))?;
     row.map(passage_from_row).transpose()
+}
+
+/// Streams the text of the passages a generation created after `since`.
+///
+/// The catch-up of the restart of the lexical branch ("Reprise au démarrage",
+/// `Gt < G`) indexes the encoder input of those passages (`docs/03`), which is
+/// exactly the `passages.text` this reads and decompresses. Only the live
+/// passages are reported: a passage created and tombstoned before the lexical
+/// index reached it has nothing to index. The rows come in ascending `iid`
+/// order, so two catch-ups of the same gap index the same documents in the same
+/// order.
+pub(crate) fn for_each_passage_created_after(
+    connection: &Connection,
+    since: Generation,
+    mut visit: impl FnMut(Iid, &str) -> Result<(), CribleError>,
+) -> Result<(), CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT iid, text FROM passages
+             WHERE created_generation > ?1 AND dead_since_gen IS NULL ORDER BY iid",
+        )
+        .map_err(|error| database_error("prepare the created passages query", &error))?;
+    let mut rows = statement
+        .query(params![to_sql_u64(since.get(), "created_generation")?])
+        .map_err(|error| database_error("query the created passages", &error))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error("read a created passage row", &error))?
+    {
+        let (iid, text) = passage_text_row(row)?;
+        visit(iid, &text)?;
+    }
+    Ok(())
+}
+
+/// Streams the text of every live passage of the reference state.
+///
+/// This is the full rebuild of the lexical branch: it reads the whole
+/// `passages` table, so only the recovery of a lexical index that cannot be
+/// caught up calls it, and `RECONSTRUIRE-LEXICAL` is the task that decides when a
+/// rebuild is worth its cost.
+pub(crate) fn for_each_live_passage(
+    connection: &Connection,
+    mut visit: impl FnMut(Iid, &str) -> Result<(), CribleError>,
+) -> Result<(), CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT iid, text FROM passages
+             WHERE dead_since_gen IS NULL ORDER BY iid",
+        )
+        .map_err(|error| database_error("prepare the live passages query", &error))?;
+    let mut rows = statement
+        .query([])
+        .map_err(|error| database_error("query the live passages", &error))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| database_error("read a live passage row", &error))?
+    {
+        let (iid, text) = passage_text_row(row)?;
+        visit(iid, &text)?;
+    }
+    Ok(())
+}
+
+/// Reads one `(iid, text)` row of the passage text queries.
+fn passage_text_row(row: &Row<'_>) -> Result<(Iid, String), CribleError> {
+    let iid: i64 = row
+        .get(0)
+        .map_err(|error| database_error("read a passage iid", &error))?;
+    let frame: Vec<u8> = row
+        .get(1)
+        .map_err(|error| database_error("read a passage text", &error))?;
+    Ok((Iid::new(from_sql_u32(iid, "iid")?), decode_text(&frame)?))
+}
+
+/// Internal identifiers of the passages tombstoned after `since`.
+///
+/// The mirror of [`for_each_passage_created_after`]: the catch-up of the lexical
+/// branch removes what died after `Gt`, whether the passage was already indexed
+/// or not. The rows are read in `iid` order so a commit applies the deletions in
+/// a stable order, which keeps two replays of the same state identical on disk;
+/// the order is not significant for the result, since a deletion names one
+/// document.
+pub(crate) fn iids_dead_after(
+    connection: &Connection,
+    since: Generation,
+) -> Result<Vec<Iid>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT iid FROM passages
+             WHERE dead_since_gen > ?1 ORDER BY iid",
+        )
+        .map_err(|error| database_error("prepare the tombstoned iids query", &error))?;
+    let rows = statement
+        .query_map(params![to_sql_u64(since.get(), "generation")?], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| database_error("query the tombstoned iids", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read a tombstoned iid", &error))?;
+    rows.into_iter()
+        .map(|iid| from_sql_u32(iid, "iid").map(Iid::new))
+        .collect()
 }
 
 /// Reads the key of one passage, the query "passage key by iid".

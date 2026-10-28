@@ -223,10 +223,12 @@ impl AcceptanceReport {
 /// document: that pass is what lets the segment be written before the
 /// transaction, and `docs/02` has no separate step for it.
 ///
-/// The lexical step of `docs/02` does not exist yet (it belongs to phase 2).
-/// The acceptance statistics of `docs/04` are not a duration of this structure:
-/// they are content of the report, carried by
-/// [`AttachReport::acceptance`].
+/// Step 4 of `docs/02` — the tantivy commit and the reader reload — is measured
+/// as its own step (`lexical`), between the transaction and the manifest
+/// (ADR-0087). It is call telemetry like the others: the persisted report
+/// carries no duration (ADR-0042). The acceptance statistics of `docs/04` are
+/// not a duration of this structure either: they are content of the report,
+/// carried by [`AttachReport::acceptance`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AttachDurations {
     /// Opening the batch, checking its controls, validating its content, and
@@ -236,9 +238,14 @@ pub struct AttachDurations {
     pub segment: Duration,
     /// Filling the SQLite transaction and reaching the commit point.
     pub transaction: Duration,
+    /// Step 4: adding the passages, removing the tombstoned ones, committing
+    /// tantivy and reloading its reader. Zero when the step does not run — a
+    /// configuration that disables the lexical branch, or a generation that
+    /// changes no passage text.
+    pub lexical: Duration,
     /// Writing `manifests/<generation>.json`.
     pub manifest: Duration,
-    /// Building and publishing the new snapshot.
+    /// Building the new snapshot (step 6); its publication is immediate.
     pub snapshot: Duration,
 }
 
@@ -250,6 +257,7 @@ impl AttachDurations {
             validation: Duration::from_micros(micros(self.validation)),
             segment: Duration::from_micros(micros(self.segment)),
             transaction: Duration::from_micros(micros(self.transaction)),
+            lexical: Duration::from_micros(micros(self.lexical)),
             manifest: Duration::from_micros(micros(self.manifest)),
             snapshot: Duration::from_micros(micros(self.snapshot)),
         }
@@ -637,6 +645,7 @@ pub fn attach(
             validation,
             segment: segment_duration,
             transaction: committed.timings.transaction,
+            lexical: committed.timings.lexical,
             manifest: committed.timings.manifest,
             snapshot: committed.timings.snapshot,
         }

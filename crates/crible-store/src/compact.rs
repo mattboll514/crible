@@ -484,6 +484,17 @@ fn write_new_epoch(
         }
         close_segment(&transaction, &mut writer)?;
         records::advance_meta(&transaction, generation, next_iid)?;
+        // The transaction that creates the epoch initialises the marker of the
+        // lexical branch at the generation it writes when it carries passages,
+        // and leaves it at 0 when it carries none (ADR-0088, decision 3): an
+        // epoch without a passage is up to date without a lexical index, and a
+        // marker is never left behind a passage the state holds. The compaction
+        // renumbers the identifiers but keeps `created_generation`, so the
+        // marker stays conservative: a lexical index rebuilt at or after it
+        // describes this epoch.
+        if !order.is_empty() {
+            records::mark_passage_change(&transaction, generation)?;
+        }
         transaction
             .commit()
             .map_err(|error| records::database_error("commit the new epoch", &error))?;
