@@ -777,6 +777,7 @@ dependencies = [
  "roaring",
  "rusqlite",
  "serde_json",
+ "tantivy",
  "tempfile",
  "tracing",
  "tracing-subscriber",

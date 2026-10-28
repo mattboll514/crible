@@ -101,6 +101,7 @@
   - la latence BM25 filtrée selon la taille du pool.
 - **Critères d'acceptation** : un rapport reproductible, avec une alerte si le filtrage du pool est trop lent ; dans ce cas, proposer le repli de ADR-0007.
 - **Invariants / mesures** : MES-06.
+- **Protocole** : fixé par ADR-0091 (jeu et extrapolation, positions, pools et requêtes, seuil de l'alerte, périmètre, harnais).
 
 ### MESURER-HYBRIDE
 - **Objectif** : MES-10 et MES-11, puis les choix par défaut.
