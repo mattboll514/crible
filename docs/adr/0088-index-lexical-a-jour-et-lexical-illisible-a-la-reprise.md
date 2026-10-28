@@ -1,7 +1,7 @@
 # ADR-0088 — Définition d'un index lexical à jour, et lexical illisible à la reprise
 
-- **Statut** : Proposé
-- **Date** : 2026-10-28
+- **Statut** : Accepté (décidé le 2026-10-28, tel que proposé)
+- **Date** : 2026-10-28 (proposition et décision)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, à partir de la relecture du 1er tour de la tâche `INDEXER-TANTIVY-A-L-ATTACHE` (phase P5) et des verdicts de `@architecte` du 2026-10-28 (`ECART` sur le patch de métadonnées, `NON-COUVERT` sur le lexical illisible)
 - **Remplace** : — (précise ADR-0087, dont le corps n'est pas réécrit : la décision 2 ci-dessous élargit sa règle d'ouverture « charge utile égale `G` » au critère `M ≤ Gt ≤ G`, et la décision 5 décline le message d'ADR-0087:38 selon l'état constaté)
@@ -38,7 +38,7 @@ Le commentaire du code explique le `internal` actuel par une hypothèse : « a p
 
 ### Ce que cet ADR ne décide pas
 
-- Ni le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONSTUIRE-LEXICAL`) ;
+- Ni le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONSTRUIRE-LEXICAL`) ;
 - ni un code d'erreur dédié (`lexical_not_ready`), écarté par ADR-0087:42 ;
 - ni le budget de l'`IndexWriter` (ADR-0087, point 3) ;
 - ni `ensure_manifest`, qui reste hors périmètre (ADR-0087, décision 4) ;
@@ -123,7 +123,7 @@ Rien n'est réparé à la lecture (ADR-0087, décision 1). Un `lexical/` illisib
 
 ### 8. Ce que cet ADR ne décide pas
 
-Le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONSTUIRE-LEXICAL`), qui devra commiter avec une charge utile au moins égale à `M` ; le code d'erreur d'une recherche lexicale quand `lexical.enabled` vaut `false` ; le budget de l'`IndexWriter` ; `ensure_manifest` ; toute mesure de durée, les chiffres cités venant d'ADR-0066 et restant à confirmer.
+Le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONSTRUIRE-LEXICAL`), qui devra commiter avec une charge utile au moins égale à `M` ; le code d'erreur d'une recherche lexicale quand `lexical.enabled` vaut `false` ; le budget de l'`IndexWriter` ; `ensure_manifest` ; toute mesure de durée, les chiffres cités venant d'ADR-0066 et restant à confirmer.
 
 ## Conséquences
 

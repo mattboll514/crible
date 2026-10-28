@@ -32,12 +32,15 @@
   - un index tantivy par époque, avec un champ `iid` (u64, fast et indexed) et un champ `text` (analysé, non stocké) ;
   - à l'étape 4 : ajout des nouveaux passages, suppression des passages tombés, commit avec la charge utile G+1 ;
   - un lecteur rechargé dans le `Snapshot` ;
-  - la reprise : si Gt < G, ré-indexer les écarts ; si Gt > G, tout reconstruire. La reprise et la comparaison `Gt`/`G` n'ont lieu qu'à l'ouverture en **écriture** (ADR-0087) : en lecture seule, aucun `IndexWriter` n'est ouvert, rien n'est commité ni supprimé sous `lexical/`, et un lecteur n'est ouvert que si la charge utile du dernier commit vaut G ;
+  - la reprise : un index lexical est **à jour pour `G`** quand `M ≤ Gt ≤ G`, où `Gt` est la charge utile du dernier commit tantivy et `M` vaut `meta.passage_change_generation` (dernière génération qui a créé ou fait mourir un passage, `0` sinon) (ADR-0088). Si `M ≤ Gt`, aucun rattrapage ni commit tantivy, même quand `Gt < G` — c'est le cas d'un patch ; si `M > Gt`, ré-indexer les écarts ; si `Gt > G`, tout reconstruire. La colonne `meta.passage_change_generation` est complétée à l'ouverture en écriture si elle manque (`ALTER TABLE`, puis calcul unique par époque), sans génération nouvelle. Une charge utile ou un dossier `lexical/` illisible est un état indécidable : reconstruit à l'ouverture en écriture, comme `Gt > G`, avec une ligne de journal. La reprise et la comparaison n'ont lieu qu'à l'ouverture en **écriture** (ADR-0087) : en lecture seule, aucun `IndexWriter` n'est ouvert, rien n'est commité ni supprimé sous `lexical/`, rien n'est écrit dans l'époque, et un lecteur n'est ouvert que si `M ≤ Gt ≤ G` — une colonne `M` absente réduit le critère à `Gt = G` —, un lexical illisible laissant l'instantané sans lecteur lexical sans faire échouer l'ouverture (ADR-0088) ;
   - la durée de l'étape 4 mesurée à part : champ `lexical` d'`AttachDurations`, dans l'ordre `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` (ADR-0087, télémétrie d'appel seulement).
 - **Critères d'acceptation** :
+  - **patch puis ouverture en lecture seule : lecteur présent**, `lexical` et `hybrid` servis à `G` (ADR-0088) ;
+  - un patch puis une ouverture en écriture ne produit aucun commit tantivy et laisse la charge utile inchangée (ADR-0088) ;
+  - une charge utile non décimale et un dossier `lexical/` illisible : l'ouverture en écriture reconstruit et journalise sans erreur, et l'ouverture en lecture seule sert `dense` et refuse `lexical` en `overloaded` (ADR-0088) ;
   - un test de panne entre l'étape 3 et l'étape 4, suivi d'un redémarrage, retrouve le lexical à G (**INV-04**) ;
   - un index avec `lexical.enabled: false` ne crée aucun dossier lexical ;
-  - une ouverture en lecture seule avec `Gt ≠ G` n'écrit rien et n'ouvre aucun `IndexWriter` (ADR-0087) ;
+  - une ouverture en lecture seule quand le critère `M ≤ Gt ≤ G` n'est pas tenu n'écrit rien et n'ouvre aucun `IndexWriter` (ADR-0087, ADR-0088) ;
   - la durée de l'étape 4 est attribuable séparément de celle de `snapshot`.
 - **Invariants** : INV-04.
 
@@ -62,12 +65,12 @@
   - un collecteur personnalisé qui lit le fast field `iid`, ne garde que les passages du pool et tient un tas top-k ;
   - les scores BM25 ;
   - l'explication tantivy disponible pour `explain` (P7) ;
-  - le refus explicite en `overloaded` (503) quand l'instantané n'a pas de lecteur lexical, c'est-à-dire quand `Gt ≠ G` à l'ouverture en lecture seule (ADR-0087) : message « lexical index behind generation Gt of G; open the index for writing to repair it », sans dégradation silencieuse de `hybrid` vers le dense, le mode `dense` restant servi.
+  - le refus explicite en `overloaded` (503) quand l'instantané n'a pas de lecteur lexical, c'est-à-dire quand le critère `M ≤ Gt ≤ G` n'est pas tenu à l'ouverture en lecture seule (ADR-0087, ADR-0088) : le message nomme l'état constaté et garde la phrase d'ADR-0087:38 pour le seul cas où elle est vraie — « lexical index behind generation Gt of G; open the index for writing to repair it » (`M > Gt`), « lexical index ahead of generation Gt of G; open the index for writing to repair it » (`Gt > G`), « lexical index state at generation Gt is not certified for generation G; open the index for writing to repair it » (colonne `M` absente), « lexical index is unreadable at generation G; open the index for writing to repair it » (`lexical/` illisible, `M > G`) — sans dégradation silencieuse de `hybrid` vers le dense, le mode `dense` restant servi. Aucun `iid` ne figure dans ces messages (INV-01).
 - **Critères d'acceptation** :
   - aucun résultat ne sort du pool (**INV-05**) ;
   - aucun passage mort n'apparaît, même si tantivy ne l'a pas encore supprimé ;
   - les résultats sont égaux à un calcul BM25 de référence sur un petit corpus de test ;
-  - une recherche `lexical` ou `hybride` sur un instantané sans lecteur lexical échoue en `overloaded` (503) avec ce message, et une recherche `dense` sur le même instantané réussit (ADR-0087).
+  - une recherche `lexical` ou `hybride` sur un instantané sans lecteur lexical échoue en `overloaded` (503) avec le message de l'état constaté — l'un des quatre de la décision 5 d'ADR-0088 —, et une recherche `dense` sur le même instantané réussit (ADR-0087, ADR-0088).
 - **Invariants** : INV-05.
 
 ### FUSIONNER-HYBRIDE

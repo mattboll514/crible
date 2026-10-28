@@ -77,7 +77,7 @@ models/<model_name>/                    # volume : model.json, model.onnx, model
 exchange/                               # dossier monté : inbox/ (lots), outbox/ (exports), snapshots/ (instantanés, ADR-0064)
 ```
 
-Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien dans l'époque et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087). La phrase vaut pour `lexical/` sans exception.
+Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien dans l'époque et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087). La phrase vaut pour `lexical/` sans exception. Pour `lexical/`, « absent » et « illisible » ont la même conséquence : un état indécidable est reconstruit à l'ouverture en écriture, et la lecture seule publie l'instantané sans lecteur lexical (ADR-0088).
 
 Deux fichiers méritent une description de format propre :
 
@@ -92,13 +92,15 @@ Hors du volume de données, l'instantané ajoute un troisième fichier de format
 
 | Table | Colonnes principales |
 |---|---|
-| `meta` | `generation`, `epoch`, `format_version`, `next_iid` |
+| `meta` | `generation`, `epoch`, `format_version`, `next_iid`, `passage_change_generation` |
 | `batches` | `batch_id` (PK), `generation`, `applied_at`, `manifest_blake3`, `manifest` (JSON), `report` (JSON) |
 | `segments` | `segment_id`, `iid_start`, `count`, `generation`, `batch_id`, `checksums` |
 | `documents` | `doc_id` (PK), `doc_hash`, `fields` (JSON canonique), `updated_generation` |
 | `passages` | `iid` (PK), `doc_id`, `ord`, `text` (zstd), `passage_hash`, `fields` (JSON), `segment_id`, `created_generation`, `dead_since_gen` (NULL = vivant) |
 
 Index SQLite : `passages(doc_id)`, `passages(dead_since_gen)`.
+
+- `meta.passage_change_generation` est la **dernière génération qui a créé ou fait mourir un passage** dans l'époque (`0` si l'époque n'en a jamais porté). Elle sert à définir un index lexical à jour, avec la charge utile du dernier commit tantivy (ADR-0088). Elle est écrite dans la transaction de l'étape 3, n'est pas modifiée par une génération qui ne crée ni ne tue aucun passage, et une colonne absente se lit `NULL` : la colonne est optionnelle et additive, sans changement de `format_version` (ADR-0088).
 
 - `batches.manifest_blake3` est le digest blake3 des octets de `manifest.json` tels que lus, sous la forme `blake3:<hex>`, `<hex>` en hexadécimal minuscule (ADR-0041). Il identifie le contenu du manifeste pour comparer deux tentatives du même `batch_id` ; ce n'est pas un contrôle d'intégrité.
 - Une ligne `documents` n'existe que pour un document vivant. Sa suppression appartient à la transaction du commit de génération, que le document soit nommé dans `deletions` ou absent d'un lot `replace_all` (ADR-0041). Un document ré-ajouté ensuite est un document neuf.
@@ -114,8 +116,8 @@ Attacher un lot (un seul écrivain par index) :
 
 1. **Valider et faire la recette.** Aucun état n'est modifié à cette étape.
 2. **Écrire le segment** dans `segments/tmp-<id>/`, faire un fsync, puis le renommer en `segments/<id>/`. Il reste invisible tant que SQLite ne le référence pas.
-3. **Transaction SQLite** : `batches`, `segments`, `documents`, `passages`, les pierres tombales, `meta.generation = G+1`, `next_iid`. **COMMIT ← point de commit.**
-4. **tantivy** : ajouter les nouveaux passages, supprimer les iid tombés, faire un commit avec la charge utile `G+1`, puis recharger le lecteur.
+3. **Transaction SQLite** : `batches`, `segments`, `documents`, `passages`, les pierres tombales, `meta.generation = G+1`, `next_iid`. Quand la transaction crée au moins un passage ou pose au moins une pierre tombale, elle écrit aussi `meta.passage_change_generation = G+1` ; une transaction qui n'en fait ni l'un ni l'autre la laisse telle quelle (ADR-0088). **COMMIT ← point de commit.**
+4. **tantivy** : ajouter les nouveaux passages, supprimer les iid tombés, faire un commit avec une charge utile égale à **la génération dont le texte est indexé** (`G+1`), puis recharger le lecteur. Un patch de métadonnées ne produit aucun commit tantivy (ADR-0088).
 5. **Écrire** `manifests/<G+1>.json`.
 6. **Construire le nouvel instantané de lecture** (bitmaps en copie sur écriture) et le publier (`ArcSwap`).
 
@@ -136,12 +138,15 @@ Une génération n'est créée que si au moins un document change réellement : 
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
 - Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`. La reprise ne touche pas au dossier `epochs/` : un dossier de transit `epochs/tmp-*`, laissé par une compaction ou une restauration interrompue, y reste, inerte, et se supprime à la main ou par l'opération suivante qui vise ce numéro d'époque (ADR-0065).
 - Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Un lot n'est résiduel que si son verrou de présence, `<data>/tmp/online-<batch_id>.lock`, peut être pris : le nettoyage ouvre ce fichier en lecture-écriture avec création, tente un verrou exclusif avec `try_lock`, et ne supprime le dossier puis le verrou qu'en cas de succès. Si le verrou est déjà tenu, un écrivain tient le lot et il est laissé en place. Toute autre erreur de verrou (système de fichiers sans verrou, montage réseau) ne supprime rien et est journalisée : la règle est asymétrique à dessein, car un résidu qui s'accumule est un coût alors qu'une suppression de lot vivant est une panne (ADR-0056). Ce nettoyage n'efface rien de plus large que `<data>/tmp/` et ne s'exécute qu'à l'ouverture en écriture.
-- Comparer la charge utile du dernier commit tantivy (Gt) à G, **à l'ouverture en écriture seulement** (ADR-0087) :
-  - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
+- Comparer la charge utile du dernier commit tantivy (Gt) et `meta.passage_change_generation` (M) à G, **à l'ouverture en écriture seulement** (ADR-0087, ADR-0088) :
+  - **Gt < G avec M ≤ Gt** : aucun rattrapage ni commit tantivy, le pool et les textes de G étant identiques à ceux de Gt (ADR-0088) ;
+  - **Gt < G avec M > Gt** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
-  - À l'ouverture en **lecture seule**, aucune comparaison n'a lieu : le moteur n'ouvre aucun `IndexWriter`, ne commite rien et ne supprime rien sous `lexical/`. Un lecteur tantivy n'est ouvert que si la charge utile du dernier commit égale G. Si `Gt ≠ G`, l'instantané n'a pas de lecteur lexical et la branche lexicale est refusée en `overloaded` (503) ; le mode `dense` continue de servir la génération G, et `hybrid` n'est pas dégradé vers le dense. La réparation appartient à la prochaine ouverture en écriture, qui répare avant de publier son instantané (ADR-0087).
+  - Si la colonne `meta.passage_change_generation` manque, elle est ajoutée par `ALTER TABLE meta ADD COLUMN`, puis M est calculé une fois par époque — `max(created_generation)` et `max(dead_since_gen)` sur `passages`, `0` si la table est vide — et écrit. Cela ne crée ni génération ni manifeste, et se paie une fois par époque, avant la comparaison de reprise et avant la publication de l'instantané (ADR-0088).
+  - Une **charge utile non décimale**, un `meta.json` ou un segment que tantivy n'ouvre pas, un dossier `lexical/` qu'il n'ouvre pas, ou un M incohérent (`M > G`) sont un **état indécidable** : ils sont traités comme un dossier absent et empruntent le chemin de `Gt > G` — `remove_index` puis reconstruction — avec une ligne de journal qui nomme l'époque, le cas et le message d'origine. Aucune génération nouvelle, aucun changement du manifeste, aucune erreur (ADR-0088).
+  - À l'ouverture en **lecture seule**, aucune comparaison n'a lieu, et rien n'est écrit : pas de `ALTER TABLE`, aucune complétion de M. Le moteur n'ouvre aucun `IndexWriter`, ne commite rien et ne supprime rien sous `lexical/`. Un lecteur tantivy est ouvert si **M ≤ Gt ≤ G** ; une colonne M absente réduit le critère à `Gt = G` et ne l'élargit jamais. Sinon l'instantané n'a pas de lecteur lexical et la branche lexicale est refusée en `overloaded` (503) avec un message qui nomme l'état constaté — retard, avance, état non certifié, ou lexical illisible — sans dégradation silencieuse de `hybrid` vers le dense ; le mode `dense` continue de servir la génération G. Un `lexical/` illisible ne fait pas échouer l'ouverture : elle journalise le cas et publie l'instantané sans lecteur lexical. La réparation appartient à la prochaine ouverture en écriture, qui répare avant de publier son instantané (ADR-0087, ADR-0088).
 - Écrire le manifeste G s'il manque.
-- Reconstruire `codes.bin` des segments où il manque, depuis les `vectors.*` du segment, et le persister par fichier temporaire, fsync et renommage (ADR-0069). Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). La reconstruction ne crée ni génération ni époque. Elle n'a lieu qu'à l'ouverture en **écriture** : un segment ouvert en lecture seule construit les codes manquants en RAM et n'écrit rien dans l'époque.
+- Reconstruire `codes.bin` des segments où il manque, depuis les `vectors.*` du segment, et le persister par fichier temporaire, fsync et renommage (ADR-0069). Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). La reconstruction ne crée ni génération ni époque. Elle n'a lieu qu'à l'ouverture en **écriture** : un segment ouvert en lecture seule construit les codes manquants en RAM et n'écrit rien dans l'époque. `lexical/` suit la règle inverse pour une charge utile ou un dossier illisible : l'état est indécidable, donc il est reconstruit à l'ouverture en écriture au lieu d'être refusé, parce que la charge utile est l'unique état de l'index, que le format appartient à tantivy et qu'un refus rendrait l'index non ouvrable pour écrire (ADR-0088).
 - Construire les bitmaps, ou charger le cache estampillé G.
 - Publier l'instantané.
 
