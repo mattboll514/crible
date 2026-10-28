@@ -77,7 +77,7 @@ models/<model_name>/                    # volume : model.json, model.onnx, model
 exchange/                               # dossier monté : inbox/ (lots), outbox/ (exports), snapshots/ (instantanés, ADR-0064)
 ```
 
-Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`.
+Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien dans l'époque et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087). La phrase vaut pour `lexical/` sans exception.
 
 Deux fichiers méritent une description de format propre :
 
@@ -136,9 +136,10 @@ Une génération n'est créée que si au moins un document change réellement : 
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
 - Supprimer les `tmp-*` résiduels du dossier de l'index (un `tmp-CURRENT_EPOCH` laissé par une création interrompue) et du dossier `manifests/`. La reprise ne touche pas au dossier `epochs/` : un dossier de transit `epochs/tmp-*`, laissé par une compaction ou une restauration interrompue, y reste, inerte, et se supprime à la main ou par l'opération suivante qui vise ce numéro d'époque (ADR-0065).
 - Supprimer les dossiers `online-*` résiduels de `<data>/tmp/` : ce sont les lots internes du mode en ligne, qu'un garde n'a pas supprimés (ADR-0055). Un lot n'est résiduel que si son verrou de présence, `<data>/tmp/online-<batch_id>.lock`, peut être pris : le nettoyage ouvre ce fichier en lecture-écriture avec création, tente un verrou exclusif avec `try_lock`, et ne supprime le dossier puis le verrou qu'en cas de succès. Si le verrou est déjà tenu, un écrivain tient le lot et il est laissé en place. Toute autre erreur de verrou (système de fichiers sans verrou, montage réseau) ne supprime rien et est journalisée : la règle est asymétrique à dessein, car un résidu qui s'accumule est un coût alors qu'une suppression de lot vivant est une panne (ADR-0056). Ce nettoyage n'efface rien de plus large que `<data>/tmp/` et ne s'exécute qu'à l'ouverture en écriture.
-- Comparer la charge utile du dernier commit tantivy (Gt) à G :
+- Comparer la charge utile du dernier commit tantivy (Gt) à G, **à l'ouverture en écriture seulement** (ADR-0087) :
   - **Gt < G** : ré-indexer les passages créés après Gt et supprimer ceux morts après Gt ;
   - **Gt > G** : incohérence, reconstruire tout le lexical depuis SQLite.
+  - À l'ouverture en **lecture seule**, aucune comparaison n'a lieu : le moteur n'ouvre aucun `IndexWriter`, ne commite rien et ne supprime rien sous `lexical/`. Un lecteur tantivy n'est ouvert que si la charge utile du dernier commit égale G. Si `Gt ≠ G`, l'instantané n'a pas de lecteur lexical et la branche lexicale est refusée en `overloaded` (503) ; le mode `dense` continue de servir la génération G, et `hybrid` n'est pas dégradé vers le dense. La réparation appartient à la prochaine ouverture en écriture, qui répare avant de publier son instantané (ADR-0087).
 - Écrire le manifeste G s'il manque.
 - Reconstruire `codes.bin` des segments où il manque, depuis les `vectors.*` du segment, et le persister par fichier temporaire, fsync et renommage (ADR-0069). Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). La reconstruction ne crée ni génération ni époque. Elle n'a lieu qu'à l'ouverture en **écriture** : un segment ouvert en lecture seule construit les codes manquants en RAM et n'écrit rien dans l'époque.
 - Construire les bitmaps, ou charger le cache estampillé G.

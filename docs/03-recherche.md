@@ -90,7 +90,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
   - Le collecteur lit le fast field `iid` et ne garde un document que s'il est dans la bitmap du pool. Il remplit un tas de taille k.
   - Avec ce collecteur, l'élagage block-WAND ne s'applique probablement pas (à mesurer, MES-06).
 - **Suppressions** : elles sont aussi faites dans tantivy, mais la bitmap des vivants reste l'autorité.
-- **Reconstruction** depuis le texte SQLite, dans trois cas : compaction, reprise après incident, changement d'analyseur (le changement de réglage lance un job de reconstruction).
+- **Reconstruction** depuis le texte SQLite, dans trois cas : compaction, reprise après incident, changement d'analyseur (le changement de réglage lance un job de reconstruction). La reprise d'un retard (`Gt ≠ G`) n'a lieu qu'à l'ouverture en écriture : une ouverture en lecture seule n'écrit rien dans l'époque et refuse la branche lexicale en `overloaded` quand `Gt ≠ G` (ADR-0087).
 
 ## Fusion (mode `hybrid`)
 

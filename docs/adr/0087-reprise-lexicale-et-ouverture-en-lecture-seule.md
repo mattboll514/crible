@@ -1,7 +1,7 @@
 # ADR-0087 — Reprise lexicale à l'ouverture en écriture et comportement en lecture seule
 
-- **Statut** : Proposé
-- **Date** : 2026-10-28
+- **Statut** : Accepté (décidé le 2026-10-28, tel que proposé)
+- **Date** : 2026-10-28 (proposition et décision)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, à la demande de l'orchestrateur, sur une `QUESTION-CONCEPTION` de `@dev` dans la tâche `INDEXER-TANTIVY-A-L-ATTACHE` (phase P5)
 - **Remplace** : —

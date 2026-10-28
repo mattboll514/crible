@@ -32,10 +32,13 @@
   - un index tantivy par époque, avec un champ `iid` (u64, fast et indexed) et un champ `text` (analysé, non stocké) ;
   - à l'étape 4 : ajout des nouveaux passages, suppression des passages tombés, commit avec la charge utile G+1 ;
   - un lecteur rechargé dans le `Snapshot` ;
-  - la reprise : si Gt < G, ré-indexer les écarts ; si Gt > G, tout reconstruire.
+  - la reprise : si Gt < G, ré-indexer les écarts ; si Gt > G, tout reconstruire. La reprise et la comparaison `Gt`/`G` n'ont lieu qu'à l'ouverture en **écriture** (ADR-0087) : en lecture seule, aucun `IndexWriter` n'est ouvert, rien n'est commité ni supprimé sous `lexical/`, et un lecteur n'est ouvert que si la charge utile du dernier commit vaut G ;
+  - la durée de l'étape 4 mesurée à part : champ `lexical` d'`AttachDurations`, dans l'ordre `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` (ADR-0087, télémétrie d'appel seulement).
 - **Critères d'acceptation** :
   - un test de panne entre l'étape 3 et l'étape 4, suivi d'un redémarrage, retrouve le lexical à G (**INV-04**) ;
-  - un index avec `lexical.enabled: false` ne crée aucun dossier lexical.
+  - un index avec `lexical.enabled: false` ne crée aucun dossier lexical ;
+  - une ouverture en lecture seule avec `Gt ≠ G` n'écrit rien et n'ouvre aucun `IndexWriter` (ADR-0087) ;
+  - la durée de l'étape 4 est attribuable séparément de celle de `snapshot`.
 - **Invariants** : INV-04.
 
 ### RECONSTRUIRE-LEXICAL
@@ -58,11 +61,13 @@
   - la requête analysée et transformée en sac de termes (OU) ;
   - un collecteur personnalisé qui lit le fast field `iid`, ne garde que les passages du pool et tient un tas top-k ;
   - les scores BM25 ;
-  - l'explication tantivy disponible pour `explain` (P7).
+  - l'explication tantivy disponible pour `explain` (P7) ;
+  - le refus explicite en `overloaded` (503) quand l'instantané n'a pas de lecteur lexical, c'est-à-dire quand `Gt ≠ G` à l'ouverture en lecture seule (ADR-0087) : message « lexical index behind generation Gt of G; open the index for writing to repair it », sans dégradation silencieuse de `hybrid` vers le dense, le mode `dense` restant servi.
 - **Critères d'acceptation** :
   - aucun résultat ne sort du pool (**INV-05**) ;
   - aucun passage mort n'apparaît, même si tantivy ne l'a pas encore supprimé ;
-  - les résultats sont égaux à un calcul BM25 de référence sur un petit corpus de test.
+  - les résultats sont égaux à un calcul BM25 de référence sur un petit corpus de test ;
+  - une recherche `lexical` ou `hybride` sur un instantané sans lecteur lexical échoue en `overloaded` (503) avec ce message, et une recherche `dense` sur le même instantané réussit (ADR-0087).
 - **Invariants** : INV-05.
 
 ### FUSIONNER-HYBRIDE
