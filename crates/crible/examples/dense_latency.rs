@@ -1433,12 +1433,15 @@ fn rescore_mode(
                 }
 
                 // The engine's rescoring: the exact cosine of each candidate,
-                // the key read and the final sort (ADR-0072).
+                // the key read and the final sort (ADR-0072). This series keeps
+                // the full-candidate behaviour on purpose (every key read), for
+                // comparability with the MES-03 campaign; production passes `k`
+                // (`planner::candidates`).
                 if skip_engine {
                     totals.push(f64::NAN);
                 } else {
                     let started = Instant::now();
-                    let scored = searcher.rescore(query, candidates)?;
+                    let scored = searcher.rescore(query, candidates, candidates.len())?;
                     totals.push(started.elapsed().as_secs_f64() * 1e6);
                     for pair in scored.windows(2) {
                         if pair[0].score == pair[1].score {
@@ -1726,7 +1729,10 @@ fn compare_mode(
     let search = opened.config.search.clone();
     let engine = scan_pool
         .install(|| dense_search(&snapshot, &searcher, &pool, query, k, &search, false))?;
-    let replica_scored = searcher.rescore(query, &candidates)?;
+    // The replica keeps the full-candidate behaviour on purpose (every key
+    // read), so it stays comparable with the MES-03 campaign; production passes
+    // `k` (`planner::candidates`).
+    let replica_scored = searcher.rescore(query, &candidates, candidates.len())?;
     let replica: Vec<Value> = replica_scored
         .iter()
         .take(top)

@@ -39,20 +39,49 @@
 //!   score, then ascending textual key", so a tie cannot be broken one way by a
 //!   heap and another way by a sort.
 //!
-//! # Parallelism and cost
+//! # Keys after the score (ADR-0079, decision 3, ADR-0083)
 //!
-//! The loop is sequential. `N` is bounded by `search.rescore_candidates` (1 000
-//! by default, `docs/03-recherche.md`), so it is a few thousand products plus
-//! the random reads of the retained vectors, while the scan it follows has
-//! already walked millions of codes. MES-03 measures that step; a parallel loop
-//! is added only if the measurement asks for one, and it would not change the
-//! answer, since the ranking is total and built after the loop.
+//! A key lives in `records.sqlite`, one row per candidate, and MES-03 attributes
+//! 69 to 93 % of the hot cost of the rescoring to those random page reads
+//! (`docs/mesures/MES-03-latence-rescoring.md`). The loop therefore scores first
+//! and reads the **key** afterwards, and only where the ranking needs one:
+//!
+//! 1. the scores alone are sorted by descending score, then ascending
+//!    identifier: the identifier only breaks the ties of this intermediate
+//!    ranking, where the keys are not known yet, and it never leaves the engine
+//!    (rule 11 of `AGENTS.md`);
+//! 2. the keys are then read **by group of equal score**, and the whole group is
+//!    ordered by ascending key before the next group is touched. The cut falls
+//!    after a group, so a tie cannot be resolved by the identifier: a group that
+//!    straddles the `limit` of the caller is entirely read and entirely sorted,
+//!    and the caller's truncation keeps the smallest keys of it, as `EXACT`
+//!    would (ADR-0045, ADR-0072 decision 3).
+//!
+//! Reading stops as soon as a whole group reaches `limit`. The caller passes the
+//! number of candidates it will consume, which is `k` for a plain search and the
+//! over-sampled count of `crate::group::candidates_per_branch` for a regrouped
+//! one, so the regrouping still reads the keys it consumes beyond `k`
+//! (ADR-0075). `N` key reads become about `k` plus the ties of the boundary.
 //!
 //! **Nesting rule.** As with [`ExactSearcher::top_k`], a caller must not hold a
 //! connection of the searcher's read pool when it calls this method: the key
-//! reads would wait for it, and the pool would run out of connections.
+//! reads would wait for it, and the pool would run out of connections. The
+//! rescoring holds none itself, and every vector read is finished before the
+//! first key read.
+//!
+//! # Parallelism and cost
+//!
+//! The loop is sequential. `N` is bounded by `search.rescore_candidates` (5 000
+//! by default, ADR-0078), so it is a few thousand products plus the random reads
+//! of the retained vectors, while the scan it follows has already walked
+//! millions of codes. MES-03 measures that step; a parallel loop is added only
+//! if the measurement asks for one, and it would not change the answer, since
+//! the ranking is total and built after the loop.
+
+use std::ops::Range;
 
 use crible_core::error::CribleError;
+use crible_core::ids::Iid;
 
 use super::binary::Candidate;
 use super::exact::ExactSearcher;
@@ -66,6 +95,13 @@ impl ExactSearcher {
     /// ([`binary::top_k`](super::binary::top_k)): distinct identifiers, taken
     /// from the generation this searcher opened. The Hamming distance they
     /// carry is ignored: it ranked the candidates, it does not score them.
+    ///
+    /// `limit` is the number of candidates the caller consumes: the return value
+    /// holds at least `limit` candidates when the list has them, and may hold
+    /// more, because the group of equal score that straddles `limit` is returned
+    /// whole (see the module documentation). The caller truncates it to `limit`,
+    /// and the keys of that group are ordered, so its truncation keeps the
+    /// smallest keys. A `limit` of `0` returns no result and reads no key.
     ///
     /// The query is validated and normalised exactly as the exact strategy does
     /// it, before an empty candidate list short-circuits: a malformed query is
@@ -81,22 +117,30 @@ impl ExactSearcher {
     /// means the stored data contradicts the format, not a bad request.
     ///
     /// A candidate whose passage row is absent is an `internal` error, here and
-    /// in the exact strategy: the key is read before the payload, and a passage
-    /// of the pool always has a row. A document row may be absent, which is a
+    /// in the exact strategy: a passage of the pool always has a row. The
+    /// rescoring only meets that case for a candidate it reads the key of, which
+    /// is the economy the exact strategy already practises with its heap
+    /// (`exact.rs`, `score_slice`). A document row may be absent, which is a
     /// normal state of the database and is handled by the payload step
     /// (ADR-0043).
     pub fn rescore(
         &self,
         query: &[f32],
         candidates: &[Candidate],
+        limit: usize,
     ) -> Result<Vec<Scored>, CribleError> {
         let empty = candidates.is_empty();
         let query = self.normalised_query(query, empty)?;
-        if empty {
+        if empty || limit == 0 {
             return Ok(Vec::new());
         }
 
-        let mut scored = Vec::with_capacity(candidates.len());
+        // The candidates are visited in the order the scan returned them, that
+        // is by ascending Hamming distance: visiting them by identifier was
+        // measured as a loss at both N (ADR-0083, decision 2) and is gone. The
+        // visit order reaches nothing but the order of this vector, since the
+        // ranking below is total.
+        let mut scored: Vec<(Iid, f32)> = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let iid = candidate.iid;
             let score = cosine(self.reader(iid)?, iid, &query)?;
@@ -105,15 +149,82 @@ impl ExactSearcher {
                     "a stored vector produces a non-finite cosine, so the ranking is undefined",
                 ));
             }
-            scored.push(Scored {
-                iid,
-                key: self.key_of(iid)?,
-                score,
-            });
+            scored.push((iid, score));
         }
-        scored.sort_unstable_by(|left, right| right.cmp(left));
-        Ok(scored)
+
+        // Intermediate order, before any key is read: descending score, then
+        // ascending identifier. The identifier only breaks ties here, and only
+        // so that the order is total; the final order compares the keys.
+        scored.sort_unstable_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+
+        let runs = equal_score_runs(&scored);
+        let wanted = runs_to_read(&runs, limit);
+        let mut kept: Vec<Scored> = Vec::with_capacity(limit.min(scored.len()));
+        for run in runs.iter().take(wanted) {
+            let mut group: Vec<Scored> = Vec::with_capacity(run.len());
+            for (iid, score) in &scored[run.clone()] {
+                group.push(Scored {
+                    iid: *iid,
+                    key: self.key_of(*iid)?,
+                    score: *score,
+                });
+            }
+            group.sort_unstable_by(|left, right| right.cmp(left));
+            kept.extend(group);
+        }
+        Ok(kept)
     }
+}
+
+/// Cuts a list of scored candidates, ordered by descending score, into the runs
+/// of candidates that share the same score.
+///
+/// The runs are contiguous and cover the whole list, in order. They are what the
+/// rescoring reads the keys by: the whole run is needed once its score reaches
+/// the caller's `limit`, because only the keys order its members.
+///
+/// The comparison is [`f32::total_cmp`], the one [`Scored`] ranks with, so two
+/// scores are in the same run exactly when the final order considers them equal
+/// (`-0.0` and `0.0` are two different runs, as they are two different rankings).
+fn equal_score_runs(scored: &[(Iid, f32)]) -> Vec<Range<usize>> {
+    let mut runs: Vec<Range<usize>> = Vec::new();
+    let mut start = 0_usize;
+    for position in 1..scored.len() {
+        if scored[position].1.total_cmp(&scored[start].1) != std::cmp::Ordering::Equal {
+            runs.push(start..position);
+            start = position;
+        }
+    }
+    if !scored.is_empty() {
+        runs.push(start..scored.len());
+    }
+    runs
+}
+
+/// Number of leading runs of `runs` to read so that the caller's `limit` is
+/// covered.
+///
+/// The answer is the smallest count whose runs hold `limit` candidates, capped
+/// at the number of runs, so a `limit` above the list reads everything and a
+/// `limit` of `0` reads nothing. A run that straddles the limit is counted whole:
+/// its keys are what decides which of its members the caller keeps.
+fn runs_to_read(runs: &[Range<usize>], limit: usize) -> usize {
+    if limit == 0 {
+        return 0;
+    }
+    let mut covered = 0_usize;
+    for (position, run) in runs.iter().enumerate() {
+        covered += run.len();
+        if covered >= limit {
+            return position + 1;
+        }
+    }
+    runs.len()
 }
 
 #[cfg(test)]
@@ -121,6 +232,7 @@ mod tests {
     use crible_core::ids::Iid;
 
     use super::super::Scored;
+    use super::{equal_score_runs, runs_to_read};
 
     /// The order the rescoring sorts with is total, and a tie is broken by the
     /// textual key, not by the internal identifier.
@@ -159,5 +271,107 @@ mod tests {
             vec!["doc#0", "doc#10", "doc#2"],
             "descending score first, then the ascending textual key"
         );
+    }
+
+    /// One run per score value, in order, covering the whole list.
+    #[test]
+    fn equal_scores_are_grouped_into_runs() {
+        let scored = [
+            (Iid::new(4), 5.0_f32),
+            (Iid::new(1), 3.0),
+            (Iid::new(7), 3.0),
+            (Iid::new(2), 3.0),
+            (Iid::new(0), 1.5),
+            (Iid::new(9), 1.5),
+        ];
+        let runs = equal_score_runs(&scored);
+        assert_eq!(
+            runs,
+            vec![0..1, 1..4, 4..6],
+            "the runs must follow the score and cover the whole list"
+        );
+        for run in &runs {
+            let score = scored[run.start].1;
+            assert!(
+                scored[run.clone()].iter().all(|entry| entry.1 == score),
+                "a run must hold one score only"
+            );
+        }
+    }
+
+    /// The boundaries of the grouping: an empty list, a list where every score
+    /// differs, and a list where every score ties.
+    #[test]
+    fn equal_score_runs_of_degenerate_lists() {
+        assert!(equal_score_runs(&[]).is_empty(), "an empty list has no run");
+
+        let distinct = [
+            (Iid::new(0), 4.0_f32),
+            (Iid::new(1), 3.0),
+            (Iid::new(2), 2.0),
+        ];
+        assert_eq!(
+            equal_score_runs(&distinct),
+            vec![0..1, 1..2, 2..3],
+            "distinct scores give one run per candidate"
+        );
+
+        let tied = [
+            (Iid::new(0), 2.0_f32),
+            (Iid::new(1), 2.0),
+            (Iid::new(2), 2.0),
+        ];
+        assert_eq!(
+            equal_score_runs(&tied),
+            vec![0..3],
+            "a list of ex aequo is a single run"
+        );
+
+        // `-0.0` and `0.0` are distinct for `total_cmp`, so they are distinct for
+        // the final order too: the grouping must not merge them.
+        let signed = [(Iid::new(0), 0.0_f32), (Iid::new(1), -0.0)];
+        assert_eq!(
+            equal_score_runs(&signed),
+            vec![0..1, 1..2],
+            "the grouping must use the comparison of the ranking, not the `==` of f32"
+        );
+    }
+
+    /// The reading stops after the run that reaches `limit`, never inside it.
+    #[test]
+    fn runs_to_read_stops_after_the_run_that_reaches_the_limit() {
+        let runs = vec![0..1, 1..4, 4..6];
+        assert_eq!(runs_to_read(&runs, 0), 0, "a zero limit reads nothing");
+        assert_eq!(
+            runs_to_read(&runs, 1),
+            1,
+            "a limit met by the first run reads one run"
+        );
+        assert_eq!(
+            runs_to_read(&runs, 2),
+            2,
+            "a limit inside the second run reads that run whole"
+        );
+        assert_eq!(
+            runs_to_read(&runs, 3),
+            2,
+            "a limit inside the second run reads that run whole"
+        );
+        assert_eq!(
+            runs_to_read(&runs, 4),
+            2,
+            "a limit exactly at the end of a run does not read the next one"
+        );
+        assert_eq!(
+            runs_to_read(&runs, 6),
+            3,
+            "a limit above the list reads every run"
+        );
+        assert_eq!(
+            runs_to_read(&runs, 99),
+            3,
+            "a limit above the list reads every run, and reads no more"
+        );
+        assert_eq!(runs_to_read(&[], 3), 0, "an empty list has nothing to read");
     }
 }

@@ -149,7 +149,7 @@ fn both_strategies(
         .top_k(query, &pool, pool_size)
         .unwrap_or_else(|error| panic!("the exact search must run: {error}"));
     let rescored = searcher
-        .rescore(query, &candidates)
+        .rescore(query, &candidates, pool_size)
         .unwrap_or_else(|error| panic!("the rescoring must run: {error}"));
     (exact, rescored, pool_size)
 }
@@ -320,7 +320,7 @@ fn rescoring_rejects_a_malformed_query() {
         // answer.
         for (case, list) in [("candidates", &candidates), ("no candidate", &empty)] {
             let error = searcher
-                .rescore(&malformed, list)
+                .rescore(&malformed, list, list.len())
                 .expect_err("a malformed query must be refused");
             assert_eq!(
                 error.code(),
@@ -349,7 +349,7 @@ fn rescoring_an_empty_generation_returns_no_result() {
     let fixture = DenseFixture::create(DIMS);
     let searcher = fixture.searcher();
     let rescored = searcher
-        .rescore(&query(), &[])
+        .rescore(&query(), &[], 10)
         .unwrap_or_else(|error| panic!("an empty generation must accept any query: {error}"));
     assert!(
         rescored.is_empty(),
