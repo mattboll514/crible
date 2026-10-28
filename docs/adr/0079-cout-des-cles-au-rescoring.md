@@ -101,6 +101,7 @@ Ce qui n'est **pas** décidé ici : l'accès aléatoire aux vecteurs fp16, renvo
   - si le nombre d'égalités de score à la frontière dépasse largement `k` sur un jeu réel, le gain de (b) s'effondre vers N et (a) redevient le levier principal ;
   - si le regroupement (ADR-0075) demande beaucoup plus de candidats que `k`, (b) lit d'autant plus de clés : le facteur 20 à 50 est une borne, pas une promesse ;
   - si (c) ou (d) revient sur la table, le budget de MES-09 (1,12 Gio par index) et la règle de `docs/02:204` devront être révisés par un ADR, pas par une tâche.
+  - **Note du 2026-10-28 (ADR-0081, accepté, décision 7)** : le scan binaire n'a plus qu'un parcours, le clairsemé, qui suit l'itérateur trié de la bitmap du pool et rend donc les candidats déjà en **ordre croissant des iid** (ADR-0081, décisions 1 et 7). Cet ordre est celui que la décision 2 de cet ADR recherche pour la localité des pages, et il rend la règle de localité mesurable. Le corps de cet ADR et ses options ne changent pas ; la condition d'ordre écrite plus haut (`:100`) a par ailleurs été infirmée par ADR-0083.
 
 ## Alternatives écartées
 

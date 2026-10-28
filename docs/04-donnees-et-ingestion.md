@@ -65,7 +65,6 @@ Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la con
 
 Parmi les réglages de `search`, `exact_threshold` est **optionnelle** dans `index.json` (ADR-0074). Absente à la création de l'index, elle prend la valeur de `rescore_candidates` à ce moment, et cette valeur est écrite dans la configuration stockée : elle se lit ensuite comme une valeur explicite. Un `PATCH` ultérieur de `rescore_candidates` ne déplace pas le seuil ; seul un `PATCH` de `exact_threshold` le change. Ce réglage n'a pas de domaine au sens d'`ingest.*` : tout entier de `0` à `u32::MAX` est accepté, sans nouvelle erreur.
 
-
 ## Le modèle
 
 Fichier `models/<name>/model.json` :

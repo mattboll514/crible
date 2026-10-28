@@ -14,6 +14,10 @@ La décision 5 disait que `half` était « déjà une dépendance de `crible-sea
 - **Avant** : « `half` est déjà une dépendance de `crible-search` et figure en `docs/07:36`. »
 - **Après** : « `half` figure en `docs/07:36`, et la tâche `NOYAUX-SIMD` l'ajoute aux dépendances de `crible-search` (`crates/crible-search/Cargo.toml:12`). »
 
+## Erratum du 2026-10-28
+
+La décision 4 dit que le produit scalaire est comparé au scalaire avec « `1e-5` pour le produit scalaire ». Depuis la tâche `NETTOYER-P4` (commit `0a84182`), le test `crates/crible-search/tests/kernels_simd_vs_scalar.rs` applique une tolérance **relative** de `1e-6 × |référence|`, avec un plancher absolu de `1e-5` : `|simd - référence| ≤ 1e-6 × |référence| + 1e-5` (`:26-35`). Aucun résultat accepté par l'ancienne règle n'est rejeté, la nouvelle borne étant toujours supérieure ou égale à `1e-5`. Le fond de la décision ne change pas ; la correction est autorisée par le propriétaire le 2026-10-28.
+
 ## Contexte
 
 ### Ce que la fiche demande

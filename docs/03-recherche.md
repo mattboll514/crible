@@ -49,7 +49,7 @@ Choix de la stratégie :
 Détails :
 - **Code binaire** : le bit i vaut 1 si x_i > 0 (ADR-0004). Les requêtes sont codées de la même façon. La distance de Hamming est le popcount du XOR sur des mots `u64`. Un centrage préalable est à étudier (MES-12) ; son protocole de mesure — variante principale, contrôle du harnais, absence de changement du format — est fixé par ADR-0076, et son adoption par défaut demanderait un ADR qui remplace ADR-0069, décision 6.
 - **Parallélisme** : le pool est découpé en tranches contiguës d'iid, une par thread rayon. Chaque thread garde son propre tas, puis les tas sont fusionnés.
-- **Parcours du scan** : le scan binaire n'a qu'un parcours, **clairsemé**, sur l'itérateur trié de la bitmap du pool (ADR-0081) ; sa mise en œuvre appartient à la tâche `UNIFIER-PARCOURS-SCAN`, après une mesure multi-segments.
+- **Parcours du scan** : le scan binaire n'a qu'un parcours, **clairsemé**, sur l'itérateur trié de la bitmap du pool (ADR-0081) ; la mise en œuvre est faite (`UNIFIER-PARCOURS-SCAN`, fusionnée en `1b1f283`) et le curseur de segment d'ADR-0082 supprime la recherche binaire par iid quand la table des segments compte plusieurs entrées.
 - **Sortie** : les `candidates_per_branch` meilleurs, avec leur cosinus. Ce nombre est augmenté quand il faut regrouper (voir plus bas) ; la règle est calculée par la couche de recherche partagée, pas par la CLI (ADR-0075).
 - **Nom de la stratégie** : elle vaut `"exact"` ou `"binary"` dans le plan de debug (ADR-0074). `search.scan: none` donne `"exact"`, comme `exact: true` et comme un pool de taille inférieure ou égale au seuil.
 - **Rangement physique** : à la compaction, les passages sont triés selon `cluster_by`. Un filtre sur ce champ parcourt alors une zone mémoire contiguë.

@@ -1,8 +1,9 @@
 # ADR-0084 — Quel froid fait foi pour le rescoring jusqu'à P8
 
-- **Statut** : Proposé
-- **Date** : 2026-10-28
+- **Statut** : Accepté (décision du propriétaire le 2026-10-28, tel que proposé)
+- **Date** : 2026-10-28 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
+- **Décision** : accepté tel que proposé le 2026-10-28. Pour P4, la série « searcher déjà ouvert, cache déplacé après l'ouverture » fait foi pour juger les gains du rescoring ; la mesure absolue du froid est renvoyée à P8, en conteneur.
 - **Proposé par** : agent greffier, sur demande du propriétaire du 2026-10-28, tâche `NETTOYER-P4` (phase P4, hors plan), à partir du verdict de `@architecte` (ECART et NON-COUVERT) et du rejeu de MES-03 du 2026-10-28
 - **Remplace** : — (précise, s'il est accepté, la décision 6 d'ADR-0080 et la ligne MES-03 de `docs/08`)
 
@@ -84,6 +85,8 @@ Précisions :
 - l'index des ADR, avec la mention « précisé par ADR-0084 » sur la ligne d'ADR-0080 ;
 - la ligne MES-03 de `docs/08` (`:68`), pour y ajouter que la série `F_NOCACHE` est déclarée non rejouable en P4 et que le froid vrai est renvoyé à P8 ;
 - le livrable de rejeu de la fiche `GROUPER-LECTURES-VECTEURS` (`docs/phases/P4-recherche-rapide.md:188`), pour y distinguer la série principale de P4 et la série renvoyée à P8.
+
+**Application du 2026-10-28.** L'ADR est accepté ce jour et les quatre points ci-dessus sont appliqués : le statut d'ADR-0080 ne change pas, une note datée est ajoutée à sa décision 6 et à sa section « À surveiller » ; l'index des ADR porte la mention « précisé par ADR-0084 » sur la ligne d'ADR-0080 et le statut de cet ADR ; la ligne MES-03 de `docs/08-invariants-et-tests.md:68` et le livrable de rejeu de `GROUPER-LECTURES-VECTEURS` (`docs/phases/P4-recherche-rapide.md:188`) distinguent désormais la série principale de P4 et la série renvoyée à P8.
 
 ## Alternatives écartées
 
