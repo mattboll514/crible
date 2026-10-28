@@ -368,12 +368,34 @@ impl FusionConfig {
     }
 }
 
+/// Values accepted by `lexical.language`, in the order of ADR-0086:
+/// lowercase ISO 639-1 codes, one per analysis language of tantivy.
+pub const LEXICAL_LANGUAGES: [&str; 18] = [
+    "ar", "da", "de", "el", "en", "es", "fi", "fr", "hu", "it", "nl", "no", "pt", "ro", "ru", "sv",
+    "ta", "tr",
+];
+
+/// Refuses any `lexical.language` outside [`LEXICAL_LANGUAGES`].
+///
+/// The domain is a fixed table, not a range (ADR-0086). Only the lowercase
+/// form is accepted: nothing is lowercased or trimmed in silence, so the value
+/// stored in `index.json` is exactly the value the producer wrote.
+fn check_lexical_language(language: &str, path: &str) -> Result<(), CribleError> {
+    if LEXICAL_LANGUAGES.contains(&language) {
+        return Ok(());
+    }
+    Err(json::invalid(format!(
+        "unknown lexical language '{language}' at {path}; expected one of {}",
+        LEXICAL_LANGUAGES.join(", ")
+    )))
+}
+
 /// Lexical branch settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexicalConfig {
     /// Whether the lexical branch is built and queried.
     pub enabled: bool,
-    /// Language of the analyzer.
+    /// Language of the analyzer, one of [`LEXICAL_LANGUAGES`].
     pub language: String,
     /// Whether term positions are stored.
     pub positions: bool,
@@ -383,9 +405,11 @@ impl LexicalConfig {
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
         json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        let language = json::string_member(object, path, "language")?;
+        check_lexical_language(&language, &format!("{path}.language"))?;
         Ok(Self {
             enabled: json::boolean_member(object, path, "enabled")?,
-            language: json::string_member(object, path, "language")?,
+            language,
             positions: json::boolean_member(object, path, "positions")?,
         })
     }
@@ -1047,7 +1071,14 @@ impl LexicalPatch {
                 Some(value) => Some(json::boolean(value, &format!("{path}.enabled"))?),
                 None => None,
             },
-            language: optional_string(object, path, "language")?,
+            language: match object.get("language") {
+                Some(value) => {
+                    let language = json::string(value, &format!("{path}.language"))?;
+                    check_lexical_language(&language, &format!("{path}.language"))?;
+                    Some(language)
+                }
+                None => None,
+            },
             positions: match object.get("positions") {
                 Some(value) => Some(json::boolean(value, &format!("{path}.positions"))?),
                 None => None,
@@ -1270,7 +1301,7 @@ fn immutable(setting: &str, path: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexConfig, IngestConfig, Schema};
+    use super::{IndexConfig, IndexPatch, IngestConfig, Schema, apply_patch};
     use crate::error::ErrorCode;
 
     /// `to_json_string` round-trips through `from_json_str`, writes both
@@ -1337,6 +1368,64 @@ mod tests {
             "the message names the setting: {}",
             error.message()
         );
+    }
+
+    /// ADR-0086: `lexical.language` takes its values in a fixed table of
+    /// eighteen lowercase ISO 639-1 codes. Nothing is normalised in silence:
+    /// a wrong case, a surrounding space or a language name is refused, so the
+    /// value stored in `index.json` is always canonical.
+    #[test]
+    fn a_lexical_language_outside_the_table_is_refused_at_creation() {
+        let search = r#"{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#;
+
+        let accepted = pretty_configuration(search, "n")
+            .replace("\"language\": \"fr\"", "\"language\": \"no\"");
+        let config = IndexConfig::from_json_str(&accepted).expect("no is a code of the table");
+        assert_eq!(config.lexical.language, "no");
+
+        for refused in [
+            "FR",
+            "Fr",
+            " fr",
+            "fr ",
+            "",
+            "French",
+            "français",
+            "nb",
+            "xx",
+        ] {
+            let raw = pretty_configuration(search, "n").replace(
+                "\"language\": \"fr\"",
+                &format!("\"language\": \"{refused}\""),
+            );
+            let error = IndexConfig::from_json_str(&raw)
+                .expect_err("a language outside the table must be refused");
+            assert_eq!(error.code(), ErrorCode::InvalidRequest, "for {refused:?}");
+            assert!(
+                error.message().contains("lexical.language"),
+                "the message names the setting, for {refused:?}: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// ADR-0086: the same domain applies to `PATCH`, since the patch parses
+    /// `lexical.language` through the same control (ADR-0054).
+    #[test]
+    fn a_patch_with_a_lexical_language_outside_the_table_is_refused() {
+        let search = r#"{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#;
+        let mut config = IndexConfig::from_json_str(&pretty_configuration(search, "n"))
+            .expect("the test configuration is valid");
+
+        let error = IndexPatch::from_json_str(r#"{"lexical":{"language":" FR "}}"#)
+            .expect_err("a language outside the table must be refused");
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert!(error.message().contains("$.lexical.language"));
+
+        let patch = IndexPatch::from_json_str(r#"{"lexical":{"language":"el"}}"#)
+            .expect("el is a code of the table");
+        apply_patch(&mut config, &patch).expect("the patch only changes the language");
+        assert_eq!(config.lexical.language, "el");
     }
 
     /// Threshold the insertion tests use.

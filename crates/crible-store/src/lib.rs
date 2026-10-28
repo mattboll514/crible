@@ -9,6 +9,7 @@ pub mod compact;
 pub mod export;
 pub mod filters_index;
 pub mod generation;
+pub mod lexical;
 pub mod online;
 pub mod patch;
 pub mod records;
