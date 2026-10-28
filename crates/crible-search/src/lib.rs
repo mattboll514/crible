@@ -5,5 +5,6 @@
 pub mod dense;
 pub mod group;
 pub mod kernels;
+pub mod lexical;
 pub mod pool;
 pub mod scan_pool;

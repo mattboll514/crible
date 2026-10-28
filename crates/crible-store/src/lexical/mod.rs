@@ -71,7 +71,7 @@ use std::path::{Path, PathBuf};
 
 use crible_core::config::LexicalConfig;
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::ids::{Generation, Iid};
+use crible_core::ids::{Generation, Iid, PassageKey};
 use tantivy::directory::MmapDirectory;
 use tantivy::schema::{
     Field, IndexRecordOption, NumericOptions, Schema, TextFieldIndexing, TextOptions,
@@ -80,6 +80,8 @@ use tantivy::{
     Index, IndexReader, IndexWriter, ReloadPolicy, Searcher, SegmentReader, TantivyDocument, Term,
 };
 
+use crate::generation::RECORDS_FILE_NAME;
+use crate::records::ReadPool;
 use crate::segment::io_error;
 
 /// Name of the tantivy directory inside an epoch directory (`docs/02`).
@@ -93,10 +95,26 @@ pub(crate) const LEXICAL_DIR_NAME: &str = "lexical";
 const TOKENIZER_NAME: &str = "crible";
 
 /// Name of the field holding the internal identifier of a passage.
-const IID_FIELD_NAME: &str = "iid";
+///
+/// Public because the lexical branch of a query reads it as a fast field and
+/// indexes nothing itself: the name is the store's, so the two cannot drift
+/// apart (ADR-0089, "Rappels").
+pub const IID_FIELD_NAME: &str = "iid";
 
 /// Name of the field holding the encoder input of a passage.
-const TEXT_FIELD_NAME: &str = "text";
+///
+/// Public for the same reason as [`IID_FIELD_NAME`]: the branch builds its term
+/// queries on this field, and never names it a second time.
+pub const TEXT_FIELD_NAME: &str = "text";
+
+/// Number of read-only connections the lexical reader keeps on
+/// `records.sqlite`.
+///
+/// One query reads the key of the passages it keeps after its search, in the
+/// calling thread, so one connection serves it; a second would only queue on
+/// the same rows. The value is a bound on connections, not a measured optimum:
+/// `MES-06` is the measure that would settle it.
+const KEY_READ_CONNECTIONS: usize = 1;
 
 /// Number of indexing threads of one commit.
 ///
@@ -179,12 +197,24 @@ pub fn read_state(epoch_dir: &Path) -> Result<LexicalState, CribleError> {
 /// [`ReloadPolicy::Manual`]: no background thread watches `meta.json`, so a
 /// search started on this snapshot reads the commit the snapshot names, and no
 /// other (`docs/02`, "Concurrence").
+///
+/// It also holds the read-only connections to the `records.sqlite` of the same
+/// epoch, because the lexical branch has to translate between the two sides of
+/// a passage: tantivy indexes its text under an internal identifier, while the
+/// answer names it by its key `doc_id#ord`, which only the reference state
+/// carries (`docs/03`, "Branche lexicale"). The pool is created with the reader,
+/// once per snapshot, so a query opens no connection of its own.
 pub struct LexicalIndex {
     reader: IndexReader,
+    records: ReadPool,
 }
 
 impl LexicalIndex {
     /// Reader over the commits of the tantivy index `index`.
+    ///
+    /// `directory` is the lexical directory of the epoch. The reference state
+    /// sits beside it, `<epoch>/records.sqlite` (`docs/02`, "Organisation sur
+    /// disque"), which [`records_path_of`] names.
     fn reader_of(index: Index, directory: &Path) -> Result<Self, CribleError> {
         let reader = index
             .reader_builder()
@@ -196,7 +226,8 @@ impl LexicalIndex {
         reader.reload().map_err(|error| {
             tantivy_error("reload the reader of the lexical index", directory, error)
         })?;
-        Ok(Self { reader })
+        let records = ReadPool::new(&records_path_of(directory), KEY_READ_CONNECTIONS)?;
+        Ok(Self { reader, records })
     }
 
     /// Searcher of the loaded generation, which the lexical branch of a query
@@ -205,6 +236,69 @@ impl LexicalIndex {
     pub fn searcher(&self) -> Searcher {
         self.reader.searcher()
     }
+
+    /// Terms the analysis chain of the index makes of `query`, in order and
+    /// without repetition: the bag of terms `docs/03` scores in BM25.
+    ///
+    /// The chain is the one [`register_analyzer`] put under [`TOKENIZER_NAME`]
+    /// when the index was opened (ADR-0086), so the branch of a query never
+    /// rebuilds it and never names the language: the index is the authority on
+    /// how its text was analysed.
+    pub fn terms(&self, query: &str) -> Result<Vec<String>, CribleError> {
+        let searcher = self.reader.searcher();
+        let mut analyzer = searcher
+            .index()
+            .tokenizers()
+            .get(TOKENIZER_NAME)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the lexical index has no analysis chain registered under \
+                         '{TOKENIZER_NAME}'"
+                    ),
+                )
+            })?;
+        let mut stream = analyzer.token_stream(query);
+        let mut terms: Vec<String> = Vec::new();
+        while let Some(token) = stream.next() {
+            if !terms.iter().any(|term| term == &token.text) {
+                terms.push(token.text.clone());
+            }
+        }
+        Ok(terms)
+    }
+
+    /// Key `doc_id#ord` of the passage `iid`, or `None` when the reference state
+    /// holds no such passage.
+    ///
+    /// The key is the tie-break of the ranking of both branches (ADR-0045,
+    /// ADR-0079): a branch reads it for the candidates it keeps, after its
+    /// search, never for every candidate it scores.
+    pub fn passage_key(&self, iid: Iid) -> Result<Option<PassageKey>, CribleError> {
+        self.records.read_passage_key(iid)
+    }
+
+    /// Internal identifier of the passage `key`, or `None` when the reference
+    /// state holds no such passage.
+    ///
+    /// This is the lookup `explain` needs: a passage is designated by its
+    /// external key, and the derived index is reached by identifier only.
+    pub fn passage_iid(&self, key: &PassageKey) -> Result<Option<Iid>, CribleError> {
+        self.records.read_passage_iid(key)
+    }
+}
+
+/// Path of `records.sqlite` beside the lexical directory `directory`.
+///
+/// The lexical directory of an epoch is `<epoch>/lexical` and the reference
+/// state is `<epoch>/records.sqlite` (`docs/02`, "Organisation sur disque"), so
+/// the epoch directory is its parent.
+fn records_path_of(directory: &Path) -> PathBuf {
+    directory.parent().map_or_else(
+        || directory.to_path_buf(),
+        |epoch| epoch.join(RECORDS_FILE_NAME),
+    )
 }
 
 /// What the lexical index of an epoch is, relative to the generation the
@@ -217,10 +311,11 @@ impl LexicalIndex {
 /// [`NotCertified`](LexicalStatus::NotCertified) and
 /// [`Unreadable`](LexicalStatus::Unreadable) are the four states whose refusal
 /// `docs/05` names, in `overloaded` (503), with a message that quotes the state
-/// found. [`Disabled`](LexicalStatus::Disabled) is not one of them: the error
-/// code of a lexical search on an index that disables the branch is undecided by
-/// `ADR-0088` (decision 8), and [`Missing`](LexicalStatus::Missing) has no
-/// passage to serve.
+/// found; `ADR-0089`, decision 1, adds two messages for the states without a
+/// tantivy commit. [`Disabled`](LexicalStatus::Disabled) is not one of them: a
+/// branch the configuration disables refuses in `invalid_request` (400)
+/// (`ADR-0089`, decision 3), and [`Missing`](LexicalStatus::Missing) has no
+/// passage to serve (decision 2).
 ///
 /// The type names no `iid`, no generation of a passage and no text: it is a
 /// state of the derived directory, safe to log (INV-01).
