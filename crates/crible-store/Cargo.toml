@@ -19,6 +19,7 @@ roaring.workspace = true
 rusqlite.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tantivy.workspace = true
 tracing.workspace = true
 zstd.workspace = true
 

@@ -80,8 +80,9 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 - **Un index tantivy par époque.** Chaque document tantivy est un passage, avec deux champs : `iid` (`u64`, en fast field et indexé) et `text` (analysé, non stocké).
 - **Le texte indexé est l'entrée encodeur**, c'est-à-dire exactement le texte de la branche dense. Il contient donc le gabarit, par exemple « Code civil, article 1240 ».
 - **Chaîne d'analyse**, choisie par index avec `lexical.language` :
+  - `lexical.language` prend ses valeurs dans une table figée de dix-huit codes ISO 639-1, en **minuscules**, sans normalisation : `ar`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`, `ta`, `tr` (table d'ADR-0086, avec le stemmer et la liste de mots vides de chaque langue). Toute autre valeur est refusée en `invalid_request` (400) à la validation de la configuration ;
   - `SimpleTokenizer`, puis `RemoveLongFilter(40)`, `LowerCaser` et `AsciiFoldingFilter` ;
-  - `StopWordFilter(langue)`, puis `Stemmer(langue)`.
+  - `StopWordFilter(langue)`, puis `Stemmer(langue)`. `StopWordFilter` est **absent** pour `ar`, `el`, `ro`, `ta` et `tr`, les cinq langues sans liste de mots vides : ces langues reçoivent les mêmes jetons qu'une chaîne sans filtre de mots vides (ADR-0086).
 
   Le traitement des élisions (l', d', qu') et des identifiants comme `L1132-1` est à mesurer (MES-11).
 - **Positions désactivées par défaut** (`lexical.positions`). Les requêtes de phrase viendront plus tard.

@@ -16,8 +16,8 @@
 - **Dépend de** : DEFINIR-CONFIG-INDEX
 - **À lire** : `03-recherche.md` (branche lexicale).
 - **Livrables** :
-  - `crible-store::lexical::analyzer` : `SimpleTokenizer`, `RemoveLongFilter(40)`, `LowerCaser`, `AsciiFoldingFilter`, `StopWordFilter(langue)`, `Stemmer(langue)` ;
-  - les langues prises en charge : celles de tantivy ;
+  - `crible-store::lexical::analyzer` : `SimpleTokenizer`, `RemoveLongFilter(40)`, `LowerCaser`, `AsciiFoldingFilter`, `StopWordFilter(langue)` — absent pour `ar`, `el`, `ro`, `ta` et `tr` —, `Stemmer(langue)` ;
+  - les langues prises en charge : les dix-huit de tantivy, désignées par un code ISO 639-1 en minuscules (`fr`, `en`, `no`, `el`… ; table d'ADR-0086). Toute autre valeur est refusée en `invalid_request` (400) à la validation de la configuration, avec reconstruction du lexical à chaque `PATCH` accepté ;
   - des tests sur des phrases juridiques (« l'article 1240 du code civil », « L. 1132-1 », « qu'il », « dommages-intérêts »), avec les jetons obtenus.
 - **Critères d'acceptation** :
   - les jetons sont documentés dans le rapport de la tâche ;
