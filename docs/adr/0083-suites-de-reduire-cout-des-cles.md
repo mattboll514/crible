@@ -1,6 +1,6 @@
 # ADR-0083 — Suites de REDUIRE-COUT-DES-CLES : seule la lecture des clés après le tri est livrée
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-28, par délégation du propriétaire pour l'enchaînement `UNIFIER-PARCOURS-SCAN`, `REDUIRE-COUT-DES-CLES` et `GROUPER-LECTURES-VECTEURS`, à confirmer avec lui au point de fin des trois tâches)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-28, par délégation du propriétaire pour l'enchaînement `UNIFIER-PARCOURS-SCAN`, `REDUIRE-COUT-DES-CLES` et `GROUPER-LECTURES-VECTEURS`, à confirmer avec lui au point de fin des trois tâches, confirmé par le propriétaire le 2026-10-28)
 - **Date** : 2026-10-28 (proposition et acceptation anticipée le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire, à partir de la section « Rejeu après REDUIRE-COUT-DES-CLES (ADR-0079) » de `docs/mesures/MES-03-latence-rescoring.md` (2026-10-28) et du verdict de `@architecte` sur la fiche `REDUIRE-COUT-DES-CLES`
