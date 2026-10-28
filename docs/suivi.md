@@ -101,6 +101,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P5 | FUSIONNER-HYBRIDE | A-FAIRE | | |
 | P5 | MESURER-LEXICAL | A-FAIRE | | |
 | P5 | MESURER-HYBRIDE | A-FAIRE | | |
+| P5 | NETTOYER-P5 | A-FAIRE | | Hors plan, décision du propriétaire du 2026-10-28, sans fiche ; à faire en dernier, avant le rapport de J5 ; contenu dans la section « Contenu de NETTOYER-P5 » ci-dessous, complété à la fin de chaque tâche de P5 |
 | P6 | DEMARRER-SERVEUR-AXUM | A-FAIRE | | |
 | P6 | AUTHENTIFIER-CLES | A-FAIRE | | |
 | P6 | FORMAT-ERREURS-ET-LIMITES | A-FAIRE | | |
@@ -330,6 +331,19 @@ Ouvert par l'orchestrateur le 2026-10-26, sur décision du propriétaire, et com
 - (GROUPER-LECTURES-VECTEURS, `@relecteur`) `docs/mesures/MES-03-latence-rescoring.md:1376` : borne basse de résidence « 0,51 » alors que la série complète froide donne 0,483 (`base`, N = 1000, r2) ; écrire 0,48 ou restreindre la borne aux séries citées.
 - (GROUPER-LECTURES-VECTEURS, `@relecteur`) `docs/mesures/MES-03-latence-rescoring.md:1387` : l'écart 5 dit « `rustfmt` seul » alors que le harnais mesuré diffère aussi par deux réécritures équivalentes (`let period = period;` supprimé, `if` imbriqués en let-chain) ; écrire « mise en forme et deux réécritures équivalentes, aucun changement de comportement ».
 
+## Contenu de NETTOYER-P5
+
+Ouvert par l'orchestrateur le 2026-10-28, sur décision du propriétaire, et complété à la fin de chaque tâche de P5. On y note les corrections mineures (points mineurs de `@relecteur`, petites idées de nettoyage de `@dev`), chacune avec sa tâche d'origine. Les questions de conception n'y vont pas : elles passent par `@architecte` et un ADR. Les mesures à faire vont dans la fiche de mesure concernée ou dans « Idées hors périmètre ».
+
+**Code et commentaires (Rust)**
+- (CONFIGURER-ANALYSEUR, `@relecteur`) `crates/crible-store/src/lexical/analyzer.rs:16,36-37` : le commentaire dit la limite de `RemoveLongFilter` en caractères ; elle est en octets UTF-8, et un jeton de 40 octets ou plus est rejeté (tantivy 0.27.0, `remove_long.rs:28,36`). Corriger le commentaire, sans changer le comportement.
+- (CONFIGURER-ANALYSEUR, `@relecteur`) `crates/crible-core/src/config.rs:1074` : la lecture et le contrôle de `lexical.language` au `PATCH` dupliquent `LexicalConfig::from_value` (`:408-409`), `format!("{path}.language")` compris ; factoriser par `optional_patch` et une fonction unique.
+- (CONFIGURER-ANALYSEUR, `@dev`) Vérifier que l'étape 4 et la reprise ne reconstruisent pas le `TextAnalyzer` à chaque appel ; le garder par index s'il est reconstruit.
+
+**Tests**
+- (CONFIGURER-ANALYSEUR, `@relecteur`) `crates/crible-store/src/lexical/analyzer.rs:161` : le test de concordance code → `Language` ne détecte ni un doublon dans `LEXICAL_LANGUAGES` ni une entrée en trop hors des six codes échantillonnés ; vérifier que les 18 `Language` obtenus sont deux à deux distincts.
+- (CONFIGURER-ANALYSEUR, `@relecteur`) `crates/crible-store/src/lexical/analyzer.rs:149` : seules `el` et `tr` sont exercées parmi les cinq langues sans liste de mots vides (ADR-0086) ; boucler sur `ar`, `el`, `ro`, `ta`, `tr` et vérifier qu'un mot vide d'une autre langue survit.
+
 ## Écarts à la conception
 
 Quand une tâche ne peut pas respecter la conception (docs 01 à 08 ou un ADR accepté), ou demande un choix que rien ne tranche, l'agent fait rédiger un **ADR `Proposé`** par `@greffier`, ajoute une ligne ici et **s'arrête**. Seul le propriétaire tranche, en passant l'ADR en `Accepté` ou en `Rejeté`.
@@ -498,8 +512,6 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-28 | NETTOYER-P4 (`@architecte`, Q2) | `GenerationStore::open_read_only` exécute encore `recover` et `ensure_manifest`, qui écrivent sous `epochs/` ; `docs/02:132-135` décrit la reprise « au démarrage » sans distinguer lecture et écriture, ADR-0056 ne limite que `<data>/tmp` : NON-COUVERT étroit, ADR seulement si une ouverture en lecture doit les sauter (à trancher avant le chemin de lecture du serveur, P6) |
 | 2026-10-28 | NETTOYER-P4 (`@dev`, passage A) | Ajouter `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace` à la CI, désormais verte en local : demande un ADR (`docs/07` énumère les étapes, précédent d'ADR-0068) |
 | 2026-10-28 | NETTOYER-P4 (`@relecteur`, passages A et C) | Cosmétique : l'insertion ciblée de `search.exact_threshold` choisit CRLF si le fichier en contient une seule ; `relative()` est recopié dans quatre harnais (`mes02_analyze.py`, `mes07`, `mes08`, `mes13/merge.py`), à mutualiser ; 27 lignes Python de plus de 100 caractères, antérieures, dans les analyseurs de `tools/bench/mes02` et `mes03` ; `MES-02-parcours-dense-clairseme.md:320` dit « en dessous de 100 000 passages » en citant le pool de 100 k, à reprendre au prochain rejeu |
-| 2026-10-28 | CONFIGURER-ANALYSEUR (`@relecteur`, 4 mineurs) | (1) `crates/crible-store/src/lexical/analyzer.rs:16,36-37` : le commentaire dit la limite de `RemoveLongFilter` en caractères, elle est en octets UTF-8 et un jeton de 40 octets ou plus est rejeté (tantivy `remove_long.rs:28,36`) ; (2) `analyzer.rs:161` : le test de concordance code → `Language` ne détecte ni un doublon dans `LEXICAL_LANGUAGES` ni une entrée en trop hors des six codes échantillonnés (vérifier 18 `Language` distincts) ; (3) `analyzer.rs:149` : seules `el` et `tr` sont exercées parmi les 5 langues sans liste, boucler sur `ar`, `el`, `ro`, `ta`, `tr` ; (4) `crates/crible-core/src/config.rs:1074` : la lecture et le contrôle de `language` au `PATCH` dupliquent `LexicalConfig::from_value` (`:408-409`), à factoriser par `optional_patch` et une fonction unique |
-| 2026-10-28 | CONFIGURER-ANALYSEUR (`@dev`) | INDEXER-TANTIVY-A-L-ATTACHE devra peut-être garder le `TextAnalyzer` par index plutôt que le reconstruire à chaque appel |
 | 2026-10-28 | INDEXER-TANTIVY-A-L-ATTACHE (`@relecteur`, 1er tour, point 9) | `CreatedPassage` (`crates/crible-store/src/filters_index.rs:154`) garde le texte de chaque passage créé jusqu'à la publication de l'instantané : le compromis mémoire du delta double pour un gros lot ; à mesurer par MES-06 (pic RSS de l'attache), avec le budget de l'`IndexWriter` (50 MiB, un thread : pic RSS du commit et nombre de segments produits, ADR-0087 « À surveiller ») |
 | 2026-10-28 | INDEXER-TANTIVY-A-L-ATTACHE (`@relecteur`, 3e tour ; `@dev`) | Pour RECHERCHER-BM25-DANS-LE-POOL : `NotCertified { committed: None }` (époque ancienne sans index lexical) et `Behind { committed: None }` (passages sans aucun commit tantivy) n'ont pas de `Gt` à nommer, alors que les messages d'ADR-0088 décision 5 citent `Gt` ; prévoir une formulation sans `Gt` (« no committed lexical index ») et un test de plus par état |
 
@@ -815,3 +827,4 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-28 | INDEXER-TANTIVY-A-L-ATTACHE : corrections d'ADR-0087 faites par `@dev` (666 verts, 317 sous `failpoints`) ; relecture 1er tour `A-CORRIGER` (garde-fou sans écart) ; verdicts `@architecte` : patch et charge utile ECART, lexical illisible NON-COUVERT, `docs/04:229` erratum, durée du rattrapage à corriger ; ADR-0088 `Proposé` par `@greffier` ; tâche `BLOQUE`, code toujours non commité |
 | 2026-10-28 | ADR-0088 et erratum de `docs/04:229` acceptés par le propriétaire, tels que proposés ; appliqués par `@greffier` (`docs/02`, `docs/03`, `docs/04`, `docs/05`, fiches P5 ; coquille `RECONSTUIRE` corrigée dans l'ADR) ; INDEXER-TANTIVY-A-L-ATTACHE reprend (`EN-COURS`), `@dev` relancé pour ADR-0088 et les points de relecture |
 | 2026-10-28 | INDEXER-TANTIVY-A-L-ATTACHE `FAIT` : 2e tour `A-CORRIGER` (garde de l'étape 4 incrémentale, 3 mineurs), 3e tour OK ; garde-fou sans écart ; 676 verts / 24 ignorés, 326 / 1 sous `failpoints` |
+| 2026-10-28 | Tâche hors plan NETTOYER-P5 ajoutée en fin de P5, sur décision du propriétaire ; les 4 mineurs de relecture et l'idée de `@dev` de CONFIGURER-ANALYSEUR y passent depuis « Idées hors périmètre ». Copie jetable du dépôt laissée par `@testeur` dans le dossier temporaire du système (1,3 Go, avec une copie de `.env.prod`) supprimée par l'orchestrateur, à la demande du propriétaire |
