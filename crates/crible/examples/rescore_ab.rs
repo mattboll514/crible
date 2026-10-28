@@ -15,7 +15,7 @@
 //!
 //! It therefore builds the pool and the candidate sets the way production does
 //! (`Pool::evaluate` with the empty filter, then the engine's own
-//! `dense::binary::top_k`), and times **only** `ExactSearcher::rescore`, called
+//! `dense::binary::top_k`), and times **only** `DenseSearcher::rescore`, called
 //! with the consumer count production gives it: `search.candidates_per_branch`,
 //! that is `k`, as `planner::candidates` does (`dense/planner.rs`, `rescore(…,
 //! k)`). Base before the task has no consumer count and is called without it,
@@ -74,7 +74,7 @@ use crible_core::config::IndexConfig;
 use crible_core::filter::Filter;
 use crible_core::ids::Iid;
 use crible_search::dense::binary::{self, Candidate};
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::codes::quantize;
@@ -113,7 +113,7 @@ struct Prepared {
     candidate_pairs: usize,
     iid_inversions: usize,
     scan_pool: ScanPool,
-    searcher: ExactSearcher,
+    searcher: DenseSearcher,
     snapshot: Arc<Snapshot>,
     pool: Pool,
 }
@@ -198,7 +198,7 @@ fn prepare(arguments: &[String]) -> Result<Prepared, Box<dyn std::error::Error>>
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
     let searcher =
-        scan_pool.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
+        scan_pool.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
 
     // Keep the store alive for the whole run: the snapshot holds its epoch, and
     // dropping the store would release the lease the files of that epoch rely
@@ -411,7 +411,7 @@ fn measure_mode(arguments: &[String]) -> Result<(), Box<dyn std::error::Error>> 
 ///
 /// 1. **the scan alone**: `dense::binary::top_k` on the whole live pool, the
 ///    work a production request does before the rescoring;
-/// 2. **the rescoring alone**: `ExactSearcher::rescore` on the candidates of the
+/// 2. **the rescoring alone**: `DenseSearcher::rescore` on the candidates of the
 ///    query, as `measure` times it;
 /// 3. **the two concurrently**: the same scan and the same rescoring, launched
 ///    in two threads that both install themselves on the `ScanPool`, which is

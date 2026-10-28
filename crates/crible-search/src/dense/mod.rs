@@ -5,8 +5,8 @@
 //!
 //! `docs/03-recherche.md` ("Branche dense") splits the branch by strategy: the
 //! scan of the binary codes above the exact threshold ([`binary`]), the exact
-//! dot product below it ([`exact`]), and the rescoring of the candidates the
-//! scan kept ([`rescore`]). The binary scan has a single traversal, the sparse
+//! dot product at or below it ([`exact`]), and the rescoring of the candidates
+//! the scan kept ([`rescore`]). The binary scan has a single traversal, the sparse
 //! walk of the pool bitmap with a segment cursor (ADR-0081, ADR-0082). The
 //! planner chooses between the two strategies from the search settings, the
 //! pool and the request option (ADR-0074), and runs the planned one: [`plan`]
@@ -147,7 +147,7 @@ impl Ord for Scored {
 /// `query` must already be normalised and must hold one component per dimension
 /// of the index; both callers validate it before the first score. A segment
 /// whose code array and vector file disagree is not detected here: the reader
-/// opened in [`exact::ExactSearcher::open`] checked the row length.
+/// opened in [`exact::DenseSearcher::open`] checked the row length.
 pub(crate) fn cosine(reader: &SegmentReader, iid: Iid, query: &[f32]) -> Result<f32, CribleError> {
     match reader.meta().precision {
         ReferencePrecision::Fp16 => {
@@ -229,7 +229,7 @@ pub(crate) fn invalid_request(message: impl Into<String>) -> CribleError {
 mod tests {
     use roaring::RoaringBitmap;
 
-    use super::{fp32_dot, windows};
+    use super::{cosine, fp32_dot, windows};
 
     /// A fragmented pool: every live identifier is isolated, as after
     /// interleaved attaches or a filter that keeps one passage out of two.
@@ -331,6 +331,75 @@ mod tests {
             fp32_dot(&stored, &[2.0_f32]),
             0.1_f32 * 2.0,
             "a single component multiplies the first component only"
+        );
+    }
+
+    /// The `f16` branch of [`cosine`] is [`crate::kernels::dot`], whose
+    /// accumulator is `f64` (ADR-0070, ADR-0072 decision 1).
+    ///
+    /// The stored vector is `[1.0, 6e-8, -1.0]`, which `f16` rounds to its
+    /// smallest subnormal `5.96e-8`, and the query is `[1, 1, 1]`. A sequential
+    /// `f32` accumulator rounds `1.0 + 5.96e-8` back to `1.0` (half an ulp,
+    /// ties to even), then loses that term against `-1.0` and returns `0.0`.
+    /// The `f64` accumulation keeps it. Comparing the score with
+    /// [`crate::kernels::dot`] pins the choice: if the `f16` branch ever went
+    /// back to an `f32` sum, both strategies would change together and INV-06
+    /// would still pass at `1e-5`, but this test would fail.
+    #[test]
+    fn the_fp16_cosine_accumulates_in_f64_like_the_kernel() {
+        use crible_core::config::ReferencePrecision;
+        use crible_core::ids::{Generation, Iid};
+        use crible_store::segment::{SegmentReader, SegmentSpec, SegmentWriter};
+        use half::f16;
+
+        let temp = tempfile::tempdir().unwrap_or_else(|error| {
+            panic!("a temporary directory for the segment must be creatable: {error}")
+        });
+        let spec = SegmentSpec {
+            segment_id: "segment-1".to_owned(),
+            iid_start: Iid::new(0),
+            dims: 3,
+            generation: Generation::new(1),
+            batch_id: "batch-1".to_owned(),
+            precision: ReferencePrecision::Fp16,
+        };
+        let components = [1.0_f32, 6e-8, -1.0];
+        let mut writer = SegmentWriter::create(temp.path(), spec)
+            .unwrap_or_else(|error| panic!("the segment writer must start: {error}"));
+        writer
+            .append(&components)
+            .unwrap_or_else(|error| panic!("the stored vector must be appended: {error}"));
+        writer
+            .finish()
+            .unwrap_or_else(|error| panic!("the segment must be finished: {error}"));
+        let reader = SegmentReader::open(&temp.path().join("segment-1"))
+            .unwrap_or_else(|error| panic!("the segment must open: {error}"));
+
+        let query = [1.0_f32, 1.0, 1.0];
+        let score = cosine(&reader, Iid::new(0), &query)
+            .unwrap_or_else(|error| panic!("the cosine must be computed: {error}"));
+        let stored: Vec<f16> = components
+            .iter()
+            .map(|component| f16::from_f32(*component))
+            .collect();
+
+        assert_eq!(
+            score.to_bits(),
+            crate::kernels::dot(&stored, &query).to_bits(),
+            "the f16 branch of cosine must be the kernel of ADR-0070, bit for bit"
+        );
+        let sequential: f32 = stored
+            .iter()
+            .zip(query)
+            .map(|(component, query)| component.to_f32() * query)
+            .sum();
+        assert_eq!(
+            sequential, 0.0,
+            "a sequential f32 sum is the case the f64 accumulator exists to avoid"
+        );
+        assert_ne!(
+            score, 0.0,
+            "the small component must survive the accumulation"
         );
     }
 }

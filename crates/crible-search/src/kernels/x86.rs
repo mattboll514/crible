@@ -91,7 +91,7 @@ unsafe fn dot_bits(a: &[f16], b: &[f32]) -> f32 {
     let mut acc_high = _mm256_setzero_pd();
     let mut index = 0;
     // SAFETY: `index + 8 <= len` keeps the 16-byte load of `a`, the 32-byte
-    // load of `b` and the four `u64` stores of the accumulator inside their
+    // load of `b` and the four `f64` stores of the accumulator inside their
     // buffers. `f16` is `repr(transparent)` over `u16` (`half`), so the cast to
     // `*const __m128i` reinterprets the same 16 bytes.
     unsafe {

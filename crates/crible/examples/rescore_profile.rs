@@ -19,7 +19,7 @@
 //! filter, that is the whole live set), keeps the `max(N, k)` candidates of the
 //! **engine's own** binary scan (`dense::binary::top_k`, no replica: the
 //! candidates are the ones the rescoring really receives), and then repeats
-//! `ExactSearcher::rescore` over the `--vectors` queries for `--seconds`. Only
+//! `DenseSearcher::rescore` over the `--vectors` queries for `--seconds`. Only
 //! the rescoring runs in that loop, so every sample of the loop belongs to the
 //! step under study.
 //!
@@ -54,7 +54,7 @@ use std::time::{Duration, Instant};
 use crible_core::config::IndexConfig;
 use crible_core::filter::Filter;
 use crible_search::dense::binary::{self, Candidate};
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::codes::quantize;
@@ -110,12 +110,12 @@ impl Opened {
     }
 
     /// Opens the exact searcher, which reads and checksums every vector file.
-    fn searcher(&self) -> Result<ExactSearcher, Box<dyn std::error::Error>> {
+    fn searcher(&self) -> Result<DenseSearcher, Box<dyn std::error::Error>> {
         let pool = ScanPool::new(self.threads)?;
         let segments = self.snapshot().segments().to_vec();
         let directory = self.segments_directory.clone();
         let records = self.records_path.clone();
-        Ok(pool.install(|| ExactSearcher::open(&directory, &segments, &records))?)
+        Ok(pool.install(|| DenseSearcher::open(&directory, &segments, &records))?)
     }
 }
 

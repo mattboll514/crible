@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use crible_core::config::IndexConfig;
 use crible_core::filter::Filter;
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
 use crible_search::dense::{plan as dense_plan, search as dense_search};
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
     let searcher =
-        scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
+        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
 
     let mut records = Vec::with_capacity(queries.len());
     let mut binary_runs = 0_usize;

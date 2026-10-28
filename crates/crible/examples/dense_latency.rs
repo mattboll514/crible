@@ -50,7 +50,7 @@
 //! line for line: the same windows (`dense::windows`), the same single sparse
 //! traversal with its segment cursor (ADR-0081, ADR-0082), the same bounded heap
 //! and the same `kernels::hamming_function`.
-//! The replica of the exact scoring follows `ExactSearcher::score_slice`: one
+//! The replica of the exact scoring follows `DenseSearcher::score_slice`: one
 //! bounded heap per window, the production dot product (`kernels::dot` for a
 //! stored `f16` row), no key read, since a random corpus produces no exact tie
 //! and the harness reports the ties it met.
@@ -66,7 +66,7 @@ use crible_core::config::IndexConfig;
 use crible_core::filter::Filter;
 use crible_core::ids::Iid;
 use crible_search::dense::binary::Candidate;
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
 use crible_search::dense::{Strategy, plan, search as dense_search};
 use crible_search::kernels;
 use crible_search::pool::Pool;
@@ -153,12 +153,12 @@ impl Opened {
     }
 
     /// Opens the exact searcher, which reads and checksums every vector file.
-    fn searcher(&self) -> Result<ExactSearcher, Box<dyn std::error::Error>> {
+    fn searcher(&self) -> Result<DenseSearcher, Box<dyn std::error::Error>> {
         let pool = ScanPool::new(self.threads)?;
         let segments = self.snapshot().segments().to_vec();
         let directory = self.segments_directory.clone();
         let records = self.records_path.clone();
-        let searcher = pool.install(|| ExactSearcher::open(&directory, &segments, &records))?;
+        let searcher = pool.install(|| DenseSearcher::open(&directory, &segments, &records))?;
         Ok(searcher)
     }
 
@@ -648,7 +648,7 @@ impl FlatVectors {
     ///
     /// `buffer` is reused across candidates, so the allocation is paid once per
     /// query, but **every row is copied** into it before the kernel runs, whereas
-    /// production hands the kernel the mmap slice itself (`ExactSearcher`). The
+    /// production hands the kernel the mmap slice itself (`DenseSearcher`). The
     /// replica is therefore pessimistic: it pays one 1 536-byte copy per
     /// candidate, which the report declares rather than hides.
     fn dot_with(&self, iid: u32, query: &[f32], buffer: &mut Vec<f16>) -> Option<f32> {
@@ -1451,7 +1451,7 @@ fn rescore_mode(
                 }
 
                 if let Some(connection) = &connection {
-                    // Replica of `ExactSearcher::key_of`: the same statement,
+                    // Replica of `DenseSearcher::key_of`: the same statement,
                     // compiled per read as `query_row` does it, on a read-only
                     // connection of the same database.
                     let started = Instant::now();
@@ -1616,7 +1616,7 @@ fn exact_mode(
                     ranges
                         .par_iter()
                         .map(|&(from, to)| {
-                            // Replica of `ExactSearcher::score_slice`: a bounded
+                            // Replica of `DenseSearcher::score_slice`: a bounded
                             // max-heap of the window, worst on top.
                             let mut heap: BinaryHeap<Reverse<ScoreIid>> =
                                 BinaryHeap::with_capacity(k);

@@ -64,7 +64,7 @@ use std::sync::Arc;
 use crible_core::config::{FusionConfig, ScanStrategy, SearchConfig};
 use crible_core::filter::Filter;
 use crible_search::dense::binary::{Candidate, top_k as scan_top_k};
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::dense::{Scored, Strategy, plan, search};
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
@@ -225,7 +225,7 @@ fn run_dense(
     ScanPool::new(workers)
         .unwrap_or_else(|error| panic!("a {workers}-worker scan pool must be buildable: {error}"))
         .install(move || {
-            let searcher = ExactSearcher::open(&segments_dir, snapshot.segments(), &records)
+            let searcher = DenseSearcher::open(&segments_dir, snapshot.segments(), &records)
                 .unwrap_or_else(|error| panic!("the searcher must open: {error}"));
             search(&snapshot, &searcher, &pool, &query(), k, &settings, false)
                 .unwrap_or_else(|error| panic!("the dense search must succeed: {error}"))
@@ -422,7 +422,7 @@ fn the_result_does_not_depend_on_the_scan_pool_worker_count() {
 /// The answer does not depend on the order in which the candidates reach the
 /// rescoring.
 ///
-/// This test calls `ExactSearcher::rescore` directly, because the arrival order
+/// This test calls `DenseSearcher::rescore` directly, because the arrival order
 /// is an internal input of the batched read that no pipeline entry point exposes:
 /// the scan builds its list in Hamming order, and a batched, parallel read hands
 /// its rows back in the order its chunks finished. Four fixed permutations stand

@@ -101,10 +101,10 @@ unsafe fn dot_bits(a: &[f16], b: &[f32]) -> f32 {
     let mut acc_low = vdupq_n_f64(0.0);
     let mut acc_high = vdupq_n_f64(0.0);
     let mut index = 0;
-    // SAFETY: `index + 8 <= len` keeps the two 4-element loads and the two
-    // 4-element loads of `b` inside their slices. `f16` is `repr(transparent)`
-    // over `u16` (`half`), so the cast to `*const u16` is a reinterpretation of
-    // the same 16 bytes.
+    // SAFETY: `index + 8 <= len` keeps the 16-byte load of `a` (eight `f16`)
+    // and the two 4-element loads of `b` inside their slices. `f16` is
+    // `repr(transparent)` over `u16` (`half`), so the cast to `*const u16` is a
+    // reinterpretation of the same 16 bytes.
     unsafe {
         while index + 8 <= len {
             let packed = vld1q_u16(a.as_ptr().add(index).cast::<u16>());
@@ -163,6 +163,24 @@ mod tests {
         assert_eq!(distance, 65);
         // SAFETY: NEON is part of the `aarch64` baseline.
         assert_eq!(unsafe { hamming_bits(&[], &[]) }, 0);
+    }
+
+    #[test]
+    fn neon_hamming_flushes_the_wide_accumulator() {
+        use super::FLUSH_ITERATIONS;
+
+        // One word past `FLUSH_ITERATIONS` four-word iterations: the flush
+        // branch runs at 4 096 words, then the tail loop adds the last word.
+        // The `code()` strategy of `tests/kernels_simd_vs_scalar.rs` stops at
+        // 128 words, so nothing else executes that branch.
+        let len = 4 * FLUSH_ITERATIONS + 1;
+        assert_eq!(len, 4_097, "the width the task sheet names");
+        let a = words(0, len);
+        let b = words(u64::MAX, len);
+        // SAFETY: NEON is part of the `aarch64` baseline.
+        let distance = unsafe { hamming_bits(&a, &b) };
+        assert_eq!(distance, 64 * 4_097);
+        assert_eq!(distance, scalar::hamming(&a, &b));
     }
 
     #[test]

@@ -42,7 +42,7 @@ use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::dense::{DenseQuery, search_grouped as dense_search_grouped};
 use crible_search::group::Grouping;
 use crible_search::pool::Pool;
@@ -549,6 +549,10 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
             request.k
         )));
     }
+    // The regrouping options are validated before the index is opened, the
+    // model loaded and the pool evaluated: a request the command can refuse
+    // pays for none of that.
+    let grouping = grouping_of(request)?;
     let name = path_component(request.index, "index name")?;
     let (index_dir, config) = load_index(request.data, name)?;
     let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
@@ -577,13 +581,12 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     let snapshot = store.snapshot();
     let pool = Pool::evaluate(snapshot.filters(), &filter)?;
-    let grouping = grouping_of(request)?;
     let scan = ScanPool::new(0)?;
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
     let searcher =
-        scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
+        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
     let hits = scan.install(|| {
         dense_search_grouped(
             &snapshot,

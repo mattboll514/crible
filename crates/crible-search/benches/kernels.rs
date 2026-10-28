@@ -60,9 +60,10 @@
 //! On `aarch64` the Hamming kernel is at parity with the reference, because
 //! LLVM already vectorises the `count_ones` loop into `cnt` on a 128-bit
 //! register: the instruction is the same, only the loop that feeds it differs.
-//! Its body is 1.6x faster than the reference at 768 bits (3.55 ns against
-//! 3.60 ns once the 1.33 ns of dispatch is removed on both sides); at
-//! 4 096 bits the two are equal within noise. The vector path is kept for
+//! The SIMD body alone takes 2.22 ns at 768 bits against 3.60 ns for the
+//! scalar reference, 1.6x faster; with the 1.33 ns of dispatch included, the
+//! two are at parity (3.55 ns against 3.60 ns), which is what ADR-0070 records.
+//! At 4 096 bits the two are equal within noise. The vector path is kept for
 //! `x86_64`, where a scalar `popcnt` handles 64 bits per cycle while AVX2
 //! counts 256.
 //!
