@@ -50,5 +50,5 @@ crible = { path = "../clients/python", editable = true }
 torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "bench/mes00/tests", "bench/mes04/tests"]
-pythonpath = [".", "bench/mes00", "bench/mes04"]
+testpaths = ["tests", "bench/mes00/tests", "bench/mes01/tests", "bench/mes02/tests", "bench/mes03/tests", "bench/mes04/tests"]
+pythonpath = [".", "bench/mes00", "bench/mes01", "bench/mes02", "bench/mes03", "bench/mes04"]

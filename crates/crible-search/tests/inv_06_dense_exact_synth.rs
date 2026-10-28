@@ -18,9 +18,9 @@
 //! `crible_search::dense::exact`, as `src/dense/exact.rs` implements it:
 //!
 //! ```text
-//! crible_search::dense::exact::ExactSearcher
+//! crible_search::dense::exact::DenseSearcher
 //!
-//! impl ExactSearcher {
+//! impl DenseSearcher {
 //!     /// Opens one reader per segment, and the payload reader of the epoch.
 //!     pub fn open(segments_dir: &Path, segments: &[SegmentMeta],
 //!                 records_path: &Path) -> Result<Self, CribleError>;
@@ -61,8 +61,15 @@
 //! | Test | Criterion |
 //! |---|---|
 //! | `inv_06_synth_small_200_queries_match_the_numpy_reference` | INV-06, and the three acceptance criteria: same keys, same order, scores within 1e-5 |
+//! | `inv_06_synth_small_200_queries_forced_exact_match_the_p1_reference` | `PLANIFIER-STRATEGIE`: the 200 queries with `exact: true` give the results of P1, under settings that would scan them |
 //! | `expected_jsonl_holds_the_quasi_equalities_the_tolerance_allows` | the premise of the tolerance: 5 queries under 1e-6, 55 under 1e-5 (`tools/README.md`) |
 //! | `tolerance_guards::*` | the tolerance cannot mask a real error |
+//!
+//! The second test is written against the API `PLANIFIER-STRATEGIE` must
+//! provide: `crible_search::dense::plan(&SearchConfig, pool_len, k, exact)` and
+//! `crible_search::dense::search(&Snapshot, &DenseSearcher, &Pool, &[f32], k,
+//! &SearchConfig, exact)`. See `tests/planifier_strategie.rs` for the whole
+//! supposed API.
 //!
 //! # Dataset
 //!
@@ -75,15 +82,17 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use crible_core::config::{IndexConfig, Schema};
+use crible_core::config::{IndexConfig, ScanStrategy, Schema};
 use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation};
 use crible_core::model::ModelConfig;
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
+use crible_search::dense::{Strategy, plan, search};
 use crible_search::pool::Pool;
 use crible_store::attach::attach;
-use crible_store::generation::{GenerationStore, write_index_config};
+use crible_store::generation::{GenerationStore, Snapshot, write_index_config};
 use crible_store::records::RecordStore;
 use serde_json::Value;
 
@@ -351,6 +360,78 @@ fn queries_with_adjacent_gap(expected: &[ExpectedQuery], tolerance: f32) -> usiz
         .count()
 }
 
+/// Index of `synth-small`: the three batches attached in order, generations 1
+/// to 3, and the snapshot of the published generation kept alive with it.
+///
+/// `PLANIFIER-STRATEGIE` added the second test that searches the same index
+/// (with `exact: true`), so the construction lives here instead of inside the
+/// test of `RECHERCHER-DENSE-EXACT`.
+struct SynthIndex {
+    // The directory must outlive the index: dropping it removes the files.
+    _temp: tempfile::TempDir,
+    index: PathBuf,
+    snapshot: Arc<Snapshot>,
+}
+
+impl SynthIndex {
+    /// Builds the index, attaches `l1`, `l2` and `l3`, and takes the snapshot.
+    fn build(dataset: &Dataset) -> Self {
+        let model = dataset_model();
+        let temp = tempfile::tempdir().unwrap_or_else(|error| {
+            panic!("a temporary directory for the index must be creatable: {error}")
+        });
+        let index = temp.path().join("indexes").join("inv-06");
+        let root = dataset_root();
+        write_index_config(&index, &read_file(&root.join("index.json")))
+            .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
+        let mut store = GenerationStore::create(&index, Epoch::new(EPOCH), &dataset.index.schema)
+            .unwrap_or_else(|error| panic!("the index must be created: {error}"));
+
+        for (name, generation) in [("l1", 1), ("l2", 2), ("l3", 3)] {
+            let batch = root.join(name);
+            assert!(
+                batch.join("manifest.json").is_file(),
+                "the synthetic batch '{name}' is missing at {}; generate the dataset:\n  \
+                 {DATASET_COMMAND}",
+                batch.display()
+            );
+            attach_batch(&mut store, &batch, &dataset.index, &model);
+            assert_eq!(
+                store.generation(),
+                Generation::new(generation),
+                "{name} must publish generation {generation}"
+            );
+        }
+
+        let snapshot = store.snapshot();
+        Self {
+            _temp: temp,
+            index,
+            snapshot,
+        }
+    }
+
+    /// Snapshot of the published generation.
+    fn snapshot(&self) -> Arc<Snapshot> {
+        Arc::clone(&self.snapshot)
+    }
+
+    /// Searcher over the segments of the published generation.
+    fn searcher(&self, snapshot: &Snapshot) -> DenseSearcher {
+        DenseSearcher::open(
+            &segments_dir(&self.index),
+            snapshot.segments(),
+            &self.records_path(),
+        )
+        .unwrap_or_else(|error| panic!("the searcher must open over the dataset: {error}"))
+    }
+
+    /// Path of `records.sqlite` of the epoch.
+    fn records_path(&self) -> PathBuf {
+        records_path(&self.index)
+    }
+}
+
 // --- Tests ---
 
 /// INV-06, on the 200 queries of `synth-small`: the exact search returns the
@@ -359,41 +440,9 @@ fn queries_with_adjacent_gap(expected: &[ExpectedQuery], tolerance: f32) -> usiz
 #[test]
 fn inv_06_synth_small_200_queries_match_the_numpy_reference() {
     let dataset = Dataset::load();
-    let model = dataset_model();
-
-    let temp = tempfile::tempdir().unwrap_or_else(|error| {
-        panic!("a temporary directory for the index must be creatable: {error}")
-    });
-    let index_dir = temp.path().join("indexes").join("inv-06");
-    let root = dataset_root();
-    write_index_config(&index_dir, &read_file(&root.join("index.json")))
-        .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
-    let mut store = GenerationStore::create(&index_dir, Epoch::new(EPOCH), &dataset.index.schema)
-        .unwrap_or_else(|error| panic!("the index must be created: {error}"));
-
-    for (name, generation) in [("l1", 1), ("l2", 2), ("l3", 3)] {
-        let batch = root.join(name);
-        assert!(
-            batch.join("manifest.json").is_file(),
-            "the synthetic batch '{name}' is missing at {}; generate the dataset:\n  \
-             {DATASET_COMMAND}",
-            batch.display()
-        );
-        attach_batch(&mut store, &batch, &dataset.index, &model);
-        assert_eq!(
-            store.generation(),
-            Generation::new(generation),
-            "{name} must publish generation {generation}"
-        );
-    }
-
-    let snapshot = store.snapshot();
-    let searcher = ExactSearcher::open(
-        &segments_dir(&index_dir),
-        snapshot.segments(),
-        &records_path(&index_dir),
-    )
-    .unwrap_or_else(|error| panic!("the searcher must open over the dataset: {error}"));
+    let index = SynthIndex::build(&dataset);
+    let snapshot = index.snapshot();
+    let searcher = index.searcher(&snapshot);
 
     let mut inverted_pairs = 0;
     let mut boundary_replacements = 0;
@@ -451,7 +500,7 @@ fn inv_06_synth_small_200_queries_match_the_numpy_reference() {
     // The payload of the k results comes from the records of the epoch, not
     // from the search structures: read them again through the store and check
     // that each hit carries the fields and the text of its own passage.
-    let records = RecordStore::open(&records_path(&index_dir))
+    let records = RecordStore::open(&index.records_path())
         .unwrap_or_else(|error| panic!("the records of the epoch must open: {error}"));
     let query = &dataset.queries[0];
     let filter = query.parsed_filter(&dataset.index.schema);
@@ -497,6 +546,106 @@ fn inv_06_synth_small_200_queries_match_the_numpy_reference() {
             hit.ord
         );
     }
+}
+
+/// The acceptance criterion of `PLANIFIER-STRATEGIE`: the 200 queries of
+/// `synth-small` with `exact: true` give the same results as in P1, compared to
+/// `expected.jsonl` as ADR-0045 leaves it — keys and order, scores within
+/// `1e-5`, the adjacent inversions and the k-th place replacement the sheet
+/// allows.
+///
+/// The dataset plans its pools exactly today (`scan: none` in `index.json`), so
+/// the settings are replaced here by the worst case: the binary scan enabled, a
+/// threshold of `0` and an `N` of `5`. Without the option every query would be
+/// scanned and rescored on five candidates; with it, every query must return
+/// the reference, on a real pool of up to 10 000 passages.
+#[test]
+fn inv_06_synth_small_200_queries_forced_exact_match_the_p1_reference() {
+    let dataset = Dataset::load();
+    let index = SynthIndex::build(&dataset);
+    let snapshot = index.snapshot();
+    let searcher = index.searcher(&snapshot);
+
+    let mut settings = dataset.index.search.clone();
+    settings.scan = ScanStrategy::Binary;
+    settings.exact_threshold = 0;
+    settings.rescore_candidates = 5;
+
+    let mut forced = 0_usize;
+    let mut inverted_pairs = 0;
+    let mut boundary_replacements = 0;
+    for (query, expected) in dataset.queries.iter().zip(dataset.expected.iter()) {
+        assert_eq!(
+            query.query_id, expected.query_id,
+            "queries.jsonl and expected.jsonl must be in the same order"
+        );
+        let filter = query.parsed_filter(&dataset.index.schema);
+        let pool = Pool::evaluate(snapshot.filters(), &filter).unwrap_or_else(|error| {
+            panic!(
+                "the pool of query {} must evaluate: {error}",
+                query.query_id
+            )
+        });
+        assert_eq!(
+            pool.len(),
+            expected.pool_size,
+            "query {}: the pool must hold the {} live passages of the reference, got {}",
+            query.query_id,
+            expected.pool_size,
+            pool.len()
+        );
+        if !pool.is_empty() {
+            assert_eq!(
+                plan(&settings, pool.len(), query.k, false).strategy,
+                Strategy::Binary,
+                "query {}: the settings of the test must plan BINARY without the option",
+                query.query_id
+            );
+        }
+        assert_eq!(
+            plan(&settings, pool.len(), query.k, true).strategy,
+            Strategy::Exact,
+            "query {}: exact: true must force EXACT",
+            query.query_id
+        );
+        forced += 1;
+
+        let hits = search(
+            &snapshot,
+            &searcher,
+            &pool,
+            &query.vector,
+            query.k,
+            &settings,
+            true,
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "the forced exact search of query {} must succeed: {error}",
+                query.query_id
+            )
+        });
+        assert_eq!(
+            hits.len(),
+            expected.results.len(),
+            "query {}: the forced exact search must return the min(k, pool_size) results of the \
+             reference",
+            query.query_id
+        );
+        let summary = compare_to_reference(query.query_id, &expected.results, &hits)
+            .unwrap_or_else(|message| panic!("{message}"));
+        inverted_pairs += summary.inverted_pairs;
+        boundary_replacements += summary.boundary_replacements;
+    }
+    assert_eq!(
+        forced, 200,
+        "the test must replay the 200 queries of the dataset"
+    );
+    eprintln!(
+        "PLANIFIER-STRATEGIE: {forced} forced exact queries of synth-small compared to the P1 \
+         reference; {inverted_pairs} allowed adjacent inversion(s), {boundary_replacements} \
+         allowed k-th place replacement(s)"
+    );
 }
 
 /// The tolerance of the sheet is written for a measured state of the dataset:

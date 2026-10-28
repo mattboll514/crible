@@ -1020,6 +1020,17 @@ impl ReadPool {
         self.with_connection(|connection| passage_key_by_iid(connection, iid))
     }
 
+    /// Reads the content digest of one passage by internal identifier, or
+    /// `None` when it is unknown.
+    ///
+    /// Only `passage_hash` is read, so `dedup: content` compares its candidates
+    /// without paying for the text and the fields of the payload step
+    /// (`docs/04-donnees-et-ingestion.md`, `passage_hash`; `docs/03-recherche.md`,
+    /// step 7 before step 8).
+    pub fn read_passage_hash(&self, iid: Iid) -> Result<Option<String>, CribleError> {
+        self.with_connection(|connection| passage_hash_by_iid(connection, iid))
+    }
+
     /// Runs a trivial query on one pooled connection.
     ///
     /// [`ReadPool::new`] opens nothing, and SQLite does not validate the file
@@ -1454,6 +1465,25 @@ pub(crate) fn passage_key_by_iid(
         )
     })?;
     Ok(Some(PassageKey::new(doc_id, ord)))
+}
+
+/// Reads the content digest of one passage, the query "passage hash by iid".
+///
+/// `dedup: content` compares this digest of its candidates before the payload
+/// step, so the text and the fields stay unread (`docs/03-recherche.md`, step 7
+/// runs before step 8; `docs/04-donnees-et-ingestion.md`, `passage_hash`).
+pub(crate) fn passage_hash_by_iid(
+    connection: &Connection,
+    iid: Iid,
+) -> Result<Option<String>, CribleError> {
+    connection
+        .query_row(
+            "SELECT passage_hash FROM passages WHERE iid = ?1",
+            params![i64::from(iid.get())],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| database_error("read a passage hash", &error))
 }
 
 /// Reads one document, the query "documents by id".

@@ -1,0 +1,209 @@
+{
+ "commit": "5542ac095e4404cf2a4ff294309fbf95dfe50df2",
+ "dataset": {
+  "dims": 768,
+  "index": "data/mes02/indexes/synth-large (measurement copy)",
+  "live_passages": 7740000,
+  "name": "synth-large",
+  "queries": 300,
+  "queries_law": "standard normal, normalised to the unit sphere (as the passages of synth-large)",
+  "queries_seed": 20261021,
+  "queries_sha256": "03cb2a2b3bb7951892179ee8d612b0970626f0f041fe6b3e18c2f0393452948b",
+  "queries_stream": 7
+ },
+ "date": "2026-10-27",
+ "index_runs": [
+  {
+   "codes_bytes": 825600000,
+   "filter_memory_bytes": 361661936,
+   "label": "rss-base-1",
+   "live_passages": 7740000,
+   "passes": 1,
+   "queries": 300,
+   "states": {
+    "after_open": {
+     "anonymous_bytes": 1203748864,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 1203765248,
+     "swapped_bytes": 0
+    },
+    "after_pass": {
+     "anonymous_bytes": 892914893,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 4080218931,
+     "resident_bytes": 4973133824,
+     "swapped_bytes": 347321139
+    },
+    "after_searcher": {
+     "anonymous_bytes": 1203568640,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 1203585024,
+     "swapped_bytes": 262144
+    }
+   }
+  },
+  {
+   "codes_bytes": 825600000,
+   "filter_memory_bytes": 361661936,
+   "label": "rss-base-2",
+   "live_passages": 7740000,
+   "passes": 1,
+   "queries": 300,
+   "states": {
+    "after_open": {
+     "anonymous_bytes": 696893440,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 696909824,
+     "swapped_bytes": 506986496
+    },
+    "after_pass": {
+     "anonymous_bytes": 893075456,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 4294967296,
+     "resident_bytes": 5188042752,
+     "swapped_bytes": 329134899
+    },
+    "after_searcher": {
+     "anonymous_bytes": 53510144,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 53526528,
+     "swapped_bytes": 1150507416
+    }
+   }
+  },
+  {
+   "codes_bytes": 825600000,
+   "filter_memory_bytes": 361661936,
+   "label": "rss-base-3",
+   "live_passages": 7740000,
+   "passes": 1,
+   "queries": 300,
+   "states": {
+    "after_open": {
+     "anonymous_bytes": 1203765248,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 1203781632,
+     "swapped_bytes": 0
+    },
+    "after_pass": {
+     "anonymous_bytes": 903145063,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 4187593113,
+     "resident_bytes": 5090738176,
+     "swapped_bytes": 362286284
+    },
+    "after_searcher": {
+     "anonymous_bytes": 992149504,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 992165888,
+     "swapped_bytes": 211750092
+    }
+   }
+  }
+ ],
+ "machine": "MacBook Air M3 (Mac15,12), 8 cores, 24 GB, macOS 15.7.7 (24G720), APFS, native",
+ "measure": "MES-09",
+ "model_runs": [
+  {
+   "codes_bytes": 825600000,
+   "filter_memory_bytes": 361661936,
+   "label": "rss-model-cold-1",
+   "live_passages": 7740000,
+   "model": {
+    "after": {
+     "anonymous_bytes": 1632960512,
+     "footprint_bytes": 2362232012,
+     "mapped_file_bytes": 688128,
+     "resident_bytes": 1633648640,
+     "swapped_bytes": 1217866342
+    },
+    "before": {
+     "anonymous_bytes": 856866816,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 856883200,
+     "swapped_bytes": 346868940
+    }
+   },
+   "passes": 0,
+   "queries": 300,
+   "states": {
+    "after_open": {
+     "anonymous_bytes": 1203601408,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 1203617792,
+     "swapped_bytes": 0
+    },
+    "after_pass": {
+     "anonymous_bytes": 856850432,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 856866816,
+     "swapped_bytes": 346973798
+    },
+    "after_searcher": {
+     "anonymous_bytes": 856768512,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 856784896,
+     "swapped_bytes": 346990182
+    }
+   }
+  },
+  {
+   "codes_bytes": 825600000,
+   "filter_memory_bytes": 361661936,
+   "label": "rss-model-cold-2",
+   "live_passages": 7740000,
+   "model": {
+    "after": {
+     "anonymous_bytes": 1642348544,
+     "footprint_bytes": 2469606195,
+     "mapped_file_bytes": 688128,
+     "resident_bytes": 1643036672,
+     "swapped_bytes": 1199600434
+    },
+    "before": {
+     "anonymous_bytes": 146800640,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 146817024,
+     "swapped_bytes": 1046278962
+    }
+   },
+   "passes": 0,
+   "queries": 300,
+   "states": {
+    "after_open": {
+     "anonymous_bytes": 1205354496,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 1205370880,
+     "swapped_bytes": 0
+    },
+    "after_pass": {
+     "anonymous_bytes": 159236096,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 159252480,
+     "swapped_bytes": 1001724313
+    },
+    "after_searcher": {
+     "anonymous_bytes": 203685888,
+     "footprint_bytes": 1181116006,
+     "mapped_file_bytes": 16384,
+     "resident_bytes": 203702272,
+     "swapped_bytes": 1001740697
+    }
+   }
+  }
+ ],
+ "protocol": "ADR-0077"
+}

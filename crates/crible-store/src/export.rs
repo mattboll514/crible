@@ -190,7 +190,7 @@ pub struct ExportReport {
 /// - [`ErrorCode::InvalidRequest`] when `<exchange>/outbox/<index>-g<G>/` already
 ///   exists: an export never overwrites a batch;
 /// - [`ErrorCode::Overloaded`] when the index commits faster than the export can
-///   read one generation: after [`MAX_GENERATION_ATTEMPTS`] attempts, each on a
+///   read one generation: after `MAX_GENERATION_ATTEMPTS` attempts, each on a
 ///   fresh snapshot, the writer had moved every time. The cause is a retryable
 ///   race with the writer, not a corrupt state (ADR-0061, décision 5), and
 ///   `docs/05-api.md` attaches `Retry-After` to the code at the API layer;

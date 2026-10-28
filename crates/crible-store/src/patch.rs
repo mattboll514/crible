@@ -17,7 +17,7 @@
 //! publishes the snapshot with the filter structures of the generation, copied
 //! on write. The `documents` rows this commit writes are the delta that selects
 //! the documents whose inherited fields are refreshed for their passages
-//! ([`crate::filters_index::FilterIndex::after_commit`], ADR-0066).
+//! (`crate::filters_index::FilterIndex::after_commit`, ADR-0066).
 //!
 //! # Input
 //!

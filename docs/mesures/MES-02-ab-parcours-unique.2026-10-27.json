@@ -1,0 +1,3245 @@
+{
+ "budget": [
+  {
+   "copy": "synth-large",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "p50_us": [
+    8254.707999999999,
+    7273.75,
+    7163.916
+   ],
+   "p50_us_max": 8254.707999999999,
+   "p50_us_median": 7273.75,
+   "p50_us_min": 7163.916,
+   "p95_us": [
+    9589.416,
+    8666.958,
+    8343.583
+   ],
+   "p95_us_max": 9589.416,
+   "p95_us_median": 8666.958,
+   "p95_us_min": 8343.583,
+   "segments": 1,
+   "size": 1000000
+  },
+  {
+   "copy": "synth-large",
+   "label": "full",
+   "n": 5000,
+   "p50_us": [
+    39898.834,
+    37310.25,
+    36749.542
+   ],
+   "p50_us_max": 39898.834,
+   "p50_us_median": 37310.25,
+   "p50_us_min": 36749.542,
+   "p95_us": [
+    49421.5,
+    41629.792,
+    40492.958000000006
+   ],
+   "p95_us_max": 49421.5,
+   "p95_us_median": 41629.792,
+   "p95_us_min": 40492.958000000006,
+   "segments": 1,
+   "size": 7740000
+  },
+  {
+   "copy": "synth-large-8seg",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "p50_us": [
+    7099.459,
+    6737.875,
+    7167.167
+   ],
+   "p50_us_max": 7167.167,
+   "p50_us_median": 7099.459,
+   "p50_us_min": 6737.875,
+   "p95_us": [
+    8339.666000000001,
+    7861.417,
+    8479.917
+   ],
+   "p95_us_max": 8479.917,
+   "p95_us_median": 8339.666000000001,
+   "p95_us_min": 7861.417,
+   "segments": 8,
+   "size": 1000000
+  },
+  {
+   "copy": "synth-large-8seg",
+   "label": "full",
+   "n": 5000,
+   "p50_us": [
+    36712.666,
+    36072.125,
+    36556.458
+   ],
+   "p50_us_max": 36712.666,
+   "p50_us_median": 36556.458,
+   "p50_us_min": 36072.125,
+   "p95_us": [
+    40113.917,
+    39707.833,
+    40432.5
+   ],
+   "p95_us_max": 40432.5,
+   "p95_us_median": 40113.917,
+   "p95_us_min": 39707.833,
+   "segments": 8,
+   "size": 7740000
+  },
+  {
+   "copy": "synth-large-multi",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "p50_us": [
+    6922.083,
+    7260.75,
+    7187.834
+   ],
+   "p50_us_max": 7260.75,
+   "p50_us_median": 7187.834,
+   "p50_us_min": 6922.083,
+   "p95_us": [
+    7874.4169999999995,
+    8591.0,
+    8522.166
+   ],
+   "p95_us_max": 8591.0,
+   "p95_us_median": 8522.166,
+   "p95_us_min": 7874.4169999999995,
+   "segments": 100,
+   "size": 1000000
+  },
+  {
+   "copy": "synth-large-multi",
+   "label": "full",
+   "n": 5000,
+   "p50_us": [
+    35860.875,
+    37348.375,
+    37111.584
+   ],
+   "p50_us_max": 37348.375,
+   "p50_us_median": 37111.584,
+   "p50_us_min": 35860.875,
+   "p95_us": [
+    38240.458999999995,
+    41476.875,
+    41919.375
+   ],
+   "p95_us_max": 41919.375,
+   "p95_us_median": 41476.875,
+   "p95_us_min": 38240.458999999995,
+   "segments": 100,
+   "size": 7740000
+  }
+ ],
+ "campaign": "v\u00e9rification A/B du parcours unique (ADR-0082)",
+ "commit": "4a06e7c6fc21d1228453f84407c029b677985982",
+ "controls": {
+  "synth-large": [
+   {
+    "copy": "synth-large",
+    "identical": true,
+    "pools_checked": 16,
+    "queries_checked": 5,
+    "segments": 1,
+    "side": "old"
+   },
+   {
+    "copy": "synth-large",
+    "identical": true,
+    "pools_checked": 16,
+    "queries_checked": 5,
+    "segments": 1,
+    "side": "new"
+   }
+  ],
+  "synth-large-8seg": [
+   {
+    "copy": "synth-large-8seg",
+    "identical": true,
+    "pools_checked": 18,
+    "queries_checked": 5,
+    "segments": 8,
+    "side": "old"
+   },
+   {
+    "copy": "synth-large-8seg",
+    "identical": true,
+    "pools_checked": 18,
+    "queries_checked": 5,
+    "segments": 8,
+    "side": "new"
+   }
+  ],
+  "synth-large-multi": [
+   {
+    "copy": "synth-large-multi",
+    "identical": true,
+    "pools_checked": 16,
+    "queries_checked": 5,
+    "segments": 100,
+    "side": "old"
+   },
+   {
+    "copy": "synth-large-multi",
+    "identical": true,
+    "pools_checked": 16,
+    "queries_checked": 5,
+    "segments": 100,
+    "side": "new"
+   }
+  ]
+ },
+ "dataset": {
+  "dims": 768,
+  "indexes": {
+   "synth-large": "data/mes02/indexes/synth-large",
+   "synth-large-8seg": "data/mes02/indexes/synth-large-8seg",
+   "synth-large-multi": "data/mes02/indexes/synth-large-multi"
+  },
+  "live_passages": 7740000,
+  "name": "synth-large",
+  "queries": 300,
+  "queries_law": "standard normal, normalised to the unit sphere (as the passages of synth-large)",
+  "queries_seed": 20261021,
+  "queries_sha256": "03cb2a2b3bb7951892179ee8d612b0970626f0f041fe6b3e18c2f0393452948b",
+  "queries_stream": 7,
+  "threads": 8
+ },
+ "date": "2026-10-27",
+ "documents": [
+  "ab-old-synth-large-r1.json",
+  "ab-new-synth-large-r1.json",
+  "ab-old-synth-large-r2.json",
+  "ab-new-synth-large-r2.json",
+  "ab-old-synth-large-r3.json",
+  "ab-new-synth-large-r3.json",
+  "ab-old-synth-large-8seg-r1.json",
+  "ab-new-synth-large-8seg-r1.json",
+  "ab-old-synth-large-8seg-r2.json",
+  "ab-new-synth-large-8seg-r2.json",
+  "ab-old-synth-large-8seg-r3.json",
+  "ab-new-synth-large-8seg-r3.json",
+  "ab-old-synth-large-multi-r1.json",
+  "ab-new-synth-large-multi-r1.json",
+  "ab-old-synth-large-multi-r2.json",
+  "ab-new-synth-large-multi-r2.json",
+  "ab-old-synth-large-multi-r3.json",
+  "ab-new-synth-large-multi-r3.json"
+ ],
+ "machine": "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7, native",
+ "measure": "MES-02",
+ "old_commit": "e7d4e08",
+ "protocol": "ADR-0077 (N = 5000, 300 requ\u00eates, p50/p95/p99), ADR-0082 d\u00e9cisions 2 et 3 (binaire ancien de e7d4e08, trois copies, trois paires altern\u00e9es, r\u00e8gle de bruit)",
+ "rows": [
+  {
+   "copy": "synth-large",
+   "density": 0.900000090000009,
+   "gap_amplitude_points": 20.720330632680074,
+   "gap_max_percent": 12.005440495462816,
+   "gap_median_percent": -8.373710211194412,
+   "gap_min_percent": -8.714890137217258,
+   "kind": "contiguous",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "new_p50_us": [
+    8254.707999999999,
+    7273.75,
+    7163.916
+   ],
+   "new_p95_us": [
+    9589.416,
+    8666.958,
+    8343.583
+   ],
+   "old_p50_us": [
+    7369.917,
+    7968.167,
+    7818.624999999999
+   ],
+   "old_p95_us": [
+    8339.5,
+    9276.833,
+    9137.625
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -6.968936353898533,
+   "p50_gaps_percent": [
+    12.005440495462816,
+    -8.714890137217258,
+    -8.373710211194412
+   ],
+   "p95_gap_amplitude_points": 23.6777082062733,
+   "p95_gap_median_percent": -6.574172457346165,
+   "p95_gaps_percent": [
+    14.987900953294552,
+    -6.574172457346165,
+    -8.68980725297875
+   ],
+   "segments": 1,
+   "size": 1000000,
+   "span": 1111111,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.900000104651175,
+   "gap_amplitude_points": 13.520112500390969,
+   "gap_max_percent": -11.661305303244156,
+   "gap_median_percent": -22.026951937429484,
+   "gap_min_percent": -25.181417803635124,
+   "kind": "full",
+   "label": "full",
+   "n": 5000,
+   "new_p50_us": [
+    39898.834,
+    37310.25,
+    36749.542
+   ],
+   "new_p95_us": [
+    49421.5,
+    41629.792,
+    40492.958000000006
+   ],
+   "old_p50_us": [
+    45165.75,
+    49867.625,
+    47131.083
+   ],
+   "old_p95_us": [
+    52713.833,
+    57807.667,
+    51115.583
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -20.837274203947317,
+   "p50_gaps_percent": [
+    -11.661305303244156,
+    -25.181417803635124,
+    -22.026951937429484
+   ],
+   "p95_gap_amplitude_points": 21.740019099115663,
+   "p95_gap_median_percent": -20.781578486544884,
+   "p95_gaps_percent": [
+    -6.245671795484876,
+    -27.98569089460054,
+    -20.781578486544884
+   ],
+   "segments": 1,
+   "size": 7740000,
+   "span": 8599999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.10000080000640005,
+   "gap_amplitude_points": 15.28819845244566,
+   "gap_max_percent": 8.77412513551682,
+   "gap_median_percent": -4.2300379773360826,
+   "gap_min_percent": -6.514073316928839,
+   "kind": "density",
+   "label": "density-1000000-10",
+   "n": 5000,
+   "new_p50_us": [
+    3116.333,
+    3002.667,
+    2882.833
+   ],
+   "new_p95_us": [
+    3554.625,
+    3276.292,
+    3313.375
+   ],
+   "old_p50_us": [
+    2864.958,
+    3135.291,
+    3083.708
+   ],
+   "old_p95_us": [
+    3094.375,
+    3440.792,
+    3371.041
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -2.6280374146968577,
+   "p50_gaps_percent": [
+    8.77412513551682,
+    -4.2300379773360826,
+    -6.514073316928839
+   ],
+   "p95_gap_amplitude_points": 19.654638907053943,
+   "p95_gap_median_percent": -1.7106288532236829,
+   "p95_gaps_percent": [
+    14.87376287618663,
+    -4.780876030867312,
+    -1.7106288532236829
+   ],
+   "segments": 1,
+   "size": 100000,
+   "span": 999992,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.25000025000025,
+   "gap_amplitude_points": 12.745244733399375,
+   "gap_max_percent": 10.920367717977362,
+   "gap_median_percent": 3.3809353437260334,
+   "gap_min_percent": -1.8248770154220124,
+   "kind": "density",
+   "label": "density-1000000-25",
+   "n": 5000,
+   "new_p50_us": [
+    4415.0,
+    4342.0,
+    4550.958
+   ],
+   "new_p95_us": [
+    4861.625,
+    4648.959,
+    4940.875
+   ],
+   "old_p50_us": [
+    3980.333,
+    4422.709000000001,
+    4402.125
+   ],
+   "old_p95_us": [
+    4340.125,
+    4709.375,
+    5394.583
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 0.2924723854956413,
+   "p50_gaps_percent": [
+    10.920367717977362,
+    -1.8248770154220124,
+    3.3809353437260334
+   ],
+   "p95_gap_amplitude_points": 20.426219869775643,
+   "p95_gap_median_percent": -1.2828878566688822,
+   "p95_gaps_percent": [
+    12.015782955560034,
+    -1.2828878566688822,
+    -8.410436914215607
+   ],
+   "segments": 1,
+   "size": 250000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.4000004000004,
+   "gap_amplitude_points": 11.832730065363428,
+   "gap_max_percent": 8.674112111842998,
+   "gap_median_percent": 4.7688705268813845,
+   "gap_min_percent": -3.15861795352043,
+   "kind": "density",
+   "label": "density-1000000-40",
+   "n": 5000,
+   "new_p50_us": [
+    5052.667,
+    4950.2080000000005,
+    5247.0
+   ],
+   "new_p95_us": [
+    5691.625,
+    5665.583,
+    5985.25
+   ],
+   "old_p50_us": [
+    4649.375,
+    5111.666,
+    5008.167
+   ],
+   "old_p95_us": [
+    5295.75,
+    5724.375,
+    5722.375
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 0.8885486446438388,
+   "p50_gaps_percent": [
+    8.674112111842998,
+    -3.15861795352043,
+    4.7688705268813845
+   ],
+   "p95_gap_amplitude_points": 8.502380615050802,
+   "p95_gap_median_percent": 4.593809388584286,
+   "p95_gaps_percent": [
+    7.475333994240664,
+    -1.0270466208101385,
+    4.593809388584286
+   ],
+   "segments": 1,
+   "size": 400000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.5000005000005,
+   "gap_amplitude_points": 9.676008955679995,
+   "gap_max_percent": -7.851823941582063,
+   "gap_median_percent": -12.573502299675908,
+   "gap_min_percent": -17.52783289726206,
+   "kind": "density",
+   "label": "density-1000000-50",
+   "n": 5000,
+   "new_p50_us": [
+    5634.7080000000005,
+    5393.542,
+    5631.25
+   ],
+   "new_p95_us": [
+    6343.292,
+    6338.166,
+    6687.167
+   ],
+   "old_p50_us": [
+    6114.834000000001,
+    6539.8330000000005,
+    6441.125
+   ],
+   "old_p95_us": [
+    7086.165999999999,
+    7784.5,
+    7492.7919999999995
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -12.573502299675908,
+   "p50_gaps_percent": [
+    -7.851823941582063,
+    -17.52783289726206,
+    -12.573502299675908
+   ],
+   "p95_gap_amplitude_points": 8.096224166718006,
+   "p95_gap_median_percent": -10.752000055520014,
+   "p95_gaps_percent": [
+    -10.483440551632562,
+    -18.579664718350568,
+    -10.752000055520014
+   ],
+   "segments": 1,
+   "size": 500000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.6000006000006,
+   "gap_amplitude_points": 6.600539451645295,
+   "gap_max_percent": -8.758865564984362,
+   "gap_median_percent": -8.814205564231587,
+   "gap_min_percent": -15.359405016629657,
+   "kind": "density",
+   "label": "density-1000000-60",
+   "n": 5000,
+   "new_p50_us": [
+    5911.917,
+    5853.708,
+    6128.667
+   ],
+   "new_p95_us": [
+    6701.459,
+    6920.084,
+    7308.041
+   ],
+   "old_p50_us": [
+    6483.375,
+    6915.958,
+    6717.0
+   ],
+   "old_p95_us": [
+    7498.7919999999995,
+    8241.0,
+    7920.165999999999
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -11.985752568110758,
+   "p50_gaps_percent": [
+    -8.814205564231587,
+    -15.359405016629657,
+    -8.758865564984362
+   ],
+   "p95_gap_amplitude_points": 8.299899743597733,
+   "p95_gap_median_percent": -10.632819259422046,
+   "p95_gaps_percent": [
+    -10.632819259422046,
+    -16.028588763499577,
+    -7.728689019901845
+   ],
+   "segments": 1,
+   "size": 600000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.75000075000075,
+   "gap_amplitude_points": 11.981700858416717,
+   "gap_max_percent": -4.509587798751115,
+   "gap_median_percent": -5.638520415376202,
+   "gap_min_percent": -16.491288657167832,
+   "kind": "density",
+   "label": "density-1000000-75",
+   "n": 5000,
+   "new_p50_us": [
+    6566.0,
+    6524.083,
+    6708.0
+   ],
+   "new_p95_us": [
+    7523.833,
+    7812.875,
+    8154.375
+   ],
+   "old_p50_us": [
+    6876.083,
+    7812.4580000000005,
+    7108.8330000000005
+   ],
+   "old_p95_us": [
+    8046.75,
+    9449.083,
+    8411.167000000001
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -7.636035338008369,
+   "p50_gaps_percent": [
+    -4.509587798751115,
+    -16.491288657167832,
+    -5.638520415376202
+   ],
+   "p95_gap_amplitude_points": 14.263061707635583,
+   "p95_gap_median_percent": -6.498486966787838,
+   "p95_gaps_percent": [
+    -6.498486966787838,
+    -17.31605066862044,
+    -3.052988960984858
+   ],
+   "segments": 1,
+   "size": 750000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.9000009000009,
+   "gap_amplitude_points": 6.698693633248582,
+   "gap_max_percent": 2.1466668968732217,
+   "gap_median_percent": -0.4220438228754804,
+   "gap_min_percent": -4.55202673637536,
+   "kind": "density",
+   "label": "density-1000000-90",
+   "n": 5000,
+   "new_p50_us": [
+    7395.291,
+    7211.3330000000005,
+    7333.7919999999995
+   ],
+   "new_p95_us": [
+    8337.834,
+    8671.666,
+    8744.0
+   ],
+   "old_p50_us": [
+    7239.875,
+    7555.25,
+    7364.875
+   ],
+   "old_p95_us": [
+    8395.417000000001,
+    8854.459,
+    8612.791
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -0.4220438228754804,
+   "p50_gaps_percent": [
+    2.1466668968732217,
+    -4.55202673637536,
+    -0.4220438228754804
+   ],
+   "p95_gap_amplitude_points": 3.587837711919904,
+   "p95_gap_median_percent": -0.6858861209633843,
+   "p95_gaps_percent": [
+    -0.6858861209633843,
+    -2.0644174872795897,
+    1.5234202246403141
+   ],
+   "segments": 1,
+   "size": 900000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.10000001291989831,
+   "gap_amplitude_points": 22.146110388172417,
+   "gap_max_percent": 22.820832513069536,
+   "gap_median_percent": 4.024426682602525,
+   "gap_min_percent": 0.674722124897119,
+   "kind": "density",
+   "label": "density-7740000-10",
+   "n": 5000,
+   "new_p50_us": [
+    14037.5,
+    13925.75,
+    13596.834
+   ],
+   "new_p95_us": [
+    16861.25,
+    15866.042,
+    15997.917000000001
+   ],
+   "old_p50_us": [
+    11429.25,
+    13387.0,
+    13505.708
+   ],
+   "old_p95_us": [
+    12776.416000000001,
+    15413.833,
+    15454.125
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 4.024426682602525,
+   "p50_gaps_percent": [
+    22.820832513069536,
+    4.024426682602525,
+    0.674722124897119
+   ],
+   "p95_gap_amplitude_points": 29.037886619858668,
+   "p95_gap_median_percent": 3.51874984834147,
+   "p95_gaps_percent": [
+    31.971673433300847,
+    2.933786813442178,
+    3.51874984834147
+   ],
+   "segments": 1,
+   "size": 774000,
+   "span": 7739999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.25000003229974577,
+   "gap_amplitude_points": 4.564276897445925,
+   "gap_max_percent": 8.360263356484511,
+   "gap_median_percent": 4.435459844306093,
+   "gap_min_percent": 3.795986459038586,
+   "kind": "density",
+   "label": "density-7740000-25",
+   "n": 5000,
+   "new_p50_us": [
+    19247.041,
+    19612.5,
+    19163.334
+   ],
+   "new_p95_us": [
+    21125.042,
+    20985.625,
+    20763.917
+   ],
+   "old_p50_us": [
+    17762.084000000003,
+    18779.541,
+    18462.5
+   ],
+   "old_p95_us": [
+    20080.208,
+    21706.5,
+    20114.375
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 4.249375761679085,
+   "p50_gaps_percent": [
+    8.360263356484511,
+    4.435459844306093,
+    3.795986459038586
+   ],
+   "p95_gap_amplitude_points": 8.524312510715866,
+   "p95_gap_median_percent": 3.229242767920958,
+   "p95_gaps_percent": [
+    5.2033026749523845,
+    -3.321009835763481,
+    3.229242767920958
+   ],
+   "segments": 1,
+   "size": 1935000,
+   "span": 7739999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.40000005167959324,
+   "gap_amplitude_points": 9.462020010418986,
+   "gap_max_percent": 11.595663229943204,
+   "gap_median_percent": 6.655864026625788,
+   "gap_min_percent": 2.1336432195242176,
+   "kind": "density",
+   "label": "density-7740000-40",
+   "n": 5000,
+   "new_p50_us": [
+    23265.417,
+    22872.75,
+    22555.875
+   ],
+   "new_p95_us": [
+    25193.666999999998,
+    25107.167,
+    24355.417
+   ],
+   "old_p50_us": [
+    20847.958,
+    21445.375,
+    22084.666999999998
+   ],
+   "old_p95_us": [
+    22430.790999999997,
+    22657.375,
+    24821.25
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 6.655864026625788,
+   "p50_gaps_percent": [
+    11.595663229943204,
+    6.655864026625788,
+    2.1336432195242176
+   ],
+   "p95_gap_amplitude_points": 14.194087236419733,
+   "p95_gap_median_percent": 10.81233814596793,
+   "p95_gaps_percent": [
+    12.317336468428602,
+    10.81233814596793,
+    -1.8767507679911315
+   ],
+   "segments": 1,
+   "size": 3096000,
+   "span": 7739999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.5000000645994915,
+   "gap_amplitude_points": 7.785604705951467,
+   "gap_max_percent": -26.98239770234544,
+   "gap_median_percent": -28.68342416389161,
+   "gap_min_percent": -34.76800240829691,
+   "kind": "density",
+   "label": "density-7740000-50",
+   "n": 5000,
+   "new_p50_us": [
+    25569.791,
+    26073.875,
+    24239.041999999998
+   ],
+   "new_p95_us": [
+    29115.959,
+    29289.5,
+    26719.708
+   ],
+   "old_p50_us": [
+    35018.667,
+    36560.75,
+    37158.208999999995
+   ],
+   "old_p95_us": [
+    38574.375,
+    39993.208,
+    41063.0
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -30.062181437744023,
+   "p50_gaps_percent": [
+    -26.98239770234544,
+    -28.68342416389161,
+    -34.76800240829691
+   ],
+   "p95_gap_amplitude_points": 10.410019941762219,
+   "p95_gap_median_percent": -26.763814495701364,
+   "p95_gaps_percent": [
+    -24.519946207812833,
+    -26.763814495701364,
+    -34.92996614957505
+   ],
+   "segments": 1,
+   "size": 3870000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.6000000775193899,
+   "gap_amplitude_points": 5.509000594831349,
+   "gap_max_percent": -26.191931106100352,
+   "gap_median_percent": -30.189911299926532,
+   "gap_min_percent": -31.7009317009317,
+   "kind": "density",
+   "label": "density-7740000-60",
+   "n": 5000,
+   "new_p50_us": [
+    27077.792,
+    28518.792,
+    26610.0
+   ],
+   "new_p95_us": [
+    29740.417,
+    32090.958000000002,
+    29992.166
+   ],
+   "old_p50_us": [
+    38787.792,
+    38639.125,
+    38961.0
+   ],
+   "old_p95_us": [
+    46647.209,
+    42150.208,
+    42890.417
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -30.189911299926532,
+   "p50_gaps_percent": [
+    -30.189911299926532,
+    -26.191931106100352,
+    -31.7009317009317
+   ],
+   "p95_gap_amplitude_points": 12.378707881842832,
+   "p95_gap_median_percent": -30.072570756306703,
+   "p95_gaps_percent": [
+    -36.24395191575127,
+    -23.865244033908436,
+    -30.072570756306703
+   ],
+   "segments": 1,
+   "size": 4644000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.7500000968992373,
+   "gap_amplitude_points": 6.581381267168336,
+   "gap_max_percent": -21.355052286713615,
+   "gap_median_percent": -24.058027430215738,
+   "gap_min_percent": -27.93643355388195,
+   "kind": "density",
+   "label": "density-7740000-75",
+   "n": 5000,
+   "new_p50_us": [
+    31629.749999999996,
+    31436.417,
+    30749.917
+   ],
+   "new_p95_us": [
+    36080.25,
+    35822.958,
+    34615.666000000005
+   ],
+   "old_p50_us": [
+    43891.458,
+    39972.583,
+    40491.333
+   ],
+   "old_p95_us": [
+    49381.166,
+    43351.166,
+    44727.541000000005
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -22.362602880967138,
+   "p50_gaps_percent": [
+    -27.93643355388195,
+    -21.355052286713615,
+    -24.058027430215738
+   ],
+   "p95_gap_amplitude_points": 9.56955902538159,
+   "p95_gap_median_percent": -22.60771500941668,
+   "p95_gaps_percent": [
+    -26.935200355536352,
+    -17.365641330154762,
+    -22.60771500941668
+   ],
+   "segments": 1,
+   "size": 5805000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large",
+   "density": 0.9000001162790848,
+   "gap_amplitude_points": 4.7223518183011315,
+   "gap_max_percent": -14.773761794273476,
+   "gap_median_percent": -15.571313216426793,
+   "gap_min_percent": -19.496113612574607,
+   "kind": "density",
+   "label": "density-7740000-90",
+   "n": 5000,
+   "new_p50_us": [
+    36519.875,
+    35660.291,
+    35239.0
+   ],
+   "new_p95_us": [
+    46079.0,
+    40247.875,
+    38969.792
+   ],
+   "old_p50_us": [
+    43255.292,
+    41841.916,
+    43773.042
+   ],
+   "old_p95_us": [
+    51923.417,
+    45031.334,
+    48370.375
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -17.558547518301353,
+   "p50_gaps_percent": [
+    -15.571313216426793,
+    -14.773761794273476,
+    -19.496113612574607
+   ],
+   "p95_gap_amplitude_points": 8.812075487432566,
+   "p95_gap_median_percent": -11.255840500635776,
+   "p95_gaps_percent": [
+    -11.255840500635776,
+    -10.622512315535673,
+    -19.434587802968238
+   ],
+   "segments": 1,
+   "size": 6966000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 1.0,
+   "gap_amplitude_points": 8.72759393424055,
+   "gap_max_percent": -0.2857795558751158,
+   "gap_median_percent": -8.829051299832551,
+   "gap_min_percent": -9.013373490115667,
+   "kind": "contiguous",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "new_p50_us": [
+    7099.459,
+    6737.875,
+    7167.167
+   ],
+   "new_p95_us": [
+    8339.666000000001,
+    7861.417,
+    8479.917
+   ],
+   "old_p50_us": [
+    7802.75,
+    7390.375,
+    7187.7080000000005
+   ],
+   "old_p95_us": [
+    9656.25,
+    8692.958,
+    8385.625
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -3.9364172995281046,
+   "p50_gaps_percent": [
+    -9.013373490115667,
+    -8.829051299832551,
+    -0.2857795558751158
+   ],
+   "p95_gap_amplitude_points": 14.75897494908766,
+   "p95_gap_median_percent": -9.565685236256751,
+   "p95_gaps_percent": [
+    -13.634526860841412,
+    -9.565685236256751,
+    1.1244480882462482
+   ],
+   "segments": 8,
+   "size": 1000000,
+   "span": 1000000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 1.0,
+   "gap_amplitude_points": 13.943579569779562,
+   "gap_max_percent": -14.494151977092134,
+   "gap_median_percent": -17.260312463264494,
+   "gap_min_percent": -28.437731546871696,
+   "kind": "full",
+   "label": "full",
+   "n": 5000,
+   "new_p50_us": [
+    36712.666,
+    36072.125,
+    36556.458
+   ],
+   "new_p95_us": [
+    40113.917,
+    39707.833,
+    40432.5
+   ],
+   "old_p50_us": [
+    51301.708,
+    43597.125,
+    42753.167
+   ],
+   "old_p95_us": [
+    62125.042,
+    49972.0,
+    47379.958
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -16.149383703627247,
+   "p50_gaps_percent": [
+    -28.437731546871696,
+    -17.260312463264494,
+    -14.494151977092134
+   ],
+   "p95_gap_amplitude_points": 20.76707392003494,
+   "p95_gap_median_percent": -20.539836308332667,
+   "p95_gaps_percent": [
+    -35.43035834084426,
+    -20.539836308332667,
+    -14.663284420809319
+   ],
+   "segments": 8,
+   "size": 7740000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.10000220004840106,
+   "gap_amplitude_points": 7.907186658846134,
+   "gap_max_percent": -12.943868856578833,
+   "gap_median_percent": -13.660075678676744,
+   "gap_min_percent": -20.851055515424967,
+   "kind": "density",
+   "label": "density-1000000-10",
+   "n": 5000,
+   "new_p50_us": [
+    2714.083,
+    2780.541,
+    2799.0
+   ],
+   "new_p95_us": [
+    3169.25,
+    2971.375,
+    2983.833
+   ],
+   "old_p50_us": [
+    3429.083,
+    3220.4579999999996,
+    3215.167
+   ],
+   "old_p95_us": [
+    3996.2920000000004,
+    3538.459,
+    3526.542
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -13.660075678676744,
+   "p50_gaps_percent": [
+    -20.851055515424967,
+    -13.660075678676744,
+    -12.943868856578833
+   ],
+   "p95_gap_amplitude_points": 5.305966468543122,
+   "p95_gap_median_percent": -16.026298453648888,
+   "p95_gaps_percent": [
+    -20.69523448236516,
+    -16.026298453648888,
+    -15.389268013822036
+   ],
+   "segments": 8,
+   "size": 100000,
+   "span": 999978,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.25000200001600015,
+   "gap_amplitude_points": 11.494753008317842,
+   "gap_max_percent": -3.9396576134538517,
+   "gap_median_percent": -14.901725922644287,
+   "gap_min_percent": -15.434410621771693,
+   "kind": "density",
+   "label": "density-1000000-25",
+   "n": 5000,
+   "new_p50_us": [
+    4012.667,
+    3820.708,
+    4281.25
+   ],
+   "new_p95_us": [
+    4438.125,
+    4189.709,
+    4617.5419999999995
+   ],
+   "old_p50_us": [
+    4715.3330000000005,
+    4518.041,
+    4456.834
+   ],
+   "old_p95_us": [
+    6426.7919999999995,
+    4912.5419999999995,
+    4849.5830000000005
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -11.18568866462257,
+   "p50_gaps_percent": [
+    -14.901725922644287,
+    -15.434410621771693,
+    -3.9396576134538517
+   ],
+   "p95_gap_amplitude_points": 26.158623222670705,
+   "p95_gap_median_percent": -14.714031961457016,
+   "p95_gaps_percent": [
+    -30.943385129003705,
+    -14.714031961457016,
+    -4.784761906332999
+   ],
+   "segments": 8,
+   "size": 250000,
+   "span": 999992,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.4000004000004,
+   "gap_amplitude_points": 8.202822075540226,
+   "gap_max_percent": -5.306792532674389,
+   "gap_median_percent": -11.896740776936241,
+   "gap_min_percent": -13.509614608214616,
+   "kind": "density",
+   "label": "density-1000000-40",
+   "n": 5000,
+   "new_p50_us": [
+    4713.041,
+    4507.583,
+    4846.833
+   ],
+   "new_p95_us": [
+    5466.5,
+    5213.9580000000005,
+    5465.3330000000005
+   ],
+   "old_p50_us": [
+    5449.208,
+    5116.25,
+    5118.459
+   ],
+   "old_p95_us": [
+    5933.291,
+    5811.5,
+    5805.9169999999995
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -7.920704258840399,
+   "p50_gaps_percent": [
+    -13.509614608214616,
+    -11.896740776936241,
+    -5.306792532674389
+   ],
+   "p95_gap_amplitude_points": 4.415907986806699,
+   "p95_gap_median_percent": -7.867320176947333,
+   "p95_gaps_percent": [
+    -7.867320176947333,
+    -10.282061429923418,
+    -5.866153443116719
+   ],
+   "segments": 8,
+   "size": 400000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.5000005000005,
+   "gap_amplitude_points": 9.086904195783507,
+   "gap_max_percent": -16.90369384538741,
+   "gap_median_percent": -24.913264788529254,
+   "gap_min_percent": -25.990598041170916,
+   "kind": "density",
+   "label": "density-1000000-50",
+   "n": 5000,
+   "new_p50_us": [
+    5206.5,
+    4914.5830000000005,
+    5365.875
+   ],
+   "new_p95_us": [
+    6122.4169999999995,
+    5772.584,
+    6122.208
+   ],
+   "old_p50_us": [
+    7034.9169999999995,
+    6545.2080000000005,
+    6457.417
+   ],
+   "old_p95_us": [
+    8052.625000000001,
+    7758.208,
+    7511.625
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -20.453253739224184,
+   "p50_gaps_percent": [
+    -25.990598041170916,
+    -24.913264788529254,
+    -16.90369384538741
+   ],
+   "p95_gap_amplitude_points": 7.096958655571374,
+   "p95_gap_median_percent": -23.969922851244174,
+   "p95_gaps_percent": [
+    -23.969922851244174,
+    -25.593848476349173,
+    -18.4968898207778
+   ],
+   "segments": 8,
+   "size": 500000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.6000006000006,
+   "gap_amplitude_points": 15.044654909724732,
+   "gap_max_percent": -14.429553923994396,
+   "gap_median_percent": -21.52254883881183,
+   "gap_min_percent": -29.47420883371913,
+   "kind": "density",
+   "label": "density-1000000-60",
+   "n": 5000,
+   "new_p50_us": [
+    5674.417,
+    5430.084,
+    5761.708
+   ],
+   "new_p95_us": [
+    6768.2080000000005,
+    6375.25,
+    6707.834
+   ],
+   "old_p50_us": [
+    8045.874999999999,
+    6919.2919999999995,
+    6733.292
+   ],
+   "old_p95_us": [
+    9737.042,
+    8200.375,
+    7906.458
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -17.99136385630205,
+   "p50_gaps_percent": [
+    -29.47420883371913,
+    -21.52254883881183,
+    -14.429553923994396
+   ],
+   "p95_gap_amplitude_points": 15.330038789429743,
+   "p95_gap_median_percent": -22.256604118714083,
+   "p95_gaps_percent": [
+    -30.49010161402199,
+    -22.256604118714083,
+    -15.160062824592249
+   ],
+   "segments": 8,
+   "size": 600000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.75000075000075,
+   "gap_amplitude_points": 14.481447377752104,
+   "gap_max_percent": -6.963940649138199,
+   "gap_median_percent": -15.97943157095003,
+   "gap_min_percent": -21.445388026890303,
+   "kind": "density",
+   "label": "density-1000000-75",
+   "n": 5000,
+   "new_p50_us": [
+    6406.292,
+    6082.459,
+    6576.292
+   ],
+   "new_p95_us": [
+    7756.667,
+    7191.542,
+    8327.207999999999
+   ],
+   "old_p50_us": [
+    8155.2080000000005,
+    7239.25,
+    7068.541
+   ],
+   "old_p95_us": [
+    9460.792000000001,
+    8572.375,
+    8373.584
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -11.506136685430116,
+   "p50_gaps_percent": [
+    -21.445388026890303,
+    -15.97943157095003,
+    -6.963940649138199
+   ],
+   "p95_gap_amplitude_points": 17.458661396026336,
+   "p95_gap_median_percent": -16.107939748319453,
+   "p95_gaps_percent": [
+    -18.01249831937961,
+    -16.107939748319453,
+    -0.5538369233532741
+   ],
+   "segments": 8,
+   "size": 750000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.9,
+   "gap_amplitude_points": 12.887936602738034,
+   "gap_max_percent": -3.360932589964526,
+   "gap_median_percent": -9.614039465725059,
+   "gap_min_percent": -16.24886919270256,
+   "kind": "density",
+   "label": "density-1000000-90",
+   "n": 5000,
+   "new_p50_us": [
+    7086.916,
+    6765.9169999999995,
+    7150.083
+   ],
+   "new_p95_us": [
+    8535.917000000001,
+    7995.499999999999,
+    8618.166
+   ],
+   "old_p50_us": [
+    8461.875,
+    7485.584,
+    7398.75
+   ],
+   "old_p95_us": [
+    9476.042000000001,
+    8925.709,
+    8804.5
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -5.325810250743291,
+   "p50_gaps_percent": [
+    -16.24886919270256,
+    -9.614039465725059,
+    -3.360932589964526
+   ],
+   "p95_gap_amplitude_points": 8.305332313888576,
+   "p95_gap_median_percent": -9.921072532181684,
+   "p95_gaps_percent": [
+    -9.921072532181684,
+    -10.421681907846219,
+    -2.116349593957644
+   ],
+   "segments": 8,
+   "size": 900000,
+   "span": 1000000,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 1.0,
+   "gap_amplitude_points": 10.469008099255467,
+   "gap_max_percent": 1.9256165854464338,
+   "gap_median_percent": -4.351869790122234,
+   "gap_min_percent": -8.543391513809032,
+   "kind": "density",
+   "label": "density-1000000-100",
+   "n": 5000,
+   "new_p50_us": [
+    7625.042,
+    7257.541,
+    7712.584
+   ],
+   "new_p95_us": [
+    8921.0,
+    8517.916000000001,
+    9186.207999999999
+   ],
+   "old_p50_us": [
+    8337.333,
+    7587.75,
+    7566.875
+   ],
+   "old_p95_us": [
+    9324.334,
+    8861.707999999999,
+    8898.542000000001
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": 0.49147639287009154,
+   "p50_gaps_percent": [
+    -8.543391513809032,
+    -4.351869790122234,
+    1.9256165854464338
+   ],
+   "p95_gap_amplitude_points": 7.558338359938858,
+   "p95_gap_median_percent": -3.879522999403701,
+   "p95_gaps_percent": [
+    -4.325606525892367,
+    -3.879522999403701,
+    3.232731834046492
+   ],
+   "segments": 8,
+   "size": 1000000,
+   "span": 1000000,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.10000005167961327,
+   "gap_amplitude_points": 18.558516794937198,
+   "gap_max_percent": -1.9029325837096347,
+   "gap_median_percent": -13.269298257527124,
+   "gap_min_percent": -20.461449378646833,
+   "kind": "density",
+   "label": "density-7740000-10",
+   "n": 5000,
+   "new_p50_us": [
+    13219.458,
+    11160.75,
+    13757.583
+   ],
+   "new_p95_us": [
+    15350.0,
+    13395.917,
+    15593.707999999999
+   ],
+   "old_p50_us": [
+    15241.958999999999,
+    14031.875,
+    14024.458999999999
+   ],
+   "old_p95_us": [
+    17330.25,
+    16033.249999999998,
+    15782.500000000002
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -5.7897964455926205,
+   "p50_gaps_percent": [
+    -13.269298257527124,
+    -20.461449378646833,
+    -1.9029325837096347
+   ],
+   "p95_gap_amplitude_points": 15.252936871405208,
+   "p95_gap_median_percent": -11.426551838548203,
+   "p95_gaps_percent": [
+    -11.426551838548203,
+    -16.449147864593886,
+    -1.1962109931886777
+   ],
+   "segments": 8,
+   "size": 774000,
+   "span": 7739996,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.2500001291990332,
+   "gap_amplitude_points": 10.42797176371461,
+   "gap_max_percent": 0.8845365712329184,
+   "gap_median_percent": -3.1837471310966237,
+   "gap_min_percent": -9.543435192481692,
+   "kind": "density",
+   "label": "density-7740000-25",
+   "n": 5000,
+   "new_p50_us": [
+    19370.708,
+    18508.0,
+    19151.416
+   ],
+   "new_p95_us": [
+    20319.833,
+    19603.125,
+    20525.792
+   ],
+   "old_p50_us": [
+    21414.375,
+    19116.625,
+    18983.5
+   ],
+   "old_p95_us": [
+    25462.5,
+    20610.334000000003,
+    20214.333000000002
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": 0.18199342195602558,
+   "p50_gaps_percent": [
+    -9.543435192481692,
+    -3.1837471310966237,
+    0.8845365712329184
+   ],
+   "p95_gap_amplitude_points": 21.73780604135058,
+   "p95_gap_median_percent": -4.886912555614104,
+   "p95_gaps_percent": [
+    -20.197023073146788,
+    -4.886912555614104,
+    1.5407829682037932
+   ],
+   "segments": 8,
+   "size": 1935000,
+   "span": 7739996,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.4,
+   "gap_amplitude_points": 11.688120452677282,
+   "gap_max_percent": 1.738978685353697,
+   "gap_median_percent": -0.820079404520717,
+   "gap_min_percent": -9.949141767323585,
+   "kind": "density",
+   "label": "density-7740000-40",
+   "n": 5000,
+   "new_p50_us": [
+    22664.0,
+    23331.333,
+    22701.415999999997
+   ],
+   "new_p95_us": [
+    24281.958,
+    25318.583,
+    24512.375
+   ],
+   "old_p50_us": [
+    25168.0,
+    22932.541,
+    22889.125
+   ],
+   "old_p95_us": [
+    29537.417,
+    25110.084000000003,
+    25248.291999999998
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -1.0078473205389828,
+   "p50_gaps_percent": [
+    -9.949141767323585,
+    1.738978685353697,
+    -0.820079404520717
+   ],
+   "p95_gap_amplitude_points": 18.622887384594517,
+   "p95_gap_median_percent": -2.914719934322677,
+   "p95_gaps_percent": [
+    -17.792547669283344,
+    0.830339715311172,
+    -2.914719934322677
+   ],
+   "segments": 8,
+   "size": 3096000,
+   "span": 7740000,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.5,
+   "gap_amplitude_points": 4.837465846407177,
+   "gap_max_percent": -33.53558085240423,
+   "gap_median_percent": -33.834652771880535,
+   "gap_min_percent": -38.37304669881141,
+   "kind": "density",
+   "label": "density-7740000-50",
+   "n": 5000,
+   "new_p50_us": [
+    24252.209,
+    25727.375,
+    24660.875
+   ],
+   "new_p95_us": [
+    26231.125,
+    28541.5,
+    27252.542
+   ],
+   "old_p50_us": [
+    39353.25,
+    38883.458000000006,
+    37103.875
+   ],
+   "old_p95_us": [
+    44231.875,
+    43022.333000000006,
+    41012.833999999995
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -36.577464380868605,
+   "p50_gaps_percent": [
+    -38.37304669881141,
+    -33.834652771880535,
+    -33.53558085240423
+   ],
+   "p95_gap_amplitude_points": 7.14514495232077,
+   "p95_gap_median_percent": -33.658874333941874,
+   "p95_gaps_percent": [
+    -40.69633041782651,
+    -33.658874333941874,
+    -33.55118546550574
+   ],
+   "segments": 8,
+   "size": 3870000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.6,
+   "gap_amplitude_points": 5.433399334716803,
+   "gap_max_percent": -31.757145790554418,
+   "gap_median_percent": -34.583519861521474,
+   "gap_min_percent": -37.19054512527122,
+   "kind": "density",
+   "label": "density-7740000-60",
+   "n": 5000,
+   "new_p50_us": [
+    26705.166999999998,
+    27398.875,
+    26587.415999999997
+   ],
+   "new_p95_us": [
+    29987.209000000003,
+    30767.375,
+    30018.666
+   ],
+   "old_p50_us": [
+    42517.75,
+    41883.75,
+    38960.0
+   ],
+   "old_p95_us": [
+    54708.75,
+    46244.417,
+    42978.333
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -36.23978989464888,
+   "p50_gaps_percent": [
+    -37.19054512527122,
+    -34.583519861521474,
+    -31.757145790554418
+   ],
+   "p95_gap_amplitude_points": 15.033590402024071,
+   "p95_gap_median_percent": -33.46791462415885,
+   "p95_gaps_percent": [
+    -45.18754495396074,
+    -33.46791462415885,
+    -30.153954551936668
+   ],
+   "segments": 8,
+   "size": 4644000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.75,
+   "gap_amplitude_points": 9.954968249162363,
+   "gap_max_percent": -22.663059757590204,
+   "gap_median_percent": -27.0136234635846,
+   "gap_min_percent": -32.61802800675257,
+   "kind": "density",
+   "label": "density-7740000-75",
+   "n": 5000,
+   "new_p50_us": [
+    30769.584,
+    30962.25,
+    31101.083000000002
+   ],
+   "new_p95_us": [
+    34651.792,
+    35202.041000000005,
+    35345.875
+   ],
+   "old_p50_us": [
+    45664.416,
+    42421.958000000006,
+    40215.042
+   ],
+   "old_p95_us": [
+    54459.75,
+    46446.625,
+    44242.125
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -27.0136234635846,
+   "p50_gaps_percent": [
+    -32.61802800675257,
+    -27.0136234635846,
+    -22.663059757590204
+   ],
+   "p95_gap_amplitude_points": 16.263640427310918,
+   "p95_gap_median_percent": -24.209690155097373,
+   "p95_gaps_percent": [
+    -36.371738761195196,
+    -24.209690155097373,
+    -20.10809833388428
+   ],
+   "segments": 8,
+   "size": 5805000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 0.9,
+   "gap_amplitude_points": 11.731140749619168,
+   "gap_max_percent": -14.8263966715574,
+   "gap_median_percent": -17.208056668808855,
+   "gap_min_percent": -26.55753742117657,
+   "kind": "density",
+   "label": "density-7740000-90",
+   "n": 5000,
+   "new_p50_us": [
+    35015.959,
+    35874.75,
+    35571.833
+   ],
+   "new_p95_us": [
+    38747.5,
+    41013.75,
+    40083.041
+   ],
+   "old_p50_us": [
+    47678.084,
+    43331.209,
+    41763.916999999994
+   ],
+   "old_p95_us": [
+    53059.084,
+    47231.583,
+    46283.084
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -17.907130170312126,
+   "p50_gaps_percent": [
+    -26.55753742117657,
+    -17.208056668808855,
+    -14.8263966715574
+   ],
+   "p95_gap_amplitude_points": 13.808353296202494,
+   "p95_gap_median_percent": -13.3959158814914,
+   "p95_gaps_percent": [
+    -26.972919472186895,
+    -13.164566175984401,
+    -13.3959158814914
+   ],
+   "segments": 8,
+   "size": 6966000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-8seg",
+   "density": 1.0,
+   "gap_amplitude_points": 8.97745535941738,
+   "gap_max_percent": -12.306804067305293,
+   "gap_median_percent": -12.384791094881294,
+   "gap_min_percent": -21.284259426722674,
+   "kind": "density",
+   "label": "density-7740000-100",
+   "n": 5000,
+   "new_p50_us": [
+    38226.167,
+    38514.916000000005,
+    38132.875
+   ],
+   "new_p95_us": [
+    41765.0,
+    43061.666,
+    42285.125
+   ],
+   "old_p50_us": [
+    48562.291,
+    43959.167,
+    43484.416999999994
+   ],
+   "old_p95_us": [
+    53073.5,
+    49314.583,
+    49857.666000000005
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -13.04164840066237,
+   "p50_gaps_percent": [
+    -21.284259426722674,
+    -12.384791094881294,
+    -12.306804067305293
+   ],
+   "p95_gap_amplitude_points": 8.627592761507003,
+   "p95_gap_median_percent": -15.188318281886689,
+   "p95_gaps_percent": [
+    -21.307243728037534,
+    -12.67965096653053,
+    -15.188318281886689
+   ],
+   "segments": 8,
+   "size": 7740000,
+   "span": 7740000,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.900000090000009,
+   "gap_amplitude_points": 9.93081260341599,
+   "gap_max_percent": -2.6374113415135283,
+   "gap_median_percent": -3.1044088945234956,
+   "gap_min_percent": -12.56822394492952,
+   "kind": "contiguous",
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "new_p50_us": [
+    6922.083,
+    7260.75,
+    7187.834
+   ],
+   "new_p95_us": [
+    7874.4169999999995,
+    8591.0,
+    8522.166
+   ],
+   "old_p50_us": [
+    7917.125000000001,
+    7493.375,
+    7382.5419999999995
+   ],
+   "old_p95_us": [
+    9232.25,
+    8629.917000000001,
+    8610.167
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -4.077481775568421,
+   "p50_gaps_percent": [
+    -12.56822394492952,
+    -3.1044088945234956,
+    -2.6374113415135283
+   ],
+   "p95_gap_amplitude_points": 14.256543661249966,
+   "p95_gap_median_percent": -1.0220591540210568,
+   "p95_gaps_percent": [
+    -14.70749817216822,
+    -0.45095451091825417,
+    -1.0220591540210568
+   ],
+   "segments": 100,
+   "size": 1000000,
+   "span": 1111111,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.900000104651175,
+   "gap_amplitude_points": 8.393448738069996,
+   "gap_max_percent": -17.933004833165974,
+   "gap_median_percent": -24.674090339561186,
+   "gap_min_percent": -26.32645357123597,
+   "kind": "full",
+   "label": "full",
+   "n": 5000,
+   "new_p50_us": [
+    35860.875,
+    37348.375,
+    37111.584
+   ],
+   "new_p95_us": [
+    38240.458999999995,
+    41476.875,
+    41919.375
+   ],
+   "old_p50_us": [
+    48675.375,
+    49582.375,
+    45221.083
+   ],
+   "old_p95_us": [
+    53502.75,
+    53983.875,
+    48106.916
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -23.75696335159205,
+   "p50_gaps_percent": [
+    -26.32645357123597,
+    -24.674090339561186,
+    -17.933004833165974
+   ],
+   "p95_gap_amplitude_points": 15.664119182900674,
+   "p95_gap_median_percent": -23.16802934209521,
+   "p95_gaps_percent": [
+    -28.52618042997791,
+    -23.16802934209521,
+    -12.862061247077236
+   ],
+   "segments": 100,
+   "size": 7740000,
+   "span": 8599999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.10000080000640005,
+   "gap_amplitude_points": 18.094229985252383,
+   "gap_max_percent": -7.199227589201293,
+   "gap_median_percent": -13.5707747314506,
+   "gap_min_percent": -25.293457574453676,
+   "kind": "density",
+   "label": "density-1000000-10",
+   "n": 5000,
+   "new_p50_us": [
+    2479.292,
+    3009.375,
+    2982.708
+   ],
+   "new_p95_us": [
+    2756.8340000000003,
+    3243.5,
+    3208.2920000000004
+   ],
+   "old_p50_us": [
+    3318.708,
+    3242.834,
+    3451.041
+   ],
+   "old_p95_us": [
+    3659.7079999999996,
+    3597.7090000000003,
+    3774.375
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -10.124421913588058,
+   "p50_gaps_percent": [
+    -25.293457574453676,
+    -7.199227589201293,
+    -13.5707747314506
+   ],
+   "p95_gap_amplitude_points": 14.825252389787234,
+   "p95_gap_median_percent": -14.99805928133796,
+   "p95_gaps_percent": [
+    -24.670656784639633,
+    -9.845404394852398,
+    -14.99805928133796
+   ],
+   "segments": 100,
+   "size": 100000,
+   "span": 999992,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.25000025000025,
+   "gap_amplitude_points": 11.144542216473006,
+   "gap_max_percent": -2.5969065572879115,
+   "gap_median_percent": -12.732744036316113,
+   "gap_min_percent": -13.741448773760917,
+   "kind": "density",
+   "label": "density-1000000-25",
+   "n": 5000,
+   "new_p50_us": [
+    3987.625,
+    4335.25,
+    4247.334
+   ],
+   "new_p95_us": [
+    4416.0830000000005,
+    4645.667,
+    4531.708
+   ],
+   "old_p50_us": [
+    4622.875,
+    4450.834,
+    4867.042
+   ],
+   "old_p95_us": [
+    5082.541,
+    4826.666,
+    5341.542
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -8.12353784171106,
+   "p50_gaps_percent": [
+    -13.741448773760917,
+    -2.5969065572879115,
+    -12.732744036316113
+   ],
+   "p95_gap_amplitude_points": 11.411072944973373,
+   "p95_gap_median_percent": -13.11269304074477,
+   "p95_gaps_percent": [
+    -13.11269304074477,
+    -3.749979799720962,
+    -15.161052744694334
+   ],
+   "segments": 100,
+   "size": 250000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.4000004000004,
+   "gap_amplitude_points": 7.735801922968716,
+   "gap_max_percent": -6.421832554431778,
+   "gap_median_percent": -12.704978592077424,
+   "gap_min_percent": -14.157634477400494,
+   "kind": "density",
+   "label": "density-1000000-40",
+   "n": 5000,
+   "new_p50_us": [
+    4695.7919999999995,
+    4935.0,
+    4862.0419999999995
+   ],
+   "new_p95_us": [
+    5472.834,
+    5664.875,
+    5490.0419999999995
+   ],
+   "old_p50_us": [
+    5470.25,
+    5273.666,
+    5569.667
+   ],
+   "old_p95_us": [
+    6340.4580000000005,
+    5971.625,
+    6296.459
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -11.118468077327371,
+   "p50_gaps_percent": [
+    -14.157634477400494,
+    -6.421832554431778,
+    -12.704978592077424
+   ],
+   "p95_gap_amplitude_points": 8.547139862765832,
+   "p95_gap_median_percent": -12.807468451712309,
+   "p95_gaps_percent": [
+    -13.683932611808178,
+    -5.136792749042346,
+    -12.807468451712309
+   ],
+   "segments": 100,
+   "size": 400000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.5000005000005,
+   "gap_amplitude_points": 14.272276554304904,
+   "gap_max_percent": -7.522180206607393,
+   "gap_median_percent": -15.886300675016582,
+   "gap_min_percent": -21.794456760912297,
+   "kind": "density",
+   "label": "density-1000000-50",
+   "n": 5000,
+   "new_p50_us": [
+    6038.415999999999,
+    5389.375,
+    5285.75
+   ],
+   "new_p95_us": [
+    6810.4580000000005,
+    6309.375,
+    6115.583
+   ],
+   "old_p50_us": [
+    6529.5830000000005,
+    6407.25,
+    6758.7919999999995
+   ],
+   "old_p95_us": [
+    7656.666,
+    7509.2919999999995,
+    7982.5
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -17.462187095255555,
+   "p50_gaps_percent": [
+    -7.522180206607393,
+    -15.886300675016582,
+    -21.794456760912297
+   ],
+   "p95_gap_amplitude_points": 12.335710774351025,
+   "p95_gap_median_percent": -15.97909629829283,
+   "p95_gaps_percent": [
+    -11.051912150797744,
+    -15.97909629829283,
+    -23.38762292514877
+   ],
+   "segments": 100,
+   "size": 500000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.6000006000006,
+   "gap_amplitude_points": 2.6560827196377677,
+   "gap_max_percent": -13.882067270659862,
+   "gap_median_percent": -16.207352649397386,
+   "gap_min_percent": -16.53814999029763,
+   "kind": "density",
+   "label": "density-1000000-60",
+   "n": 5000,
+   "new_p50_us": [
+    5747.791,
+    5869.5830000000005,
+    5772.083
+   ],
+   "new_p95_us": [
+    6724.375,
+    6939.709,
+    6695.915999999999
+   ],
+   "old_p50_us": [
+    6859.541,
+    6815.75,
+    6915.834
+   ],
+   "old_p95_us": [
+    8178.959,
+    7997.334,
+    8166.875000000001
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -15.8532181672214,
+   "p50_gaps_percent": [
+    -16.207352649397386,
+    -13.882067270659862,
+    -16.53814999029763
+   ],
+   "p95_gap_amplitude_points": 4.7865637478086285,
+   "p95_gap_median_percent": -17.784463768555387,
+   "p95_gaps_percent": [
+    -17.784463768555387,
+    -13.224719637819305,
+    -18.011283385627934
+   ],
+   "segments": 100,
+   "size": 600000,
+   "span": 999999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.75000075000075,
+   "gap_amplitude_points": 11.614417762266433,
+   "gap_max_percent": -9.353949251335033,
+   "gap_median_percent": -9.410137898897156,
+   "gap_min_percent": -20.968367013601465,
+   "kind": "density",
+   "label": "density-1000000-75",
+   "n": 5000,
+   "new_p50_us": [
+    6491.0,
+    6492.75,
+    6561.084
+   ],
+   "new_p95_us": [
+    7796.666,
+    7822.792,
+    8290.208999999999
+   ],
+   "old_p50_us": [
+    8213.167000000001,
+    7162.75,
+    7242.625
+   ],
+   "old_p95_us": [
+    10131.291000000001,
+    8429.75,
+    8608.25
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -10.353635594829223,
+   "p50_gaps_percent": [
+    -20.968367013601465,
+    -9.353949251335033,
+    -9.410137898897156
+   ],
+   "p95_gap_amplitude_points": 19.34909995037491,
+   "p95_gap_median_percent": -7.200189803968085,
+   "p95_gaps_percent": [
+    -23.043706868157283,
+    -7.200189803968085,
+    -3.6946069177823726
+   ],
+   "segments": 100,
+   "size": 750000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.9000009000009,
+   "gap_amplitude_points": 8.155945087180605,
+   "gap_max_percent": -3.5809839008575284,
+   "gap_median_percent": -5.808976517857777,
+   "gap_min_percent": -11.736928988038134,
+   "kind": "density",
+   "label": "density-1000000-90",
+   "n": 5000,
+   "new_p50_us": [
+    7187.667,
+    7222.7080000000005,
+    7160.8330000000005
+   ],
+   "new_p95_us": [
+    8642.458,
+    8669.0,
+    8606.625
+   ],
+   "old_p50_us": [
+    8143.459000000001,
+    7490.958,
+    7602.4580000000005
+   ],
+   "old_p95_us": [
+    9328.125,
+    8861.457999999999,
+    8954.041
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -5.456011726733645,
+   "p50_gaps_percent": [
+    -11.736928988038134,
+    -3.5809839008575284,
+    -5.808976517857777
+   ],
+   "p95_gap_amplitude_points": 5.178679213765804,
+   "p95_gap_median_percent": -3.8799911682334187,
+   "p95_gaps_percent": [
+    -7.350534003350077,
+    -2.1718547895842732,
+    -3.8799911682334187
+   ],
+   "segments": 100,
+   "size": 900000,
+   "span": 999999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.10000001291989831,
+   "gap_amplitude_points": 2.528734455249518,
+   "gap_max_percent": -8.361086650825255,
+   "gap_median_percent": -8.501630112866454,
+   "gap_min_percent": -10.889821106074773,
+   "kind": "density",
+   "label": "density-7740000-10",
+   "n": 5000,
+   "new_p50_us": [
+    13710.084,
+    13668.25,
+    14095.667
+   ],
+   "new_p95_us": [
+    15816.292,
+    15610.792,
+    15777.209
+   ],
+   "old_p50_us": [
+    15385.542,
+    14915.334,
+    15405.375
+   ],
+   "old_p95_us": [
+    17613.041999999998,
+    17172.458000000002,
+    17292.083
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -10.889821106074773,
+   "p50_gaps_percent": [
+    -10.889821106074773,
+    -8.361086650825255,
+    -8.501630112866454
+   ],
+   "p95_gap_amplitude_points": 1.4407412811894833,
+   "p95_gap_median_percent": -9.094015545124655,
+   "p95_gaps_percent": [
+    -10.20124746196596,
+    -9.094015545124655,
+    -8.760506180776476
+   ],
+   "segments": 100,
+   "size": 774000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.25000003229974577,
+   "gap_amplitude_points": 6.014369610907906,
+   "gap_max_percent": 0.03328966571718922,
+   "gap_median_percent": -0.6688610036907953,
+   "gap_min_percent": -5.981079945190717,
+   "kind": "density",
+   "label": "density-7740000-25",
+   "n": 5000,
+   "new_p50_us": [
+    19733.083,
+    19603.042,
+    19535.084000000003
+   ],
+   "new_p95_us": [
+    20970.665999999997,
+    20933.333,
+    21125.458
+   ],
+   "old_p50_us": [
+    20988.416999999998,
+    19735.042,
+    19528.583
+   ],
+   "old_p95_us": [
+    24020.583000000002,
+    21279.834000000003,
+    21048.833
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -0.6688610036907953,
+   "p50_gaps_percent": [
+    -5.981079945190717,
+    -0.6688610036907953,
+    0.03328966571718922
+   ],
+   "p95_gap_amplitude_points": 13.061132584841044,
+   "p95_gap_median_percent": -1.6283068749502643,
+   "p95_gaps_percent": [
+    -12.697098151198096,
+    -1.6283068749502643,
+    0.3640344336429483
+   ],
+   "segments": 100,
+   "size": 1935000,
+   "span": 7739999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.40000005167959324,
+   "gap_amplitude_points": 7.427933914247077,
+   "gap_max_percent": -4.69015152306262,
+   "gap_median_percent": -4.916108796679034,
+   "gap_min_percent": -12.118085437309697,
+   "kind": "density",
+   "label": "density-7740000-40",
+   "n": 5000,
+   "new_p50_us": [
+    23041.833000000002,
+    23037.083,
+    22817.416
+   ],
+   "new_p95_us": [
+    25021.334,
+    25163.208,
+    24601.709
+   ],
+   "old_p50_us": [
+    26219.084,
+    24228.165999999997,
+    23940.25
+   ],
+   "old_p95_us": [
+    30239.958000000002,
+    26516.75,
+    26359.5
+   ],
+   "old_traversal": [
+    "sparse"
+   ],
+   "p50_gap_of_medians_percent": -4.916108796679034,
+   "p50_gaps_percent": [
+    -12.118085437309697,
+    -4.916108796679034,
+    -4.69015152306262
+   ],
+   "p95_gap_amplitude_points": 12.152899221684429,
+   "p95_gap_median_percent": -6.66852937271193,
+   "p95_gaps_percent": [
+    -17.25737846593571,
+    -5.10447924425128,
+    -6.66852937271193
+   ],
+   "segments": 100,
+   "size": 3096000,
+   "span": 7739999,
+   "verdict": "match nul"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.5000000645994915,
+   "gap_amplitude_points": 4.906635445988599,
+   "gap_max_percent": -33.530180342443,
+   "gap_median_percent": -37.333233410485164,
+   "gap_min_percent": -38.4368157884316,
+   "kind": "density",
+   "label": "density-7740000-50",
+   "n": 5000,
+   "new_p50_us": [
+    24750.375,
+    25180.125,
+    24266.583000000002
+   ],
+   "new_p95_us": [
+    27382.291999999998,
+    28120.208000000002,
+    26818.375
+   ],
+   "old_p50_us": [
+    40203.208,
+    37882.042,
+    38723.209
+   ],
+   "old_p95_us": [
+    44963.5,
+    41637.458,
+    42510.958
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -36.08387414379837,
+   "p50_gaps_percent": [
+    -38.4368157884316,
+    -33.530180342443,
+    -37.333233410485164
+   ],
+   "p95_gap_amplitude_points": 6.6369087863262735,
+   "p95_gap_median_percent": -36.91420692048389,
+   "p95_gaps_percent": [
+    -39.10106642054111,
+    -32.464157634214835,
+    -36.91420692048389
+   ],
+   "segments": 100,
+   "size": 3870000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.6000000775193899,
+   "gap_amplitude_points": 3.560476020239598,
+   "gap_max_percent": -32.23605987694853,
+   "gap_median_percent": -32.62559090293786,
+   "gap_min_percent": -35.79653589718813,
+   "kind": "density",
+   "label": "density-7740000-60",
+   "n": 5000,
+   "new_p50_us": [
+    27145.458000000002,
+    27061.417,
+    26577.666
+   ],
+   "new_p95_us": [
+    30749.583,
+    30285.375,
+    30080.833000000002
+   ],
+   "old_p50_us": [
+    40290.458,
+    39934.834,
+    41396.0
+   ],
+   "old_p95_us": [
+    47162.458,
+    44278.791999999994,
+    46340.667
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -32.83417875269623,
+   "p50_gaps_percent": [
+    -32.62559090293786,
+    -32.23605987694853,
+    -35.79653589718813
+   ],
+   "p95_gap_amplitude_points": 3.4846349804295187,
+   "p95_gap_median_percent": -34.8007200981764,
+   "p95_gaps_percent": [
+    -34.8007200981764,
+    -31.60297823843071,
+    -35.08761321886023
+   ],
+   "segments": 100,
+   "size": 4644000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.7500000968992373,
+   "gap_amplitude_points": 5.212584416151223,
+   "gap_max_percent": -20.881539629457517,
+   "gap_median_percent": -24.32865922036181,
+   "gap_min_percent": -26.09412404560874,
+   "kind": "density",
+   "label": "density-7740000-75",
+   "n": 5000,
+   "new_p50_us": [
+    31334.833,
+    31288.334000000003,
+    30830.083000000002
+   ],
+   "new_p95_us": [
+    35340.083,
+    35418.0,
+    34373.416
+   ],
+   "old_p50_us": [
+    39604.958000000006,
+    41347.667,
+    41715.334
+   ],
+   "old_p95_us": [
+    42699.792,
+    45608.916,
+    45630.0
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -24.32865922036181,
+   "p50_gaps_percent": [
+    -20.881539629457517,
+    -24.32865922036181,
+    -26.09412404560874
+   ],
+   "p95_gap_amplitude_points": 7.433325032186914,
+   "p95_gap_median_percent": -22.344131134359777,
+   "p95_gaps_percent": [
+    -17.235936418613004,
+    -22.344131134359777,
+    -24.66926145079992
+   ],
+   "segments": 100,
+   "size": 5805000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  },
+  {
+   "copy": "synth-large-multi",
+   "density": 0.9000001162790848,
+   "gap_amplitude_points": 4.614055256624809,
+   "gap_max_percent": -13.090372893356431,
+   "gap_median_percent": -14.503191539699051,
+   "gap_min_percent": -17.70442814998124,
+   "kind": "density",
+   "label": "density-7740000-90",
+   "n": 5000,
+   "new_p50_us": [
+    35665.792,
+    36137.791000000005,
+    34834.584
+   ],
+   "new_p95_us": [
+    40244.416999999994,
+    40481.208999999995,
+    39453.75
+   ],
+   "old_p50_us": [
+    41037.791999999994,
+    42268.0,
+    42328.625
+   ],
+   "old_p95_us": [
+    43991.083,
+    46357.875,
+    45896.417
+   ],
+   "old_traversal": [
+    "dense"
+   ],
+   "p50_gap_of_medians_percent": -15.619873190120181,
+   "p50_gaps_percent": [
+    -13.090372893356431,
+    -14.503191539699051,
+    -17.70442814998124
+   ],
+   "p95_gap_amplitude_points": 5.520531298572337,
+   "p95_gap_median_percent": -12.676737231807984,
+   "p95_gaps_percent": [
+    -8.516876022352086,
+    -12.676737231807984,
+    -14.037407320924423
+   ],
+   "segments": 100,
+   "size": 6966000,
+   "span": 7739999,
+   "verdict": "gagn\u00e9"
+  }
+ ],
+ "segment_cost": [
+  {
+   "eight_vs_one": [
+    -13.995031683737318,
+    -7.367245231139371,
+    0.045380208254817665
+   ],
+   "eight_vs_one_amplitude_points": 14.040411891992136,
+   "eight_vs_one_median_percent": -7.367245231139371,
+   "hundred_vs_eight": [
+    -2.4984438955137316,
+    7.760235979444557,
+    0.28835661287087994
+   ],
+   "hundred_vs_eight_amplitude_points": 10.25867987495829,
+   "hundred_vs_eight_median_percent": 0.28835661287087994,
+   "hundred_vs_one": [
+    -16.1438175644735,
+    -0.17872486681560407,
+    0.33386767795713496
+   ],
+   "hundred_vs_one_amplitude_points": 16.477685242430635,
+   "hundred_vs_one_median_percent": -0.17872486681560407,
+   "label": "contiguous-1000000",
+   "n": 5000,
+   "size": 1000000,
+   "span": 1111111
+  },
+  {
+   "eight_vs_one": [
+    -7.985616822787366,
+    -3.3184580644728996,
+    -0.5254051873626141
+   ],
+   "eight_vs_one_amplitude_points": 7.460211635424751,
+   "eight_vs_one_median_percent": -3.3184580644728996,
+   "hundred_vs_eight": [
+    -2.3201556650775443,
+    3.5380505029853384,
+    1.5185442747215931
+   ],
+   "hundred_vs_eight_amplitude_points": 5.858206168062883,
+   "hundred_vs_eight_median_percent": 1.5185442747215931,
+   "hundred_vs_one": [
+    -10.120493746759623,
+    0.10218371627099793,
+    0.9851605769671941
+   ],
+   "hundred_vs_one_amplitude_points": 11.105654323726817,
+   "hundred_vs_one_median_percent": 0.10218371627099793,
+   "label": "full",
+   "n": 5000,
+   "size": 7740000,
+   "span": 8599999
+  },
+  {
+   "eight_vs_one": [
+    -12.90779900607541,
+    -7.397623512697205,
+    -2.908007505117365
+   ],
+   "eight_vs_one_amplitude_points": 9.999791500958045,
+   "eight_vs_one_median_percent": -7.397623512697205,
+   "hundred_vs_eight": [
+    -8.650840818058997,
+    8.229837287060317,
+    6.563344051446948
+   ],
+   "hundred_vs_eight_amplitude_points": 16.880678105119316,
+   "hundred_vs_eight_median_percent": 6.563344051446948,
+   "hundred_vs_one": [
+    -20.44200667900382,
+    0.22340139615881763,
+    3.4644740087268326
+   ],
+   "hundred_vs_one_amplitude_points": 23.906480687730653,
+   "hundred_vs_one_median_percent": 0.22340139615881763,
+   "label": "density-1000000-10",
+   "n": 5000,
+   "size": 100000,
+   "span": 999992
+  },
+  {
+   "eight_vs_one": [
+    -9.112865232163083,
+    -12.00580377706126,
+    -5.9264005512685385
+   ],
+   "eight_vs_one_amplitude_points": 6.0794032257927215,
+   "eight_vs_one_median_percent": -9.112865232163083,
+   "hundred_vs_eight": [
+    -0.6240737145644011,
+    13.467189850676888,
+    -0.7921985401459892
+   ],
+   "hundred_vs_eight_amplitude_points": 14.259388390822878,
+   "hundred_vs_eight_median_percent": -0.6240737145644011,
+   "hundred_vs_one": [
+    -9.680067950169875,
+    -0.15545831414094888,
+    -6.671650232764175
+   ],
+   "hundred_vs_one_amplitude_points": 9.524609636028925,
+   "hundred_vs_one_median_percent": -6.671650232764175,
+   "label": "density-1000000-25",
+   "n": 5000,
+   "size": 250000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -6.721717461293218,
+    -8.941543466456377,
+    -7.626586620926251
+   ],
+   "eight_vs_one_amplitude_points": 2.219826005163159,
+   "eight_vs_one_median_percent": -7.626586620926251,
+   "hundred_vs_eight": [
+    -0.36598450978891767,
+    9.48217703367859,
+    0.31379253215449826
+   ],
+   "hundred_vs_eight_amplitude_points": 9.848161543467508,
+   "hundred_vs_eight_median_percent": 0.31379253215449826,
+   "hundred_vs_one": [
+    -7.063101526382025,
+    -0.3072194138105012,
+    -7.336725748046513
+   ],
+   "hundred_vs_one_amplitude_points": 7.029506334236012,
+   "hundred_vs_one_median_percent": -7.063101526382025,
+   "label": "density-1000000-40",
+   "n": 5000,
+   "size": 400000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -7.599470992995565,
+    -8.880231209843176,
+    -4.712541620421754
+   ],
+   "eight_vs_one_amplitude_points": 4.167689589421422,
+   "eight_vs_one_median_percent": -7.599470992995565,
+   "hundred_vs_eight": [
+    15.978411600883497,
+    9.660880689165275,
+    -1.4932326973699537
+   ],
+   "hundred_vs_eight_amplitude_points": 17.47164429825345,
+   "hundred_vs_eight_median_percent": 9.660880689165275,
+   "hundred_vs_one": [
+    7.164665853137353,
+    -0.0772590627828683,
+    -6.135405105438402
+   ],
+   "hundred_vs_one_amplitude_points": 13.300070958575755,
+   "hundred_vs_one_median_percent": -0.0772590627828683,
+   "label": "density-1000000-50",
+   "n": 5000,
+   "size": 500000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -4.017309444635302,
+    -7.236848848627226,
+    -5.9875826178841285
+   ],
+   "eight_vs_one_amplitude_points": 3.2195394039919245,
+   "eight_vs_one_median_percent": -5.9875826178841285,
+   "hundred_vs_eight": [
+    1.2930667591049405,
+    8.09377902809608,
+    0.18006813257457685
+   ],
+   "hundred_vs_eight_amplitude_points": 7.913710895521503,
+   "hundred_vs_eight_median_percent": 1.2930667591049405,
+   "hundred_vs_one": [
+    -2.776189178569324,
+    0.2711956250636504,
+    -5.818296213515936
+   ],
+   "hundred_vs_one_amplitude_points": 6.089491838579586,
+   "hundred_vs_one_median_percent": -2.776189178569324,
+   "label": "density-1000000-60",
+   "n": 5000,
+   "size": 600000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -2.4323484617727633,
+    -6.769135217930241,
+    -1.963446630888486
+   ],
+   "eight_vs_one_amplitude_points": 4.805688587041756,
+   "eight_vs_one_median_percent": -2.4323484617727633,
+   "hundred_vs_eight": [
+    1.3222625506299062,
+    6.745479089953589,
+    -0.23125493819314194
+   ],
+   "hundred_vs_eight_amplitude_points": 6.976734028146731,
+   "hundred_vs_eight_median_percent": 1.3222625506299062,
+   "hundred_vs_one": [
+    -1.1422479439537008,
+    -0.4802667286728209,
+    -2.190161001788911
+   ],
+   "hundred_vs_one_amplitude_points": 1.7098942731160902,
+   "hundred_vs_one_median_percent": -1.1422479439537008,
+   "label": "density-1000000-75",
+   "n": 5000,
+   "size": 750000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -4.1698832405648405,
+    -6.176611175770153,
+    -2.5049660530323172
+   ],
+   "eight_vs_one_amplitude_points": 3.671645122737836,
+   "eight_vs_one_median_percent": -4.1698832405648405,
+   "hundred_vs_eight": [
+    1.4216480059873744,
+    6.751353881521176,
+    0.15034790505230372
+   ],
+   "hundred_vs_eight_amplitude_points": 6.601005976468873,
+   "hundred_vs_eight_median_percent": 1.4216480059873744,
+   "hundred_vs_one": [
+    -2.807516296518958,
+    0.15773782738919417,
+    -2.358384311963019
+   ],
+   "hundred_vs_one_amplitude_points": 2.965254123908152,
+   "hundred_vs_one_median_percent": -2.358384311963019,
+   "label": "density-1000000-90",
+   "n": 5000,
+   "size": 900000,
+   "span": 999999
+  },
+  {
+   "eight_vs_one": [
+    -5.827547640249328,
+    -19.855304023122635,
+    1.1822531627583288
+   ],
+   "eight_vs_one_amplitude_points": 21.037557185880964,
+   "eight_vs_one_median_percent": -5.827547640249328,
+   "hundred_vs_eight": [
+    3.7113927061154866,
+    22.467128105190064,
+    2.4574374728467854
+   ],
+   "hundred_vs_eight_amplitude_points": 20.00969063234328,
+   "hundred_vs_eight_median_percent": 3.7113927061154866,
+   "hundred_vs_one": [
+    -2.33243811219946,
+    -1.8490925084824874,
+    3.6687437678506534
+   ],
+   "hundred_vs_one_amplitude_points": 6.0011818800501135,
+   "hundred_vs_one_median_percent": -1.8490925084824874,
+   "label": "density-7740000-10",
+   "n": 5000,
+   "size": 774000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    0.6425247392573105,
+    -5.631612492033143,
+    -0.06219168334694708
+   ],
+   "eight_vs_one_amplitude_points": 6.274137231290453,
+   "eight_vs_one_median_percent": -0.06219168334694708,
+   "hundred_vs_eight": [
+    1.870736991131145,
+    5.916587421655508,
+    2.003340118558343
+   ],
+   "hundred_vs_eight_amplitude_points": 4.0458504305243626,
+   "hundred_vs_eight_median_percent": 2.003340118558343,
+   "hundred_vs_one": [
+    2.525281678362911,
+    -0.048224346717648026,
+    1.9399025242684997
+   ],
+   "hundred_vs_one_amplitude_points": 2.573506025080559,
+   "hundred_vs_one_median_percent": 1.9399025242684997,
+   "label": "density-7740000-25",
+   "n": 5000,
+   "size": 1935000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    -2.585025662768053,
+    2.0049316326195963,
+    0.6452465266809532
+   ],
+   "eight_vs_one_amplitude_points": 4.589957295387649,
+   "eight_vs_one_median_percent": 0.6452465266809532,
+   "hundred_vs_eight": [
+    1.6671064242852203,
+    -1.2611795476923673,
+    0.5109813414282336
+   ],
+   "hundred_vs_eight_amplitude_points": 2.9282859719775876,
+   "hundred_vs_eight_median_percent": 0.5109813414282336,
+   "hundred_vs_one": [
+    -0.9610143673762603,
+    0.7184662972314161,
+    1.1595249574667403
+   ],
+   "hundred_vs_one_amplitude_points": 2.1205393248430005,
+   "hundred_vs_one_median_percent": 0.7184662972314161,
+   "label": "density-7740000-40",
+   "n": 5000,
+   "size": 3096000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    -5.152885293430838,
+    -1.3289163962011785,
+    1.740303927853264
+   ],
+   "eight_vs_one_amplitude_points": 6.893189221284102,
+   "eight_vs_one_median_percent": -1.3289163962011785,
+   "hundred_vs_eight": [
+    2.0541056693021287,
+    -2.127111685510084,
+    -1.598856488263282
+   ],
+   "hundred_vs_eight_amplitude_points": 4.181217354812213,
+   "hundred_vs_eight_median_percent": -1.598856488263282,
+   "hundred_vs_one": [
+    -3.2046253330737082,
+    -3.4277605457570073,
+    0.11362247732399952
+   ],
+   "hundred_vs_one_amplitude_points": 3.5413830230810066,
+   "hundred_vs_one_median_percent": -3.2046253330737082,
+   "label": "density-7740000-50",
+   "n": 5000,
+   "size": 3870000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    -1.376127713810652,
+    -3.926944030448419,
+    -0.08487034949268155
+   ],
+   "eight_vs_one_amplitude_points": 3.8420736809557376,
+   "eight_vs_one_median_percent": -1.376127713810652,
+   "hundred_vs_eight": [
+    1.6487109030248894,
+    -1.2316491096805935,
+    -0.036671483983236136
+   ],
+   "hundred_vs_eight_amplitude_points": 2.880360012705483,
+   "hundred_vs_eight_median_percent": -0.036671483983236136,
+   "hundred_vs_one": [
+    0.249894821557094,
+    -5.1102269689403395,
+    -0.12151071025929697
+   ],
+   "hundred_vs_one_amplitude_points": 5.360121790497433,
+   "hundred_vs_one_median_percent": -0.12151071025929697,
+   "label": "density-7740000-60",
+   "n": 5000,
+   "size": 4644000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    -2.7194840300666225,
+    -1.5083366529970679,
+    1.1420063345211666
+   ],
+   "eight_vs_one_amplitude_points": 3.861490364587789,
+   "eight_vs_one_median_percent": -1.5083366529970679,
+   "hundred_vs_eight": [
+    1.8370381608019133,
+    1.0531663558042537,
+    -0.8713522934233511
+   ],
+   "hundred_vs_eight_amplitude_points": 2.708390454225264,
+   "hundred_vs_eight_median_percent": 1.0531663558042537,
+   "hundred_vs_one": [
+    -0.9324038286739467,
+    -0.4710555913544432,
+    0.26070314271092526
+   ],
+   "hundred_vs_one_amplitude_points": 1.1931069713848719,
+   "hundred_vs_one_median_percent": -0.4710555913544432,
+   "label": "density-7740000-75",
+   "n": 5000,
+   "size": 5805000,
+   "span": 7739999
+  },
+  {
+   "eight_vs_one": [
+    -4.118075431528715,
+    0.6013944193556989,
+    0.9445018303584061
+   ],
+   "eight_vs_one_amplitude_points": 5.062577261887121,
+   "eight_vs_one_median_percent": 0.6013944193556989,
+   "hundred_vs_eight": [
+    1.8558195136109186,
+    0.7332204405605746,
+    -2.0725639862303304
+   ],
+   "hundred_vs_eight_amplitude_points": 3.928383499841249,
+   "hundred_vs_eight_median_percent": 0.7332204405605746,
+   "hundred_vs_one": [
+    -2.3386799653613237,
+    1.33902440672738,
+    -1.1476375606572191
+   ],
+   "hundred_vs_one_amplitude_points": 3.6777043720887037,
+   "hundred_vs_one_median_percent": -1.1476375606572191,
+   "label": "density-7740000-90",
+   "n": 5000,
+   "size": 6966000,
+   "span": 7739999
+  }
+ ],
+ "tally": {
+  "synth-large": {
+   "gagn\u00e9": 7,
+   "match nul": 9,
+   "perdu": 0
+  },
+  "synth-large-8seg": {
+   "gagn\u00e9": 13,
+   "match nul": 5,
+   "perdu": 0
+  },
+  "synth-large-multi": {
+   "gagn\u00e9": 10,
+   "match nul": 6,
+   "perdu": 0
+  }
+ },
+ "vectors": "data/mes02/queries.f32"
+}

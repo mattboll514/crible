@@ -244,7 +244,7 @@ pub struct OnlineIngest<'a> {
 /// # Errors
 ///
 /// - [`ErrorCode::InvalidRequest`] for a missing or invalid file, a file that
-///   changes while it is read, a file holding more than [`MAX_ONLINE_PASSAGES`]
+///   changes while it is read, a file holding more than `MAX_ONLINE_PASSAGES`
 ///   passages, an empty file, a passage without a vector on an `external`
 ///   model, a vector that is not base64 of `dims` fp32 components, an undeclared
 ///   or mistyped field, a passage longer than `max_tokens`, or `replace_all`;
@@ -367,7 +367,7 @@ pub fn ingest(
 /// - on `WouldBlock`, a writer holds it: it is left untouched.
 ///
 /// The lock is taken on the file the path currently names (see
-/// [`lock_presence`]), so a path replaced under the caller never yields a lock
+/// `lock_presence`), so a path replaced under the caller never yields a lock
 /// on a vanished inode.
 ///
 /// Two kinds of residue are handled: the usual pair

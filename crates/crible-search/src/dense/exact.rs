@@ -11,9 +11,10 @@
 //! The vectors stored in the segments are normalised, so the dot product *is*
 //! the cosine (`docs/03-recherche.md`). The query is normalised here, in `f32`,
 //! so the score of a passage stays its cosine whatever the norm of the input
-//! vector. Every component is read from the segment as fp16 and widened to
-//! `f32`; the product is the plain scalar loop the task sheet asks for, because
-//! the SIMD version belongs to P4.
+//! vector. The score itself comes from the shared calculation of the dense
+//! branch (ADR-0072): the `f16` kernel of ADR-0070, or the `f64` loop of ADR-0072
+//! for an `fp32` reference. The rescoring of the binary strategy calls the same
+//! function, so both strategies return the same bits for the same passage.
 //!
 //! # Parallelism and determinism
 //!
@@ -36,16 +37,18 @@
 //! A score is checked finite before it may enter a heap: [`f32::total_cmp`]
 //! would otherwise rank a NaN above every number, and a corrupt vector would
 //! silently win the top-k. A non-finite cosine stops the search with an
-//! [`ErrorCode::Internal`] error instead. The vectors are written normalised
+//! [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) error
+//! instead. The vectors are written normalised
 //! and their checksum is verified when a segment opens, so a non-finite score
 //! means the stored data contradicts the format, not a bad request. The query
 //! itself is checked earlier: a non-finite component, or finite components whose
-//! squared norm overflows `f32`, is an [`ErrorCode::InvalidRequest`] error
-//! before any scan starts.
+//! squared norm overflows `f32`, is an
+//! [`ErrorCode::InvalidRequest`](crible_core::error::ErrorCode::InvalidRequest)
+//! error before any scan starts.
 //!
 //! # The pool is the only input set
 //!
-//! [`ExactSearcher::top_k`] scores the passages of the pool and nothing else; a
+//! [`DenseSearcher::top_k`] scores the passages of the pool and nothing else; a
 //! tombstoned passage is never in the pool, because [`Pool`] already
 //! intersects the filter with the live bitmap. During the scan, only the key of
 //! a candidate is read; the payload of the `k` retained results comes from
@@ -68,14 +71,14 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 use std::path::Path;
 
-use crible_core::error::{CribleError, ErrorCode};
+use crible_core::error::CribleError;
 use crible_core::ids::Iid;
 use crible_store::records::{PassageRecord, ReadPool};
 use crible_store::segment::{SegmentMeta, SegmentReader};
 use rayon::prelude::*;
-use roaring::RoaringBitmap;
 use serde_json::{Map, Value};
 
+use super::{Scored, cosine, internal, invalid_request, normalise, windows};
 use crate::pool::Pool;
 
 /// Number of read-only connections the searcher keeps.
@@ -93,52 +96,12 @@ use crate::pool::Pool;
 /// branch of `docs/03-recherche.md`, step 5) would have to revisit the capacity
 /// with a measurement.
 ///
-/// **Nesting rule.** A caller must not call [`ExactSearcher::top_k`] while it
+/// **Nesting rule.** A caller must not call [`DenseSearcher::top_k`] while it
 /// already holds a connection of this same [`ReadPool`]: `checkout` is never
 /// re-entered here, and an outer holder that waited for the search would wait on
 /// itself once every connection is checked out.
 fn read_connections() -> usize {
     rayon::current_num_threads().max(1)
-}
-
-/// Cuts the pool into at most `threads` contiguous windows of about
-/// `pool_size / threads` **live** passages.
-///
-/// A window is a range of internal identifiers, not a list of them: only the
-/// bounds are kept, one entry per worker. The scan of a window walks the live
-/// bitmap from its first identifier and skips the tombstoned ones, so a
-/// fragmented pool (one live passage out of two, the normal state after
-/// interleaved attaches) costs no extra window, heap or rayon task. This keeps
-/// the work count bounded by the number of workers whatever the fragmentation,
-/// while a window still covers only live passages. `exact: true` may cover the
-/// whole index (`docs/03-recherche.md`), which is why the pool is never
-/// materialised as a vector of identifiers.
-///
-/// The bounds are deterministic: they are read from the sorted live bitmap, and
-/// the same pool always yields the same windows.
-fn windows(bitmap: &RoaringBitmap, total: u32, threads: usize) -> Vec<(u32, u32)> {
-    let total = usize::try_from(total).unwrap_or(usize::MAX);
-    if total == 0 {
-        return Vec::new();
-    }
-    let width = total.div_ceil(threads.max(1)).max(1);
-    let mut starts = Vec::with_capacity(threads.max(1));
-    let mut last = 0_u32;
-    for (position, iid) in bitmap.iter().enumerate() {
-        if position % width == 0 {
-            starts.push(iid);
-        }
-        last = iid;
-    }
-    let mut windows: Vec<(u32, u32)> = Vec::with_capacity(starts.len());
-    for (position, &from) in starts.iter().enumerate() {
-        let to = match starts.get(position + 1) {
-            Some(&next) => next - 1,
-            None => last,
-        };
-        windows.push((from, to));
-    }
-    windows
 }
 
 /// One result of the exact search: a passage, its cosine and its payload.
@@ -150,7 +113,8 @@ pub struct Hit {
     pub ord: u32,
     /// Key `doc_id#ord`, the tie-break of the ranking.
     pub key: String,
-    /// Cosine between the query and the passage, computed in `f32`.
+    /// Cosine between the query and the passage, computed by the dense
+    /// branch's shared dot product (ADR-0072).
     pub score: f32,
     /// Document fields merged with the passage fields (ADR-0019, ADR-0030).
     pub fields: Value,
@@ -163,8 +127,15 @@ pub struct Hit {
 /// The searcher opens every segment once, at construction, so it serves many
 /// queries: [`SegmentReader::open`] verifies the blake3 checksum of the whole
 /// vector file, which must not be paid per query.
+///
+/// It owns what the dense branch reads from an epoch: the reference vectors of
+/// the segments, through their memory maps, and the read-only connections to
+/// `records.sqlite`. The exact strategy scores the pool with them
+/// ([`DenseSearcher::top_k`]); the binary strategy rescores the candidates its
+/// scan kept with them ([`DenseSearcher::rescore`], ADR-0072). One opening
+/// therefore serves either strategy, and both read the same bytes.
 #[derive(Debug)]
-pub struct ExactSearcher {
+pub struct DenseSearcher {
     /// One reader per segment, sorted by `iid_start`.
     segments: Vec<SegmentReader>,
     /// Read-only connections used for the payloads.
@@ -173,7 +144,7 @@ pub struct ExactSearcher {
     dims: u32,
 }
 
-impl ExactSearcher {
+impl DenseSearcher {
     /// Opens one reader per segment and the payload reader of the epoch.
     ///
     /// `segments_dir` is the `segments/` directory of the epoch and `segments`
@@ -248,25 +219,26 @@ impl ExactSearcher {
     /// calls this method: the key reads would wait for it, and the pool would
     /// run out of connections.
     pub fn top_k(&self, query: &[f32], pool: &Pool, k: usize) -> Result<Vec<Hit>, CribleError> {
+        let candidates = self.top_k_candidates(query, pool, k)?;
+        candidates
+            .into_iter()
+            .map(|candidate| self.payload(candidate))
+            .collect()
+    }
+
+    /// Returns the `k` best candidates of `pool`, payload unread.
+    ///
+    /// This is [`DenseSearcher::top_k`] without the payload step: it is what
+    /// the regrouping step of `docs/03-recherche.md` (step 7) consumes, so that
+    /// only the candidates it keeps pay for their text and their fields.
+    pub fn top_k_candidates(
+        &self,
+        query: &[f32],
+        pool: &Pool,
+        k: usize,
+    ) -> Result<Vec<Scored>, CribleError> {
         let empty = pool.is_empty();
-        if !empty && self.segments.is_empty() {
-            return Err(internal(
-                "the generation holds no segment, yet its pool is not empty",
-            ));
-        }
-        // The request is validated before the empty pool short-circuits: a
-        // malformed vector is refused whatever the filter keeps.
-        if !self.segments.is_empty() && query.len() != self.dims as usize {
-            return Err(CribleError::new(
-                ErrorCode::InvalidRequest,
-                format!(
-                    "the query vector holds {} components where the index holds {} dimensions",
-                    query.len(),
-                    self.dims
-                ),
-            ));
-        }
-        let query = normalise(query)?;
+        let query = self.normalised_query(query, empty)?;
         if k == 0 || empty {
             return Ok(Vec::new());
         }
@@ -276,19 +248,47 @@ impl ExactSearcher {
             pool.len(),
             rayon::current_num_threads().max(1),
         );
-        let heaps: Vec<Vec<Candidate>> = windows
+        let heaps: Vec<Vec<Scored>> = windows
             .par_iter()
             .map(|&(from, to)| self.score_slice(&query, pool, from, to, k))
             .collect::<Result<Vec<_>, CribleError>>()?;
 
-        let mut candidates: Vec<Candidate> = heaps.into_iter().flatten().collect();
+        let mut candidates: Vec<Scored> = heaps.into_iter().flatten().collect();
         candidates.sort_unstable_by(|left, right| right.cmp(left));
         candidates.truncate(k);
+        Ok(candidates)
+    }
 
-        candidates
-            .into_iter()
-            .map(|candidate| self.payload(candidate))
-            .collect()
+    /// Validates `query` against the generation and returns it normalised.
+    ///
+    /// The request is validated before an empty set short-circuits: a malformed
+    /// vector is refused whatever the filter or the candidate list keeps. A
+    /// generation without a segment has no dimensionality to compare against;
+    /// its pool is necessarily empty (a passage always comes with a vector), so
+    /// `empty` lets the caller keep the "no result, no error" state of a fresh
+    /// index. The zero vector stays refused, because no cosine exists whatever
+    /// the generation holds.
+    ///
+    /// The rescoring of the binary strategy calls this too, so both strategies
+    /// score the same normalised query (`RESCORER-FP16`, ADR-0072).
+    pub(crate) fn normalised_query(
+        &self,
+        query: &[f32],
+        empty: bool,
+    ) -> Result<Vec<f32>, CribleError> {
+        if !empty && self.segments.is_empty() {
+            return Err(internal(
+                "the generation holds no segment, yet it holds passages to score",
+            ));
+        }
+        if !self.segments.is_empty() && query.len() != self.dims as usize {
+            return Err(invalid_request(format!(
+                "the query vector holds {} components where the index holds {} dimensions",
+                query.len(),
+                self.dims
+            )));
+        }
+        normalise(query)
     }
 
     /// Scores the live passages of one window and keeps its `k` best
@@ -309,10 +309,10 @@ impl ExactSearcher {
         from: u32,
         to: u32,
         k: usize,
-    ) -> Result<Vec<Candidate>, CribleError> {
+    ) -> Result<Vec<Scored>, CribleError> {
         // `Reverse` turns the max-heap into a heap whose top is the worst
         // candidate: `pop` then drops exactly the one a new candidate beats.
-        let mut heap: BinaryHeap<Reverse<Candidate>> =
+        let mut heap: BinaryHeap<Reverse<Scored>> =
             BinaryHeap::with_capacity(k.min(usize::try_from(pool.len()).unwrap_or(usize::MAX)));
         let mut live = pool.bitmap().iter();
         live.advance_to(from);
@@ -321,8 +321,7 @@ impl ExactSearcher {
                 break;
             }
             let iid = Iid::new(raw);
-            let vector = self.reader(iid)?.vector(iid)?;
-            let score = dot(query, &vector);
+            let score = cosine(self.reader(iid)?, iid, query)?;
             if !score.is_finite() {
                 return Err(internal(
                     "a stored vector produces a non-finite cosine, so the ranking is undefined",
@@ -336,7 +335,11 @@ impl ExactSearcher {
                     continue;
                 }
             }
-            let candidate = Candidate::new(score, iid, self.key_of(iid)?);
+            let candidate = Scored {
+                iid,
+                key: self.key_of(iid)?,
+                score,
+            };
             heap.push(Reverse(candidate));
             if heap.len() > k {
                 heap.pop();
@@ -348,8 +351,8 @@ impl ExactSearcher {
             .collect())
     }
 
-    /// Segment holding `iid`.
-    fn reader(&self, iid: Iid) -> Result<&SegmentReader, CribleError> {
+    /// Segment holding `iid`, shared with the rescoring of the binary strategy.
+    pub(crate) fn reader(&self, iid: Iid) -> Result<&SegmentReader, CribleError> {
         let position = self
             .segments
             .partition_point(|reader| reader.meta().iid_start.get() <= iid.get());
@@ -366,12 +369,23 @@ impl ExactSearcher {
     }
 
     /// Key of `iid`, read from its identity columns only.
-    fn key_of(&self, iid: Iid) -> Result<String, CribleError> {
+    pub(crate) fn key_of(&self, iid: Iid) -> Result<String, CribleError> {
         let key = self
             .records
             .read_passage_key(iid)?
             .ok_or_else(|| internal("a passage of the pool has no passage row"))?;
         Ok(key.to_string())
+    }
+
+    /// Content digest of `iid`, read without its text and its fields.
+    ///
+    /// `dedup: content` compares it before the payload step, so a duplicate the
+    /// regrouping drops never has its text decompressed
+    /// (`docs/03-recherche.md`, step 7 before step 8).
+    pub(crate) fn passage_hash_of(&self, iid: Iid) -> Result<String, CribleError> {
+        self.records
+            .read_passage_hash(iid)?
+            .ok_or_else(|| internal("a passage of the pool has no passage row"))
     }
 
     /// Passage row of `iid`, payload included, through the read-only
@@ -390,7 +404,10 @@ impl ExactSearcher {
     /// fields. A missing document row is not an inconsistency: the document may
     /// have been removed after the snapshot was taken, and the result then
     /// carries its passage fields only (ADR-0043, option A, without marker).
-    fn payload(&self, candidate: Candidate) -> Result<Hit, CribleError> {
+    ///
+    /// The planned binary strategy calls it too, after the rescoring, so both
+    /// strategies build their results the same way.
+    pub(crate) fn payload(&self, candidate: Scored) -> Result<Hit, CribleError> {
         let passage = self.passage_of(candidate.iid)?;
         let document = self.records.read_document(&passage.doc_id)?;
         Ok(Hit {
@@ -405,101 +422,6 @@ impl ExactSearcher {
             text: passage.text,
         })
     }
-}
-
-/// One scored passage of a slice, ordered best first.
-///
-/// The order is the one of the answer: descending score, then ascending
-/// **textual** key `doc_id#ord`. It is not the `Ord` of
-/// [`crible_core::ids::PassageKey`], which compares `(doc_id, ord)` with `ord`
-/// as a number; the two diverge from `ord = 10` on, and the text is the order
-/// `tools/reference_topk.py` uses. A score is finite here: [`ExactSearcher`]
-/// refuses a non-finite cosine before a candidate can enter a heap, so
-/// [`f32::total_cmp`] only provides the total order a heap requires.
-#[derive(Debug)]
-struct Candidate {
-    /// Cosine between the query and the passage.
-    score: f32,
-    /// Internal identifier of the passage, kept until the payload step.
-    iid: Iid,
-    /// Textual key `doc_id#ord`, the tie-break.
-    key: String,
-}
-
-impl Candidate {
-    /// Candidate for the passage `iid` whose textual key is `key`.
-    fn new(score: f32, iid: Iid, key: String) -> Self {
-        Self { score, iid, key }
-    }
-}
-
-impl PartialEq for Candidate {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for Candidate {}
-
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Candidate {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Greater is better: a higher score wins, and at equal score the
-        // smaller key wins. A slice wraps its heap in `Reverse`, so the top of
-        // the heap is the candidate that `pop` removes first.
-        self.score
-            .total_cmp(&other.score)
-            .then_with(|| other.key.cmp(&self.key))
-    }
-}
-
-/// Dot product of a normalised query and one stored vector, in `f32`.
-///
-/// The loop is the scalar implementation of the task sheet: fp16 is widened to
-/// `f32` by the segment reader, and the sum runs in component order, so the
-/// score is reproducible bit for bit and does not depend on a SIMD width.
-fn dot(query: &[f32], vector: &[f32]) -> f32 {
-    let mut sum = 0.0_f32;
-    for (query, vector) in query.iter().zip(vector) {
-        sum += query * vector;
-    }
-    sum
-}
-
-/// Divides `query` by its Euclidean norm in `f32`, as the numpy reference does.
-///
-/// The query comes from the caller, so a non-finite component, or finite
-/// components whose squares overflow `f32`, is an invalid request: the norm
-/// would be infinite and every component would become zero in silence, scoring
-/// the whole pool at zero. A zero vector has no cosine either, so it is refused
-/// rather than scoring every passage at zero, which would be meaningless.
-fn normalise(query: &[f32]) -> Result<Vec<f32>, CribleError> {
-    let mut squares = 0.0_f32;
-    for component in query {
-        if !component.is_finite() {
-            return Err(invalid_request(
-                "the query vector holds a non-finite component",
-            ));
-        }
-        squares += component * component;
-    }
-    let norm = squares.sqrt();
-    if !norm.is_finite() {
-        return Err(invalid_request(
-            "the squared norm of the query vector overflows f32",
-        ));
-    }
-    if norm == 0.0 {
-        return Err(invalid_request(
-            "the query vector has a zero norm, so no cosine is defined",
-        ));
-    }
-    Ok(query.iter().map(|component| component / norm).collect())
 }
 
 /// Document fields merged with the passage fields, as a result carries them.
@@ -521,89 +443,4 @@ fn merge_fields(document: Option<&Value>, passage: &Value) -> Result<Value, Crib
         }
     }
     Ok(Value::Object(merged))
-}
-
-/// Error raised when the structures of the epoch contradict each other.
-fn internal(message: impl Into<String>) -> CribleError {
-    CribleError::new(ErrorCode::Internal, message)
-}
-
-/// Error raised when the request itself is malformed.
-fn invalid_request(message: impl Into<String>) -> CribleError {
-    CribleError::new(ErrorCode::InvalidRequest, message)
-}
-
-#[cfg(test)]
-mod tests {
-    use roaring::RoaringBitmap;
-
-    use super::windows;
-
-    /// A fragmented pool: every live identifier is isolated, as after
-    /// interleaved attaches or a filter that keeps one passage out of two.
-    fn fragmented(live: u32) -> RoaringBitmap {
-        (0..live).map(|position| position * 2).collect()
-    }
-
-    #[test]
-    fn windows_are_bounded_by_the_worker_count_on_a_fragmented_pool() {
-        let bitmap = fragmented(1_000);
-        let total = u32::try_from(bitmap.len()).unwrap_or(u32::MAX);
-        let windows = windows(&bitmap, total, 4);
-
-        assert_eq!(
-            windows.len(),
-            4,
-            "four workers must give four windows, not one per run of the bitmap"
-        );
-        for pair in windows.windows(2) {
-            assert!(
-                pair[0].1 < pair[1].0,
-                "the windows must be ordered and disjoint"
-            );
-        }
-        for (from, to) in &windows {
-            let covered = bitmap
-                .iter()
-                .filter(|&iid| *from <= iid && iid <= *to)
-                .count();
-            assert_eq!(
-                covered, 250,
-                "every window must hold about pool_size / workers live passages"
-            );
-        }
-        let mut seen = 0_usize;
-        for iid in bitmap.iter() {
-            let owners = windows
-                .iter()
-                .filter(|(from, to)| *from <= iid && iid <= *to)
-                .count();
-            assert_eq!(owners, 1, "iid {iid} must belong to exactly one window");
-            seen += 1;
-        }
-        assert_eq!(seen, 1_000, "the windows must cover the whole pool");
-    }
-
-    #[test]
-    fn windows_of_an_empty_or_small_pool() {
-        assert!(
-            windows(&RoaringBitmap::new(), 0, 4).is_empty(),
-            "an empty pool has no window"
-        );
-
-        let one: RoaringBitmap = std::iter::once(42).collect();
-        assert_eq!(
-            windows(&one, 1, 4),
-            vec![(42, 42)],
-            "a single live passage gives a single window"
-        );
-
-        let few = fragmented(3);
-        let total = u32::try_from(few.len()).unwrap_or(u32::MAX);
-        assert_eq!(
-            windows(&few, total, 8).len(),
-            3,
-            "fewer live passages than workers give one window per passage, never more"
-        );
-    }
 }

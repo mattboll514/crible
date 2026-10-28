@@ -3,7 +3,7 @@
 **But** : passer d'un calcul exact partout au **scan binaire suivi d'un rescoring fp16**, choisir la stratégie selon la taille du pool, puis regrouper par document. On garantit la fidélité par la mesure.
 
 **Jalon J4** :
-- MES-01 atteint la cible de fidélité (recall@10 contre l'exact, par défaut au moins 0,99) ;
+- MES-01 atteint la cible de fidélité (recall@10 contre l'exact, par défaut au moins 0,99, en moyenne globale selon ADR-0076) ;
 - MES-02, MES-03, MES-09 et MES-12 sont consignées ;
 - le N par défaut est choisi et validé (Q-01) ;
 - INV-06 est toujours vert ;
@@ -24,6 +24,7 @@
   - les codes reconstruits sont identiques à ceux écrits à l'attache ;
   - `crible inspect` affiche la mémoire occupée par les codes.
 - **Invariants** : INV-15.
+- **Précisé par ADR-0069** (accepté par anticipation le 2026-10-26) : le « job de reconstruction » est l'ouverture du segment par l'écrivain ; `codes.bin` absent y est reconstruit depuis les `vectors.*` du segment et persisté atomiquement, sans nouvelle génération ni nouvelle époque. En lecture seule, les codes manquants sont construits en RAM et jamais écrits dans l'époque. Un fichier absent n'est pas une erreur ; un fichier de longueur fausse en est une (`Internal`, fichier nommé). Le format n'a pas d'en-tête : taille `count × ceil(dims/64) × 8` octets, version portée par `format_version` de `segment.json`, incrémenté à tout changement de disposition, et `codes.bin` reste hors des `checksums`. Aucune sous-commande CLI n'est ajoutée en P4.
 
 ### NOYAUX-SIMD
 - **Objectif** : les calculs de base, rapides et sûrs.
@@ -44,7 +45,8 @@
 - **Objectif** : obtenir le top-N par distance de Hamming sur le pool.
 - **Dépend de** : QUANTIFIER-BINAIRE, NOYAUX-SIMD, EVALUER-FILTRES
 - **À lire** : `03-recherche.md` (branche dense : parallélisme).
-- **Livrables** : un parcours du pool par tranches d'iid sur le pool rayon, avec un tas par thread, puis la fusion des tas. Si le pool est dense, on itère sur les codes contigus en testant la bitmap. S'il est clairsemé, on itère sur la bitmap.
+- **Livrables** : un parcours du pool par tranches d'iid sur le pool rayon, avec un tas par thread, puis la fusion des tas. Un seul parcours : le pool est suivi par l'itérateur trié de sa bitmap, et un curseur de segment avance avec lui en O(1) amorti, sans recherche binaire par iid (ADR-0081, ADR-0082).
+- **Précisé par ADR-0081** (accepté le 2026-10-27) : le livrable d'origine demandait deux parcours selon la densité ; ADR-0081 les ramène à un seul, le parcours clairsemé sur l'itérateur trié de la bitmap du pool. **Corrigé par `UNIFIER-PARCOURS-SCAN`** (2026-10-27) : le livrable ci-dessus décrit désormais ce seul parcours, et le curseur de segment qu'ADR-0082 rend obligatoire.
 - **Critères d'acceptation** :
   - le résultat est égal à un tri complet par Hamming sur `synth-small` ;
   - les égalités de score sont départagées de façon déterministe (par iid).
@@ -53,7 +55,7 @@
 - **Objectif** : le score exact des N candidats.
 - **Dépend de** : SCANNER-POOL-BINAIRE
 - **Livrables** : la lecture des vecteurs de référence des N candidats (mmap), le produit scalaire via les noyaux, puis le tri final.
-- **Critères d'acceptation** : quand N est au moins égal à la taille du pool, le résultat est identique à la stratégie EXACT.
+- **Critères d'acceptation** : quand N est au moins égal à la taille du pool, le rescoring rend les mêmes clés que la stratégie EXACT, dans le même ordre (départage stable par clé `doc_id#ord`), avec des scores identiques au bit près ; les deux stratégies passent par la même fonction de calcul du produit scalaire (ADR-0072, décision 3). La comparaison à la référence numpy reste celle d'ADR-0045 (`1e-5`, quasi-égalités admises).
 
 ### PLANIFIER-STRATEGIE
 - **Objectif** : choisir EXACT ou BINARY, et forcer l'exact à la demande.
@@ -62,7 +64,7 @@
 - **Livrables** :
   - la sélection selon `exact_threshold` et `search.scan` ;
   - l'option `exact` ;
-  - la stratégie choisie, exposée dans le plan (pour le debug, P7) ;
+  - la stratégie choisie, exposée dans le plan (pour le debug, P7 ; valeurs `"exact"` et `"binary"`, ADR-0074) ;
   - le réglage par `PATCH` au niveau de la bibliothèque.
 - **Critères d'acceptation** :
   - **INV-06** : un pool sous le seuil donne un résultat identique à l'exact ;
@@ -73,9 +75,9 @@
 - **Objectif** : `group_by: document`, `passages_per_document` et `dedup: content`.
 - **Dépend de** : PLANIFIER-STRATEGIE
 - **À lire** : `03-recherche.md` (regroupement).
-- **Livrables** : le sur-échantillonnage (`clamp(k × 20, 200, 1000)` quand on regroupe), le regroupement, et la fusion des passages identiques par `passage_hash`.
+- **Livrables** : le sur-échantillonnage (`clamp(k × 20, 200, 1000)` quand on regroupe), le regroupement, et la fusion des passages identiques par `passage_hash`. **Précisé par ADR-0075** (accepté par anticipation le 2026-10-27) : `dedup` s'applique avant `group_by`, sur toute la liste sur-échantillonnée, et le regroupement se recomplète depuis les candidats restants ; la règle de sur-échantillonnage vit dans `crible-search`, la CLI ne passant que `k` et les options de la requête ; la réponse reste une liste plate d'entrées de passage, où `k` compte des documents et où les entrées d'un document sont consécutives ; sous BINARY, le scan garde `max(N, candidates_per_branch)` candidats.
 - **Critères d'acceptation** :
-  - on obtient k documents distincts ;
+  - on obtient k documents distincts, ou moins quand les candidats sur-échantillonnés sont épuisés, sans erreur ;
   - le meilleur passage de chaque document est conservé ;
   - les doublons de contenu sont fusionnés ;
   - des tests couvrent un document qui a plusieurs passages dans le top.
@@ -84,9 +86,9 @@
 - **Objectif** : MES-01 et MES-12, puis le choix de N.
 - **Dépend de** : PLANIFIER-STRATEGIE, CONSTITUER-ECHANTILLON-LEGIFACILE
 - **À lire** : `08-invariants-et-tests.md` (cibles) ; `docs/mesures/README.md`.
-- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index.
+- **Livrables** : le recall@10 et le recouvrement@10 de BINARY contre EXACT sur les requêtes réelles de l'échantillon, pour N ∈ {200, 500, 1000, 2000, 5000}, avec et sans centrage, et par structure d'index. **Précisé par ADR-0076** (accepté par anticipation le 2026-10-27) : recall@10 au niveau du passage et recouvrement@10 au niveau du document, cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près ; BINARY forcé par `search.exact_threshold = 0` sur des copies des index ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée. **Précisé par ADR-0078** (2026-10-27) : le N par défaut retenu vaut 5000, seule valeur qui atteint la cible dans les deux campagnes et pour toutes les structures.
 - **Critères d'acceptation** :
-  - le rapport contient une recommandation de N et de centrage ;
+  - le rapport contient une recommandation de N et de centrage (rendue : N = 5000, sans centrage, ADR-0078) ;
   - la cible est atteinte, ou bien le rapport propose un levier (scoring asymétrique) à faire valider.
 - **Invariants / mesures** : MES-01, MES-12.
 
@@ -116,6 +118,8 @@
   - (b) **seulement si** le ré-encodage représente plus de la moitié de `validation` : l'encodage de la recette par **lots triés par longueur** (remplissage et masque d'attention), dans `crible-encode`, avec une taille de lot interne fixée par la mesure de cette tâche, **non configurable**, et notée dans le rapport. Sinon, la tâche s'arrête au rapport et propose la suite au propriétaire : elle ne code rien.
   - (c) le rejeu de MES-08, comparé à la campagne du 2026-10-25.
   - Les résultats des contrôles remis à l'orchestrateur pour `docs/suivi.md`, qui reste tenu par lui.
+- **Issue du livrable (b), note du 2026-10-27 (ADR-0073)** : il a été codé une fois la condition remplie (les 200 ré-encodages font 88,0 % et 89,0 % de `validation`), puis **mesuré et retiré**. Le temps de ré-encodage croît avec la taille de lot sur les deux lots (+3,6 % à +21,5 % dès B = 4), et huit copies du plus long passage coûtent 8,05 à 8,08 fois un appel seul : avec les défauts d'ONNX Runtime, les lignes d'un lot ne s'exécutent pas en parallèle. La recette reste donc encodée **un passage à la fois**, et aucune taille de lot ne subsiste dans le code. La mesure est consignée dans MES-08, campagne du 2026-10-27. Voir ADR-0073.
+- **Note du 2026-10-28, après acceptation d'ADR-0085** : le test `inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, écrit en application de la décision 2 d'ADR-0073 pour épingler les statistiques de la recette (`sample`, `min_cosine`, `p1`, `p50`) à `1e-6`, reste **local**. Depuis `ADR-0085`, la CI l'exclut par son nom, avec un quatrième `--skip` explicite, parce que ses données dérivent de la production (ADR-0032) et n'existent pas en CI. Les critères ci-dessus ne sont pas réécrits : ce test reste la preuve d'INV-12 à chaque jalon, et `ADR-0085` fait foi pour ce décompte.
 - **Critères d'acceptation** :
   - la ventilation est mesurée et reproductible : les postes de l'étape `validation` sont chiffrés pour les deux tailles de lot, et leur somme retrouve la durée de `validation` de la campagne du 2026-10-25 à la variabilité de la mesure près ;
   - si (b) est fait : un test prouve que le cosinus de **chaque** passage de la recette, encodé par lots, égale celui du même passage encodé seul à **1e-6** près ; et les statistiques de la recette d'un lot de référence (`sample`, `min_cosine`, `p1`, `p50`) sont inchangées à **1e-6** ;
@@ -129,7 +133,83 @@
 - **Objectif** : MES-02, MES-03 et MES-09.
 - **Dépend de** : PLANIFIER-STRATEGIE
 - **Livrables** :
-  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud ;
-  - la RAM réelle (RSS), en natif sur le Mac.
+  - sur `synth-large` (8,6 M passages) : la latence p50/p95 du scan selon la taille du pool (1 k, 10 k, 100 k, 1 M, 8,6 M) et le rescoring à froid et à chaud. **Précisé par ADR-0077** (accepté par anticipation le 2026-10-27) : le point « tous les passages » vaut **7,74 M vivants** et non 8,6 M, le jeu portant 860 000 passages morts (MES-07) ; les pools sont construits par un harnais, contigus et dispersés, avec contre-contrôle par la CLI ; N ∈ {1000, 2000, 5000}, BINARY forcé par `search.exact_threshold = 0` sur des copies de mesure ; le froid ne concerne que le rescoring, ses vecteurs fp16 étant en mmap, et il se mesure par copies non cachées (`F_NOCACHE`, `mincore`) ; **Précisé par ADR-0078** : le défaut vaut N = 5000, et les lignes de rescoring de `docs/03-recherche.md` portent désormais les mesures à N = 1000 et à N = 5000 ;
+  - la RAM réelle (RSS), en natif sur le Mac. **Précisé par ADR-0077** : trois états (index ouvert, après une passe de requêtes, session fp32 à part), mémoire anonyme et adossée à des fichiers séparées, comparaison au tableau de `docs/02-architecture.md:202-219`.
 - **Critères d'acceptation** : les protocoles sont reproductibles et les chiffres sont comparés au budget de `03-recherche.md`.
 - **Invariants / mesures** : MES-02, MES-03, MES-09.
+
+### UNIFIER-PARCOURS-SCAN
+- **Ajoutée par** : ADR-0081, accepté le 2026-10-27, hors plan initial. Elle met en œuvre la décision et corrige le livrable de `SCANNER-POOL-BINAIRE` qui demande encore deux parcours. Elle se fait en P4, avant J4.
+- **Objectif** : un seul parcours clairsemé pour le scan binaire, à la place de la règle de densité d'ADR-0071.
+- **Dépend de** : SCANNER-POOL-BINAIRE, MESURER-LATENCE-DENSE
+- **À lire** : ADR-0081 (décisions 1 à 8, « Conséquences », « À surveiller ») ; **ADR-0082** (curseur obligatoire, mesure A/B et règle de bruit) ; ADR-0071 (le seuil retiré, que cet ADR remplace) ; ADR-0077 (protocole de mesure) ; `docs/mesures/MES-02-parcours-dense-clairseme.md` (§ « Protocole », « Contrôles », « Écarts au protocole », « Résultats », « Conclusion », et la section « multi-segments » du 2026-10-27) ; `docs/03-recherche.md:143` (budget du scan binaire).
+- **Livrables** :
+  - (1) **d'abord** la mesure multi-segments d'ADR-0081, par `@mesureur`, sur **une copie compactée** d'environ 8 segments de 1 M passages et sur **une copie multi-attaches** (nombreux petits segments), même pool, même plage, N = 5000, 300 requêtes, 3 paires de passes alternées avec **l'ordre des paires alterné** (dense puis clairsemé, puis clairsemé puis dense), et le contrôle `agree` (les deux parcours rendent les mêmes candidats). La mesure est consignée dans une section datée du rapport MES-02 ; les copies de mesure et les sorties brutes vont dans `data/`.
+  - (2) **puis, la mesure multi-segments faite** (section datée du 2026-10-27 de MES-02 ; ADR-0082, décision 1), le code : un seul parcours clairsemé sur l'itérateur trié de la bitmap du pool, `traversal` et `dense_window` supprimés avec la règle de densité ; et le **curseur de segment** qui avance avec l'itérateur trié de la bitmap, en O(1) amorti, au lieu d'une recherche binaire par iid, avec un test du curseur sur des segments de tailles inégales. **Précisé par ADR-0082** : le curseur est **obligatoire**, et non conditionnel. La mesure multi-segments a établi le coût par passage de `segment_of` (0,93 à 1,03 ns par passage vivant à 100 segments) et les points où le dense repasse devant, quand le clairsemé gagne partout à un segment ; le curseur se met en œuvre avec le parcours unique (ADR-0081, « À surveiller » ; ADR-0082, décision 1). Le remède n'est pas le retour d'un second parcours.
+  - (3) la mise à jour de la fiche `SCANNER-POOL-BINAIRE` ou de sa note (`docs/phases/P4-recherche-rapide.md:48-49`), selon ce qu'ADR-0081 prévoit en décision 6 : le livrable et la note cessent de demander deux parcours et décrivent le seul parcours clairsemé.
+- **Critères d'acceptation** :
+  - mêmes candidats et même ordre qu'avant : le test de tri complet existant `dense_and_sparse_traversals_agree_with_a_full_sort` (`crates/crible-search/src/dense/binary.rs:576`) est adapté au parcours unique et compare toujours le moteur à un tri complet ;
+  - la latence du scan est au moins aussi bonne que celle de l'ancienne règle sur **tous** les points mesurés, et le budget de `docs/03-recherche.md:143` reste tenu. **Précisé par ADR-0082** : la comparaison est une mesure **A/B** par `@mesureur` après le code — binaire de `e7d4e08` (règle de densité d'ADR-0071) contre binaire du parcours unique avec curseur, sur les trois copies à 1, 8 et 100 segments et **tous** les points de la campagne multi-segments, protocole d'ADR-0077 avec l'ordre des paires alterné d'ADR-0081, et contrôle que les deux binaires rendent les mêmes candidats. Un point n'est **perdu** que si le nouveau binaire est plus lent en p50 **et** que l'écart dépasse l'amplitude de ses propres écarts d'une paire à l'autre sur ce point ; sinon c'est un **match nul**, qui satisfait le critère. Un point perdu au-delà du bruit remonte une `QUESTION-CONCEPTION`, la tâche passe en `BLOQUE`, et aucun repli n'est écrit dans le code ;
+  - si la mesure multi-segments contredit ADR-0081 — le clairsemé perd du terrain à mesure que le nombre de segments croît —, une `QUESTION-CONCEPTION` est remontée **avant** le code. **Précisé par ADR-0082** : cette question a été tranchée sur la mesure du 2026-10-27, qui établit la croissance monotone et son coût par passage ; le code se fait avec le curseur obligatoire du livrable (2), et la seule condition d'arrêt restante est celle du critère de latence — un point perdu au-delà du bruit ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` verts ; build `--release` pour la mesure.
+- **Invariants / mesures** : MES-02 ; INV-06 (ADR-0081, décision 5 : le parcours unique ne le touche pas).
+- **Hors périmètre** : un seuil par taille de pool ou un point de bascule de densité autre que la moitié (ADR-0081, alternatives (b) et (c)) ; le retour d'un second parcours, même comme filet ; la réécriture d'ADR-0071 et du protocole de MES-02 ; le budget de `docs/03-recherche.md:143` ; toute configuration du choix de parcours.
+
+### REDUIRE-COUT-DES-CLES
+- **Ajoutée par** : ADR-0079, accepté le 2026-10-27, hors plan initial. Elle met en œuvre la décision, en P4, avant J4.
+- **Objectif** : réduire le coût des clés au rescoring (MES-03 : 29,8 ms en p50 à N = 1000 et 61,1 ms à N = 5000, contre 0,36 ms et 2,04 ms pour le calcul seul).
+- **Dépend de** : RESCORER-FP16, MESURER-LATENCE-DENSE. **Pas** de dépendance à `UNIFIER-PARCOURS-SCAN` : ADR-0081 (point 7) fait du scan clairsemé trié une **aide** à l'ordre des iid que demande ADR-0079, décision 2, pas une condition ; les candidats peuvent être ordonnés par le rescoring lui-même, et ADR-0081 ne modifie pas ADR-0079. Si `UNIFIER-PARCOURS-SCAN` est déjà `FAIT`, le scan rend les candidats triés par iid ; **ADR-0083** retire (2a), donc cette constatation n'a plus d'objet et aucune mesure d'ordre n'est faite.
+- **À lire** : ADR-0079 (décisions 1 à 7, « Conséquences », « À surveiller ») ; **ADR-0083** (seule (b) est livrée, (2a) et (2b) retirées, gain à publier sur la variante livrée) ; ADR-0072 (décision 3, égalité au bit près) ; ADR-0045 (tri final par score puis clé textuelle) ; ADR-0082 (décision 3, règle de bruit) ; `docs/mesures/MES-03-latence-rescoring.md` (tableau, réserves, proposition, et la section datée « Rejeu après REDUIRE-COUT-DES-CLES » du 2026-10-28).
+- **Livrables**, dans l'ordre d'ADR-0079 :
+  - (e) un **profil par échantillonnage** du rescoring à N = 1000 et à N = 5000, consigné, **avant tout changement** : il attribue les 25,4 ms non expliquées entre la lecture de la clé, le calcul et le reste (allocation de `String`, emprunt de connexion, copie du vecteur, tri). Ni l'API, ni le format, ni les résultats ne changent.
+  - (2a) le parcours des candidats dans l'**ordre croissant des iid** avant la boucle de rescoring, pour la localité des pages, et (2b) la ligne fp16 **empruntée** au mmap au lieu d'être copiée quand le décodeur peut travailler sur une vue ; les deux changements mesurés séparément, puis ensemble, puis **retirés sans trace** selon la mesure (voir la note ci-dessous et ADR-0083).
+  - (b) la lecture des clés **après le tri par score** : tri intermédiaire sur `(score, iid)`, puis clés pour les `k` résultats, pour les candidats que consomme le regroupement s'il y en a (ADR-0075), et pour **toutes** les égalités de score à la frontière. Le tri final reste `(score décroissant, clé textuelle croissante)` et l'iid ne sort jamais du moteur.
+  - (a) les clés **par lot**, en repli, si le profil montre que le coût est dans les N allers-retours et les N emprunts de connexion : une requête unique pour les N iid, découpée selon la limite de variables de SQLite, exécutée hors des lectures de vecteurs.
+  - le rejeu de MES-03 au protocole d'ADR-0077 sur `data/mes02` (N ∈ {1000, 2000, 5000}), en section datée du rapport.
+- **Mesures neutres (2a) et (2b) : mesurées, puis retirées, note du 2026-10-28 (ADR-0083)** : le rejeu du 2026-10-28 (section datée de MES-03) a mesuré les deux changements séparément, puis ensemble, comme la décision 2 d'ADR-0079 le demande. (2a), le parcours par iid croissant, est une **perte** : +6,6 % à N = 1000 et +10,2 % à N = 5000, au-delà de sa dispersion et reproduite dans les deux ordres de ronde. (2b), la ligne `f16` empruntée au mmap, **ne sort pas du bruit** : match nul à N = 1000, −1,3 % (6,9 ms) à N = 5000, pour un `unsafe` de plus. Les deux sont donc **retirées du code sans trace** (ni option, ni configuration) ; seule (b) est livrée, et (a) n'est pas mise en œuvre, sa condition n'étant pas remplie par le profil (1,5 % du coût). La condition d'« À surveiller » d'ADR-0079 (`:100`) est infirmée : aucune règle d'ordre des iid n'est écrite dans `docs/03`. Voir ADR-0083.
+- **Critères d'acceptation** :
+  - scores et ordre identiques au bit près à EXACT (ADR-0072, décision 3) ;
+  - **INV-06** vert ;
+  - un test dédié des égalités de score à la frontière, avec des vecteurs dupliqués, prouve que le résultat ne dépend pas de l'ordre d'itération ;
+  - le top-10 du harnais de MES-01 donne **0 écart** ;
+  - le rapport MES-03 est complété avec le gain chiffré à N = 1000 et à N = 5000. **Précisé par ADR-0083** : le gain publié est celui de la **variante livrée**, (b) seule, mesurée en confirmation contre `base` et contre `final` (pour situer l'effet des deux mesures retirées), à N ∈ {1000, 2000, 5000}, en passes alternées avec la règle de bruit d'ADR-0082 (décision 3) et la résidence des deux fichiers déclarée par série. Les contrôles d'égalité ci-dessus sont **rejoués sur cette variante** : le rejeu du 2026-10-28 porte sur `final`, qui contient les deux mesures retirées, et ne prouve donc plus l'égalité du code livré ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` verts ; build `--release` pour la mesure.
+- **Invariants / mesures** : INV-06 ; MES-03.
+- **Hors périmètre** : les clés en RAM (c) et la colonne de clés en mmap (d), écartées pour l'instant et rejugées après le profil, ce qui demanderait un ADR (budget de MES-09, `docs/02-architecture.md:204`) ; la valeur de `rescore_candidates` (ADR-0078) ; l'accès aux vecteurs fp16, traité par `GROUPER-LECTURES-VECTEURS` ; la règle d'imbrication de `rescore.rs`, qui interdit de tenir la connexion SQLite pendant les lectures de vecteurs.
+
+### GROUPER-LECTURES-VECTEURS
+- **Ajoutée par** : ADR-0080, accepté le 2026-10-27, hors plan initial. Elle met en œuvre la décision, en P4, avant J4.
+- **Objectif** : réduire le coût de l'accès aux vecteurs fp16 au rescoring (MES-03 : 85,0 ms à froid à N = 1000 et 177,5 ms à N = 5000 pour le seul produit scalaire, contre 0,36 ms et 2,04 ms sur pages chaudes, à environ une page de 16 Kio par candidat).
+- **Dépend de** : REDUIRE-COUT-DES-CLES
+- **À lire** : ADR-0080 (décisions 1 à 8, « Conséquences », « À surveiller ») ; ADR-0079 (profil et mesures neutres, préalables) ; ADR-0072 (décision 3, égalité au bit près) ; `docs/mesures/MES-03-latence-rescoring.md`, `docs/mesures/MES-09-ram-reelle.md`.
+- **Livrables** :
+  - la **lecture groupée et parallèle des N lignes fp16** (rayon, tampon transitoire d'au plus 7,7 Mio à N = 5000, libéré après la requête), **avant** le calcul, qui reprend ensuite vecteur par vecteur avec le **même** `kernels::dot` et le même tri final ; la connexion SQLite n'est pas tenue pendant ces lectures ;
+  - `madvise(MADV_RANDOM)` **testé dans la même campagne comme contrôle** ; il n'est gardé que si la mesure le retient, et alors avec l'ADR de dépendance `libc` qu'ADR-0080 exige, `libc` étant absent de `docs/07` ; sinon il est retiré sans trace dans le code ;
+  - le `pread` groupé en repli, si l'option retenue plafonne sous sa borne (15 à 25 ms à N = 1000, 60 à 90 ms à N = 5000), avec les mêmes contrôles ;
+  - le rejeu de MES-03 au protocole d'ADR-0077, en distinguant deux séries depuis l'ADR-0084 (accepté le 2026-10-28) : la **série principale de P4**, « searcher déjà ouvert, cache déplacé après l'ouverture », qui fait foi pour juger le gain, avec `mincore` et la résidence des pages de candidats publiée pour chaque point (moyenne par requête et valeur de la première requête, par N et par variante) ; et la **série renvoyée à P8**, la série froide `F_NOCACHE` avec `mincore`, qui reste au protocole mais n'est ni rejouable sur le moteur en P4 (la vérification blake3 à l'ouverture réchauffe le fichier) ni un critère d'acceptation, son absence étant déclarée dans le rapport ; la **série 10 min** reste secondaire (ADR-0077, ADR-0084) ; N ∈ {1000, 2000, 5000}, 300 requêtes, 3 passes à chaud ;
+  - le **RSS en trois états** (MES-09), mémoire anonyme et adossée à des fichiers séparées, pour montrer que la mémoire possédée ne bouge pas et que le tampon n'est que transitoire.
+- **Critères d'acceptation** :
+  - scores et ordre identiques au bit près à EXACT (ADR-0072, décision 3) ;
+  - **INV-06** vert ;
+  - le top-10 du harnais de MES-01 donne **0 écart** ;
+  - la mémoire possédée reste inchangée : 1,12 Gio par index, au bruit de mesure près ;
+  - le gain à froid est chiffré à N = 1000 **et** à N = 5000, et la contention avec le scan est mesurée (p50 et p95, pas seulement la médiane) ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` verts ; build `--release` pour la mesure.
+- **Invariants / mesures** : INV-06 ; MES-03, MES-09.
+- **Hors périmètre** : le format des segments et `format_version` (ADR-0006, ADR-0069), et une quantification du rescoring ; les vecteurs en RAM et `mlock` (écarts à la règle de mémoire de `docs/02-architecture.md:204` et `:213`) ; le préchargement `MADV_WILLNEED` et l'ordre physique selon `cluster_by` ; le préchauffage à l'ouverture (ADR-0047) ; la valeur de `rescore_candidates` (ADR-0078) ; les cibles de latence en conteneur et le protocole de froid sous Linux, qui appartiennent à P8.
+
+### EXCLURE-QUATRIEME-TEST-ECHANTILLON
+- **Ajoutée par** : ADR-0085, accepté le 2026-10-28, hors plan initial. Elle applique la décision de l'ADR dans la CI distante, après le run `40665513025` (2026-10-28), rouge dans le job `Rust with ONNX Runtime` sur `data/legifacile-sample/configs/dole.json` absent. Elle se fait en P4, avant la validation de J4.
+- **Objectif** : rendre la CI verte sans toucher au code ni au contrat des tests, en excluant par son nom le quatrième test local de l'échantillon Legifacile.
+- **Dépend de** : ACCELERER-RECETTE, dont le test est la cause du run rouge.
+- **À lire** : `adr/0085-quatrieme-test-local-de-l-echantillon-legifacile-exclu-de-la-ci-par-son-nom.md` (décision 1, « Modifications à appliquer après acceptation », `.github/workflows/ci.yml`) ; ADR-0057, ADR-0062 et ADR-0063 (les trois exclusions précédentes, qui ne changent pas) ; ADR-0032 (aucune donnée de production en CI) ; `docs/07-stack-et-deploiement.md` (« CI (GitHub Actions) ») ; `docs/08-invariants-et-tests.md` (« Sauts de test ») ; `.github/workflows/ci.yml`.
+- **Livrables** :
+  - dans `.github/workflows/ci.yml`, à l'étape `Test with ONNX Runtime` du job `Rust with ONNX Runtime`, un quatrième `--skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, à la suite des trois déjà présents ;
+  - le commentaire qui précède l'étape, « The three Legifacile sample tests … (ADR-0057, ADR-0062, ADR-0063) », passe à **quatre** tests et cite `ADR-0085`.
+- **Critères d'acceptation** :
+  - le workflow et `docs/07-stack-et-deploiement.md` nomment les **mêmes quatre** tests, dans la même commande ;
+  - en local, la commande de l'étape, jouée sans l'échantillon, laisse passer tous les tests ; en particulier `inv_12_the_legifacile_sample_test_fails_without_its_prerequisites` reste **exécuté** et vert, puisqu'il prouve l'échec bruyant d'un test de l'échantillon privé de ses prérequis ;
+  - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` sont verts ;
+  - la CI distante est verte au prochain push de la branche de phase.
+- **Aucun invariant cité** : la tâche ne change ni le comportement du moteur, ni le contrat de la recette, ni la preuve d'INV-12, qui reste le passage local du test exclu.
+- **Hors périmètre** : le code Rust et les tests, `crates/crible/tests/recette_import.rs` compris ; une règle générale d'exclusion (motif commun, feature Cargo, variable d'environnement, `cfg`) ; la publication, la reconstitution ou la réduction de l'échantillon Legifacile ; le `timeout-minutes`, le cache et le téléchargement du modèle ; les documents `docs/01` à `docs/08` hors les modifications déjà appliquées avec cet ADR, et `docs/suivi.md`, tenu par l'orchestrateur.

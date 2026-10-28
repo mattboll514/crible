@@ -20,7 +20,7 @@
 //! keep it for every request. Nothing else in the search crate needs to know
 //! how the pool is sized.
 //!
-//! The pool is also what [`ExactSearcher::open`](crate::dense::exact::ExactSearcher::open)
+//! The pool is also what [`DenseSearcher::open`](crate::dense::exact::DenseSearcher::open)
 //! must see: it sizes its read-only connection pool on the worker count of the
 //! current rayon pool, so opening the searcher inside `install` gives it the
 //! right capacity. Opening it outside and searching inside stays correct, but

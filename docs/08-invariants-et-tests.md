@@ -45,7 +45,7 @@ Règle normative (ADR-0057) : **`#[ignore]` est le seul mécanisme de saut autor
 Deux conséquences pratiques :
 
 - un test qui saute silencieusement ne prouve rien et se lit pourtant comme vert : c'est le défaut corrigé dans `crates/crible/tests/recette_import.rs` par `AJOUTER-ORT-CI` ; les tests de `crates/crible-encode/tests/charger_modele.rs` et de `crates/crible-core/tests/model_config.rs` sont le modèle à suivre, puisqu'ils échouent déjà avec la commande d'export à lancer ;
-- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction` et de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`, dont les données dérivent de la production Legifacile (ADR-0032) et dont les deux derniers demandent en plus ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062, ADR-0063).
+- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction`, de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import` et de `inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, dont les données dérivent de la production Legifacile (ADR-0032) et qui passent tous par la recette, laquelle demande ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062, ADR-0063, ADR-0085).
 
 ## Jeux de données
 
@@ -63,18 +63,18 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | # | Question | Phase |
 |---|---|---|
 | MES-00 | Référence pgvector actuelle : rappel et latence p50/p95 sur le jeu de requêtes de Legifacile | P0 |
-| MES-01 | Rappel du scan binaire + rescoring contre l'exact (mDenseOn, 768 dimensions), selon N → choix du N par défaut | P4 |
-| MES-02 | Latence du scan binaire selon la taille du pool (1 k → 8,6 M) | P4, puis P8 en conteneur |
-| MES-03 | Latence du rescoring fp16, à froid et à chaud | P4 |
+| MES-01 | Rappel du scan binaire + rescoring contre l'exact (mDenseOn, 768 dimensions), selon N → choix du N par défaut. Métriques, agrégation et protocole fixés par ADR-0076 | P4 |
+| MES-02 | Latence du scan binaire selon la taille du pool (1 k → 8,6 M). Protocole fixé par ADR-0077 : pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, BINARY forcé par `search.exact_threshold = 0`, un seul parcours, le clairsemé, avec curseur de segment (ADR-0081, qui remplace ADR-0071 ; ADR-0082 ; corrigé le 2026-10-28) | P4, puis P8 en conteneur |
+| MES-03 | Latence du rescoring fp16, à froid et à chaud. Protocole fixé par ADR-0077 : N ∈ {1000, 2000, 5000}, froid par copies non cachées (`F_NOCACHE`, `mincore`) ; le scan n'a pas d'état froid, ses codes étant en RAM. Depuis l'ADR-0084 (accepté le 2026-10-28), la série `F_NOCACHE` est déclarée non rejouable sur le moteur en P4, la vérification du sceau blake3 à l'ouverture réchauffant le fichier ; la série « searcher déjà ouvert, cache déplacé après l'ouverture » fait foi jusqu'à P8, et le froid vrai est renvoyé à P8. Rejouée en conteneur par la tâche `MESURER-EN-CONTENEUR-MAC` (P8) | P4, P8 |
 | MES-04 | Parité de l'encodeur : ONNX fp32 et INT8 contre PyTorch (cosinus, rappel) | P2 |
 | MES-05 | Latence d'encodage d'une requête sur CPU (natif, puis en conteneur) | P2, P8 |
 | MES-06 | tantivy : taille d'index (avec ou sans positions), durée de construction, latence BM25 filtrée selon le pool | P5 |
 | MES-07 | Durée d'une compaction à l'échelle de Legifacile | P3, P9 |
 | MES-08 | Durée d'une attache quotidienne type (~1 000 à 3 000 passages) | P3, P9 |
-| MES-09 | RAM réelle (RSS) en régime, par index | P4, P8 |
+| MES-09 | RAM réelle (RSS) en régime, par index. Protocole fixé par ADR-0077 : trois états (index ouvert, après une passe de requêtes, session fp32 à part), mémoire anonyme et adossée à des fichiers séparées | P4, P8 |
 | MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut | P5 |
 | MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`) | P5 |
-| MES-12 | Codes binaires : signe brut contre signe après centrage | P4 |
+| MES-12 | Codes binaires : signe brut contre signe après centrage. Centrage mesuré hors moteur, par un harnais contrôlé au bit près (ADR-0076) | P4 |
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
 | MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
@@ -82,6 +82,6 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 ## Cibles chiffrées
 
 Les cibles de latence et de rappel sont fixées **après MES-00** et consignées dans `docs/suivi.md` (section « Cibles »). Règles :
-- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut. À confirmer ou ajuster après MES-01, avec l'accord du propriétaire.
+- **Fidélité** : le recall@10 de l'approximation contre l'exact doit atteindre au moins 0,99 au N par défaut (N = 5000, ADR-0078), **en moyenne sur toutes les requêtes** et au niveau du passage. Les valeurs par structure sont rapportées et toute structure sous 0,99 est signalée et expliquée ; le recouvrement@10 au niveau du document est rapporté sans cible (ADR-0076). La cible est atteinte sur l'échantillon (MES-01) ; sa confirmation à 8,58 M passages est renvoyée à P9.
 - **Rappel** : au moins égal à pgvector (MES-00) sur le jeu de référence.
 - **Latence** : p95 au plus égal à pgvector (MES-00) à l'échelle de Legifacile, sur le Mac mini en conteneur.

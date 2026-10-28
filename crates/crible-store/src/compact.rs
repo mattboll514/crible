@@ -68,7 +68,7 @@
 //! published, E still on disk) and `after_compaction_publish` (step 6: the
 //! snapshot of E+1 published, E not reclaimed). Stopping means panicking with a
 //! message containing `CRIBLE_FAILPOINT`, exactly as the commit protocol does.
-//! [`compact_with_observer`] is the other test hook: it calls back at each step,
+//! `compact_with_observer` is the other test hook: it calls back at each step,
 //! so a test holds the compaction at a known point without sleeping.
 
 use crible_core::config::{FieldLevel, FieldType, IndexConfig};
@@ -948,6 +948,7 @@ mod tests {
                 booleans: 0,
                 columns: 0,
             },
+            codes_memory: 0,
         }
     }
 

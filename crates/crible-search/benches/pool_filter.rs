@@ -221,7 +221,7 @@ const FIXTURE_SCHEMA: &str = r#"{
 /// `synth-small`, with a name of its own.
 fn fixture_config(name: &str, schema: &Schema) -> String {
     format!(
-        r#"{{"name":"{name}","model":"synthetic-external","reference_precision":"fp16","schema":{},"cluster_by":["categorie"],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":1000,"exact_threshold":1000,"candidates_per_branch":100,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":200,"acceptance_min_cosine":0.999}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        r#"{{"name":"{name}","model":"synthetic-external","reference_precision":"fp16","schema":{},"cluster_by":["categorie"],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":5000,"exact_threshold":5000,"candidates_per_branch":100,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":200,"acceptance_min_cosine":0.999}},"compaction":{{"dead_ratio":0.1}}}}"#,
         schema.to_json_string()
     )
 }

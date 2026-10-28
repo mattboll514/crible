@@ -10,10 +10,11 @@
 //!
 //! [`DenseFixture`] builds a real index in a temporary directory: a schema with
 //! one document field and one passage field, one generation per
-//! [`DenseFixture::add_generation`] call, one fp16 segment per generation, and
-//! the matching rows in `records.sqlite`. The samples give the vectors, the
-//! texts and both levels of fields, so a test states exactly which passages it
-//! searches and why the expected order is the one it asserts.
+//! [`DenseFixture::add_generation`] call, one segment per generation, in the
+//! configured reference precision, and the matching rows in `records.sqlite`.
+//! The samples give the vectors, the texts and both levels of fields, so a test
+//! states exactly which passages it searches and why the expected order is the
+//! one it asserts.
 //!
 //! # The reference comparison
 //!
@@ -53,7 +54,7 @@ use std::sync::Arc;
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation, Iid};
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::pool::Pool;
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
@@ -104,6 +105,10 @@ pub struct Sample {
     pub text: String,
     /// Reference vector of the passage, written in fp16.
     pub vector: Vec<f32>,
+    /// Content digest of the passage; the default of `(doc_id, ord)` when
+    /// `None`. `dedup: content` compares it, so a test that wants two passages
+    /// of identical content sets the same digest on both.
+    passage_hash: Option<String>,
 }
 
 impl Sample {
@@ -117,6 +122,7 @@ impl Sample {
             passage_fields: json!({ "rang": ord }),
             text: format!("{doc_id}#{ord} text"),
             vector,
+            passage_hash: None,
         }
     }
 
@@ -140,6 +146,14 @@ impl Sample {
         self.text = text.to_owned();
         self
     }
+
+    /// Replaces the content digest of the passage, which `dedup: content`
+    /// compares instead of the text.
+    #[must_use]
+    pub fn with_passage_hash(mut self, hash: &str) -> Self {
+        self.passage_hash = Some(hash.to_owned());
+        self
+    }
 }
 
 /// One index in a temporary directory, its writer and its iid counter.
@@ -148,26 +162,41 @@ pub struct DenseFixture {
     _temp: tempfile::TempDir,
     index: PathBuf,
     dims: u32,
+    precision: ReferencePrecision,
     store: GenerationStore,
     next_iid: u32,
 }
 
 impl DenseFixture {
-    /// Creates an empty index whose vectors have `dims` dimensions.
+    /// Creates an empty index whose vectors have `dims` dimensions, stored in
+    /// `fp16`, the default reference precision of `docs/03-recherche.md`.
     pub fn create(dims: u32) -> Self {
+        Self::create_with_precision(dims, ReferencePrecision::Fp16)
+    }
+
+    /// Creates an empty index whose vectors have `dims` dimensions, stored in
+    /// `precision`.
+    ///
+    /// The precision is frozen at creation (ADR-0005): it is written in the
+    /// configuration and used for every segment the fixture adds.
+    pub fn create_with_precision(dims: u32, precision: ReferencePrecision) -> Self {
         let temp = tempfile::tempdir().unwrap_or_else(|error| {
             panic!("a temporary directory for the index must be creatable: {error}")
         });
         let index = temp.path().join("indexes").join("dense-exact");
         let schema = fixture_schema();
-        write_index_config(&index, &super::test_config("dense-exact", &schema))
-            .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
+        write_index_config(
+            &index,
+            &super::test_config_with_precision("dense-exact", &schema, precision),
+        )
+        .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));
         let store = GenerationStore::create(&index, Epoch::new(EPOCH), &schema)
             .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"));
         Self {
             _temp: temp,
             index,
             dims,
+            precision,
             store,
             next_iid: 0,
         }
@@ -201,7 +230,7 @@ impl DenseFixture {
             dims: self.dims,
             generation,
             batch_id: format!("batch-{}", generation.get()),
-            precision: ReferencePrecision::Fp16,
+            precision: self.precision,
         };
         let mut writer = SegmentWriter::create(&segments, spec)
             .unwrap_or_else(|error| panic!("the segment writer must start: {error}"));
@@ -243,7 +272,10 @@ impl DenseFixture {
                 doc_id: sample.doc_id.clone(),
                 ord: sample.ord,
                 text: sample.text.clone(),
-                passage_hash: format!("blake3:passage-{}-{}", sample.doc_id, sample.ord),
+                passage_hash: sample
+                    .passage_hash
+                    .clone()
+                    .unwrap_or_else(|| format!("blake3:passage-{}-{}", sample.doc_id, sample.ord)),
                 fields: sample.passage_fields.clone(),
                 segment_id: segment_id.clone(),
                 created_generation: generation,
@@ -334,9 +366,9 @@ impl DenseFixture {
     }
 
     /// Searcher over the segments of the published generation.
-    pub fn searcher(&self) -> ExactSearcher {
+    pub fn searcher(&self) -> DenseSearcher {
         let snapshot = self.snapshot();
-        ExactSearcher::open(
+        DenseSearcher::open(
             &self.segments_dir(),
             snapshot.segments(),
             &self.records_path(),

@@ -25,8 +25,8 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
   "lexical":    { "enabled": true, "language": "fr", "positions": false },
   "search": {
     "scan": "binary",
-    "rescore_candidates": 1000,
-    "exact_threshold": 1000,
+    "rescore_candidates": 5000,
+    "exact_threshold": 5000,
     "candidates_per_branch": 100,
     "fusion": { "method": "rrf" }
   },
@@ -62,6 +62,8 @@ Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l
 | `acceptance_min_cosine` | `∈ ]0, 1]` | `0,999` (ADR-0052) |
 
 Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la configuration est invalide en elle-même, quelle que soit la tâche qui la lit, et c'est la validation de la configuration qui la refuse, pas l'attache. `ingest.*` reste réglable par `PATCH` : aucune clé n'est retirée, et la valeur par défaut ne change pas.
+
+Parmi les réglages de `search`, `exact_threshold` est **optionnelle** dans `index.json` (ADR-0074). Absente à la création de l'index, elle prend la valeur de `rescore_candidates` à ce moment, et cette valeur est écrite dans la configuration stockée : elle se lit ensuite comme une valeur explicite. Un `PATCH` ultérieur de `rescore_candidates` ne déplace pas le seuil ; seul un `PATCH` de `exact_threshold` le change. Ce réglage n'a pas de domaine au sens d'`ingest.*` : tout entier de `0` à `u32::MAX` est accepté, sans nouvelle erreur.
 
 ## Le modèle
 

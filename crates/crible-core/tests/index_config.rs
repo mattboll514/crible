@@ -36,8 +36,8 @@ const DECISIONS_CONFIG: &str = r#"{
   "lexical":    { "enabled": true, "language": "fr", "positions": false },
   "search": {
     "scan": "binary",
-    "rescore_candidates": 1000,
-    "exact_threshold": 1000,
+    "rescore_candidates": 5000,
+    "exact_threshold": 5000,
     "candidates_per_branch": 100,
     "fusion": { "method": "rrf" }
   },
@@ -73,8 +73,8 @@ fn index_config_doc_example_is_parsed() {
     assert_eq!(config.lexical.language, "fr");
     assert!(!config.lexical.positions);
 
-    assert_eq!(config.search.rescore_candidates, 1000);
-    assert_eq!(config.search.exact_threshold, 1000);
+    assert_eq!(config.search.rescore_candidates, 5000);
+    assert_eq!(config.search.exact_threshold, 5000);
     assert_eq!(config.search.candidates_per_branch, 100);
     assert_eq!(config.search.fusion, FusionConfig::Rrf);
 

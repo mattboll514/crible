@@ -536,3 +536,609 @@ du 2026-10-25.
   « ≈ 1,0 ms par passage ajouté ». Après « ≈ 1,0 ms par document ajouté et
   ≈ 0,8 ms par passage ajouté ». Détail : `(2 439 − 823) / (2 517 − 905) = 1,00 ms`
   par document, `(2 439 − 823) / (3 002 − 1 000) = 0,81 ms` par passage.
+
+## Campagne du 2026-10-26 (nuit) — ventilation de l'étape `validation` (`ACCELERER-RECETTE`, livrable a)
+
+Cette section ne rejoue pas les campagnes précédentes et ne les réécrit pas : elle
+ajoute la **ventilation mesurée** que la campagne du 2026-10-25 déclarait ne pas
+avoir (`MES-08`, « Ce que la mesure ne permet **pas** d'affirmer : rien sur la
+répartition interne de l'étape `validation` »). Elle répond au livrable (a) de la
+fiche `ACCELERER-RECETTE` (ADR-0067, décision 3). Aucun contrat ne change :
+`acceptance_sample` reste 200, la recette reste en fp32, `acceptance_min_cosine`
+reste 0,999, les réglages d'ONNX Runtime restent les défauts de la bibliothèque,
+et la recette reste dans le chemin de l'attache avant toute écriture (INV-12).
+
+- Tâche : `ACCELERER-RECETTE` (phase P4, hors plan), livrable (a) seulement. Le
+  livrable (b) n'est pas réalisé : aucune ligne de code de production n'a été
+  écrite pendant cette campagne.
+- Commit : `366c5d018745b3f172d2c3d217abea42b1795354` (branche
+  `tache/ACCELERER-RECETTE`). L'attache mesurée est celle de ce commit.
+- Machine : MacBook Apple M3 (8 cœurs), 24 Go de RAM, macOS 15.7.7 (24G720),
+  APFS, 84 Gio libres avant et après. Mesure **native**, aucun conteneur. Le
+  pilote des postes est compilé par `cargo build --release` ; le banc d'attache
+  de production par `cargo bench` (profil `bench`), comme le 2026-10-25.
+- Charge ambiante : **la machine était nettement plus chargée que le 2026-10-25**
+  (2,3 à 2,7 de charge moyenne ce jour-là). Ici, charge moyenne 5,88 au début et
+  5,17 à la fin : `mediaanalysisd` 71,6 % d'un cœur, `mds_stores` 42,6 %,
+  `mediaanalysisd-access` 36,9 %, Adobe Lightroom 22,8 %, puis `WindowServer` et
+  Arc à 20 à 45 % pendant la première moitié de la campagne
+  (`data/accelere-recette/conditions-start.txt` et `conditions-end.txt`). L'effet
+  n'est pas isolé ; il explique l'écart absolu avec le 2026-10-25 (voir
+  « Comparaison avec la campagne du 2026-10-25 »), et il dérive pendant la
+  campagne (voir « Écarts au protocole »).
+- Jeu de données : `data/mes07/indexes/articles`, inchangé depuis le 2026-10-25 —
+  50 000 passages, 44 890 vivants (5 110 morts), 38 175 documents, génération 2,
+  époque 1, un segment, `reference_precision` `fp16`, `acceptance_sample` 200,
+  `acceptance_min_cosine` 0,999, modèle `mdenseon` (`onnx`),
+  `records.sqlite` de 58 933 248 octets, SHA-256
+  `b579a29cf1aac8f7b9a3ce30116a5d43044408ce8a7c8e98828ae97ca48fc169`.
+  Le graphe fp32 `data/models/mdenseon/model.onnx` fait 1,1 Gio et déclare des
+  dimensions de **lot et de séquence dynamiques** (`input_ids` :
+  `['batch_ids', 'sequence_ids']`, sortie `['batch_ids', 'sequence_ids', 768]`) :
+  un encodage par lots ne demande pas de réexport du modèle.
+- Lots : ceux du 2026-10-25, réutilisés tels quels (`data/mes08/batches/articles/`)
+  — `daily-articles-1000` (1 000 passages, 905 documents, 2,2 Mo) et
+  `daily-articles-3000` (3 002 passages, 2 517 documents, 6,5 Mo). Un troisième
+  lot a été écrit **pour cette campagne**, `accelere-200` (200 passages,
+  190 documents, 452 K, `make_batches.py daily --seed 20261026 --vectors source`,
+  `data/accelere-recette/batches/`) : il sert de point bas où la recette tire ses
+  200 passages dans un lot qui n'en contient que 200.
+
+### Protocole
+
+Deux instruments, tous deux **hors du code de production** :
+
+1. `crates/crible-store/examples/acceptance_split.rs`, pilote neuf (aucun
+   changement de comportement du moteur : il ouvre le lot avec le lecteur de
+   production, lit `records.sqlite` en lecture seule, et appelle l'encodeur et le
+   compteur de jetons de production). Trois modes :
+   - `load` : charge le graphe fp32, une fois par processus ;
+   - `posts` : rejoue et chronomètre chaque poste de `validation`, cinq
+     répétitions par lot ;
+   - `both` : le même rejeu **juste avant et juste après** un `attach` réel sur un
+     clone de l'index, dans le même processus — c'est ce qui encadre la mesure
+     contre la dérive de la machine (voir plus bas).
+2. `crates/crible/benches/attach_cost.rs`, **inchangé**, pour la durée de
+   `validation` que le vrai `attach` rapporte (`AttachDurations`), et pour le lot
+   de 200 passages.
+
+```sh
+# pilote : chargement fp32 à froid, un processus par répétition, puis à chaud
+for i in 1 2 3 4 5; do ./target/release/examples/acceptance_split load \
+    --model data/models/mdenseon --repetitions 1 --out data/accelere-recette/load-rep-$i.json; done
+./target/release/examples/acceptance_split load \
+    --model data/models/mdenseon --repetitions 5 --out data/accelere-recette/load-warm.json
+
+# pilote : les postes, cinq répétitions par lot
+./target/release/examples/acceptance_split posts \
+    --index data/mes07/indexes/articles --models data/models \
+    --batch data/mes08/batches/articles/daily-articles-1000 \
+    --repetitions 5 --out data/accelere-recette/posts-daily-articles-1000.json
+# idem pour daily-articles-3000
+
+# pilote : réplique avant / attach réel / réplique après, même processus
+./target/release/examples/acceptance_split both \
+    --index data/mes07/indexes/articles --models data/models \
+    --batch data/mes08/batches/articles/daily-articles-1000 \
+    --work data/accelere-recette/work --repetitions 3 --after 1 \
+    --out data/accelere-recette/both-1000.json
+
+# banc de production : `validation` du vrai attach, 5 répétitions, deux lots
+MES08_ONLY=articles MES08_DAY=2026-10-26 \
+MES08_RAW="$PWD/data/accelere-recette/attach-raw" \
+ORT_DYLIB_PATH=tools/.venv/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.1.31.0.dylib \
+    sh tools/bench/mes08/run.sh
+```
+
+Les tableaux de postes et d'encadrement de cette section viennent de
+`tools/bench/accelere-recette/merge.py`, qui relit les JSON bruts de
+`data/accelere-recette/` (gitignoré). Le troisième tableau qu'il imprime — la
+surcharge de remplissage — est un **calcul** sur les longueurs mesurées
+(`lengths-*.json`), et non un temps : la campagne du 2026-10-27 le remplace par
+des temps mesurés et corrige ce calcul (voir cette sous-section).
+
+**Ce que chaque poste rejoue.** `ouverture du lot` est `BatchReader::open`
+(manifeste, contrôles 4 et 5, sommes de contrôle des fichiers). `validate` est
+`BatchReader::validate` (contrôles 6 et 7, une passe complète). Le poste
+`comptage des jetons` est `TokenCounter::count_documents`, appelé chunk par
+chunk, exactement comme `check_passage_lengths`. Les deux postes de `contrôle 9 :
+lecture` et `tirage` sont une **réplique** de `draw_acceptance_sample` : même
+priorité blake3 sur `(empreinte du batch_id, index de ligne)`, même plafond de
+200, même ordre par index de ligne, même décodage fp16 des vecteurs gardés ;
+l'égalité **exacte** des trois statistiques de recette entre la réplique et le
+vrai `attach` sur le même lot (min 0,9999913843534255, p1 0,9999919863118626,
+p50 0,9999983411024005) prouve que la réplique ré-encode les **mêmes 200
+textes**. Le poste `plan_documents` est une réplique des **lectures seulement**
+(la requête `SELECT doc_hash, fields FROM documents WHERE doc_id = ?1` par
+document, base en lecture seule) : il ne contient ni la construction des
+enregistrements, ni les compteurs, ni `retire_passages`.
+
+### Résultats — les postes de `validation`
+
+Cinq répétitions par lot, en millisecondes, p50 avec `[min–max]` entre crochets.
+Le chargement fp32 est commun aux deux tailles : c'est le même modèle.
+
+| Poste | 1 000 passages | 3 002 passages |
+|---|---|---|
+| chargement fp32 (processus neuf, 5 processus) | 1 862,4 [1 849,4–1 946,5] | idem |
+| chargement fp32 (rechargement dans un même processus) | 1 827,7 [1 792,1–1 850,5] | idem |
+| ouverture du lot (contrôles 4 et 5, sommes de contrôle) | 2,1 [1,9–4,9] | 5,8 [4,2–5,9] |
+| contrôles 6 et 7 (`validate`, une passe) | 3,5 [3,0–3,6] | 9,9 [6,6–11,0] |
+| contrôle 8 : lecture des passages | 1,7 [1,3–1,7] | 5,2 [3,9–5,9] |
+| contrôle 8 : comptage des jetons | 38,9 [31,9–40,3] | 123,4 [102,8–130,0] |
+| contrôle 9 : lecture du tirage | 1,9 [1,7–2,0] | 5,9 [4,6–6,4] |
+| contrôle 9 : tirage (priorité, texte, vecteur) | 0,5 [0,4–0,7] | 1,0 [0,9–1,0] |
+| `plan_documents` : lecture des documents | 0,5 [0,4–0,5] | 1,1 [0,9–1,2] |
+| `plan_documents` : lectures SQLite (réplique) | 1,6 [1,1–1,7] | 4,4 [3,1–4,5] |
+| **recette : 200 ré-encodages** | **57 015,2 [56 327,8–61 130,1]** | **70 343,6 [69 176,1–71 516,6]** |
+| recette : cosinus | 0,3 [0,2–0,3] | 0,3 [0,3–0,3] |
+| total des postes (somme mesurée, hors chargement) | 57 066,6 [56 381,9–61 176,4] | 70 511,4 [69 305,4–71 674,7] |
+
+Trois lectures immédiates :
+
+1. **Les 200 ré-encodages font tout.** 57,0 s et 70,3 s, soit 99,8 à 99,9 % de la
+   somme des postes. Par passage ré-encodé : **285,1 ms** pour le lot de 1 000 et
+   **351,7 ms** pour celui de 3 002. Le chiffre de 221 ms du 2026-10-25 était une
+   déduction (44,2 s / 200) ; ici c'est une mesure directe, sur une machine plus
+   chargée.
+2. **Tout le reste de `validation` tient en 51 ms et 157 ms** : comptage des
+   jetons 38,9 et 123,4 ms, contrôles 6 et 7 3,5 et 9,9 ms, ouverture du lot 2,1
+   et 5,8 ms, `plan_documents` 2,1 et 5,5 ms, tirage 2,4 et 6,9 ms. Le chargement
+   du fp32 (1,86 s) est **du même ordre que tout le travail hors recette réuni**
+   pour le lot de 1 000 passages.
+3. **Le coût par jeton ré-encodé** est mesuré, pas déduit : les 200 passages tirés
+   du lot de 1 000 font 54 991 jetons (p50 165, p90 705, max 1 026), ceux du lot
+   de 3 002 en font 65 193 (p50 194, p90 964, max 1 090) — soit 1 037 µs et
+   1 079 µs par jeton. Les deux lots tirent 200 passages, mais ceux du second sont
+   plus longs (255 559 octets de texte contre 223 094) : c'est la **longueur du
+   tirage**, pas la taille du lot, qui fixe le coût de la recette.
+
+### Résultats — la somme des postes retrouve `validation`
+
+Comparer des processus différents ne tient pas sur cette machine : la charge
+ambiante dérive (voir « Écarts au protocole »). Le mode `both` encadre donc chaque
+mesure : réplique des postes, puis vrai `attach` sur un clone, puis réplique des
+postes de nouveau, dans le même processus et pour la même répétition. Chaque
+valeur est en millisecondes et **inclut le chargement fp32** de son propre
+processus ou de son propre appel.
+
+| Lot | rép. | postes + chargement, avant | `validation` du vrai attach | postes + chargement, après | recette / `validation` |
+|---|---|---|---|---|---|
+| 1 000 | 0 | 72 144,6 | **70 529,2** | 64 262,0 | 102,1 % |
+| 1 000 | 1 | 64 402,4 | **64 812,4** | 64 419,5 | 99,3 % |
+| 1 000 | 2 | 64 675,5 | **64 747,7** | 73 209,9 | 99,9 % |
+| 3 002 | 0 | 77 668,0 | **79 008,6** | 79 628,9 | 98,0 % |
+| 3 002 | 1 | 78 928,0 | **79 549,1** | 81 083,9 | 99,1 % |
+
+La colonne « recette / `validation` » est `(200 ré-encodages + chargement fp32 de
+l'attache) / validation` ; le chargement mesuré dans l'attache vaut 1 780,9 à
+1 842,6 ms selon la répétition. Pour la répétition 1 du lot de 1 000 (l'encadrement
+le plus serré : 64 402,4 / 64 812,4 / 64 419,5), la différence entre la réplique et
+`validation` est de **+410 ms (+0,6 %)** ; pour la répétition 0 du lot de 3 002,
++1 340,6 ms (+1,7 %) au-dessus de la réplique d'avant et −620,3 ms en dessous de
+celle d'après. **Aucun poste n'est manquant** : la somme des postes mesurés et du
+chargement retrouve `validation` à la variabilité de la mesure près, à condition
+de comparer des mesures voisines dans le temps.
+
+Pour mémoire, la campagne de référence (banc de production, 5 répétitions, même
+séance, machine un peu plus rapide) donne `validation` = **58 181,3 ms**
+[56 131,8–63 208,9] pour 1 000 passages et **76 327,1 ms** [75 594,4–79 005,2]
+pour 3 002. La somme des postes de la même séance (57 066,6 + 1 862,4 = 58 929,0
+et 70 511,4 + 1 862,4 = 72 373,8) la retrouve à +1,3 % et −5,2 % : ces deux écarts sont la dérive de la machine
+entre les deux séries de mesures, qui n'est pas monotone (la charge fluctue dans
+les deux sens pendant la campagne), et c'est précisément ce que l'encadrement du
+tableau ci-dessus élimine.
+
+### Conséquence sur la déduction du 2026-10-25
+
+La campagne du 2026-10-25 ajustait `validation` sur deux points et en tirait une
+part fixe de **44,2 s** et une part de **7,2 ms par passage ajouté**, en
+attribuant la part fixe à la recette et la part par passage au comptage des jetons
+et aux contrôles. La mesure sépare les deux et **infirme la part par passage** :
+
+- `validation` augmente de **14 196,2 ms** (+21,9 %) entre la répétition 1 du lot
+  de 1 000 (64 812,4 ms) et la répétition 0 du lot de 3 002 (79 008,6 ms), les
+  deux mesures de l'encadrement `both` du tableau précédent ;
+- les postes qui dépendent du **lot** augmentent de **106 ms** au total, mais ces
+  chiffres-là viennent des **p50 de la séance** (`posts`, cinq répétitions par
+  lot) et non de l'encadrement : comptage des jetons +84,5 ms (38,9 → 123,4),
+  contrôles 6 et 7 +6,4 ms, ouverture +3,7 ms, lectures des passages et du tirage
+  +8,0 ms, `plan_documents` +3,4 ms ;
+- les 200 ré-encodages augmentent de **13 161,0 ms** (+21,1 %) entre les mêmes
+  deux répétitions de l'encadrement (62 519,3 → 75 680,3 ms), parce que les 200
+  passages tirés du lot de 3 002 sont plus longs (54 991 → 65 193 jetons, +18,6 %).
+
+Autrement dit : la recette est **fixe en nombre de passages (200)** mais pas en
+coût, puisqu'elle dépend de la longueur des textes tirés ; la taille du lot ne
+coûte, elle, que 0,06 ms par passage ajouté. La « part fixe » du 2026-10-25 était
+la recette de ce lot-là, et sa « part par passage » était la recette des textes un
+peu plus longs du lot de 3 002, pas le comptage des jetons.
+
+### Comparaison avec la campagne du 2026-10-25
+
+| Grandeur | 2026-10-25 | 2026-10-26 (nuit) | Écart |
+|---|---|---|---|
+| `validation`, 1 000 passages | 51 469 | 58 181 (séance) · 64 812 (encadré) | +13,0 % · +25,9 % |
+| `validation`, 3 002 passages | 65 923 | 76 327 (séance) · 79 009 (encadré) | +15,8 % · +19,8 % |
+| recette (200 ré-encodages) | non mesurée (44,2 s déduits) | **57 015 · 70 344** | — |
+| part de la recette dans `validation` | 86 % · 67 % (déduite de la part fixe) | **88,0 % · 89,0 %** | révisée à la hausse |
+| part de la recette + chargement fp32 | non mesurée | **90,8 % · 91,4 %** | — |
+
+L'écart absolu vient de la charge ambiante (5,2 à 5,9 de charge moyenne contre 2,3
+à 2,7 le 2026-10-25), pas d'un changement de code : la campagne du 2026-10-25 a
+mesuré l'attache de `46c2dd1`, celle-ci `366c5d0`. Le diff de `attach.rs` entre
+les deux commits porte le delta d'index de filtres (`CommitDelta`,
+`INSERER-POOL-EN-ORDRE`, ADR-0066) et le renommage des points d'arrêt
+(`attach_failpoint` → `stop_at_failpoint`) ; aucun hunk ne touche
+`check_acceptance` ni la boucle de recette. Le rapport
+mesuré aujourd'hui (88,0 % et 89,0 %) ne dépend pas de cette charge : la déduction
+du 2026-10-25 le sous-estimait au lot de 3 002 (67 %) parce qu'elle attribuait à la
+taille du lot ce qui est la longueur du tirage. C'est ce rapport,
+et non les durées absolues, qui porte la conclusion.
+
+### Ce que la mesure ne permet pas d'affirmer
+
+- **La durée interne de `check_acceptance` n'est pas instrumentée.** Les 200
+  ré-encodages sont chronométrés par une réplique de la boucle (même appel
+  `Model::encode(Side::Document, …)`, mêmes textes, vérifiés par l'égalité exacte
+  des statistiques de recette), pas par un chronomètre à l'intérieur de la
+  fonction. Ce qu'il faudrait pour l'avoir du code de production, sans changer le
+  comportement : ajouter à `AttachDurations` des sous-durées de `validation` —
+  `acceptance_load`, `acceptance_encode`, `acceptance_cosine` — et, tant qu'on y
+  est, `token_count`, `plan_documents`, `batch_open`. Ce sont des durées de
+  télémétrie d'appel : elles ne sont pas persistées dans `batches.report`
+  (ADR-0042), donc aucun format ni aucune génération ne change. **Non codé ici**,
+  conformément à la consigne de la tâche.
+- **`plan_documents` n'est mesuré qu'à travers ses lectures SQLite** (1,6 et
+  4,4 ms). La construction des enregistrements, l'analyse des champs JSON, les
+  compteurs et `retire_passages` ne sont pas chronométrés. Le lot mesuré ne
+  contient que des documents nouveaux : le chemin `replaced` n'est pas exercé.
+  Les sous-durées ci-dessus le donneraient pour rien.
+- **Rien sur l'encodage par lots** (livrable b) : aucun gain n'est mesuré, seule
+  la surcharge de remplissage l'est (voir la conclusion). Le pilote n'appelle que
+  `Model::encode`, qui construit une forme `[1, length]`.
+- **Rien sur un index de 8,58 M passages** : comme le 2026-10-25, la recette ne
+  dépend que du lot et du modèle, mais ce n'est pas mesuré à l'échelle.
+- **Rien sur le serveur** : le chargement fp32 (1,86 s) est payé à chaque attache
+  par la CLI, alors que le serveur garde la session ouverte (ADR-0051). Les parts
+  ci-dessus valent pour la CLI.
+
+### Conclusion — la règle « plus de la moitié de `validation` »
+
+**Oui, pour les deux tailles de lot.** Les 200 ré-encodages de la recette
+représentent **88,0 %** de `validation` pour 1 000 passages et **89,0 %** pour
+3 002 ; avec le chargement fp32 qu'ils déclenchent, 90,8 % et 91,4 %. Le seuil de
+la fiche (la moitié) est dépassé d'un facteur 1,8 dans les deux cas, et la taille
+du lot ne change pas la conclusion : la recette tire toujours 200 passages.
+
+Le livrable (b) était donc justifié par cette seule mesure. La recommandation
+formulée alors — **encodage par lots triés par longueur, taille de lot interne
+8** — reposait uniquement sur la **surcharge de remplissage**, jamais sur un
+temps d'encodage : le graphe accepte les dimensions dynamiques, la surcharge vaut
++2,6 % de jetons à B = 4 (lot de 1 000) et +2,4 % (lot de 3 002), +6,4 % et
++6,1 % à B = 8, +11,9 % et +13,2 % à B = 16, +28,2 % et +21,9 % à B = 32 ; B = 8
+était le plus grand lot dont la surcharge restait sous les 10 %.
+
+**Cette recommandation est remplacée par la mesure du 2026-10-27** (sous-section
+suivante) : le temps d'encodage ne baisse à aucune taille de lot, et la valeur
+mesurée de la taille interne est **1**. Les surcharges de remplissage ci-dessus
+sont celles du calcul corrigé du 2026-10-27 ; le premier calcul, qui donnait
++26,9 %, +26,6 %, +73,0 % et +62,0 % à B = 16 et B = 32, est **abandonné** et
+n'est conservé que sous forme de note dans cette sous-section.
+
+Deux points qui restent valables, quelle que soit la taille de lot :
+
+- **Ne rien optimiser d'autre dans `validation`.** Le comptage des jetons
+  (38,9 et 123,4 ms) et tout le reste (moins de 30 ms cumulés) sont deux ordres
+  de grandeur sous la recette ; les toucher demanderait de modifier INV-11 ou le
+  chemin de l'attache pour un gain invisible.
+- **Côté serveur, le chargement fp32 disparaît de l'attache** (session gardée,
+  ADR-0051) : la part de la recette y monte encore, à recette constante.
+
+### Écarts au protocole
+
+- **La machine n'était pas au repos, et sa charge a dérivé pendant la campagne**
+  (5,88 de moyenne au début, 5,17 à la fin, avec `mediaanalysisd` et `mds_stores`
+  actifs). Conséquence mesurée : deux répliques identiques séparées de deux
+  minutes diffèrent de 10 à 15 % (`both`, lot de 1 000 : 72 144,6 puis 64 262,0
+  pour la même réplique). C'est pourquoi la comparaison retenue est celle du mode
+  `both`, qui encadre chaque `validation` par deux répliques ; les durées absolues
+  ne sont pas comparables d'une séance à l'autre. Aucune valeur n'est retirée.
+- **Un premier passage des postes a été refait.** La réplique du tirage
+  construisait un tas-max sur `Reverse((priorité, index))`, donc gardait les
+  **plus grandes** priorités au lieu des plus petites : elle ré-encodait 200
+  textes différents de ceux de la recette (statistiques de recette différentes,
+  48,3 s au lieu de 57,0 s). Le tas a été corrigé en `BinaryHeap<(priorité, index)>`
+  — les trois statistiques de recette sont alors identiques au chiffre près — et
+  tous les chiffres de cette section viennent des passages corrigés. Les JSON du
+  premier passage ne sont pas cités.
+- **`run.sh` de MES-08 réécrit un rapport versionné.** Son étape de fusion écrit
+  `docs/mesures/MES-08-duree-attache-quotidienne.<date>.json` ; avec
+  `MES08_DAY=2026-10-26`, elle a écrasé le rapport du rejeu `synth-large` déjà
+  commité. Le fichier a été restauré à l'identique depuis `HEAD`
+  (`git diff --quiet` passe), et les relevés bruts de cette campagne sont restés
+  dans `data/accelere-recette/attach-raw/`. Aucun autre fichier versionné n'a été
+  touché par les mesures.
+- **Pas de préchauffage séparé** pour les points d'attache : chaque répétition
+  part d'un clone APFS neuf, protocole du 2026-10-25 sans changement. Pour les
+  postes, le graphe fp32 est chargé une fois par processus puis réutilisé ; le
+  chargement est mesuré à part, à froid (un processus par répétition) et à chaud
+  (cinq dans un processus), et les deux valeurs diffèrent de moins de 2 %.
+- **Le lot `accelere-200` est neuf** (200 passages, 190 documents) : il ne sert
+  qu'à montrer qu'un lot dont tous les passages sont tirés coûte, en `validation`,
+  la recette de ses 200 textes (48,3 s p50 [45,3–49,3]) et rien de plus.
+- **Un seul segment** dans l'index, un seul modèle : mêmes limites que le
+  2026-10-25.
+
+### Données brutes et fichiers
+
+Tout est dans `data/accelere-recette/` (gitignoré, aucune valeur de `.env.prod`) :
+
+- `attach-raw/articles.json` et `attach-raw/accelere-200.json` : les points
+  d'attache du banc de production (5 et 3 répétitions), plus `articles.time` et
+  `conditions-start.txt` de `run.sh` ;
+- `posts-daily-articles-1000.json`, `posts-daily-articles-3000.json` : les postes,
+  5 répétitions par lot ;
+- `both-1000.json`, `both-3000.json` : les encadrements réplique / attach /
+  réplique ;
+- `load-rep-1.json` à `load-rep-5.json`, `load-warm.json` : le chargement fp32 ;
+- `lengths-1000.json`, `lengths-3000.json` : longueurs en jetons des 200 passages
+  tirés, avec la liste triée qui donne les surcharges de remplissage ;
+- `batches/accelere-200` : le lot de 200 passages ; `work/` est vide (les clones
+  sont supprimés après chaque répétition) ;
+- `conditions-start.txt`, `conditions-end.txt` : charge et processus.
+
+Instruments, hors du code de production :
+`crates/crible-store/examples/acceptance_split.rs` (pilote),
+`tools/bench/accelere-recette/run.sh` (campagne) et
+`tools/bench/accelere-recette/merge.py` (tableaux de cette section). Le banc
+d'attache, `crates/crible/benches/attach_cost.rs`, n'est pas modifié.
+
+## Campagne du 2026-10-27 — tailles de lot de la recette, et rejeu de MES-08
+
+Cette sous-section mesure ce que la campagne du 2026-10-26 n'avait pas mesuré :
+le **temps** d'encodage pour une taille de lot donnée, et non plus seulement la
+surcharge de remplissage. Elle mesure aussi le **rejeu de MES-08** que la fiche
+`ACCELERER-RECETTE` demande au livrable (c). Elle ne réécrit ni la campagne du
+2026-10-25 ni celle du 2026-10-26 : elle les complète et signale ses corrections.
+
+- Tâche : `ACCELERER-RECETTE`, livrables (b) mesuré et (c). Le code du livrable
+  (b) — `crates/crible-encode/src/batch.rs`, `Model::encode_batch`,
+  `check_acceptance` — était présent dans l'arbre pendant la campagne, non
+  modifié, avec `ACCEPTANCE_BATCH_SIZE = 1`.
+- Commit : `366c5d018745b3f172d2c3d217abea42b1795354`, plus le diff non commité du
+  livrable (b), conservé pour la reproductibilité dans
+  `data/accelere-recette/livrable-b/` (`livrable-b.diff`, `batch.rs`,
+  `accelere_recette.rs`).
+- Machine : MacBook Apple M3 (8 cœurs), 24 Go, macOS 15.7.7 (24G720), mesure
+  native, `cargo build --release`, ONNX Runtime 1.31.0 (`ORT_DYLIB_PATH`),
+  `mdenseon` fp32, réglages d'ONNX Runtime par défaut (ADR-0052).
+- Charge ambiante : même machine chargée que la veille (`mediaanalysisd`,
+  `mds_stores`, Lightroom ; relevé `data/accelere-recette/conditions-sweep-start.txt`).
+- Échantillons : les 200 passages tirés par la recette, écrits hors ligne par
+  `acceptance_split dump` dans `data/accelere-recette/sample-daily-articles-1000.json`
+  (54 991 jetons, p50 165, max 1 026) et
+  `sample-daily-articles-3000.json` (65 193 jetons, p50 194, max 1 090). Le
+  nombre de jetons est identique à celui de la campagne du 2026-10-26 : le tirage
+  est le même.
+
+### Protocole des tailles de lot
+
+Le harnais est temporaire et **hors des fichiers versionnés** :
+`data/accelere-recette/harness/` (crate `recette-batch-sweep`, dépendances
+épinglées `ort = 2.0.0-rc.15`, `tokenizers = 0.23.2`, comme le workspace). Il ne
+dépend d'aucune crate de Crible et ne référence `encode_batch` nulle part : il
+rejoue le même appel de graphe que `Model::encode_padded_batch` — `input_ids` et
+`attention_mask` de forme `[rows, length]`, remplissage après les vrais jetons,
+pooling CLS de la ligne 0 de chaque ligne, normalisation selon `model.json` — et
+la même session par défaut.
+
+```sh
+# échantillon tiré, une fois : les textes et leurs longueurs en jetons
+./target/release/examples/acceptance_split dump \
+    --index data/mes07/indexes/articles --models data/models \
+    --batch data/mes08/batches/articles/daily-articles-1000 \
+    --out data/accelere-recette/sample-daily-articles-1000.json
+
+# balayage entrelacé des tailles, trois tours
+cd data/accelere-recette/harness
+ORT_DYLIB_PATH=/…/libonnxruntime.1.31.0.dylib \
+    ./target/release/recette-batch-sweep sweep \
+    --model ../../../data/models/mdenseon \
+    --sample ../sample-daily-articles-1000.json --sizes 1,4,8,16 --rounds 3
+
+# linéarité : B copies du plus long passage tiré, contre un appel seul
+… recette-batch-sweep longest --model ../../../data/models/mdenseon \
+    --sample ../sample-daily-articles-1000.json --copies 1,4,8 --rounds 3
+```
+
+Trois précautions, dictées par la dérive constatée la veille :
+
+1. **Les tailles sont entrelacées** : un tour exécute B = 1, 4, 8, 16, puis on
+   recommence, trois tours. Une dérive de la machine frappe donc les quatre
+   tailles, et pas seulement la dernière.
+2. **Le B = 1 du code de production encadre le harnais** : `acceptance_split
+   posts` (qui appelle `encode_batch` avec la constante de production, donc
+   B = 1) est exécuté une fois avant et une fois après le balayage de chaque lot.
+3. **La surcharge est recalculée à partir des vraies longueurs d'entrée** (prompt
+   et jetons spéciaux compris), pas des longueurs de texte.
+
+### Résultats — le temps ne baisse à aucune taille
+
+Temps total de ré-encodage des 200 passages tirés, en millisecondes : médiane de
+trois tours, `[min–max]` entre crochets, puis coût par jeton et surcharge de
+remplissage mesurée.
+
+| Lot | B | temps total (ms) | µs / jeton | jetons avec remplissage |
+|---|---|---|---|---|
+| 1 000 passages (54 991 jetons) | **1** | **56 314,7 [53 728,3–57 428,7]** | 1 024 | 54 991 (+0,0 %) |
+| | 4 | 59 681,1 [56 540,7–60 143,3] | 1 085 | 56 448 (+2,6 %) |
+| | 8 | 63 633,4 [60 143,9–65 078,7] | 1 157 | 58 504 (+6,4 %) |
+| | 16 | 68 440,9 [64 731,2–68 618,7] | 1 245 | 61 552 (+11,9 %) |
+| 3 002 passages (65 193 jetons) | **1** | **70 987,2 [67 387,1–72 109,0]** | 1 089 | 65 193 (+0,0 %) |
+| | 4 | 73 561,7 [72 928,5–74 531,9] | 1 128 | 66 756 (+2,4 %) |
+| | 8 | 77 908,0 [77 251,4–81 719,8] | 1 195 | 69 176 (+6,1 %) |
+| | 16 | 86 140,6 [85 755,6–86 762,6] | 1 321 | 73 792 (+13,2 %) |
+
+Encadrement par le code de production (B = 1 réel, `encode_batch` avec la
+constante 1) : lot de 1 000, **51 744,5 ms** avant et **57 318,7 ms** après
+(941 et 1 042 µs/jeton) ; lot de 3 002, **63 003,6 ms** avant et **71 342,3 ms**
+après (966 et 1 094 µs/jeton). Les 56 314,7 et 70 987,2 du harnais tombent entre
+ces bornes : le harnais mesure le même travail que le code de production.
+
+Trois constats :
+
+1. **Le temps croît avec la taille de lot, sur les deux lots.** Par rapport à
+   B = 1 : +6,0 %, +13,0 % et +21,5 % (lot de 1 000) ; +3,6 %, +9,8 % et +21,4 %
+   (lot de 3 002). À aucun moment un lot ne rattrape son remplissage : la
+   surcharge de temps dépasse toujours la surcharge de jetons (+3,4, +6,6 et
+   +9,6 points sur le lot de 1 000).
+2. **Le coût par jeton monte lui aussi** : 1 024 → 1 245 µs (lot de 1 000) et
+   1 089 → 1 321 µs (lot de 3 002). Un lot ne partage donc pas le travail d'un
+   appel : il paie ses jetons de remplissage et, en plus, un peu plus cher par
+   jeton réel.
+3. **La dispersion est faible et n'inverse jamais l'ordre** : les trois tours
+   donnent B = 1 < B = 4 < B = 8 < B = 16 dans les deux lots, et les intervalles
+   `[min–max]` de deux tailles voisines ne se recouvrent pas — au dixième de
+   milliseconde près entre B = 4 et B = 8 du lot de 1 000 (60 143,3 contre
+   60 143,9), et sans ambiguïté ailleurs (lot de 3 002 : 74 531,9 contre
+   77 251,4).
+
+### Résultats — les lignes d'un lot ne s'exécutent pas en parallèle
+
+Le plus long passage tiré, dupliqué B fois dans un seul appel (aucun remplissage
+par construction) : si les lignes d'un lot s'exécutaient en parallèle, huit copies
+coûteraient bien moins que huit appels.
+
+| Échantillon | B copies | temps (ms), médiane de 3 tours | rapport au B = 1, par tour | médiane |
+|---|---|---|---|---|
+| 1 000 (1 026 jetons) | 1 | 1 338,1 [1 083,2–1 343,3] | — | — |
+| | 4 | 5 317,2 [4 797,0–5 322,6] | 4,43 · 3,96 · 3,97 | **3,97** |
+| | 8 | 10 786,7 [10 684,7–10 817,5] | 9,96 · 8,05 · 7,98 | **8,05** |
+| 3 002 (1 090 jetons) | 1 | 1 468,4 [1 288,2–1 491,7] | — | — |
+| | 4 | 5 894,0 [5 881,7–5 899,2] | 4,58 · 4,01 · 3,95 | **4,01** |
+| | 8 | 11 875,0 [11 863,6–11 883,7] | 9,22 · 8,08 · 7,97 | **8,08** |
+
+Huit copies coûtent 8,05 à 8,08 fois un appel seul : **strictement linéaire**.
+Le gain d'un lot ne peut donc venir que du parallélisme entre lignes, et il n'y
+en a pas avec les réglages par défaut d'ONNX Runtime — ce que confirme
+l'observation de `@dev` (processus à ~400 % d'un CPU, donc les fils intra-op
+travaillent **dans** une ligne, pas entre les lignes d'un lot).
+
+### Correction de la surcharge de remplissage du 2026-10-26
+
+Le premier calcul de la veille — celui que `merge.py` imprimait encore avant
+cette correction — donnait +26,9 % et +26,6 % (B = 16) et +73,0 % et +62,0 %
+(B = 32). Ces valeurs étaient **fausses** : le calcul multipliait le
+dernier groupe, incomplet, par la taille de lot au lieu de son nombre réel de
+passages. Recalculées sur les vraies longueurs d'entrée, elles valent **+11,9 %**
+et **+13,2 %** (B = 16), **+28,2 %** et **+21,9 %** (B = 32). Les valeurs de B = 4
+et B = 8 (+2,6 %/+2,4 % et +6,4 %/+6,1 %) étaient justes. Le calcul est corrigé
+dans `tools/bench/accelere-recette/merge.py` (chaque groupe paie son propre plus
+long passage, pondéré par son nombre réel de passages) et le script imprime
+désormais +2,6 / +6,4 / +11,9 / +28,2 % et +2,4 / +6,1 / +13,2 / +21,9 % pour
+B = 4, 8, 16 et 32. La correction ne change rien à la conclusion de la veille sur
+la règle de la moitié, et elle ne change pas non plus le classement des tailles :
+la surcharge croît avec B dans tous les cas.
+
+### Conclusion — la taille de lot mesurée est 1
+
+**Aucune taille de lot n'accélère la recette sur cette machine et avec les
+réglages par défaut d'ONNX Runtime** : le temps total croît de +3,6 % à +21,5 %
+dès B = 4, et le coût par jeton croît avec B. La valeur mesurée de la taille de
+lot interne est donc **1**, ce que le code du livrable (b) portait déjà
+(`ACCEPTANCE_BATCH_SIZE = 1`) sur la foi d'un relevé rapide de `@dev` ; cette
+campagne le confirme avec trois tours entrelacés, deux lots et un encadrement par
+le chemin de production.
+
+Il en découle, pour la décision en cours : **le code du livrable (b) n'apporte
+rien** et peut être retiré (remplissage, masque d'attention et tri par longueur
+compris), le rapport ci-dessus restant la trace de ce qu'il aurait pu valoir. Ce
+qui reste utile de ce travail est le **groupement trié par longueur** : il est
+déjà écrit, testé, et il ne coûte rien — il devient payant le jour où les lignes
+d'un lot s'exécutent réellement en parallèle.
+
+### Rejeu de MES-08 (livrable c)
+
+La campagne d'attache de référence du 2026-10-26 (banc `attach_cost` inchangé,
+cinq répétitions par lot, index et lots identiques à ceux du 2026-10-25, relevés
+dans `data/accelere-recette/attach-raw/articles.json`) tient lieu de rejeu exigé
+par la fiche. Durées en millisecondes, p50 avec `[min–max]`.
+
+| Grandeur | 2026-10-25 | 2026-10-26 (rejeu) | Écart |
+|---|---|---|---|
+| `validation`, 1 000 passages | 51 469 | **58 181,3 [56 131,8–63 208,9]** | +13,0 % |
+| `validation`, 3 002 passages | 65 923 | **76 327,1 [75 594,4–79 005,2]** | +15,8 % |
+| durée totale, 1 000 passages | 52 333 | **59 469,4 [57 385,1–64 577,4]** | +13,6 % |
+| durée totale, 3 002 passages | 68 467 | **80 165,1 [79 467,7–82 986,6]** | +17,1 % |
+| part de `validation` dans la durée totale | 98,3 % · 96,3 % | **97,8 % · 95,2 %** | −0,5 · −1,1 pt |
+| `snapshot`, 1 000 · 3 002 | 823 · 2 439 | 1 188,5 · 3 746,8 | +44,4 % · +53,6 % |
+| `segment`, 1 000 · 3 002 | 19 · 34 | 33,5 · 61,7 | +76 % · +81 % |
+| `transaction`, 1 000 · 3 002 | 19 · 58 | 20,1 · 64,5 | +6 % · +11 % |
+
+Le rejeu confirme la structure de la campagne du 2026-10-25 — `validation`
+domine la durée totale à plus de 95 %, `snapshot`, `segment` et `transaction`
+restent sous les 5 % — et il s'en écarte en valeur absolue de +13 à +17 %, dans
+le même sens et du même ordre que la dérive de charge mesurée cette nuit-là
+(charge moyenne 5,2 à 5,9 contre 2,3 à 2,7 le 2026-10-25, `mediaanalysisd` et
+`mds_stores` actifs). L'étape `validation` n'a pas changé de code entre les deux
+mesures (voir la sous-section précédente) : l'écart est celui de la machine, et
+c'est pourquoi les conclusions de cette campagne s'appuient sur des rapports et
+non sur des durées absolues.
+
+### Proposition de suite (à valider par le propriétaire)
+
+La recette est **1 ms par jeton** ré-encodé, mesuré entre 941 et 1 094 µs/jeton
+selon le moment et le lot, soit 52 à 71 s par attache pour 200 passages. Les
+leviers restants, et ce que les chiffres ci-dessus permettent d'en dire :
+
+1. **Réglages et fils d'ONNX Runtime, revus en conteneur en P8** (ADR-0052,
+   décision 3). C'est le seul levier qui ne change ni le modèle ni les vecteurs.
+   Les mesures ci-dessus montrent que le parallélisme intra-op fonctionne déjà
+   (~400 % d'un CPU) mais qu'aucun parallélisme entre lignes n'existe ; il faut
+   donc mesurer, en conteneur et sur le matériel de la cible, si les fils
+   intra-op sont réglés au nombre de cœurs utiles et si un lot devient alors
+   payant. Le protocole de cette sous-section (harnais, tailles entrelacées,
+   encadrement par B = 1, `longest` pour la linéarité) est réutilisable tel quel,
+   pour une campagne courte. Gain : **non mesuré**, à établir avant toute
+   décision.
+2. **Fournisseur d'exécution** (par exemple CoreML sur Apple, ou le fournisseur
+   par défaut d'un autre matériel). Même protocole, même harnais, un
+   fournisseur à la fois ; le coût par jeton est la grandeur à comparer.
+   Gain : **non mesuré**, et c'est un choix de dépendance, donc un ADR.
+3. **Ré-export du graphe** (fp16, longueur maximale réduite, encodeur plus
+   petit) : ADR-0050 et ADR-0057, nouvel ADR. À manier avec les chiffres en main :
+   le coût est proportionnel aux jetons ré-encodés, et changer de graphe change
+   l'empreinte du modèle, donc **tous** les vecteurs. Extrapolation linéaire, non
+   mesurée : 8,58 M passages à ~275 jetons de moyenne font ≈ 2,4 × 10⁹ jetons,
+   soit ≈ 28 jours de CPU à 1 024 µs/jeton pour ré-encoder le corpus. Un graphe
+   deux fois plus rapide par jeton ramènerait la recette à ~26–36 s par attache,
+   mais imposerait ce ré-encodage complet : la recette de 200 passages est
+   justement ce qui rend un mauvais graphe détectable en une minute.
+4. **Réduire l'échantillon sous 200** n'est pas un levier de mesure : c'est un
+   contrat (ADR-0067, décision 1), et il faudrait un ADR pour y toucher.
+
+Rien de tout cela n'est codé, et aucune de ces pistes n'est mesurée ici : la
+seule chose que cette campagne établit, c'est que **le lot n'est pas le levier**
+et que le coût est linéaire en jetons ré-encodés.
+
+### Fichiers de cette sous-section
+
+Tout est gitignoré, dans `data/accelere-recette/` :
+
+- `harness/` : le crate `recette-batch-sweep` (harnais temporaire) et son
+  `target/` ;
+- `sample-daily-articles-1000.json`, `sample-daily-articles-3000.json` : les 200
+  passages tirés, avec leurs textes et leurs longueurs en jetons ;
+- `sweep-1000.log`, `sweep-3000.log`, `longest-1000.log`, `longest-3000.log` :
+  les sorties brutes des balayages et des tests de linéarité ;
+- `sweep1000-production-{before,after}.json`, `sweep3000-production-{before,after}.json` :
+  l'encadrement par le code de production ;
+- `livrable-b/` : `livrable-b.diff`, `batch.rs`, `accelere_recette.rs`, copie du
+  code du livrable (b) tel qu'il était mesuré ;
+- `conditions-sweep-start.txt` : charge et processus au début du balayage.
+
+Le pilote `crates/crible-store/examples/acceptance_split.rs` gagne un mode `dump`
+qui écrit l'échantillon tiré ; il ne référence ni `encode_batch` ni le code du
+livrable (b), qui peuvent donc être retirés sans casser la reproductibilité de
+cette campagne (le harnais, lui, ne dépend d'aucune crate de Crible).

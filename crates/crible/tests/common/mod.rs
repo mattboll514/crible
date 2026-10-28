@@ -37,7 +37,7 @@ use crible_core::filter::Filter;
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, ModelRegistry, QueryEncoder,
 };
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::pool::Pool;
 use crible_store::generation::GenerationStore;
 use serde_json::Value;
@@ -293,7 +293,7 @@ pub fn query_filter(value: &Value, schema: &Schema) -> Filter {
 /// pool either, so its size is returned and compared too.
 pub fn search_all(store: &GenerationStore, queries: &[Query]) -> Vec<Outcome> {
     let snapshot = store.snapshot();
-    let searcher = ExactSearcher::open(
+    let searcher = DenseSearcher::open(
         &store.segments_directory(),
         snapshot.segments(),
         &store.records_path(),

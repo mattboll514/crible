@@ -42,7 +42,9 @@ use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
+use crible_search::dense::{DenseQuery, search_grouped as dense_search_grouped};
+use crible_search::group::Grouping;
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
@@ -289,8 +291,9 @@ pub fn export_index(
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let model = load_model(models, &config.model)?;
-    // Read opening, like `search` and `inspect`: no cleanup of `<data>/tmp`,
-    // and the store's recovery only repairs what a crash left behind.
+    // The write open runs the recovery of INV-04 and rebuilds a missing
+    // `codes.bin`, whose array the snapshot then loads; `<data>/tmp` is left
+    // alone, as for a read command.
     let store = GenerationStore::open(&index_dir, &config.schema)?;
     let report = crible_store::export::export(&store, &config, &model, exchange)?;
     println!(
@@ -395,9 +398,10 @@ fn print_report(name: &str, report: &AttachReport) {
 /// `<data>/tmp` are removed first, under the presence lock that protects a live
 /// lot (ADR-0056, decision 4), then the store runs its recovery (INV-04).
 ///
-/// A read command calls [`GenerationStore::open`] directly: `search` and
-/// `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
-/// index is ingesting.
+/// A read command calls [`GenerationStore::open_read_only`] directly: `search`
+/// and `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
+/// index is ingesting, and they never write `codes.bin` (ADR-0056,
+/// `ADR-0069`, decision 2).
 fn open_store_for_write(
     data: &Path,
     index_dir: &Path,
@@ -432,6 +436,18 @@ pub struct SearchRequest<'a> {
     pub filter: Option<&'a str>,
     /// Number of results, between 1 and 1000.
     pub k: usize,
+    /// Force the exact dense calculation (`exact` of the search request in
+    /// `docs/05-api.md`).
+    pub exact: bool,
+    /// Regrouping by document (`group_by` of `docs/05-api.md`): `document`, or
+    /// none.
+    pub group_by: Option<&'a str>,
+    /// Passages returned per grouped document, from 1 to 5
+    /// (`passages_per_document` of `docs/05-api.md`).
+    pub passages_per_document: usize,
+    /// Fusion of identical passages (`dedup` of `docs/05-api.md`): `content`,
+    /// or none.
+    pub dedup: Option<&'a str>,
     /// Output format.
     pub format: SearchFormat,
 }
@@ -450,24 +466,78 @@ impl std::fmt::Debug for SearchRequest<'_> {
             .field("model", &self.model)
             .field("filter", &self.filter.map(|_| "<redacted>"))
             .field("k", &self.k)
+            .field("exact", &self.exact)
+            .field("group_by", &self.group_by)
+            .field("passages_per_document", &self.passages_per_document)
+            .field("dedup", &self.dedup)
             .field("format", &self.format)
             .finish()
     }
+}
+
+/// Regrouping options of one `crible search`, from its flags.
+///
+/// `docs/05-api.md` publishes `group_by: "document"` and `dedup: "content"` as
+/// the only non-null values, `passages_per_document` from 1 to 5, and
+/// `invalid_request` for a parameter out of bounds. The message names the value
+/// the flag accepts, never the text of a query or a filter value.
+///
+/// `passages_per_document` only acts on grouped results (`docs/05-api.md`, "Passages
+/// renvoyés par document regroupé"), so it has no effect without `--group-by`;
+/// its own domain is checked either way, so a request that leaves it is refused
+/// even when nothing is grouped.
+fn grouping_of(request: &SearchRequest<'_>) -> Result<Grouping, CribleError> {
+    let by_document = match request.group_by {
+        None => false,
+        Some("document") => true,
+        Some(other) => {
+            return Err(CribleError::new(
+                ErrorCode::InvalidRequest,
+                format!("group_by must be \"document\" or absent, got {other:?}"),
+            ));
+        }
+    };
+    let dedup_content = match request.dedup {
+        None => false,
+        Some("content") => true,
+        Some(other) => {
+            return Err(CribleError::new(
+                ErrorCode::InvalidRequest,
+                format!("dedup must be \"content\" or absent, got {other:?}"),
+            ));
+        }
+    };
+    let grouping = Grouping {
+        by_document,
+        passages_per_document: request.passages_per_document,
+        dedup_content,
+    };
+    grouping.validate()?;
+    Ok(grouping)
 }
 
 /// `crible search --data <dir> --index <i> (--vector-file <file> | --query <text>)`.
 ///
 /// The response follows the shape of `docs/05-api.md` ("Recherche : réponse"),
 /// with the fields P1 and `ENCODER-REQUETES` can fill: `results`, `pool_size`,
-/// `generation`, `took_ms` and `truncated_query`. The score is the cosine of the
-/// exact dense branch, hence `score_type: "cosine"`. `took_ms` is the total,
-/// from the entry of the command: it includes reading the index configuration,
-/// the vector or the text encoding, the filter, evaluating the pool, opening
-/// the readers and the scan itself.
+/// `generation`, `took_ms` and `truncated_query`. The dense branch runs the
+/// strategy [`crible_search::dense::plan`] chooses from `search.*`, the pool
+/// and `--exact` (ADR-0074), but both strategies score with the same cosine, so
+/// `score_type` is `"cosine"` either way. `took_ms` is the total, from the
+/// entry of the command: it includes reading the index configuration, the
+/// vector or the text encoding, the filter, evaluating the pool, opening the
+/// readers and the scan itself.
 ///
 /// `truncated_query` is the wire name of the `truncated` flag of
 /// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
 /// mapping.
+///
+/// `--group-by`, `--passages-per-document` and `--dedup` are the regrouping of
+/// `docs/03-recherche.md` ("Regroupement") and `REGROUPER-RESULTATS`: the dense
+/// branch is asked for over-sampled candidates, the regrouping runs before the
+/// payload step, and `k` counts documents when `--group-by document` is set. A
+/// grouped document may then take up to `--passages-per-document` results in
+/// the flat `results` list of `docs/05-api.md`.
 ///
 /// `--format json` (the default) prints that response; `--format text` prints
 /// the readable report of [`print_search_text`] instead, for the J2 demo.
@@ -479,9 +549,13 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
             request.k
         )));
     }
+    // The regrouping options are validated before the index is opened, the
+    // model loaded and the pool evaluated: a request the command can refuse
+    // pays for none of that.
+    let grouping = grouping_of(request)?;
     let name = path_component(request.index, "index name")?;
     let (index_dir, config) = load_index(request.data, name)?;
-    let store = GenerationStore::open(&index_dir, &config.schema)?;
+    let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
     let (vector, truncated_query) = match (request.vector_file, request.query) {
         (Some(path), None) => (vector::load(path)?, false),
         (None, Some(text)) => encode_text_query(request.models, &config, request.model, text)?,
@@ -512,8 +586,21 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
     let searcher =
-        scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
-    let hits = scan.install(|| searcher.top_k(&vector, &pool, request.k))?;
+        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
+    let hits = scan.install(|| {
+        dense_search_grouped(
+            &snapshot,
+            &searcher,
+            &pool,
+            &DenseQuery {
+                vector: &vector,
+                k: request.k,
+                exact: request.exact,
+                grouping: &grouping,
+            },
+            &config.search,
+        )
+    })?;
     let took_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
     match request.format {
@@ -646,7 +733,8 @@ fn encode_text_query(
 /// `inspect` removes leftover `tmp-*` entries and segments SQLite does not
 /// reference, and rewrites a missing manifest. It therefore needs a writable
 /// mount, not a read-only one. It leaves the online batches of `<data>/tmp`
-/// alone: only a write opening cleans them (ADR-0056).
+/// alone, and it never rebuilds a missing `codes.bin`: the codes are quantized
+/// in RAM (ADR-0056; ADR-0069, decision 2).
 pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     let names = match index {
         Some(name) => vec![path_component(name, "index name")?.to_owned()],
@@ -660,7 +748,7 @@ pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     }
     for name in names {
         let (index_dir, config) = load_index(data, &name)?;
-        let store = GenerationStore::open(&index_dir, &config.schema)?;
+        let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
         let state = store.state()?;
         print_state(&name, &state);
     }
@@ -691,6 +779,7 @@ fn print_state(name: &str, state: &IndexState) {
         memory.booleans,
         memory.columns
     );
+    println!("  codes: {} bytes", state.codes_memory);
 }
 
 /// Directory holding every index of an instance.
@@ -839,6 +928,10 @@ mod tests {
             model: None,
             filter: Some(r#"{"categorie": "SECRET-VALUE"}"#),
             k: 10,
+            exact: false,
+            group_by: None,
+            passages_per_document: 1,
+            dedup: None,
             format: SearchFormat::Json,
         };
         let rendered = format!("{request:?}");

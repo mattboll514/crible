@@ -159,10 +159,10 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `vector` | base64 fp32 LE | — | Vecteur fourni (obligatoire pour un modèle `external`) |
 | `mode` | `dense` · `lexical` · `hybrid` | `hybrid` si le lexical est activé, sinon `dense` | Branches à exécuter |
 | `filter` | objet | aucun | Voir la grammaire ci-dessus |
-| `k` | 1 à 1000 | 10 | Nombre de résultats |
+| `k` | 1 à 1000 | 10 | Nombre de résultats ; sous `group_by: "document"`, nombre de documents distincts (ADR-0075) |
 | `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride |
 | `group_by` | `"document"` ou null | null | Regroupement par document |
-| `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé |
+| `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé ; il est validé même sans `group_by`, où il est sans effet (ADR-0075) |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
 | `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
@@ -188,13 +188,13 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 }
 ```
 
-Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ».
+Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ». Avec `group_by: "document"`, la réponse garde cette forme : une **liste plate** d'entrées de niveau passage, sans objet par document, et `doc_id` suffit à rattacher une entrée à son document (ADR-0075). `k` compte alors des **documents distincts**, et la liste porte au plus `k × passages_per_document` entrées. Les entrées d'un même document sont consécutives ; les documents sont rangés selon leur meilleur passage (score décroissant, puis clé croissante), et les passages d'un document par score décroissant puis clé croissante. Quand les candidats sur-échantillonnés sont épuisés avant `k` documents, la réponse en contient moins, sans erreur. Avec `dedup: "content"`, la fusion s'applique avant le regroupement. Aucun champ nouveau n'est ajouté aux résultats en P4.
 
 Avec `debug: true`, la réponse ajoute :
 
 ```json
 "debug": {
-  "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 1000,
+  "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 5000,
             "candidates_per_branch": 100, "fusion": "rrf", "group_by": null },
   "timings_ms": { "validate": 0.1, "encode": 23.4, "filter": 0.6, "dense": 9.8,
                   "lexical": 6.1, "fusion": 0.1, "group": 0.0, "fetch": 1.2, "total": 41.7 },
@@ -202,6 +202,8 @@ Avec `debug: true`, la réponse ajoute :
                     "lexical_rank": 2, "lexical_score": 14.2, "fused_rank": 1 } ]
 }
 ```
+
+`dense_strategy` vaut `"exact"` ou `"binary"` (ADR-0074) : `"exact"` pour un pool de taille inférieure ou égale à `exact_threshold`, pour `exact: true` et pour `search.scan: none` ; `"binary"` sinon. Sous `"binary"`, `rescore_candidates` est le nombre **effectif** de candidats rescorés : il vaut `max(N, candidates_per_branch)`, où `candidates_per_branch` est le nombre de résultats demandés par la branche dense — sur-échantillonné quand la requête regroupe (ADR-0075) —, donc `candidates_per_branch` quand ce nombre dépasse N.
 
 Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 

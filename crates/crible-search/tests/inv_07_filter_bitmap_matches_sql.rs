@@ -35,6 +35,12 @@
 //! live passages. The pool is therefore exactly the pool SQL describes, not
 //! merely a subset of it, and a tombstone never comes back.
 //!
+//! The run also counts the interval clauses it met: the property asserts that it
+//! exercised an interval clause on the `integer`, `float` and `date` columns, so
+//! a change of the generator cannot leave the value-column scan (`scan_column` in
+//! `src/pool.rs`, rewritten by `INSERER-POOL-EN-ORDRE`) checked on some column
+//! types only.
+//!
 //! The generator covers the whole grammar: every operator of `docs/05-api.md`
 //! on the type that allows it, the implicit AND of an object, `$and`, `$or`,
 //! `$not`, document-level and passage-level fields, values that no row carries,
@@ -55,7 +61,8 @@
 
 mod common;
 
-use crible_core::filter::Filter;
+use crible_core::config::{FieldType, Schema};
+use crible_core::filter::{Filter, Operator};
 use crible_core::ids::Iid;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngSeed, TestCaseError, TestRunner};
@@ -436,6 +443,58 @@ fn filter(depth: u32) -> BoxedStrategy<Value> {
     .boxed()
 }
 
+// --- Coverage of the interval clauses ---
+
+/// Column types on which the property has exercised an interval clause.
+///
+/// `scan_column` is the only reader of a value column, and the task
+/// `INSERER-POOL-EN-ORDRE` rewrites how it fills its result bitmap. The property
+/// must therefore meet an interval clause on every column type: a generator
+/// change that stopped drawing one would leave the rewrite checked on the
+/// remaining types only, and the test would stay green for the wrong reason.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct IntervalCoverage {
+    integer: bool,
+    float: bool,
+    date: bool,
+}
+
+impl IntervalCoverage {
+    /// Notes the interval clauses of `filter`, at every level of the AST.
+    fn record(&mut self, filter: &Filter, schema: &Schema) {
+        match filter {
+            Filter::Condition(condition) => {
+                if !matches!(
+                    condition.operator,
+                    Operator::Lt | Operator::Lte | Operator::Gt | Operator::Gte
+                ) {
+                    return;
+                }
+                match schema
+                    .field(&condition.field)
+                    .map(|(spec, _level)| spec.field_type)
+                {
+                    Some(FieldType::Integer) => self.integer = true,
+                    Some(FieldType::Float) => self.float = true,
+                    Some(FieldType::Date) => self.date = true,
+                    Some(FieldType::Keyword | FieldType::Bool) | None => {}
+                }
+            }
+            Filter::And(children) | Filter::Or(children) => {
+                for child in children {
+                    self.record(child, schema);
+                }
+            }
+            Filter::Not(child) => self.record(child, schema),
+        }
+    }
+
+    /// True once every column type has been met.
+    fn is_complete(&self) -> bool {
+        self.integer && self.float && self.date
+    }
+}
+
 // --- The property ---
 
 #[test]
@@ -462,6 +521,11 @@ fn inv_07_filter_bitmap_matches_sql() {
     };
     let mut runner = TestRunner::new(config);
 
+    // The interval clauses of the run are counted, so the property is known to
+    // cover the value-column scan on every type and not only on the one the seed
+    // happens to favour.
+    let coverage = std::cell::RefCell::new(IntervalCoverage::default());
+
     runner
         .run(&filter(2).prop_map(|value| value.to_string()), |raw| {
             let parsed = Filter::from_json_str(&raw).map_err(|error| {
@@ -472,6 +536,7 @@ fn inv_07_filter_bitmap_matches_sql() {
                     "the generated filter must validate: {error}: {raw}"
                 ))
             })?;
+            coverage.borrow_mut().record(&parsed, schema);
 
             let pool = crible_search::pool::Pool::evaluate(filters, &parsed).map_err(|error| {
                 TestCaseError::fail(format!("the filter must evaluate: {error}: {raw}"))
@@ -496,6 +561,14 @@ fn inv_07_filter_bitmap_matches_sql() {
             Ok(())
         })
         .unwrap();
+
+    let coverage = coverage.into_inner();
+    assert!(
+        coverage.is_complete(),
+        "the property must exercise an interval clause on every value-column type, \
+         otherwise the scan of a column is not checked against SQL for all of them: \
+         {coverage:?}"
+    );
 }
 
 /// The property is only as good as its dataset: every field must carry a value,

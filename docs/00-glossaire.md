@@ -17,8 +17,8 @@ Vocabulaire commun à toute la documentation, au code et aux agents. Utiliser ce
 | **Précision de référence** | Précision de stockage des vecteurs (fp16 ou fp32). Figée à la création de l'index. |
 | **Codes binaires** | 1 bit par dimension (signe de la composante). Gardés en RAM, parcourus à chaque requête. |
 | **Rescoring** | Recalcul exact (depuis les vecteurs de référence) du score des N meilleurs candidats du scan binaire. |
-| **N** | Nombre de candidats re-scorés (`rescore_candidates`). |
-| **Seuil exact** | Taille de pool en dessous de laquelle on calcule tout en exact (`exact_threshold`). |
+| **N** | Nombre de candidats re-scorés (`rescore_candidates`). Vaut 5000 par défaut (ADR-0078). |
+| **Seuil exact** | Taille de pool jusqu'à laquelle (incluse) la recherche est exacte (`exact_threshold`) ; un pool de taille égale au seuil passe par EXACT (ADR-0074). |
 | **Pool** | Ensemble des passages **vivants** qui satisfont le filtre. Calculé une fois par requête, partagé par les branches dense et lexicale. |
 | **Bitmap** | Ensemble d'ids internes compressé (roaring). |
 | **Bitmap des vivants** | Ensemble des passages non supprimés. |
