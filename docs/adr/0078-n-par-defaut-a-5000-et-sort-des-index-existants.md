@@ -1,9 +1,9 @@
 # ADR-0078 — N par défaut à 5000 et sort des index existants
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-27 pour la valeur 5000 ; mécanisme du défaut et sort des index existants retenus par l'orchestrateur sur recommandation de `@architecte`, à confirmer par le propriétaire)
-- **Date** : 2026-10-27 (proposition et acceptation le 2026-10-27)
-- **Décideurs** : propriétaire (valeur de N) ; orchestrateur sur recommandation de `@architecte` (mécanisme du défaut et sort des index existants, à confirmer)
-- **Décision** : la valeur 5000 est décidée par le propriétaire le 2026-10-27. Le mécanisme du défaut (documentaire et de gabarit, sans constante dans le code) et le sort des index existants (aucune migration) sont retenus par l'orchestrateur sur recommandation de `@architecte`, et restent à confirmer par le propriétaire. Les sept décisions ci-dessous sont retenues telles que proposées.
+- **Statut** : Accepté (décision du propriétaire le 2026-10-27 pour la valeur 5000 ; mécanisme du défaut et sort des index existants proposés par l'orchestrateur sur recommandation de `@architecte`, et confirmés par le propriétaire le 2026-10-28)
+- **Date** : 2026-10-27 (proposition et acceptation le 2026-10-27 ; mécanisme du défaut et sort des index existants confirmés le 2026-10-28)
+- **Décideurs** : propriétaire (valeur de N le 2026-10-27 ; mécanisme du défaut et sort des index existants, sur proposition de l'orchestrateur et recommandation de `@architecte`, confirmés le 2026-10-28)
+- **Décision** : la valeur 5000 est décidée par le propriétaire le 2026-10-27. Le propriétaire a confirmé, le 2026-10-28, le mécanisme du défaut et le sort des index existants tels que proposés : défaut documentaire et de gabarit, sans constante dans le code, clé obligatoire dans `index.json` ; aucune migration ni renormalisation des index existants. Les sept décisions ci-dessous sont retenues telles que proposées.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, après MES-01, MES-02 et MES-03 (phase P4) et les verdicts de `@architecte`
 - **Remplace** : —
 

@@ -141,14 +141,20 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 | Encodage de la requête (CPU, fp32) | 20 à 50 ms (estimé pour l'INT8 ; fp32 : p50 21 ms, p95 ≈ 56 ms hors conteneur, dépassement du p95 assumé, ADR-0052) | MES-05 |
 | Filtre (bitmaps) | < 1 ms | MES-14 |
 | Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
-| Scan binaire : 8,6 M / pool de 1 M | 20 à 80 ms / quelques ms | MES-02 |
-| Rescoring, N = 1000 | 29,8 ms p50 et 90,5 ms p95 à chaud ; 179,0 ms p50 à froid pour le moteur entier, 85,0 ms pour le produit scalaire seul (MES-03) | MES-03 |
-| Rescoring, N = 5000 (défaut, ADR-0078) | 61,1 ms p50 et 186,9 ms p95 à chaud ; 177,5 ms p50 à froid pour le produit scalaire seul, 258,3 ms pour le moteur entier sur une série contaminée (MES-03) | MES-03 |
+| Scan binaire, index entier (7,74 M vivants) | 20 à 80 ms ; mesuré au défaut N = 5000 avec le binaire actuel : 36,6 à 37,3 ms p50 et 40,1 à 41,6 ms p95 | MES-02 (A/B du 2026-10-27, ADR-0082) |
+| Scan binaire, pool de 1 M contigu | quelques ms ; mesuré : 7,10 à 7,27 ms p50 et 8,34 à 8,67 ms p95 | MES-02 (A/B du 2026-10-27, ADR-0082) |
+| Scan binaire, pool de 1 M dispersé (ce qu'un filtre produit, sauf sur le champ `cluster_by`) | quelques ms ; mesuré : 11,8 ms p50 et 14,1 ms p95 à N = 1000, 14,2 ms p50 à N = 5000 | MES-02 (campagne du 2026-10-27) |
+| Rescoring, N = 1000 | À chaud : 0,73 à 0,79 ms p50 et 12,0 à 17,3 ms p95. À froid partiel (pages déplacées après l'ouverture, résidence moyenne 0,51 à 0,59) : 20,3 à 24,5 ms p50. Pour mémoire, 85,0 ms p50 pour le produit scalaire seul, **seule référence à froid complet**, mesurée par un harnais `F_NOCACHE`, jamais par le moteur (ADR-0084) | MES-03 |
+| Rescoring, N = 5000 (défaut, ADR-0078) | À chaud : 2,07 à 2,17 ms p50 et 17,6 à 28,7 ms p95. À froid partiel (résidence moyenne 0,78 à 0,80) : 29,2 à 33,0 ms p50. Pour mémoire, 177,5 ms p50 pour le produit scalaire seul, **seule référence à froid complet**, mesurée par un harnais `F_NOCACHE`, jamais par le moteur (ADR-0084) | MES-03 |
 | Branche lexicale | à mesurer | MES-06 |
 | Payload (k = 10) | ~1 ms | — |
 
+Ces chiffres du scan sont **natifs**, mesurés sur une machine de développement chargée, et le pool dispersé coûte environ deux fois le pool contigu. La lecture de « quelques ms » et son percentile sont jugés en P8, en conteneur (ADR-0081, ADR-0082 décision 5) ; un filtre sur le champ `cluster_by` rend son pool contigu (voir « Rangement physique »).
+
 ADR-0046 sépare les deux lignes : la valeur d'intervalle est **mesurée, pas une cible**, et le dépassement est assumé dans les budgets de bout en bout.
 
-Les deux lignes de rescoring remplacent le budget indicatif « < 1 ms à chaud, ~10 ms à froid » par les mesures de MES-03, à N = 1000 et au défaut N = 5000 (ADR-0078). Le dépassement est **assumé au profit de la fidélité** : la cible réelle est la latence de `08-invariants-et-tests.md`, p95 au plus égal à pgvector, mesurée en P8 et P9. Le coût des clés au rescoring, distinct des produits scalaires, relève d'un ADR séparé.
+Les deux lignes de rescoring remplacent le budget indicatif « < 1 ms à chaud, ~10 ms à froid » par les mesures de MES-03 sur la variante livrée, `grouped` (ADR-0080), à N = 1000 et au défaut N = 5000 (ADR-0078). Le dépassement est **assumé au profit de la fidélité** : à N = 5000 à chaud, 2,1 ms de p50 dépasse encore « < 1 ms ». La cible réelle est la latence de `08-invariants-et-tests.md`, p95 au plus égal à pgvector, mesurée en P8 et P9. Les chiffres à froid partiel ne jugent aucun budget : ils portent leur résidence de pages, et le froid vrai est renvoyé à P8 (ADR-0084). Le coût des clés au rescoring, distinct des produits scalaires, relève d'un ADR séparé.
 
-Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000}, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. La ligne du scan binaire n'est pas touchée par ADR-0078 : son protocole est celui d'ADR-0077 et ses chiffres ceux de MES-02, vérifiés en conteneur en P8.
+Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000}, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. Les trois lignes du scan binaire ne sont pas touchées par ADR-0078 : leur protocole est celui d'ADR-0077 et leurs chiffres ceux de MES-02, vérifiés en conteneur en P8.
+
+Repères de lecture : la séparation de la ligne du scan le 2026-10-28 place le scan en `:144-146` et le rescoring en `:147-148`. ADR-0078 (`:144`) et ADR-0084 (`:145-146`) citent la numérotation antérieure.
