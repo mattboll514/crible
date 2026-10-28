@@ -72,8 +72,8 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-07 | Durée d'une compaction à l'échelle de Legifacile | P3, P9 |
 | MES-08 | Durée d'une attache quotidienne type (~1 000 à 3 000 passages) | P3, P9 |
 | MES-09 | RAM réelle (RSS) en régime, par index. Protocole fixé par ADR-0077 : trois états (index ouvert, après une passe de requêtes, session fp32 à part), mémoire anonyme et adossée à des fichiers séparées | P4, P8 |
-| MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut | P5 |
-| MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`) | P5 |
+| MES-10 | Qualité : dense, lexical, hybride (`rrf` contre `relative_score`) sur le jeu de référence Legifacile, cas « article 1240 » compris → fusion par défaut. Protocole fixé par ADR-0092 : les 57 questions étiquetées sur un jeu de mesure enrichi `data/mes10/` qui ajoute les 55 documents attendus absents de l'échantillon, recall@10 et MRR@10 au document sur les 56 satisfiables, aux défauts de production, α ∈ {0 ; 0,3 ; 0,5 ; 0,75 ; 1} avec 0 et 1 en contrôle de cohérence, cinq variantes du cas « article 1240 » et critère du top 3 en hybride, règle de décision par bootstrap apparié contre `rrf` | P5 |
+| MES-11 | Analyse française : élisions, stopwords, identifiants (`L1132-1`, `1240`). Protocole fixé par ADR-0092 : chaîne d'analyse répliquée dans le harnais, variantes V0 (chaîne actuelle), V1 (filtre d'élision), V2 (identifiants en un jeton) et V3 (V1 + V2), questions et sondes déclarées, recall@10 et rang de l'attendu en lexical puis en `rrf` | P5 |
 | MES-12 | Codes binaires : signe brut contre signe après centrage. Centrage mesuré hors moteur, par un harnais contrôlé au bit près (ADR-0076) | P4 |
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
