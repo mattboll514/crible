@@ -1230,3 +1230,374 @@ Ce que la mesure **ne** permet pas d'affirmer :
 que **(b) seule est livrée** et que (2a) et (2b) sont retirées sans trace. La présente section
 en porte la mesure de confirmation. Elle ne juge pas le code livré, qui appartient à la relecture
 et au suivi de la tâche.
+
+## Lecture groupée des vecteurs au rescoring (ADR-0080) — 2026-10-28
+
+- **Tâche** : `GROUPER-LECTURES-VECTEURS` (P4), étape « campagne de mesure » que la décision 8
+  d'ADR-0080 autorise à mener **avant** le code retenu. Elle mesure l'option 1 (lecture groupée et
+  parallèle des N lignes `f16`), l'option 2 (`madvise(MADV_RANDOM)`) comme contrôle bon marché, leur
+  combinaison, puis tranche la variante à livrer et la condition du `pread` groupé (option 9).
+- **Commit** : `07a82d773db3245e6fc680b48baabe61fbd4ac21`, branche
+  `tache/GROUPER-LECTURES-VECTEURS`. Les options mesurées sont les modifications **non commitées** de
+  l'arbre de travail (`crates/crible-search/src/dense/rescore.rs`,
+  `crates/crible-store/src/segment.rs`). **La mesure n'a modifié ni `crates/*/src`, ni les tests, ni
+  les patches** ; elle ajoute l'exemple non suivi `crates/crible/examples/rescore_ab.rs` (étendu), les
+  scripts `tools/bench/mes03/ab_round.py` (étendu), `run-grouper.sh`, `mes03_grouper_analyze.py` et
+  leurs entrées pytest.
+- **Machine** : MacBook Air M3, 8 cœurs, **24 Go**, macOS 15.7.7 (24G720), APFS, **natif**, pas de
+  conteneur. Au départ (03 h 01 UTC) : charge `15.94 14.59 10.11`, **swap occupé 7 661,69 Mio sur
+  9 216**, pages libres 109 513 (1,67 Gio), 34 Gio libres. À la fin (06 h 04 UTC) : charge
+  `5.83 4.50 3.69`, **swap 7 252,25 Mio**, pages libres 68 317 (1,04 Gio), 35 Gio libres. Pendant
+  toute la campagne tournaient `mediaanalysisd` (77 % CPU), Lightroom (50 %), `mds_stores` (30 %) et
+  `mediaanalysisd-access` (31 %). La machine est donc dans l'état de pression mémoire de MES-09, **en
+  plus chargé** : aucun chiffre absolu de cette section ne se compare aux campagnes du 2026-10-27.
+  Seuls les écarts entrelacés mesurés le même jour, sur la même machine, se comparent entre eux.
+- **Jeu de données** : la copie de mesure `data/mes02/indexes/synth-large`, **lecture seule**,
+  génération 2, époque 1, **7 740 000 vivants**, un segment `seg-large-0001` de 8 600 000 vecteurs
+  `f16` (`vectors.f16`, 13 209 600 000 octets, 10,7 vecteurs par page de 16 Kio), `records.sqlite`
+  de 3 758 346 240 octets. Mêmes 300 requêtes que MES-02 et MES-03
+  (`data/mes02/queries.f32`, SHA-256 `03cb2a2b3bb7951892179ee8d612b0970626f0f041fe6b3e18c2f0393452948b`).
+- **Artefact versionné** : `docs/mesures/MES-03-grouper-lectures-vecteurs.2026-10-28.json` (56 Ko),
+  produit par `tools/bench/mes03/mes03_grouper_analyze.py` à partir des documents bruts de
+  `data/grouper-vecteurs/raw/` (gitignorés). Il porte les tables ci-dessous, les SHA-256 des binaires
+  et les vérifications de contrôle ; aucune valeur n'y est arrondie, et aucun point manquant n'y est
+  remplacé.
+
+### Protocole
+
+1. **Quatre variantes construites hors de l'arbre**, chacune par `git archive HEAD` puis application
+   d'un patch, avec son propre `CARGO_TARGET_DIR` (recette complète en tête de
+   `tools/bench/mes03/run-grouper.sh`) :
+
+   | Variante | Contenu | SHA-256 de `rescore_ab` |
+   |---|---|---|
+   | `base` | `HEAD` seul (`07a82d7`) | `956acf70b3197c3d7b41975b5554921558dc88e5ce53aefb2719778dae853de5` |
+   | `grouped` | option 1 : les N lignes sont lues par lots et en parallèle (rayon) dans un tampon transitoire, puis le calcul reprend vecteur par vecteur avec le même `kernels::dot` | `83118d3b973ff4531ac03c8eab4b3e5d8c7f055d83a919e60f2fcef16e91221b` |
+   | `madv` | option 2 seule : `madvise(MADV_RANDOM)` sur la région `mmap` | `b8f18947d3a736de18c7bc75ab3a1fa65f783d6d6167a3a8be79ba1d6c2cea2c` |
+   | `grouped-madv` | options 1 et 2 | `84138aae7224bea65c0ffb4de723444ebc0d4a874f6a84a60a56c43c6c9023d2` |
+
+   Les patches sont `data/grouper-vecteurs/patches/stage1-grouped.patch`, `only-madv.patch` et
+   `stage2-grouped-madv.patch`. `grouped-madv` a été vérifié identique à l'arbre de travail par
+   `diff -r` sur les deux fichiers modifiés.
+
+2. **Harnais**. `crates/crible/examples/rescore_ab.rs` porte la mesure : `measure` (N, passes,
+   nombre de requêtes, `--cold`, `--idle-seconds`, `--sample-rss`, `--candidates-cache`) et `contend`
+   (scan binaire et rescoring concurrents dans la même pool rayon). Le froid de la série « cache
+   déplacé » est le nombre de pages **résidentes** parmi les pages des candidats de la requête,
+   relevé par `mincore` avant chaque requête (taux rapporté par requête, moyenne et première
+   requête) ; `mincore` et `getpagesize` sont déclarés en `unsafe extern "C"` dans l'exemple, donc
+   **aucune dépendance `libc` n'est ajoutée**.
+
+3. **Rondes alternées**. `tools/bench/mes03/ab_round.py` visite les variantes dans l'ordre donné,
+   relève l'état des pages de `vectors.f16` et de `records.sqlite` avant et après chaque invocation
+   (`residency.py`) et écrit les conditions de la machine à chaque ronde. Deux rondes, ordre inversé.
+   Les jeux de candidats de chaque N sont calculés une fois puis relus
+   (`--candidates-cache`), pour que le scan qui les produit ne soit pas payé par chaque invocation :
+   les digestes sont identiques dans toutes les variantes et toutes les rondes
+   (`50f8da124894cdbb` à N = 1000, `344676099143e420` à 2000, `113fc98ac03878d0` à 5000).
+
+   ```
+   sh tools/bench/mes03/run-grouper.sh screen-hot
+   sh tools/bench/mes03/run-grouper.sh screen-cold
+   sh tools/bench/mes03/run-grouper.sh full-hot
+   sh tools/bench/mes03/run-grouper.sh full-cold
+   sh tools/bench/mes03/run-grouper.sh idle
+   sh tools/bench/mes03/run-grouper.sh contend
+   sh tools/bench/mes03/run-grouper.sh rss
+   python3 tools/bench/mes03/mes03_grouper_analyze.py
+   ```
+
+   Chaque étape lance une invocation à la fois, au premier plan. Une ronde est exactement :
+
+   ```
+   python3 tools/bench/mes03/ab_round.py --round 1 --order base,grouped,madv,grouped-madv \
+       --ns 1000,5000 --passes 3 --tag screen --raw data/grouper-vecteurs/raw \
+       --bin-dir data/grouper-vecteurs/bin \
+       --vectors-file data/mes02/indexes/synth-large/epochs/1/segments/seg-large-0001/vectors.f16 \
+       --records-file data/mes02/indexes/synth-large/epochs/1/records.sqlite
+   ```
+
+   et la ronde 2 inverse l'ordre (`grouped-madv,madv,grouped,base`).
+
+4. **Séries mesurées** :
+
+   | Série | Variantes | N | requêtes | passes | rondes | froid |
+   |---|---|---:|---:|---:|---:|---|
+   | criblage à chaud | 4 | 1000, 5000 | 300 | 3 | 2 | non |
+   | criblage froid, cache déplacé | 4 | 1000, 5000 | 300 | 1 | 2 | 19,5 Go déplacés après l'ouverture |
+   | série complète à chaud | `base`, `grouped` | 1000, 2000, 5000 | 300 | 3 | 2 | non |
+   | série complète froide | `base`, `grouped` | 1000, 2000, 5000 | 300 | 1 | 2 | 19,5 Go déplacés après l'ouverture |
+   | après 10 min d'inactivité | `base`, `grouped` | 1000, 5000 | 300 | 1 | 2 | 600 s d'attente dans le processus |
+   | contention avec le scan | `base`, `grouped` | 1000, 5000 | 30 | 3 | 2 | non |
+   | RSS en trois états | `base`, `grouped` | 1000 | 300 | 1 | 1 | non |
+
+### Contrôles
+
+1. **Égalité au bit près** (ADR-0072, décision 3). `rescore_check --k 100 --ns 1000,2000,5000` sur la
+   même copie, pour `base` et `grouped` : les deux documents ont le **même SHA-256**,
+   `113df8905edc713a82052460e5e1c9126a6fd1eb8c5e20fe645ce8e4f044ec2f`, soit 3 points × 300 requêtes ×
+   100 résultats identiques (clé, `doc_id`, `ord`, score, ordre), 90 000 entrées. Ce digeste est celui
+   qu'a rendu `base` lors du rejeu du 2026-10-28 : la variante groupée ne déplace pas un seul bit.
+2. **Top-10 de MES-01**. `tools/bench/mes03/mes01_top10_check.py` rejoué sur les six index de
+   `data/reduire-cles/mes01-copy`, avec le binaire `fidelity` de chaque variante : **30 points**
+   (6 structures × 5 N), **0 écart** pour `base` comme pour `grouped`, plans de recherche `['binary']`
+   partout.
+3. **Invariants**. `cargo test -p crible-search --test grouper_lectures_vecteurs` : 5 tests verts, dont
+   `inv_06_multi_segment_pool_fully_rescored_returns_the_exact_result`. `cargo test -p crible-search
+   inv_06` : 4 tests verts (`inv_06_ties_are_broken_by_ascending_key`, le test multi-segments, et les
+   deux `inv_06_synth_small_200_queries_*`).
+4. **Vérifications de la tâche**. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et
+   `cd tools && uv run --no-sync pytest bench/mes03` (40 tests) passent.
+5. **Jeux de candidats identiques**. Le document de `contend` porte
+   `scan_matches_candidates: true` dans les 8 fichiers : le scan recalculé dans la boucle rend
+   exactement les jeux candidats relus du cache, donc les chiffres de contention portent sur les
+   mêmes candidats que ceux des séries de latence.
+
+### Écarts au protocole
+
+1. **La session a été coupée pendant la série d'inactivité.** La ronde 2 de la série `idle`
+   (`grouped` à N = 5000) attendait les 600 s en silence ; l'outil qui pilote la session a interrompu
+   la commande pour inactivité. **La ronde 1 était complète et est conservée ; la ronde 2 a été
+   refaite entièrement**, après suppression de son document partiel
+   (`data/grouper-vecteurs/raw/idle-r2-*`). Pour que l'attente ne soit plus muette,
+   `ab_round.py` lit désormais la sortie de l'enfant au fil de l'eau et imprime une ligne toutes les
+   30 s quand rien n'est dit (**changement Python seulement, aucun binaire Rust reconstruit**), et le
+   harnais imprime lui-même `idle: waiting 600 s before the first pass`. Les deux rondes publiées
+   ci-dessous sont donc postérieures à cette reprise, la ronde 1 avant la coupure.
+2. **La série `F_NOCACHE` n'est pas applicable au moteur.** La décision 6 d'ADR-0080 demande la série
+   froide `F_NOCACHE` avec `mincore` ; elle a été mesurée dans MES-03 sur un harnais `--skip-engine`
+   qui ouvre les fichiers à la main. Le moteur, lui, **lit et vérifie le sceau blake3 à l'ouverture**,
+   ce qui réchauffe le fichier avant la première requête : un `F_NOCACHE` posé après l'ouverture ne
+   rendrait pas le fichier froid. La série publiée est donc celle que la décision 6 ajoute,
+   **« searcher déjà ouvert, cache déplacé après l'ouverture »** : 19,5 Go lus depuis
+   `data/grouper-vecteurs/raw/displace-sources.txt` (la liste de MES-02, copiée sous
+   `data/grouper-vecteurs/raw/`) juste après l'ouverture, puis une seule passe, et le taux de
+   résidence relevé par `mincore` à chaque requête. **Le froid est partiel et il est chiffré** :
+   moyenne par requête de **0,51 à 0,84** des pages de candidats selon la série et le N, première
+   requête de **0,00 à 0,71**. La copie replica « vecteurs seuls » de MES-03 n'a pas été rejouée.
+3. **Les jeux de candidats sont relus d'un cache**, comme la décision 8 le permet pour une campagne
+   dont le sujet est la lecture des vecteurs. Les digestes sont identiques dans toutes les variantes
+   et toutes les rondes (voir Protocole, point 3), et le contrôle 5 le vérifie à nouveau.
+4. **La machine est chargée et sous pression mémoire** (7,2 à 7,7 Gio de swap, `mediaanalysisd` à
+   77 % CPU). Conséquences visibles, déclarées et non corrigées : les p95 à chaud sont instables
+   (base à N = 1000 : 90,5 ms de p95 à la ronde 1 pour 38,0 à la ronde 2) ; **le point chaud à
+   N = 2000 de `grouped` n'est pas reproductible** (p50 combiné 1,13 ms à la ronde 1, 9,43 à la
+   ronde 2), et son verdict tombe **dans le bruit** par la règle d'ADR-0082. Aucun chiffre absolu
+   n'est comparable à la campagne du 2026-10-27, qui tournait avec 4,9 Gio de swap.
+5. **Le harnais a été remis en forme après la construction des binaires** (`rustfmt` seul, aucun
+   changement de logique). Les binaires mesurés sont ceux dont les SHA-256 figurent au Protocole ;
+   ils n'ont pas été reconstruits depuis.
+6. **La série de contention mesure un ordre qui avantage la troisième étape.** Dans une passe,
+   l'étape 2 mesure le rescoring seul, puis l'étape 3 le mesure concurrent du scan : l'étape 3 relit
+   des pages que l'étape 2 vient de toucher. Le tableau ci-dessous donne les deux, mais **seule la
+   comparaison scan seul / scan sous charge est propre** (mêmes pages, même passe) ; la conclusion
+   sur le rescoring s'appuie sur lui et sur la série à chaud, pas sur l'écart entre les colonnes 3 et 4.
+7. **Le tampon transitoire de l'option 1 n'est pas isolé dans le RSS.** L'échantillonneur
+   (`--sample-rss`, période 100 ms) lit le RSS total de `ps`, sans séparer l'anonyme des pages de
+   fichier : sur une exécution de 30 requêtes à N = 5000, le maximum vaut 2 975 Mio pour `base` et
+   2 992 Mio pour `grouped`, écart dominé par la croissance des pages de fichier (2 255 et
+   1 918 Mio au-dessus du premier échantillon), pour un tampon attendu de 7,7 Mio. **La mesure ne
+   résout donc pas le tampon** ; elle établit seulement que la mémoire possédée ne bouge pas, par les
+   trois états de MES-09.
+8. **`madvise` n'a pas été mesuré sur la compaction ni sur l'export** : la variante n'est pas retenue
+   (voir Résultats), et la décision 3 d'ADR-0080 dit qu'elle est alors retirée sans trace dans le code.
+
+### Résultats
+
+#### Criblage des quatre variantes
+
+À chaud, 300 requêtes, 3 passes, p50 et p95 combinés de chaque ronde (ms) :
+
+| N | variante | r1 p50 · p95 | r2 p50 · p95 |
+|---:|---|---:|---:|
+| 1000 | `base` | 10,22 · 49,23 | 9,56 · 35,22 |
+| 1000 | `grouped` | **1,11 · 16,05** | **0,74 · 14,65** |
+| 1000 | `madv` | 9,24 · 27,45 | 9,51 · 27,95 |
+| 1000 | `grouped-madv` | 0,75 · 14,52 | 0,77 · 13,01 |
+| 5000 | `base` | 11,51 · 118,89 | 11,76 · 75,55 |
+| 5000 | `grouped` | **2,24 · 20,03** | **2,25 · 31,24** |
+| 5000 | `madv` | 11,95 · 96,47 | 12,82 · 66,92 |
+| 5000 | `grouped-madv` | 2,27 · 22,16 | 2,16 · 25,18 |
+
+Écarts de p50 contre `base`, moyenne des deux rondes et amplitude des deux écarts (règle d'ADR-0082,
+décision 3) : `grouped` **−90,7 %** (amplitude 3,1) à N = 1000 et **−80,7 %** (0,3) à N = 5000, donc
+**gain** aux deux points ; `grouped-madv` **−92,3 %** (0,8) et **−81,0 %** (1,3), **gain** aussi ;
+`madv` **−5,1 %** (9,2) à N = 1000, **dans le bruit**, et **+6,4 %** (5,3) à N = 5000, **perte**.
+
+À froid (19,5 Go déplacés après l'ouverture, une passe), p50 · p95 par ronde, et résidence moyenne de
+la première requête :
+
+| N | variante | r1 p50 · p95 · résidence | r2 p50 · p95 · résidence |
+|---:|---|---:|---:|
+| 1000 | `base` | 50,20 · 79,14 · 0,46 | 46,87 · 122,71 · 0,31 |
+| 1000 | `grouped` | **19,05 · 32,59 · 0,48** | **21,53 · 29,58 · 0,44** |
+| 1000 | `madv` | 49,11 · 78,74 · 0,30 | 71,66 · 109,40 · 0,14 |
+| 1000 | `grouped-madv` | 17,64 · 30,58 · 0,38 | 17,54 · 24,20 · 0,51 |
+| 5000 | `base` | 155,34 · 317,40 · 0,44 | 149,68 · 366,12 · 0,37 |
+| 5000 | `grouped` | **31,23 · 86,71 · 0,39** | **38,03 · 87,99 · 0,39** |
+| 5000 | `madv` | 150,86 · 323,55 · 0,43 | 138,41 · 317,31 · 0,44 |
+| 5000 | `grouped-madv` | 33,73 · 69,49 · 0,37 | 28,46 · 65,31 · 0,38 |
+
+Écarts de p50 contre `base` : `grouped` **−58,1 %** (amplitude 8,0) à N = 1000 et **−77,2 %** (5,3) à
+N = 5000 ; `grouped-madv` −63,7 % (2,3) et −79,6 % (2,7) ; `madv` −2,2 % / +52,9 % à N = 1000
+(amplitude 55,1, **dans le bruit**) et −2,9 % / −7,5 % à N = 5000 (−5,2 % de moyenne, amplitude 4,6).
+
+**Variante retenue : `grouped` (option 1), sans `MADV_RANDOM`.**
+
+- l'option 1 divise le p50 par 2,4 à 5,0 à froid et par 5,1 à 12,9 à chaud selon la ronde et le N :
+  l'écart dépasse de plus d'un ordre de grandeur l'amplitude de ses propres écarts ;
+- **`MADV_RANDOM` n'est pas retenu** (décision 3 d'ADR-0080). À chaud, il est neutre à N = 1000 et
+  **plus lent** à N = 5000 (+6,4 %, au-delà de son amplitude de 5,3). À froid, il ne se distingue pas
+  de `base` ; à N = 5000 sa moyenne de −5,2 % est dans l'amplitude de ses propres écarts. Comparé à
+  `grouped` sur la même ronde, `grouped-madv` alterne les signes : −32,5 % puis +4,4 % à chaud à
+  N = 1000, +1,3 % puis −3,9 % à 5000, −7,4 % et −18,5 % à froid à 1000, +8,0 % et −25,2 % à 5000.
+  Aucun gain reproductible, et **le groupement règle déjà la séquentialité que `MADV_RANDOM` visait**.
+  Il est donc retiré, et aucune dépendance `libc` n'est ajoutée.
+
+#### Série complète à chaud, `base` contre `grouped`
+
+300 requêtes, 3 passes ; la p50 de chaque passe montre l'échauffement, et les deux dernières
+devraient être le régime (ms) :
+
+| N | variante | passes r1 (p50) | passes r2 (p50) | p50 combiné r1 · r2 | p95 combiné r1 · r2 |
+|---:|---|---:|---:|---:|---:|
+| 1000 | `base` | 39,92 · 10,16 · 0,89 | 24,63 · 1,10 · 0,92 | 10,16 · 6,74 | 61,10 · 31,70 |
+| 1000 | `grouped` | 15,07 · 0,76 · 0,73 | 10,08 · 0,71 · 0,70 | **0,79 · 0,73** | 17,32 · 12,02 |
+| 2000 | `base` | 30,00 · 9,77 · 1,38 | 53,87 · 9,74 · 1,39 | 9,77 · 9,74 | 60,43 · 60,58 |
+| 2000 | `grouped` | 14,72 · 1,02 · 0,97 | 17,59 · 9,43 · 0,96 | **1,13 · 9,43** | 20,86 · 20,35 |
+| 5000 | `base` | 56,07 · 11,06 · 2,73 | 28,12 · 11,49 · 2,74 | 11,06 · 11,49 | 96,24 · 40,00 |
+| 5000 | `grouped` | 13,90 · 1,97 · 1,87 | 18,21 · 1,94 · 1,69 | **2,17 · 2,07** | 17,62 · 28,72 |
+
+Gain de `grouped` sur `base`, p50 (moyenne des rondes, amplitude, verdict) et p95 (r1 · r2) :
+
+| N | gain p50 | verdict | gain p95 |
+|---:|---:|---|---:|
+| 1000 | −90,7 % | gain (amplitude 3,0) | −71,7 % · −62,1 % |
+| 2000 | −45,8 % | **dans le bruit** (amplitude 85,3) | −65,5 % · −66,4 % |
+| 5000 | −81,2 % | gain (amplitude 1,6) | −81,7 % · −28,2 % |
+
+Le point à N = 2000 porte l'avertissement de la campagne : la deuxième passe de `grouped` à la ronde 2
+reste à 9,43 ms au lieu de 1,02, c'est-à-dire que **les pages des candidats n'étaient pas résidentes**
+à ce moment-là, sur une machine à 7,2 Gio de swap. Le gain reste net sur les trois N si l'on regarde
+les deux dernières passes, mais la règle d'ADR-0082, appliquée à la p50 combinée, y répond **match
+nul** et la section ne le maquille pas.
+
+#### Série complète froide, `base` contre `grouped`
+
+19,5 Go déplacés après l'ouverture, une passe (ms) :
+
+| N | variante | r1 p50 · p95 · résidence moyenne | r2 p50 · p95 · résidence moyenne |
+|---:|---|---:|---:|
+| 1000 | `base` | 58,08 · 75,32 · 0,66 | 66,42 · 121,74 · 0,48 |
+| 1000 | `grouped` | **20,29 · 36,72 · 0,59** | **24,46 · 41,05 · 0,51** |
+| 2000 | `base` | 85,21 · 153,42 · 0,67 | 79,20 · 134,89 · 0,71 |
+| 2000 | `grouped` | **28,06 · 40,02 · 0,69** | **29,85 · 41,24 · 0,68** |
+| 5000 | `base` | 116,31 · 248,79 · 0,80 | 106,79 · 305,57 · 0,80 |
+| 5000 | `grouped` | **29,19 · 75,16 · 0,80** | **33,02 · 84,62 · 0,78** |
+
+Gain de `grouped` sur `base`, p50 et p95 :
+
+| N | gain p50 | verdict | gain p95 |
+|---:|---:|---|---:|
+| 1000 | −64,1 % | gain (amplitude 1,9) | −51,3 % · −66,3 % |
+| 2000 | −64,7 % | gain (amplitude 4,8) | −73,9 % · −69,4 % |
+| 5000 | −72,0 % | gain (amplitude 5,8) | −69,8 % · −72,3 % |
+
+**Le froid publié est un froid partiel**, et le chiffre le dit : 78 à 80 % des pages de candidats de
+la première requête étaient résidentes à N = 5000 (0,47 à 0,58), et la moyenne par requête monte à
+0,80 au fil de la passe. Sur une machine de 24 Go dont 7,2 Gio de swap sont déjà occupés, 19,5 Go de
+déplacement ne tiennent pas : le noyau recharge pendant la mesure. C'est aussi pourquoi la p50 froide
+de `base` ici (58 à 116 ms) est **plus basse** que la référence de 85,0 et 177,5 ms d'ADR-0080, qui
+supposait un fichier entièrement absent du cache.
+
+#### Série après 10 minutes d'inactivité
+
+600 s d'attente **dans le processus**, searcher ouvert, puis une passe (ms) :
+
+| N | variante | r1 p50 · p95 · résidence | r2 p50 · p95 · résidence |
+|---:|---|---:|---:|
+| 1000 | `base` | 49,79 · 87,48 · 0,54 | 70,24 · 97,03 · 0,55 |
+| 1000 | `grouped` | **16,36 · 26,46 · 0,72** | **21,94 · 27,25 · 0,66** |
+| 5000 | `base` | 111,56 · 191,77 · 0,71 | 102,33 · 202,69 · 0,69 |
+| 5000 | `grouped` | **33,93 · 78,30 · 0,61** | **38,12 · 64,39 · 0,63** |
+
+Gain p50 : **−68,0 %** (amplitude 1,6) à N = 1000 et **−66,2 %** (6,8) à N = 5000, gain aux deux
+points ; gain p95 : −69,8 % · −71,9 % et −59,2 % · −68,2 %. Le résidu est du même ordre que la série
+froide, ce qui confirme que **dix minutes d'inactivité ne refroidissent pas plus que le déplacement
+de cache** sur cette machine : la résidence de la première requête reste à 0,54 à 0,72.
+
+#### Contention avec le scan binaire
+
+30 requêtes, 3 passes, même pool rayon (ms, p50 · p95) :
+
+| N | ronde · variante | scan seul | scan sous charge | rescoring seul | rescoring sous scan |
+|---:|---|---:|---:|---:|---:|
+| 1000 | r1 `base` | 30,85 · 33,27 | 30,54 · 33,13 | 2,39 · 55,91 | 0,50 · 0,61 |
+| 1000 | r1 `grouped` | 30,90 · 33,57 | 31,79 · 33,90 | 0,81 · 25,33 | 0,52 · 0,80 |
+| 1000 | r2 `base` | 31,48 · 33,47 | 31,38 · 33,04 | 2,40 · 63,12 | 0,49 · 0,62 |
+| 1000 | r2 `grouped` | 30,72 · 33,23 | 30,93 · 33,40 | 0,78 · 31,38 | 0,53 · 0,65 |
+| 5000 | r1 `base` | 33,52 · 37,06 | 33,44 · 37,12 | 4,26 · 139,17 | 1,55 · 2,76 |
+| 5000 | r1 `grouped` | 34,52 · 38,45 | 34,61 · 37,86 | 2,99 · 59,42 | 1,57 · 2,02 |
+| 5000 | r2 `base` | 34,37 · 38,33 | 35,75 · 38,46 | 23,95 · 220,37 | 1,67 · 3,71 |
+| 5000 | r2 `grouped` | 34,17 · 37,52 | 34,57 · 38,61 | 7,14 · 64,13 | 1,55 · 1,99 |
+
+Le scan ne perd rien de mesurable à partager la pool : de −1,0 % à +4,0 % de p50 sur les huit
+comparaisons, et de −1,5 % à +2,9 % de p95, c'est-à-dire dans l'amplitude d'une ronde à l'autre. Le
+rescoring groupé concurrent tient **1,55 à 1,57 ms de p50 et 1,99 à 2,02 ms de p95** à N = 5000, quand
+`base` monte à 2,76 et 3,71 ms de p95 : grouper les lectures **réduit aussi la dispersion sous
+contention**, ce que la moyenne ne montrerait pas. La colonne « rescoring seul » est plus lente que la
+colonne concurrente, et l'ordre des étapes en est la cause (écart au protocole, point 6) : elle n'est
+pas utilisée pour conclure.
+
+#### RSS
+
+Traité dans la section datée de `docs/mesures/MES-09-ram-reelle.md` du même jour, avec le détail des
+trois états. En résumé, après une passe de 300 requêtes à N = 1000 : mémoire anonyme **842 Mio**
+(`base`) contre **847 Mio** (`grouped`), pages de fichier **4 096 Mio** dans les deux cas, empreinte
+physique **1 126 Mio** dans les deux cas. **La mémoire possédée ne bouge pas.**
+
+#### Bornes d'ADR-0080 et condition du `pread` groupé
+
+La décision 2 annonce une borne optimiste de **15 à 25 ms à N = 1000** (au lieu de 85,0) et de **60 à
+90 ms à N = 5000** (au lieu de 177,5). La mesure à froid donne **20,29 et 24,46 ms** à N = 1000 — dans
+la borne — et **29,19 et 33,02 ms** à N = 5000 — **sous la borne**.
+
+La décision 4 ne rouvre l'option 9 (`pread` groupé) que « si l'option 1 plafonne sous sa borne ». Le
+plafond est atteint et dépassé : **la condition du `pread` groupé n'est donc pas remplie**, l'option 9
+reste un repli non instruit, et cette campagne ne demande ni `docs/02:213` à changer ni un nouvel ADR.
+
+### Conclusion
+
+- **Les quatre variantes tiennent**, et le criblage tranche sans ambiguïté : `grouped` et
+  `grouped-madv` réduisent le p50 de 58 à 92 % selon la série et le N ; `madv` seul est neutre à
+  N = 1000 et **plus lent** à N = 5000 à chaud.
+- **Variante retenue : l'option 1, lecture groupée et parallèle des N lignes dans un tampon
+  transitoire**, sans `madvise`. Le groupement apporte **−90,7 % / −81,2 %** de p50 à chaud,
+  **−64,1 % / −64,7 % / −72,0 %** à froid et **−68,0 % / −66,2 %** après dix minutes d'inactivité
+  (N = 1000 / 2000 / 5000) ; les gains de p95 vont de −28,2 % à −81,7 % selon le point, avec un
+  point à N = 2000 à chaud **dans le bruit** que la section déclare.
+- **`MADV_RANDOM` n'est pas retenu** : aucun gain reproductible à chaud comme à froid, une perte à
+  N = 5000 à chaud, et des signes qui alternent contre `grouped`. Il est retiré, `libc` n'entre pas
+  dans les dépendances.
+- **La condition du `pread` groupé (option 9) n'est pas remplie** : à N = 5000, l'option 1 tient
+  29,19 à 33,02 ms de p50 pour une borne de 60 à 90 ms. L'option reste un repli non instruit.
+- **La mémoire possédée est inchangée** : 842 contre 847 Mio d'anonyme, 1 126 Mio d'empreinte dans
+  les deux cas.
+- **Les contrôles sont verts** : égalité au bit près (même SHA-256 sur 90 000 entrées), 0 écart sur
+  les 30 points du top-10 de MES-01, `inv_06` vert, `fmt`, `clippy` et les 40 tests Python verts.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- le gain dans un conteneur Linux, où les pages font 4 Kio et où le coût froid suit les IOPS du
+  volume (décision 7 d'ADR-0080, renvoyée à P8) ;
+- le gain sur un fichier réellement absent du cache : le froid obtenu est partiel (résidence moyenne de 0,78
+  à 0,80 des pages à N = 5000) et la référence d'ADR-0080 (85,0 et 177,5 ms) n'est pas reproduite ;
+- l'effet de `MADV_RANDOM` sur la compaction et l'export, non mesuré puisque la variante n'est pas
+  retenue ;
+- la taille du tampon transitoire dans le RSS anonyme : 7,7 Mio ne sont pas résolus par
+  l'échantillonnage de `ps` sous 2 Gio de croissance de pages de fichier.
+
+**Proposition, à valider par le propriétaire** : livrer l'option 1 seule (lecture groupée et
+parallèle, tampon transitoire libéré avant le tri), retirer `madvise` sans trace, et **ne pas coder
+l'option 9**. Le découpage des lots et la profondeur de file du tampon restent à figer par la tâche
+d'implémentation, sur la base de ces chiffres.
