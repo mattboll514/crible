@@ -39,7 +39,7 @@ Format unique :
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
-| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) (`Retry-After`) |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) ; index lexical non certifié, en retard ou illisible, ouvert en lecture seule : la branche lexicale est refusée, le mode `dense` reste servi, et la prochaine ouverture en écriture répare (ADR-0087, ADR-0088) — le message nomme l'état constaté : « behind » (`M > Gt`), « ahead » (`Gt > G`), « not certified » (colonne M absente) ou « unreadable » (lexical illisible, `M > G`) (`Retry-After`) |
 | `timeout` | 504 | Requête trop longue |
 | `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) ; panne disque pendant un instantané ou une restauration (ADR-0065) |
 

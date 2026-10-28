@@ -10,12 +10,12 @@
 //! # What is measured
 //!
 //! The real `crible_store::attach::attach`, on a clone of the target index,
-//! with the model of that index. The production code already measures its five
+//! with the model of that index. The production code already measures its six
 //! stages (`AttachDurations`: `validation`, `segment`, `transaction`,
-//! `manifest`, `snapshot`) and returns them as call telemetry (ADR-0042), so the
-//! bench only has to run the call and read the report. The total wall time of
-//! the call is measured too, which is the sum of the stages plus the small
-//! bookkeeping between them.
+//! `lexical`, `manifest`, `snapshot`) and returns them as call telemetry
+//! (ADR-0042, ADR-0087), so the bench only has to run the call and read the
+//! report. The total wall time of the call is measured too, which is the sum of
+//! the stages plus the small bookkeeping between them.
 //!
 //! On the batch itself, the bench also replays the compression of its texts two
 //! ways: with one reused `zstd::bulk::Compressor` (what production does since
@@ -203,6 +203,7 @@ fn measure(args: &Args) -> Result<(), Box<dyn Error>> {
                 "validation_ms": millis(durations.validation),
                 "segment_ms": millis(durations.segment),
                 "transaction_ms": millis(durations.transaction),
+                "lexical_ms": millis(durations.lexical),
                 "manifest_ms": millis(durations.manifest),
                 "snapshot_ms": millis(durations.snapshot),
                 "added": report.added,

@@ -38,7 +38,8 @@
 //! | attach | 1 | `attach_validated` | validation and acceptance done, nothing written |
 //! | attach | 2 | `after_attach_segment` | segment fsynced and renamed, transaction not open |
 //! | attach | 3 | `before_sqlite_commit` | rows written, before `COMMIT` |
-//! | attach | 4 | `after_sqlite_commit` | right after `COMMIT`; lexical is not in P3 |
+//! | attach | 4 | `after_sqlite_commit` | right after `COMMIT`, before the lexical index is written |
+//! | attach | 4 | `after_lexical_commit` | tantivy committed `G+1` and the reader is reloaded |
 //! | attach | 5 | `after_manifest` | `manifests/<G+1>.json` written |
 //! | attach | 6 | `after_publish` | snapshot published |
 //! | compaction | 1 | `compaction_writer_suspended` | writer suspended, nothing read yet |
@@ -48,11 +49,27 @@
 //! | compaction | 5 | `after_epoch_switch` | `CURRENT_EPOCH` is E+1, nothing published |
 //! | compaction | 6 | `after_compaction_publish` | snapshot of E+1 published, E not reclaimed |
 //!
-//! Attach step 4 is a lexical step that does not exist in P3 (`crible-store` has
-//! no tantivy yet, see `docs/02`); its crash state is the one right after the
-//! commit, so the existing `after_sqlite_commit` point stands at the start of
-//! that step. The two existing attach points `after_attach_documents` and
+//! Step 4 is the lexical step of `docs/02`. It spans two points, because a
+//! crash inside it and a crash after it leave different states: at
+//! `after_sqlite_commit` the generation is committed and tantivy still names
+//! `G`, so the restart must catch the lexical index up (the `Gt < G` branch of
+//! "Reprise au démarrage"); at `after_lexical_commit` tantivy has committed the
+//! batch of `G+1` with `G+1` as its payload and the reader is reloaded, so the
+//! restart has a lexical index that already names `G+1`. A generation that
+//! carries no attach (a tombstone-only change, or a `replace_all`) walks the
+//! same steps 3 to 6, so the deletion scenario below arms the same two points.
+//! The two existing attach points `after_attach_documents` and
 //! `after_attach_passages` refine step 3 and are covered by `attacher_lot.rs`.
+//!
+//! # The lexical index of a generation
+//!
+//! INV-04 covers the derived lexical index like every other derived structure:
+//! after a restart, the payload of its last commit is the committed generation
+//! and the iids it holds are exactly the live passages of that generation. The
+//! tests read that state through [`crible_store::lexical::read_state`], which
+//! opens the index of one epoch read-only; a state that still names an older
+//! generation, or that holds an iid the generation has no live passage for, is
+//! the failure the invariant forbids.
 //!
 //! # Orphans
 //!
@@ -77,21 +94,17 @@
 
 mod common;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use crible_core::config::IndexConfig;
-use crible_core::ids::{Epoch, Iid};
+use crible_core::ids::{Epoch, Generation, Iid};
 use crible_core::model::ModelConfig;
 use crible_store::attach::{AttachReport, attach};
 use crible_store::compact::{CompactReport, compact, reclaim_epochs};
-use half::f16;
+use crible_store::lexical::read_state;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::Value;
 
@@ -114,6 +127,11 @@ const CHILD_TEST: &str = "crash_child_entry";
 
 const ATTACH_SCENARIO: &str = "attach";
 const COMPACTION_SCENARIO: &str = "compaction";
+/// A generation that only tombstones and appends, without attaching a batch.
+const DELETION_SCENARIO: &str = "deletion";
+
+/// Segment the deletion scenario appends: one passage, at iid 2.
+const DELETION_SEGMENT: &str = "seg-crash-deletion";
 
 /// Exit code of a child whose operation completed: the failpoint is missing.
 const EXIT_FAILPOINT_MISSING: i32 = 41;
@@ -138,7 +156,22 @@ struct ExpectedState<'a> {
     live_iids: &'a [u32],
     documents: u64,
     passages: u64,
+    /// Expected lexical state: `None` for an index that disables the lexical
+    /// branch, which must then have no lexical directory at all.
+    lexical: Option<ExpectedLexical>,
 }
+
+/// Lexical state of a generation: the payload of the last tantivy commit and
+/// the iids the index holds.
+#[derive(Clone, Copy)]
+struct ExpectedLexical {
+    generation: u64,
+    iids: &'static [u32],
+}
+
+/// Directory of the lexical index inside an epoch (`docs/02`, "Organisation sur
+/// disque").
+const LEXICAL_DIR: &str = "lexical";
 
 fn attach_old_state() -> ExpectedState<'static> {
     ExpectedState {
@@ -148,6 +181,7 @@ fn attach_old_state() -> ExpectedState<'static> {
         live_iids: &[],
         documents: 0,
         passages: 0,
+        lexical: None,
     }
 }
 
@@ -159,6 +193,19 @@ fn attach_new_state() -> ExpectedState<'static> {
         live_iids: &[0, 1],
         documents: 2,
         passages: 2,
+        lexical: None,
+    }
+}
+
+/// [`attach_new_state`] on an index that enables the lexical branch: the batch
+/// of generation 1 is indexed under the iids it produced.
+fn lexical_attach_new_state() -> ExpectedState<'static> {
+    ExpectedState {
+        lexical: Some(ExpectedLexical {
+            generation: 1,
+            iids: &[0, 1],
+        }),
+        ..attach_new_state()
     }
 }
 
@@ -170,6 +217,7 @@ fn compaction_old_state() -> ExpectedState<'static> {
         live_iids: &[1],
         documents: 2,
         passages: 2,
+        lexical: None,
     }
 }
 
@@ -181,6 +229,7 @@ fn compaction_new_state() -> ExpectedState<'static> {
         live_iids: &[0],
         documents: 2,
         passages: 1,
+        lexical: None,
     }
 }
 
@@ -197,11 +246,25 @@ const ATTACH_POINTS: [(&str, bool); 6] = [
 
 // --- Fixtures ---
 
-/// Index configuration shared by the parent and every child.
-fn fixture_config() -> IndexConfig {
-    let schema = common::fixture_schema();
-    IndexConfig::from_json_str(&common::test_config("test", &schema))
-        .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"))
+/// Index configuration of the index `index`, read from its `index.json`.
+///
+/// The parent and the child must run the attach with the configuration the
+/// index declares: an index whose fixture enabled the lexical branch would
+/// otherwise be attached with a configuration that disables it.
+fn index_config_of(index: &Path) -> IndexConfig {
+    let path = index.join("index.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "the index configuration {} must be readable: {error}",
+            path.display()
+        )
+    });
+    IndexConfig::from_json_str(&raw).unwrap_or_else(|error| {
+        panic!(
+            "the index configuration {} must be valid: {error}",
+            path.display()
+        )
+    })
 }
 
 /// External model of the fixture batch: four dimensions, normalized vectors.
@@ -214,10 +277,35 @@ fn fixture_model() -> ModelConfig {
 
 /// Creates an empty index at generation 0 and one batch that adds two documents
 /// with one passage each.
+///
+/// The index disables the lexical branch: this is the fixture of the attach
+/// steps that have nothing to do with the lexical index.
 fn attach_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let (temp, index) = common::temp_index();
     drop(common::create_store(&index));
-    let batch = write_batch(&temp.path().join("batches"), "crash-attach");
+    let batch = common::write_batch(
+        &temp.path().join("batches"),
+        "crash-attach",
+        &common::TWO_DOCUMENTS,
+    );
+    (temp, index, batch)
+}
+
+/// Same fixture as [`attach_fixture`], except that the index enables the
+/// lexical branch: the index `docs/02` step 4 builds.
+fn lexical_attach_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (temp, index) = common::temp_index();
+    let config = common::test_config_with_lexical("test", &common::fixture_schema(), true);
+    drop(common::create_store_with_config(
+        &index,
+        &common::fixture_schema(),
+        &config,
+    ));
+    let batch = common::write_batch(
+        &temp.path().join("batches"),
+        "crash-attach",
+        &common::TWO_DOCUMENTS,
+    );
     (temp, index, batch)
 }
 
@@ -253,124 +341,6 @@ fn compaction_fixture() -> (tempfile::TempDir, PathBuf) {
     (temp, index)
 }
 
-// --- Batch writer (4 dimensions, schema of `common::fixture_schema`) ---
-
-fn document_schema() -> SchemaRef {
-    Arc::new(ArrowSchema::new(vec![
-        Field::new("doc_id", DataType::Utf8, false),
-        Field::new("doc_hash", DataType::Utf8, false),
-        Field::new("title", DataType::Utf8, true),
-    ]))
-}
-
-fn passage_schema() -> SchemaRef {
-    Arc::new(ArrowSchema::new(vec![
-        Field::new("doc_id", DataType::Utf8, false),
-        Field::new("ord", DataType::UInt32, false),
-        Field::new("text", DataType::Utf8, false),
-        Field::new("part", DataType::Int64, true),
-        Field::new("vector", DataType::FixedSizeBinary(8), false),
-    ]))
-}
-
-fn fp16(vector: &[f32]) -> Vec<u8> {
-    vector
-        .iter()
-        .flat_map(|value| f16::from_f32(*value).to_bits().to_le_bytes())
-        .collect()
-}
-
-/// Writes a batch of two documents and two passages, each passage covering a
-/// distinct document, and its manifest.
-fn write_batch(root: &Path, batch_id: &str) -> PathBuf {
-    let dir = root.join(batch_id);
-    fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("the batch directory: {error}"));
-
-    let ids: StringArray = ["doc-a", "doc-b"].iter().map(|id| Some(*id)).collect();
-    let hashes: StringArray = ["blake3:doc-a", "blake3:doc-b"]
-        .iter()
-        .map(|hash| Some(*hash))
-        .collect();
-    let titles: StringArray = ["doc-a", "doc-b"]
-        .iter()
-        .map(|title| Some(*title))
-        .collect();
-    common::write_parquet(
-        &dir.join("documents.parquet"),
-        &document_schema(),
-        vec![Arc::new(ids), Arc::new(hashes), Arc::new(titles)],
-    );
-
-    let passage_ids: StringArray = ["doc-a", "doc-b"].iter().map(|id| Some(*id)).collect();
-    let ords = UInt32Array::from(vec![0_u32, 0_u32]);
-    let texts: StringArray = ["doc-a#0", "doc-b#0"]
-        .iter()
-        .map(|text| Some(*text))
-        .collect();
-    let parts = Int64Array::from(vec![Some(0_i64), Some(1_i64)]);
-    let vectors = FixedSizeBinaryArray::try_from_iter(
-        [fp16(&[1.0, 0.0, 0.0, 0.0]), fp16(&[0.0, 1.0, 0.0, 0.0])].into_iter(),
-    )
-    .unwrap_or_else(|error| panic!("the fixture vectors must share one width: {error}"));
-    common::write_parquet(
-        &dir.join("passages.parquet"),
-        &passage_schema(),
-        vec![
-            Arc::new(passage_ids),
-            Arc::new(ords),
-            Arc::new(texts),
-            Arc::new(parts),
-            Arc::new(vectors),
-        ],
-    );
-
-    write_manifest(&dir, batch_id);
-    dir
-}
-
-fn write_manifest(dir: &Path, batch_id: &str) {
-    let mut names: Vec<String> = fs::read_dir(dir)
-        .unwrap_or_else(|error| panic!("the batch directory must be readable: {error}"))
-        .map(|entry| {
-            entry
-                .unwrap_or_else(|error| panic!("a batch entry must be readable: {error}"))
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .filter(|name| name.ends_with(".parquet"))
-        .collect();
-    names.sort();
-
-    let mut files = BTreeMap::new();
-    for name in names {
-        let bytes = fs::read(dir.join(&name))
-            .unwrap_or_else(|error| panic!("the batch file {name} must be readable: {error}"));
-        files.insert(name, format!("blake3:{}", blake3::hash(&bytes).to_hex()));
-    }
-
-    let manifest = serde_json::json!({
-        "format": "crible-batch",
-        "format_version": 1,
-        "batch_id": batch_id,
-        "index": "test",
-        "mode": "upsert",
-        "created_at": "2026-01-01T00:00:00Z",
-        "producer": { "name": "test", "version": "1", "host": "test" },
-        "model": { "dims": 4, "normalize": true, "vector_dtype": "fp16" },
-        "chunker": { "name": "test", "version": "1", "params": {} },
-        "template": { "name": "test", "version": "1" },
-        "counts": { "documents": 2, "passages": 2, "deletions": 0 },
-        "files": files,
-    });
-    fs::write(
-        dir.join("manifest.json"),
-        serde_json::to_string_pretty(&manifest)
-            .unwrap_or_else(|error| panic!("the manifest must be serializable: {error}")),
-    )
-    .unwrap_or_else(|error| panic!("manifest.json must be written: {error}"));
-}
-
 // --- Child entry point ---
 
 #[test]
@@ -393,6 +363,7 @@ fn crash_child_entry() {
     let run = match scenario.as_str() {
         ATTACH_SCENARIO => run_attach(&index),
         COMPACTION_SCENARIO => run_compaction(&index),
+        DELETION_SCENARIO => run_deletion(&index),
         other => panic!("unknown {CHILD_ENV}={other}"),
     };
     let step = std::env::var(FAILPOINT_ENV).unwrap_or_default();
@@ -433,7 +404,7 @@ fn run_attach(index: &Path) -> ChildRun {
         std::env::var_os(BATCH_ENV)
             .unwrap_or_else(|| panic!("{BATCH_ENV} must name the batch the child attaches")),
     );
-    let config = fixture_config();
+    let config = index_config_of(index);
     let model = fixture_model();
     let mut store = common::open_store(index);
     match attach(&mut store, &batch, &config, &model, None, None) {
@@ -448,8 +419,32 @@ fn run_attach(index: &Path) -> ChildRun {
     }
 }
 
+/// Commits the generation [`deletion_fixture`] planned: it tombstones iid 0 and
+/// appends the passage of `seg-b` at iid 2. No batch is attached, so the
+/// generation only walks steps 3 to 6 of `docs/02`, step 4 included.
+fn run_deletion(index: &Path) -> ChildRun {
+    let mut store = common::open_store(index);
+    let segment = common::write_segment(index, DELETION_SEGMENT, 2, 2, &[&[0.0, 0.0, 1.0, 0.0]]);
+    let change = common::change(
+        vec![segment],
+        vec![common::document("doc-c", 2)],
+        vec![common::passage(2, "doc-c", 0, DELETION_SEGMENT, 2)],
+        vec![Iid::new(0)],
+    );
+    match store.commit(change) {
+        Ok(generation) => ChildRun::Completed {
+            operation: "deletion",
+            generation: generation.get(),
+        },
+        Err(error) => ChildRun::Failed {
+            operation: "deletion",
+            error: format!("{}: {}", error.code().as_str(), error.message()),
+        },
+    }
+}
+
 fn run_compaction(index: &Path) -> ChildRun {
-    let config = fixture_config();
+    let config = index_config_of(index);
     let mut store = common::open_store(index);
     match compact(&mut store, &config) {
         Ok(report) => ChildRun::Completed {
@@ -655,6 +650,82 @@ fn assert_index_state(index: &Path, expected: &ExpectedState) {
 
     assert_manifest(&epoch_dir, expected.generation, expected.segments);
     common::assert_segment_directories(index, expected.epoch, expected.segments);
+    assert_lexical_state(&epoch_dir, expected.generation, expected.lexical);
+}
+
+/// Asserts the lexical index of one epoch, the way INV-04 reads it: a disabled
+/// branch leaves no directory at all, an enabled one names the committed
+/// generation in its last commit and indexes exactly the live iids of that
+/// generation.
+fn assert_lexical_state(epoch_dir: &Path, generation: u64, expected: Option<ExpectedLexical>) {
+    let lexical_dir = epoch_dir.join(LEXICAL_DIR);
+    let Some(expected) = expected else {
+        assert!(
+            !lexical_dir.exists(),
+            "{} must not exist: the index disables the lexical branch, and a directory the \
+             configuration does not enable is a derived state no generation produced",
+            lexical_dir.display()
+        );
+        return;
+    };
+
+    let state = read_state(epoch_dir).unwrap_or_else(|error| {
+        panic!(
+            "the lexical index of {} must be readable: {}: {}",
+            epoch_dir.display(),
+            error.code().as_str(),
+            error.message()
+        )
+    });
+    assert_eq!(
+        state.generation,
+        Some(Generation::new(expected.generation)),
+        "after a restart, the payload of the last tantivy commit of generation {generation} \
+         must name that generation (INV-04); Gt is {:?} and the iids it holds are {:?}",
+        state.generation,
+        state.iids
+    );
+    let mut actual: Vec<u32> = state.iids.iter().map(|iid| iid.get()).collect();
+    actual.sort_unstable();
+    let mut wanted = expected.iids.to_vec();
+    wanted.sort_unstable();
+    assert_eq!(
+        actual, wanted,
+        "the lexical index of generation {generation} must hold exactly the iids of its live \
+         passages (INV-04): a passage it still holds after its tombstone, or one it misses, \
+         makes the lexical branch disagree with the reference state"
+    );
+}
+
+/// Asserts the lexical index on disk is *behind* `committed`: the crash left
+/// the generation committed in SQLite and tantivy on an older one. This is the
+/// gap the `Gt < G` branch of recovery must close, so the test covers it.
+fn assert_lexical_is_behind(index: &Path, epoch: u32, committed: u64, absent_iids: &[u32]) {
+    let epoch_dir = index.join("epochs").join(epoch.to_string());
+    let state = read_state(&epoch_dir).unwrap_or_else(|error| {
+        panic!(
+            "the lexical index of {} must be readable: {}: {}",
+            epoch_dir.display(),
+            error.code().as_str(),
+            error.message()
+        )
+    });
+    assert!(
+        state
+            .generation
+            .is_none_or(|generation| generation.get() < committed),
+        "the crash must leave the lexical index behind generation {committed}, otherwise the \
+         test does not exercise the catch-up of the restart; Gt is {:?}",
+        state.generation
+    );
+    for iid in absent_iids {
+        assert!(
+            !state.iids.contains(&Iid::new(*iid)),
+            "the lexical index must not hold iid {iid} yet: the crash is before step 4 of \
+             generation {committed}. It holds {:?}",
+            state.iids
+        );
+    }
 }
 
 /// Asserts no `tmp-*` entry survives in the index directory, any epoch directory
@@ -694,7 +765,7 @@ fn assert_epochs(index: &Path, expected: &[u32]) {
 // --- Replays ---
 
 fn replay_attach(index: &Path, batch: &Path) -> AttachReport {
-    let config = fixture_config();
+    let config = index_config_of(index);
     let model = fixture_model();
     let mut store = common::open_store(index);
     attach(&mut store, batch, &config, &model, None, None).unwrap_or_else(|error| {
@@ -707,7 +778,7 @@ fn replay_attach(index: &Path, batch: &Path) -> AttachReport {
 }
 
 fn replay_compaction(index: &Path) -> CompactReport {
-    let config = fixture_config();
+    let config = index_config_of(index);
     let mut store = common::open_store(index);
     compact(&mut store, &config).unwrap_or_else(|error| {
         panic!(
@@ -781,6 +852,142 @@ fn inv_04_crash_after_manifest_keeps_new_generation() {
 #[test]
 fn inv_04_crash_after_publish_keeps_new_generation() {
     assert_attach_crash("after_publish", &attach_new_state());
+}
+
+// --- Attach with the lexical branch: step 4 of `docs/02` ---
+
+/// Creates an index at generation 1 with the lexical branch enabled: two
+/// documents and two passages at generation 1, indexed by tantivy.
+///
+/// Generation 2 is the change the child commits: it tombstones iid 0 and
+/// appends `DELETION_SEGMENT`, whose single passage becomes iid 2. The
+/// generation carries no batch, so it walks steps 3 to 6 only, step 4 included.
+fn deletion_fixture() -> (tempfile::TempDir, PathBuf) {
+    let (temp, index) = common::temp_index();
+    let config = common::test_config_with_lexical("test", &common::fixture_schema(), true);
+    let mut store = common::create_store_with_config(&index, &common::fixture_schema(), &config);
+    let first = common::write_segment(
+        &index,
+        "seg-a",
+        0,
+        1,
+        &[&[1.0, 0.0, 0.0, 0.0], &[0.0, 1.0, 0.0, 0.0]],
+    );
+    common::commit(
+        &mut store,
+        common::change(
+            vec![first],
+            vec![common::document("doc-a", 1), common::document("doc-b", 1)],
+            vec![
+                common::passage(0, "doc-a", 0, "seg-a", 1),
+                common::passage(1, "doc-b", 0, "seg-a", 1),
+            ],
+            Vec::new(),
+        ),
+    );
+    drop(store);
+
+    let state = read_state(&common::epoch_dir(&index)).unwrap_or_else(|error| {
+        panic!("the lexical index of generation 1 must be readable: {error}")
+    });
+    assert_eq!(
+        state.generation,
+        Some(Generation::new(1)),
+        "the fixture must start with a lexical index at generation 1: {:?}",
+        state.generation
+    );
+    (temp, index)
+}
+
+/// The criterion of the fiche: a crash between step 3 (`COMMIT`) and step 4
+/// (tantivy) followed by a restart must find the lexical index at the
+/// generation SQLite committed.
+///
+/// The batch of generation 1 is committed in SQLite and nowhere in tantivy. The
+/// restart must index iids 0 and 1, so the lexical branch of `G+1` answers what
+/// the dense branch already sees (INV-04, "Gt < G" of "Reprise au démarrage").
+#[test]
+fn inv_04_crash_before_lexical_commit_recovers_the_lexical_to_the_committed_generation() {
+    let (_temp, index, batch) = lexical_attach_fixture();
+    let outcome = spawn_child("after_sqlite_commit", ATTACH_SCENARIO, &index, Some(&batch));
+    assert_child_was_killed("after_sqlite_commit", &outcome);
+
+    // The gap is real: the crash sits at the start of step 4, so the state on
+    // disk is before the lexical step, not after it.
+    assert_lexical_is_behind(&index, common::EPOCH, 1, &[0, 1]);
+
+    // Opening the store runs recovery, which must catch the lexical index up.
+    assert_index_state(&index, &lexical_attach_new_state());
+    assert_no_temporary_entries(&index);
+
+    let report = replay_attach(&index, &batch);
+    assert_eq!(
+        report.generation.get(),
+        1,
+        "replaying the batch after a crash at after_sqlite_commit must return generation 1 \
+         without writing (INV-10)"
+    );
+    assert_index_state(&index, &lexical_attach_new_state());
+    assert_epochs(&index, &[common::EPOCH]);
+}
+
+/// A crash at the end of step 4 leaves tantivy at `G+1` with `G+1` as its
+/// payload. The restart must not rebuild what is already consistent, and must
+/// keep the generation whole (INV-04: the state is the committed generation).
+#[test]
+fn inv_04_crash_after_lexical_commit_keeps_the_committed_generation() {
+    let (_temp, index, batch) = lexical_attach_fixture();
+    let outcome = spawn_child(
+        "after_lexical_commit",
+        ATTACH_SCENARIO,
+        &index,
+        Some(&batch),
+    );
+    assert_child_was_killed("after_lexical_commit", &outcome);
+
+    assert_index_state(&index, &lexical_attach_new_state());
+
+    let report = replay_attach(&index, &batch);
+    assert_eq!(
+        report.generation.get(),
+        1,
+        "replaying the batch after a crash at after_lexical_commit must return generation 1 \
+         without writing (INV-10)"
+    );
+    assert_index_state(&index, &lexical_attach_new_state());
+    assert_epochs(&index, &[common::EPOCH]);
+    assert_no_temporary_entries(&index);
+}
+
+/// A generation that tombstones iid 0 and appends iid 2, crashed between steps
+/// 3 and 4: after the restart, the lexical index must name generation 2 and
+/// hold exactly the live iids of that generation, `{1, 2}`. The tombstoned
+/// passage is gone from tantivy and the new one is indexed (INV-04: "Gt < G"
+/// re-indexes the passages created after `Gt` and removes those dead after it).
+#[test]
+fn inv_04_crash_after_deletion_commit_recovers_the_lexical_to_the_committed_generation() {
+    let (_temp, index) = deletion_fixture();
+    let outcome = spawn_child("after_sqlite_commit", DELETION_SCENARIO, &index, None);
+    assert_child_was_killed("after_sqlite_commit", &outcome);
+
+    // Generation 2 is committed in SQLite, the lexical index still names
+    // generation 1 and still holds the tombstoned iid 0.
+    assert_lexical_is_behind(&index, common::EPOCH, 2, &[2]);
+
+    let expected = ExpectedState {
+        epoch: common::EPOCH,
+        generation: 2,
+        segments: &["seg-a", DELETION_SEGMENT],
+        live_iids: &[1, 2],
+        documents: 3,
+        passages: 3,
+        lexical: Some(ExpectedLexical {
+            generation: 2,
+            iids: &[1, 2],
+        }),
+    };
+    assert_index_state(&index, &expected);
+    assert_no_temporary_entries(&index);
 }
 
 /// INV-03 at restart: whatever attach step the process dies at, the reopened
