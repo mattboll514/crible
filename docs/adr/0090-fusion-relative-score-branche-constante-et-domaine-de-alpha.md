@@ -1,8 +1,9 @@
 # ADR-0090 — Fusion `relative_score` : branche constante dans la normalisation min-max et domaine de `alpha`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-28, à confirmer au point de fin de l'enchaînement)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-28 ; accepté par anticipation le 2026-10-28, confirmé par le propriétaire le 2026-10-28)
 - **Date** : 2026-10-28 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-28 par le propriétaire, tel que proposé, lors d'une acceptation anticipée de sa part, confirmée par le propriétaire au point de fin de l'enchaînement de P5, le 2026-10-28. Les deux décisions sont retenues telles quelles : une branche constante normalise chacun de ses candidats à 1 et une branche vide ne contribue rien, l'absence restant à 0 ; `alpha ∈ [0, 1]`, bornes comprises et valeur finie, refusé en `invalid_request` (400) à la création de l'index, au `PATCH` de `search.fusion` et par requête, par un seul contrôle dans `crible-core` appelé depuis `FusionConfig::from_value` ; aucune valeur par défaut n'est fixée et le défaut `rrf` ne change pas.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `FUSIONNER-HYBRIDE` (phase P5), à partir des choix locaux de `@dev` et des verdicts de `@architecte` du 2026-10-28
 - **Remplace** : — (précise `docs/03` et ADR-0008, dont le corps n'est pas réécrit : cet ADR tranche deux cas que `docs/03` et ADR-0008 ne couvrent pas, sans changer ni la formule de `rrf`, ni le choix de la fusion par défaut, ni INV-05)
 

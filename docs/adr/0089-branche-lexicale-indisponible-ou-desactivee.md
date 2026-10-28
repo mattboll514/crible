@@ -1,8 +1,9 @@
 # ADR-0089 — Branche lexicale indisponible ou désactivée : messages des états sans commit tantivy et code d'erreur quand `lexical.enabled` vaut `false`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-28, à confirmer au point de fin de l'enchaînement)
+- **Statut** : Accepté (décision du propriétaire le 2026-10-28 ; accepté par anticipation le 2026-10-28, confirmé par le propriétaire le 2026-10-28)
 - **Date** : 2026-10-28 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
+- **Décision** : accepté le 2026-10-28 par le propriétaire, tel que proposé, lors d'une acceptation anticipée de sa part, confirmée par le propriétaire au point de fin de l'enchaînement de P5, le 2026-10-28. Les quatre décisions sont retenues telles quelles : deux messages de plus pour `Behind { committed: None }` et `NotCertified { committed: None }`, toujours en `overloaded` (503) et sans `iid` ; `Missing` (`M = 0`) ne refuse pas et rend une réponse vide ; une branche désactivée (`lexical.enabled` à `false`) est refusée en `invalid_request` (400) pour `lexical` comme pour `hybrid` ; une recherche multi-index dont une cible a le lexical désactivé est refusée en entier, le message nommant l'index fautif. Le défaut de `mode` ne change pas.
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `RECHERCHER-BM25-DANS-LE-POOL` (phase P5), à partir des questions de `@testeur` avant `@dev` et des verdicts de `@architecte` du 2026-10-28
 - **Remplace** : — (précise ADR-0088, décision 5, et ADR-0087, dont le corps n'est pas réécrit : cet ADR ajoute deux messages aux quatre d'ADR-0088 et tranche le code d'erreur qu'ADR-0088, décision 8, laissait ouvert)
 
