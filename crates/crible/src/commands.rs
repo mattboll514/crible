@@ -34,7 +34,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crible_core::batch::BatchMode;
-use crible_core::config::IndexConfig;
+use crible_core::config::{FusionConfig, IndexConfig, check_alpha};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::model::{ModelConfig, ModelKind};
@@ -42,9 +42,12 @@ use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
-use crible_search::dense::exact::{DenseSearcher, Hit};
-use crible_search::dense::{DenseQuery, search_grouped as dense_search_grouped};
+use crible_search::dense::exact::DenseSearcher;
+use crible_search::fusion::BranchScore;
 use crible_search::group::Grouping;
+use crible_search::pipeline::{
+    self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType,
+};
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
 use crible_store::attach::{AttachReport, attach};
@@ -80,6 +83,46 @@ pub enum SearchFormat {
     Json,
     /// Human-readable report: key, score, fields and a text excerpt.
     Text,
+}
+
+/// Branches of one `crible search` (`mode` of `docs/05-api.md`).
+///
+/// The flag has no default value: a request that does not name a mode takes the
+/// default of the index — `hybrid` when the lexical branch is enabled, `dense`
+/// otherwise (`docs/05-api.md`, ADR-0089, decision 3) — and that default can only
+/// be read once the configuration is loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum SearchMode {
+    /// Dense branch alone.
+    Dense,
+    /// Lexical branch alone.
+    Lexical,
+    /// Both branches, fused.
+    Hybrid,
+}
+
+impl From<SearchMode> for Mode {
+    fn from(mode: SearchMode) -> Self {
+        match mode {
+            SearchMode::Dense => Self::Dense,
+            SearchMode::Lexical => Self::Lexical,
+            SearchMode::Hybrid => Self::Hybrid,
+        }
+    }
+}
+
+/// Fusion of the two branches of a `hybrid` search (`fusion` of
+/// `docs/05-api.md`).
+///
+/// The names are those of the configuration (`rrf`, `relative_score`), so the
+/// flag and `index.json` say the same thing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum SearchFusion {
+    /// Reciprocal rank fusion, constant 60.
+    Rrf,
+    /// Relative score, weighted by `--alpha`.
+    #[value(name = "relative_score")]
+    RelativeScore,
 }
 
 /// `crible index create --data <dir> --config <json>`.
@@ -456,10 +499,15 @@ fn open_store_for_write(
 /// One `crible search` invocation.
 ///
 /// The query comes either from a file of a provided vector (`--vector-file`) or
-/// from text (`--query`); the two are mutually exclusive and one is required.
-/// A text query needs `--models`, and an `onnx` encoder: the model of the index
-/// by default, or the one named by `--model`, which is what lets `synth-small`
-/// (an `external` index) be searched by text with a test encoder.
+/// from text (`--query`). A text query needs `--models`, and an `onnx` encoder:
+/// the model of the index by default, or the one named by `--model`, which is
+/// what lets `synth-small` (an `external` index) be searched by text with a test
+/// encoder.
+///
+/// The mode decides which inputs are needed: `dense` takes a vector file or a
+/// text, `lexical` takes a text alone — the BM25 branch reads the text as it is,
+/// so it needs no encoder and no `--models` — and `hybrid` takes a text, which
+/// serves the lexical branch and is encoded for the dense one.
 #[derive(Clone, Copy)]
 pub struct SearchRequest<'a> {
     /// Root data directory (`<data>/indexes/<index>`).
@@ -490,6 +538,15 @@ pub struct SearchRequest<'a> {
     /// Fusion of identical passages (`dedup` of `docs/05-api.md`): `content`,
     /// or none.
     pub dedup: Option<&'a str>,
+    /// Branches to run (`mode` of `docs/05-api.md`); the default of the index
+    /// when absent.
+    pub mode: Option<SearchMode>,
+    /// Fusion of the two branches (`fusion` of `docs/05-api.md`); the default of
+    /// the index when absent.
+    pub fusion: Option<SearchFusion>,
+    /// Weight of the dense branch with `--fusion relative_score`
+    /// (`docs/03-recherche.md`, "Fusion").
+    pub alpha: Option<f64>,
     /// Output format.
     pub format: SearchFormat,
 }
@@ -512,6 +569,9 @@ impl std::fmt::Debug for SearchRequest<'_> {
             .field("group_by", &self.group_by)
             .field("passages_per_document", &self.passages_per_document)
             .field("dedup", &self.dedup)
+            .field("mode", &self.mode)
+            .field("fusion", &self.fusion)
+            .field("alpha", &self.alpha)
             .field("format", &self.format)
             .finish()
     }
@@ -558,28 +618,129 @@ fn grouping_of(request: &SearchRequest<'_>) -> Result<Grouping, CribleError> {
     Ok(grouping)
 }
 
-/// `crible search --data <dir> --index <i> (--vector-file <file> | --query <text>)`.
+/// Mode of one `crible search`, from the flag or the index.
+///
+/// `--mode` wins; otherwise `hybrid` when the index enables the lexical branch
+/// and `dense` otherwise (`docs/05-api.md`, ADR-0089, decision 3).
+fn mode_of(request: &SearchRequest<'_>, config: &IndexConfig) -> Mode {
+    request
+        .mode
+        .map_or_else(|| Mode::default_for(config.lexical.enabled), Mode::from)
+}
+
+/// Fusion of one `crible search`, from the flags or the index.
+///
+/// `docs/05-api.md` publishes `{ "method": "rrf" }` and
+/// `{ "method": "relative_score", "alpha": … }`, and `index.json` refuses an
+/// `alpha` with `rrf`; the flags follow the same contract, so a caller never
+/// believes an option took effect. The fusion only acts in `hybrid`, and its
+/// domain is checked in every mode, as `--passages-per-document` is (ADR-0075).
+fn fusion_of(
+    request: &SearchRequest<'_>,
+    config: &IndexConfig,
+) -> Result<FusionConfig, CribleError> {
+    match (request.fusion, request.alpha) {
+        (None, None) => Ok(config.search.fusion),
+        (None, Some(_)) => Err(invalid_request(
+            "--alpha needs --fusion relative_score; the default fusion of the index is not \
+             overridden by a weight alone",
+        )),
+        (Some(SearchFusion::Rrf), None) => Ok(FusionConfig::Rrf),
+        (Some(SearchFusion::Rrf), Some(_)) => Err(invalid_request(
+            "alpha is not allowed with rrf, as in the fusion of index.json",
+        )),
+        (Some(SearchFusion::RelativeScore), None) => Err(invalid_request(
+            "--fusion relative_score needs --alpha, between 0 and 1",
+        )),
+        (Some(SearchFusion::RelativeScore), Some(alpha)) => {
+            // One domain for the setting and the flag: the control of
+            // `crible-core` is reused as it is, so a request cannot carry a
+            // weight the configuration would refuse (ADR-0090, decision 2).
+            check_alpha(alpha, "fusion.alpha")?;
+            Ok(FusionConfig::RelativeScore { alpha })
+        }
+    }
+}
+
+/// Checks that the flags give the inputs `mode` runs on.
+///
+/// `dense` takes a vector file or a text; `lexical` and `hybrid` take a text,
+/// since the lexical branch scores the query text as it is. A vector file alone
+/// gives no text, so it is refused for those two modes rather than silently
+/// dropping the lexical branch (ADR-0087, decision 2).
+fn query_inputs(request: &SearchRequest<'_>, mode: Mode) -> Result<(), CribleError> {
+    if !mode.uses_lexical() {
+        return match (request.vector_file, request.query) {
+            (Some(_), Some(_)) => Err(invalid_request(
+                "--vector-file and --query are mutually exclusive; pass one of them",
+            )),
+            (None, None) => Err(invalid_request(
+                "search needs --vector-file <file> or --query <text>",
+            )),
+            _ => Ok(()),
+        };
+    }
+    if request.vector_file.is_some() {
+        return Err(invalid_request(format!(
+            "--mode {} runs the lexical branch, which scores the query text: pass --query <text> \
+             and no --vector-file",
+            mode.as_str()
+        )));
+    }
+    if request.query.is_none() {
+        return Err(invalid_request(format!(
+            "--mode {} needs --query <text>",
+            mode.as_str()
+        )));
+    }
+    Ok(())
+}
+
+/// Query text the mode needs, which [`query_inputs`] has checked.
+fn required_text<'a>(request: &SearchRequest<'a>, mode: Mode) -> Result<&'a str, CribleError> {
+    request
+        .query
+        .ok_or_else(|| invalid_request(format!("--mode {} needs --query <text>", mode.as_str())))
+}
+
+/// `crible search --data <dir> --index <i> [--query <text> | --vector-file <file>]`.
 ///
 /// The response follows the shape of `docs/05-api.md` ("Recherche : réponse"),
-/// with the fields P1 and `ENCODER-REQUETES` can fill: `results`, `pool_size`,
-/// `generation`, `took_ms` and `truncated_query`. The dense branch runs the
-/// strategy [`crible_search::dense::plan`] chooses from `search.*`, the pool
-/// and `--exact` (ADR-0074), but both strategies score with the same cosine, so
-/// `score_type` is `"cosine"` either way. `took_ms` is the total, from the
-/// entry of the command: it includes reading the index configuration, the
-/// vector or the text encoding, the filter, evaluating the pool, opening the
-/// readers and the scan itself.
+/// with the fields P1 to P5 can fill: `results`, `pool_size`, `generation`,
+/// `took_ms` and `truncated_query`. `took_ms` is the total, from the entry of
+/// the command: it includes reading the index configuration, the vector or the
+/// text encoding, the filter, evaluating the pool, opening the readers and the
+/// search itself.
+///
+/// `--mode` chooses the branches (`docs/03-recherche.md`, pipeline table):
+/// `dense` runs the dense strategy [`crible_search::dense::plan`] chooses from
+/// `search.*`, the pool and `--exact` (ADR-0074); `lexical` runs BM25 on the
+/// query text; `hybrid` runs both, in parallel, on the same pool, then fuses
+/// them (`rrf` or `relative_score`, [`crible_search::fusion`]). The response
+/// names the score it carries in `score_type`: `cosine`, `bm25`, `rrf` or
+/// `relative` (`docs/03-recherche.md`).
+///
+/// `--fusion` and `--alpha` override the fusion of the index for one request
+/// (`docs/05-api.md`); without them the default of the index applies, which is
+/// `rrf` until MES-10 recommends otherwise (ADR-0008).
+///
+/// A `lexical` or `hybrid` search on an index whose `lexical.enabled` is false
+/// is refused in `invalid_request` before any work (ADR-0089, decision 3), and
+/// `dense` keeps serving that index. A lexical branch that cannot run refuses
+/// in `overloaded` or `invalid_request` (ADR-0088, ADR-0089): the command never
+/// degrades `hybrid` into the dense ranking (ADR-0087, decision 2).
 ///
 /// `truncated_query` is the wire name of the `truncated` flag of
 /// `crible_encode::EncodedQuery` (ADR-0051); the HTTP route of P6 keeps that
 /// mapping.
 ///
 /// `--group-by`, `--passages-per-document` and `--dedup` are the regrouping of
-/// `docs/03-recherche.md` ("Regroupement") and `REGROUPER-RESULTATS`: the dense
-/// branch is asked for over-sampled candidates, the regrouping runs before the
-/// payload step, and `k` counts documents when `--group-by document` is set. A
-/// grouped document may then take up to `--passages-per-document` results in
-/// the flat `results` list of `docs/05-api.md`.
+/// `docs/03-recherche.md` ("Regroupement") and `REGROUPER-RESULTATS`: the
+/// branches are asked for over-sampled candidates, the regrouping runs after the
+/// fusion and before the payload step, and `k` counts documents when
+/// `--group-by document` is set. A grouped document may then take up to
+/// `--passages-per-document` results in the flat `results` list of
+/// `docs/05-api.md`.
 ///
 /// `--format json` (the default) prints that response; `--format text` prints
 /// the readable report of [`print_search_text`] instead, for the J2 demo.
@@ -597,19 +758,35 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let grouping = grouping_of(request)?;
     let name = path_component(request.index, "index name")?;
     let (index_dir, config) = load_index(request.data, name)?;
+    // The mode and the fusion are resolved from the flags and the configuration
+    // before the store opens, and a mode the index cannot serve is refused here:
+    // `lexical.enabled` is a permanent property of the index (ADR-0089, decision
+    // 3), so the request pays for no open, no model and no pool.
+    let mode = mode_of(request, &config);
+    if mode.uses_lexical() && !config.lexical.enabled {
+        return Err(invalid_request("lexical branch is disabled for this index"));
+    }
+    let fusion = fusion_of(request, &config)?;
+    query_inputs(request, mode)?;
     let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
-    let (vector, truncated_query) = match (request.vector_file, request.query) {
-        (Some(path), None) => (vector::load(path)?, false),
-        (None, Some(text)) => encode_text_query(request.models, &config, request.model, text)?,
-        (Some(_), Some(_)) => {
-            return Err(invalid_request(
-                "--vector-file and --query are mutually exclusive; pass one of them",
-            ));
-        }
-        (None, None) => {
-            return Err(invalid_request(
-                "search needs --vector-file <file> or --query <text>",
-            ));
+    // `lexical` scores the text as it is; `dense` and `hybrid` need a vector,
+    // read from the file or encoded from the text.
+    let (vector, text, truncated_query) = match mode {
+        Mode::Dense => match request.vector_file {
+            Some(path) => (Some(vector::load(path)?), None, false),
+            None => {
+                let text = required_text(request, mode)?;
+                let (vector, truncated) =
+                    encode_text_query(request.models, &config, request.model, text)?;
+                (Some(vector), None, truncated)
+            }
+        },
+        Mode::Lexical => (None, Some(required_text(request, mode)?), false),
+        Mode::Hybrid => {
+            let text = required_text(request, mode)?;
+            let (vector, truncated) =
+                encode_text_query(request.models, &config, request.model, text)?;
+            (Some(vector), Some(text), truncated)
         }
     };
     let filter = match request.filter {
@@ -629,16 +806,19 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let segments = snapshot.segments().to_vec();
     let searcher =
         scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
-    let hits = scan.install(|| {
-        dense_search_grouped(
+    let answer = scan.install(|| {
+        pipeline::search(
             &snapshot,
             &searcher,
             &pool,
-            &DenseQuery {
-                vector: &vector,
+            &PipelineRequest {
+                mode,
+                vector: vector.as_deref(),
+                text,
                 k: request.k,
                 exact: request.exact,
                 grouping: &grouping,
+                fusion,
             },
             &config.search,
         )
@@ -647,17 +827,18 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     match request.format {
         SearchFormat::Json => {
-            let results: Vec<Value> = hits
+            let results: Vec<Value> = answer
+                .results
                 .iter()
-                .map(|hit| {
+                .map(|result| {
                     json!({
-                        "doc_id": hit.doc_id,
-                        "passage": hit.ord,
-                        "key": hit.key,
-                        "score": hit.score,
-                        "score_type": "cosine",
-                        "fields": hit.fields,
-                        "text": hit.text,
+                        "doc_id": result.hit.doc_id,
+                        "passage": result.hit.ord,
+                        "key": result.hit.key,
+                        "score": result.hit.score,
+                        "score_type": answer.score_type.as_str(),
+                        "fields": result.hit.fields,
+                        "text": result.hit.text,
                     })
                 })
                 .collect();
@@ -672,7 +853,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
         }
         SearchFormat::Text => print_search_text(
             name,
-            &hits,
+            &answer,
             pool.len(),
             snapshot.generation().get(),
             took_ms,
@@ -684,9 +865,13 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
 /// Prints the readable report of one search: key, score, fields and a text
 /// excerpt per result, then the counts of the JSON response.
+///
+/// A fused result also prints the rank and the score of each branch, which is
+/// what the debug output of P7 reports as `per_result` (`docs/05-api.md`): the
+/// pipeline keeps them, and the readable report is where they cost nothing.
 fn print_search_text(
     index: &str,
-    hits: &[Hit],
+    answer: &Answer,
     pool_size: u32,
     generation: u64,
     took_ms: f64,
@@ -695,22 +880,41 @@ fn print_search_text(
     println!(
         "index '{index}': {pool_size} passages in the pool, generation {generation}, \
          {} result(s), {took_ms:.1} ms",
-        hits.len()
+        answer.results.len()
     );
     if truncated_query {
         println!("note: the query was truncated to the max_tokens of the model");
     }
-    for (position, hit) in hits.iter().enumerate() {
+    for (position, result) in answer.results.iter().enumerate() {
         println!(
-            "{}. {}  score {:.6} (cosine)",
+            "{}. {}  score {:.6} ({})",
             position + 1,
-            hit.key,
-            hit.score
+            result.hit.key,
+            result.hit.score,
+            answer.score_type.as_str()
         );
-        println!("   fields: {}", compact(&hit.fields)?);
-        println!("   text: {}", excerpt(&hit.text, EXCERPT_CHARS));
+        if matches!(answer.score_type, ScoreType::Rrf | ScoreType::Relative) {
+            println!("   branches: {}", branches(result));
+        }
+        println!("   fields: {}", compact(&result.hit.fields)?);
+        println!("   text: {}", excerpt(&result.hit.text, EXCERPT_CHARS));
     }
     Ok(())
+}
+
+/// Rank and score of each branch of one result, for the readable report.
+///
+/// A branch that did not return the passage prints `none`, which is the absent
+/// contribution the fusion scored 0 (`docs/03-recherche.md`).
+fn branches(result: &RankedHit) -> String {
+    let mut parts: Vec<String> = Vec::with_capacity(2);
+    for (name, branch) in [("dense", result.dense), ("lexical", result.lexical)] {
+        parts.push(match branch {
+            Some(BranchScore { rank, score }) => format!("{name} #{rank}, {score:.6}"),
+            None => format!("{name} none"),
+        });
+    }
+    parts.join(" · ")
 }
 
 /// Returns one line of at most `limit` characters, cut on a character boundary.
@@ -974,6 +1178,9 @@ mod tests {
             group_by: None,
             passages_per_document: 1,
             dedup: None,
+            mode: None,
+            fusion: None,
+            alpha: None,
             format: SearchFormat::Json,
         };
         let rendered = format!("{request:?}");

@@ -128,10 +128,37 @@ impl Ord for Scored {
         // Greater is better: a higher score wins, and at equal score the
         // smaller key wins. A window wraps its heap in `Reverse`, so the top of
         // the heap is the candidate that `pop` removes first.
-        self.score
-            .total_cmp(&other.score)
-            .then_with(|| other.key.cmp(&self.key))
+        compare_ranked(self.score, &self.key, other.score, &other.key)
     }
+}
+
+impl crate::group::Candidate for Scored {
+    fn iid(&self) -> Iid {
+        self.iid
+    }
+
+    fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+/// The order of the answer: descending score, then ascending **textual** key
+/// `doc_id#ord` (ADR-0045, ADR-0079).
+///
+/// Three lists share it: the dense branch ([`Scored`]), the lexical branch,
+/// which returns the same type, and the fusion of the two
+/// ([`crate::fusion::Fused`]). It lives in one function so the three cannot
+/// drift apart on a tie, which is what ADR-0072, decision 3, requires of the two
+/// branches and what `FUSIONNER-HYBRIDE` extends to the fused ranking.
+pub(crate) fn compare_ranked(
+    score: f32,
+    key: &str,
+    other_score: f32,
+    other_key: &str,
+) -> std::cmp::Ordering {
+    score
+        .total_cmp(&other_score)
+        .then_with(|| other_key.cmp(key))
 }
 
 /// Cosine between the normalised `query` and the reference vector of `iid`.
