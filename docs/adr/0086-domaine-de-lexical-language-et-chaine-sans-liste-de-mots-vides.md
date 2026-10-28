@@ -1,7 +1,7 @@
 # ADR-0086 — Domaine de `lexical.language` et chaîne d'analyse des langues sans liste de mots vides
 
-- **Statut** : Proposé
-- **Date** : 2026-10-28
+- **Statut** : Accepté (décidé le 2026-10-28, tel que proposé)
+- **Date** : 2026-10-28 (proposition et décision)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, à la demande de l'orchestrateur, sur une `QUESTION-CONCEPTION` de `@dev` dans la tâche `CONFIGURER-ANALYSEUR` (phase P5)
 - **Remplace** : —
