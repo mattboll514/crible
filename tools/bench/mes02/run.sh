@@ -100,9 +100,12 @@ INDEX="--data $DATA --index synth-large --vectors $DATA/queries.f32"
 "$HARNESS" scan $INDEX --sizes all --out "$RAW/scan-all.json"
 # The two forced series of the 2026-10-27 campaign (`scan-forced-dense.json`,
 # `scan-forced-sparse.json`) belong to the two-traversal code that ADR-0071
-# described. ADR-0081 removed the second traversal, so the harness no longer
-# accepts `--force-traversal`: replay those two files with the binary of commit
-# `e7d4e08`, the last one that carries the density rule.
+# described. ADR-0081 removed the second traversal, so a binary built from this
+# tree no longer accepts `--force-traversal`; the default harness is the archived
+# binary of `e7d4e08` (see above), which still accepts it and produces both files
+# that `mes02_analyze.py` requires.
+"$HARNESS" scan $INDEX --force-traversal dense --out "$RAW/scan-forced-dense.json"
+"$HARNESS" scan $INDEX --force-traversal sparse --out "$RAW/scan-forced-sparse.json"
 
 # 4. EXACT reference at the switching point (pool equal to N, k = 100).
 "$HARNESS" exact $INDEX --out "$RAW/exact.json"

@@ -13,14 +13,15 @@
 //! returns the exact answer bit for bit).
 //!
 //! The flag has no test of its own yet, and the library tests only pin
-//! `dense::plan` and `dense::search`; this test pins the command: the flag is
-//! parsed, it reaches the pipeline, and on a pool above the threshold the two
-//! calls return the same keys, order and score bits because `N` covers the
-//! pool (ADR-0072, decision 3).
+//! `dense::plan` and `dense::search`; this test pins the command. `N` is below
+//! the pool, so BINARY keeps the 100 passages whose code matches the query and
+//! rescores them: it drops `D100` and never sees the four high-score passages.
+//! `--exact` scores the whole pool, so a flag that never reached the pipeline
+//! would return the BINARY answer and the test would fail.
 //!
 //! | Test | Criterion |
 //! |---|---|
-//! | `exact_flag_matches_the_default_answer_on_a_binary_pool` | `--exact` is accepted and both paths agree when `N` covers the pool |
+//! | `exact_flag_returns_the_passages_the_binary_scan_lost` | `--exact` is accepted, reaches the pipeline, and returns the passages below `N` |
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,14 +40,17 @@ const INDEX: &str = "exact-cli";
 /// Dimensions of the fixture vectors.
 const DIMS: u32 = 4;
 
-/// Number of passages, above [`EXACT_THRESHOLD`] so the default plan is BINARY.
-const PASSAGES: u32 = 5;
+/// Number of passages: above the 100 candidates the dense branch always asks
+/// for (`group::candidates_per_branch`), and above [`EXACT_THRESHOLD`], so the
+/// default plan is BINARY and the scan keeps 100 of the 105 passages.
+const PASSAGES: u32 = 105;
 
 /// Threshold of the fixture, below the pool size.
 const EXACT_THRESHOLD: u32 = 2;
 
-/// Candidates the scan keeps: above the pool, so BINARY rescores every passage.
-const RESCORE_CANDIDATES: u32 = 10;
+/// Candidates of the configuration: `max(N, 100)` is what the scan keeps, so
+/// this value is a floor and the test relies on the 100 above, not on it.
+const RESCORE_CANDIDATES: u32 = 2;
 
 /// Schema of the index: one document field, one passage field.
 const SCHEMA: &str = r#"{
@@ -189,10 +193,29 @@ fn passage(position: u32) -> PassageRecord {
     }
 }
 
+/// One fixture vector: the low group first, the high scores behind it.
+///
+/// Scores are distinct so the exact answer has no tie, and the first components
+/// stay far from the fp16 rounding step.
+fn vector(position: u32) -> [f32; 4] {
+    if position < 101 {
+        [0.001 + position as f32 * 0.000001, -5.0, 0.0, 0.0]
+    } else {
+        [2.0 + (position - 101) as f32 * 0.1, 1.0, 0.0, 0.0]
+    }
+}
+
 /// Writes the only segment of the fixture and returns its metadata.
 ///
-/// The vectors are unnormalised on purpose: the score is the first component,
-/// so the answer is readable without computing a cosine.
+/// The vectors are unnormalised on purpose: the score is the first component of
+/// the cosine, so the answer is readable without computing it. The code of a
+/// vector sets a bit where the component is strictly positive.
+///
+/// Passage `i < 101` has a tiny score and the query's code: the scan keeps the
+/// 100 lowest identifiers of that group and drops `D100`. Passages `101..105`
+/// carry a high score but a second positive component, so their Hamming
+/// distance is one: the scan never sees them, and the exact path returns two of
+/// them.
 fn write_segment(index: &Path) -> SegmentMeta {
     let segments = index
         .join("epochs")
@@ -212,9 +235,9 @@ fn write_segment(index: &Path) -> SegmentMeta {
         },
     )
     .unwrap_or_else(|error| panic!("the segment writer must start: {error}"));
-    for score in [4.0_f32, 3.0, 2.5, 2.0, 1.0] {
+    for position in 0..PASSAGES {
         writer
-            .append(&[score, 0.0, 0.0, 0.0])
+            .append(&vector(position))
             .unwrap_or_else(|error| panic!("the fixture vector must be appended: {error}"));
     }
     writer
@@ -251,49 +274,27 @@ fn keys(response: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Keys and score **bits** of the `results` array, in order.
-///
-/// The bits, not the `f32`, so the comparison is an equality and not a
-/// tolerance that could hide a different arithmetic (ADR-0072).
-fn keys_and_bits(response: &Value) -> Vec<(String, u32)> {
-    response["results"]
-        .as_array()
-        .unwrap_or_else(|| panic!("the answer must hold a results array: {response}"))
-        .iter()
-        .map(|result| {
-            let key = result["key"]
-                .as_str()
-                .unwrap_or_else(|| panic!("each result carries its key: {result}"))
-                .to_owned();
-            let score = result["score"]
-                .as_f64()
-                .unwrap_or_else(|| panic!("each result carries its score: {result}"))
-                as f32;
-            (key, score.to_bits())
-        })
-        .collect()
-}
-
 #[test]
-fn exact_flag_matches_the_default_answer_on_a_binary_pool() {
+fn exact_flag_returns_the_passages_the_binary_scan_lost() {
     let instance = Instance::new();
 
-    let default = instance.search(&["--k", "5"]);
+    let default = instance.search(&["--k", "2"]);
     assert_eq!(
         default["pool_size"], PASSAGES,
         "the fixture pool must be above the threshold, so the default plan is BINARY"
     );
     assert_eq!(
-        keys(&default).len(),
-        PASSAGES as usize,
-        "the fixture must return every passage it holds"
+        keys(&default),
+        ["D99#0", "D98#0"],
+        "the scan keeps 100 of the 101 passages whose code equals the query's, \
+         so BINARY never reaches a high score"
     );
 
-    let forced = instance.search(&["--k", "5", "--exact"]);
+    let forced = instance.search(&["--k", "2", "--exact"]);
     assert_eq!(
-        keys_and_bits(&forced),
-        keys_and_bits(&default),
-        "N covers the pool, so the forced exact call and the binary one must agree \
-         on keys, order and score bits (ADR-0072, decision 3)"
+        keys(&forced),
+        ["D104#0", "D103#0"],
+        "--exact must score the whole pool and return the passages below the \
+         scan; a flag the pipeline ignored would return the binary answer"
     );
 }

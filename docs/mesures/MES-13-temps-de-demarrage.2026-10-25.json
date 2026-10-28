@@ -16,7 +16,7 @@
         "total": 9075612
       },
       "generated_at": 1792954106,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles",
+      "index": "data/mes13/legifacile-articles",
       "label": "legifacile-articles",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -83,7 +83,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/legifacile-articles/epochs/1/records.sqlite",
       "records_sqlite_bytes": 58847232,
       "repeats": 5,
       "warmup": 1
@@ -100,29 +100,29 @@
         "total": 9075612
       },
       "generated_at": 1792954107,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-articles",
+      "index": "data/mes13/legifacile-articles",
       "label": "legifacile-articles",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-sql_read",
+          "copy": "data/mes13/cold-work/cold-legifacile-articles-sql_read",
           "first_access_ns": 198437333,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-json_decode",
+          "copy": "data/mes13/cold-work/cold-legifacile-articles-json_decode",
           "first_access_ns": 219728167,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-build",
+          "copy": "data/mes13/cold-work/cold-legifacile-articles-build",
           "first_access_ns": 304232584,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-articles-open",
+          "copy": "data/mes13/cold-work/cold-legifacile-articles-open",
           "first_access_ns": 333295125,
           "phase": "open"
         }
@@ -141,7 +141,7 @@
         "total": 902329
       },
       "generated_at": 1792954108,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions",
+      "index": "data/mes13/legifacile-decisions",
       "label": "legifacile-decisions",
       "live_passages": 49998,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -208,7 +208,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/legifacile-decisions/epochs/1/records.sqlite",
       "records_sqlite_bytes": 62001152,
       "repeats": 5,
       "warmup": 1
@@ -225,29 +225,29 @@
         "total": 902329
       },
       "generated_at": 1792954109,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-decisions",
+      "index": "data/mes13/legifacile-decisions",
       "label": "legifacile-decisions",
       "live_passages": 49998,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-sql_read",
+          "copy": "data/mes13/cold-work/cold-legifacile-decisions-sql_read",
           "first_access_ns": 159368667,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-json_decode",
+          "copy": "data/mes13/cold-work/cold-legifacile-decisions-json_decode",
           "first_access_ns": 176964166,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-build",
+          "copy": "data/mes13/cold-work/cold-legifacile-decisions-build",
           "first_access_ns": 192428125,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-decisions-open",
+          "copy": "data/mes13/cold-work/cold-legifacile-decisions-open",
           "first_access_ns": 216507458,
           "phase": "open"
         }
@@ -266,7 +266,7 @@
         "total": 1648979
       },
       "generated_at": 1792954111,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf",
+      "index": "data/mes13/legifacile-jorf",
       "label": "legifacile-jorf",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -333,7 +333,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/legifacile-jorf/epochs/1/records.sqlite",
       "records_sqlite_bytes": 55123968,
       "repeats": 5,
       "warmup": 1
@@ -350,29 +350,29 @@
         "total": 1648979
       },
       "generated_at": 1792954112,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-jorf",
+      "index": "data/mes13/legifacile-jorf",
       "label": "legifacile-jorf",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-sql_read",
+          "copy": "data/mes13/cold-work/cold-legifacile-jorf-sql_read",
           "first_access_ns": 173268166,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-json_decode",
+          "copy": "data/mes13/cold-work/cold-legifacile-jorf-json_decode",
           "first_access_ns": 186759042,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-build",
+          "copy": "data/mes13/cold-work/cold-legifacile-jorf-build",
           "first_access_ns": 245173000,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-jorf-open",
+          "copy": "data/mes13/cold-work/cold-legifacile-jorf-open",
           "first_access_ns": 225427250,
           "phase": "open"
         }
@@ -391,7 +391,7 @@
         "total": 591270
       },
       "generated_at": 1792954113,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres",
+      "index": "data/mes13/legifacile-titres",
       "label": "legifacile-titres",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -458,7 +458,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/legifacile-titres/epochs/1/records.sqlite",
       "records_sqlite_bytes": 25600000,
       "repeats": 5,
       "warmup": 1
@@ -475,29 +475,29 @@
         "total": 591270
       },
       "generated_at": 1792954114,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-titres",
+      "index": "data/mes13/legifacile-titres",
       "label": "legifacile-titres",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-sql_read",
+          "copy": "data/mes13/cold-work/cold-legifacile-titres-sql_read",
           "first_access_ns": 127884000,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-json_decode",
+          "copy": "data/mes13/cold-work/cold-legifacile-titres-json_decode",
           "first_access_ns": 141909166,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-build",
+          "copy": "data/mes13/cold-work/cold-legifacile-titres-build",
           "first_access_ns": 173863542,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-titres-open",
+          "copy": "data/mes13/cold-work/cold-legifacile-titres-open",
           "first_access_ns": 150340666,
           "phase": "open"
         }
@@ -516,7 +516,7 @@
         "total": 1145553
       },
       "generated_at": 1792954115,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde",
+      "index": "data/mes13/legifacile-sarde",
       "label": "legifacile-sarde",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -583,7 +583,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/legifacile-sarde/epochs/1/records.sqlite",
       "records_sqlite_bytes": 29069312,
       "repeats": 5,
       "warmup": 1
@@ -600,29 +600,29 @@
         "total": 1145553
       },
       "generated_at": 1792954116,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/legifacile-sarde",
+      "index": "data/mes13/legifacile-sarde",
       "label": "legifacile-sarde",
       "live_passages": 50000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-sql_read",
+          "copy": "data/mes13/cold-work/cold-legifacile-sarde-sql_read",
           "first_access_ns": 132507584,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-json_decode",
+          "copy": "data/mes13/cold-work/cold-legifacile-sarde-json_decode",
           "first_access_ns": 132741750,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-build",
+          "copy": "data/mes13/cold-work/cold-legifacile-sarde-build",
           "first_access_ns": 153848417,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-legifacile-sarde-open",
+          "copy": "data/mes13/cold-work/cold-legifacile-sarde-open",
           "first_access_ns": 153844916,
           "phase": "open"
         }

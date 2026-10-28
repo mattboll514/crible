@@ -16,7 +16,7 @@
         "total": 671737
       },
       "generated_at": 1792681589,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "index": "data/mes13/synth-small",
       "label": "synth-small",
       "live_passages": 9750,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -83,7 +83,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/synth-small/epochs/1/records.sqlite",
       "records_sqlite_bytes": 4247552,
       "repeats": 5,
       "warmup": 1
@@ -100,29 +100,29 @@
         "total": 671737
       },
       "generated_at": 1792681592,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "index": "data/mes13/synth-small",
       "label": "synth-small",
       "live_passages": 9750,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-sql_read",
+          "copy": "data/mes13/cold-work/cold-synth-small-sql_read",
           "first_access_ns": 14108458,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-json_decode",
+          "copy": "data/mes13/cold-work/cold-synth-small-json_decode",
           "first_access_ns": 26463417,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-build",
+          "copy": "data/mes13/cold-work/cold-synth-small-build",
           "first_access_ns": 33500000,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-synth-small-open",
+          "copy": "data/mes13/cold-work/cold-synth-small-open",
           "first_access_ns": 32710458,
           "phase": "open"
         }
@@ -141,7 +141,7 @@
         "total": 45267765
       },
       "generated_at": 1792681627,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "index": "data/mes13/fixture-1m",
       "label": "fixture-1m",
       "live_passages": 1000000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -208,7 +208,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/fixture-1m/epochs/1/records.sqlite",
       "records_sqlite_bytes": 213811200,
       "repeats": 5,
       "warmup": 1
@@ -225,29 +225,29 @@
         "total": 45267765
       },
       "generated_at": 1792681638,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "index": "data/mes13/fixture-1m",
       "label": "fixture-1m",
       "live_passages": 1000000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-sql_read",
+          "copy": "data/mes13/cold-work/cold-fixture-1m-sql_read",
           "first_access_ns": 752773666,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-json_decode",
+          "copy": "data/mes13/cold-work/cold-fixture-1m-json_decode",
           "first_access_ns": 1872834417,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-build",
+          "copy": "data/mes13/cold-work/cold-fixture-1m-build",
           "first_access_ns": 2342186625,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-1m-open",
+          "copy": "data/mes13/cold-work/cold-fixture-1m-open",
           "first_access_ns": 2307100375,
           "phase": "open"
         }
@@ -266,7 +266,7 @@
         "total": 387229133
       },
       "generated_at": 1792681973,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "index": "data/mes13/fixture-8m58",
       "label": "fixture-8m58",
       "live_passages": 8580000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -333,7 +333,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/fixture-8m58/epochs/1/records.sqlite",
       "records_sqlite_bytes": 1849311232,
       "repeats": 5,
       "warmup": 1
@@ -350,29 +350,29 @@
         "total": 387229133
       },
       "generated_at": 1792682039,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "index": "data/mes13/fixture-8m58",
       "label": "fixture-8m58",
       "live_passages": 8580000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
       "measure": "MES-13",
       "phases": [
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-sql_read",
+          "copy": "data/mes13/cold-work/cold-fixture-8m58-sql_read",
           "first_access_ns": 6820468375,
           "phase": "sql_read"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-json_decode",
+          "copy": "data/mes13/cold-work/cold-fixture-8m58-json_decode",
           "first_access_ns": 16266646625,
           "phase": "json_decode"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-build",
+          "copy": "data/mes13/cold-work/cold-fixture-8m58-build",
           "first_access_ns": 20331717334,
           "phase": "build"
         },
         {
-          "copy": "/Users/mattboll/MattCorp/crible/data/mes13/cold-work/cold-fixture-8m58-open",
+          "copy": "data/mes13/cold-work/cold-fixture-8m58-open",
           "first_access_ns": 20384909708,
           "phase": "open"
         }
@@ -391,7 +391,7 @@
         "total": 671737
       },
       "generated_at": 1792682099,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small",
+      "index": "data/mes13/synth-small",
       "label": "synth-small",
       "live_passages": 9750,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -458,7 +458,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/synth-small/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/synth-small/epochs/1/records.sqlite",
       "records_sqlite_bytes": 4247552,
       "repeats": 5,
       "warmup": 1
@@ -475,7 +475,7 @@
         "total": 45267765
       },
       "generated_at": 1792682132,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m",
+      "index": "data/mes13/fixture-1m",
       "label": "fixture-1m",
       "live_passages": 1000000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -542,7 +542,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-1m/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/fixture-1m/epochs/1/records.sqlite",
       "records_sqlite_bytes": 213811200,
       "repeats": 5,
       "warmup": 1
@@ -559,7 +559,7 @@
         "total": 387229133
       },
       "generated_at": 1792682463,
-      "index": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58",
+      "index": "data/mes13/fixture-8m58",
       "label": "fixture-8m58",
       "live_passages": 8580000,
       "machine": "Apple M3 (8 cores) / 24 GB / macOS 15.7.7",
@@ -626,7 +626,7 @@
           ]
         }
       ],
-      "records_sqlite": "/Users/mattboll/MattCorp/crible/data/mes13/fixture-8m58/epochs/1/records.sqlite",
+      "records_sqlite": "data/mes13/fixture-8m58/epochs/1/records.sqlite",
       "records_sqlite_bytes": 1849311232,
       "repeats": 5,
       "warmup": 1

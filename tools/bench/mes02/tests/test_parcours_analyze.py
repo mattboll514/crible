@@ -156,13 +156,16 @@ def test_build_writes_a_dated_artefact(tmp_path):
         "points": [point()],
     }
     (raw / "cross-n5000.json").write_text(json.dumps(document), encoding="utf-8")
+    agree = {"kind": "agree", "identical": True, "points": [control()]}
+    (raw / "agree-n5000.json").write_text(json.dumps(agree), encoding="utf-8")
     artefacts = tmp_path / "mesures"
     built = parcours.build(raw, commit="da34f70", date="2026-10-27", machine="test")
     assert built["protocol"].startswith("ADR-0077")
     assert built["dataset"]["live_passages"] == 7_740_000
     assert built["rows"][0]["density"] == 0.5
     assert built["documents"] == ["cross-n5000"]
-    assert built["controls"] is None
+    assert built["controls"]["pools_checked"] == 1
+    assert built["controls"]["identical"] is True
     written = parcours.write(built, artefacts, "2026-10-27")
     assert written.name == "MES-02-parcours-dense-clairseme.2026-10-27.json"
     assert json.loads(written.read_text(encoding="utf-8"))["measure"] == "MES-02"
@@ -184,8 +187,9 @@ def control(size: int = 500_000, identical: bool = True, n: int = 5000) -> dict:
     }
 
 
-def test_controls_are_absent_when_no_control_was_run(tmp_path):
-    assert parcours.control_rows(tmp_path) is None
+def test_controls_refuse_a_campaign_without_control(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        parcours.control_rows(tmp_path)
 
 
 def test_controls_summarise_the_pools_and_refuse_a_disagreement(tmp_path):

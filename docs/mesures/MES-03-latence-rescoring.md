@@ -894,8 +894,8 @@ le code, qui décide du chiffre.
        --out docs/mesures/MES-03-rejeu-reduire-cles.2026-10-28.json
    ```
 
-   Les tests du harnais passent : `cd tools && uv run --no-sync pytest bench/mes03` (24 tests pour
-   cette section, 27 depuis la sous-section de confirmation, dont 7 neufs pour l'analyse A/B).
+   Les tests du harnais passent : `cd tools && uv run --no-sync pytest bench/mes03` (40 tests pour
+   `bench/mes03`, dont 12 pour l'analyse A/B).
 
 ### Contrôles
 
@@ -1373,7 +1373,7 @@ et au suivi de la tâche.
    `data/grouper-vecteurs/raw/displace-sources.txt` (la liste de MES-02, copiée sous
    `data/grouper-vecteurs/raw/`) juste après l'ouverture, puis une seule passe, et le taux de
    résidence relevé par `mincore` à chaque requête. **Le froid est partiel et il est chiffré** :
-   moyenne par requête de **0,51 à 0,84** des pages de candidats selon la série et le N, première
+   moyenne par requête de **0,48 à 0,84** des pages de candidats selon la série et le N, première
    requête de **0,00 à 0,71**. La copie replica « vecteurs seuls » de MES-03 n'a pas été rejouée.
 3. **Les jeux de candidats sont relus d'un cache**, comme la décision 8 le permet pour une campagne
    dont le sujet est la lecture des vecteurs. Les digestes sont identiques dans toutes les variantes
@@ -1384,8 +1384,8 @@ et au suivi de la tâche.
    N = 2000 de `grouped` n'est pas reproductible** (p50 combiné 1,13 ms à la ronde 1, 9,43 à la
    ronde 2), et son verdict tombe **dans le bruit** par la règle d'ADR-0082. Aucun chiffre absolu
    n'est comparable à la campagne du 2026-10-27, qui tournait avec 4,9 Gio de swap.
-5. **Le harnais a été remis en forme après la construction des binaires** (`rustfmt` seul, aucun
-   changement de logique). Les binaires mesurés sont ceux dont les SHA-256 figurent au Protocole ;
+5. **Le harnais a été remis en forme après la construction des binaires** (`rustfmt` et deux
+   réécritures équivalentes, aucun changement de comportement). Les binaires mesurés sont ceux dont les SHA-256 figurent au Protocole ;
    ils n'ont pas été reconstruits depuis.
 6. **La série de contention mesure un ordre qui avantage la troisième étape.** Dans une passe,
    l'étape 2 mesure le rescoring seul, puis l'étape 3 le mesure concurrent du scan : l'étape 3 relit
@@ -1448,7 +1448,8 @@ N = 5000 ; `grouped-madv` −63,7 % (2,3) et −79,6 % (2,7) ; `madv` −2,2 % /
   l'écart dépasse de plus d'un ordre de grandeur l'amplitude de ses propres écarts ;
 - **`MADV_RANDOM` n'est pas retenu** (décision 3 d'ADR-0080). À chaud, il est neutre à N = 1000 et
   **plus lent** à N = 5000 (+6,4 %, au-delà de son amplitude de 5,3). À froid, il ne se distingue pas
-  de `base` ; à N = 5000 sa moyenne de −5,2 % est dans l'amplitude de ses propres écarts. Comparé à
+  de `base` ; à N = 5000 sa moyenne de −5,2 % dépasse de 0,6 point son amplitude de 4,6 : gain
+  marginal, non reproduit à chaud. Comparé à
   `grouped` sur la même ronde, `grouped-madv` alterne les signes : −32,5 % puis +4,4 % à chaud à
   N = 1000, +1,3 % puis −3,9 % à 5000, −7,4 % et −18,5 % à froid à 1000, +8,0 % et −25,2 % à 5000.
   Aucun gain reproductible, et **le groupement règle déjà la séquentialité que `MADV_RANDOM` visait**.
@@ -1503,9 +1504,9 @@ Gain de `grouped` sur `base`, p50 et p95 :
 | 2000 | −64,7 % | gain (amplitude 4,8) | −73,9 % · −69,4 % |
 | 5000 | −72,0 % | gain (amplitude 5,8) | −69,8 % · −72,3 % |
 
-**Le froid publié est un froid partiel**, et le chiffre le dit : 78 à 80 % des pages de candidats de
-la première requête étaient résidentes à N = 5000 (0,47 à 0,58), et la moyenne par requête monte à
-0,80 au fil de la passe. Sur une machine de 24 Go dont 7,2 Gio de swap sont déjà occupés, 19,5 Go de
+**Le froid publié est un froid partiel**, et le chiffre le dit : à N = 5000, la première requête
+trouve 39 à 58 % de ses pages de candidats résidentes selon la variante et la ronde (0,39 à 0,58),
+et la moyenne par requête va de 0,78 à 0,80 au fil de la passe. Sur une machine de 24 Go dont 7,2 Gio de swap sont déjà occupés, 19,5 Go de
 déplacement ne tiennent pas : le noyau recharge pendant la mesure. C'est aussi pourquoi la p50 froide
 de `base` ici (58 à 116 ms) est **plus basse** que la référence de 85,0 et 177,5 ms d'ADR-0080, qui
 supposait un fichier entièrement absent du cache.

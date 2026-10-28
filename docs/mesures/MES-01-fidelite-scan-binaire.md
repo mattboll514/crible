@@ -200,8 +200,9 @@ Ce que la mesure permet d'affirmer :
    aussi la cible dès **N = 2000** (0,9924, intervalle [0,9890 ; 0,9958] : le
    point estimé l'atteint, l'intervalle ne le garantit pas), mais la campagne
    principale non (0,9887). Aucun `N = 1000` ne la garantit : le meilleur chiffre
-   à ce `N` est 0,9903 (variante `(c)` de MES-12, campagne principale),
-   d'intervalle [0,9864 ; 0,9943], qui chevauche 0,99.
+   à ce `N` est 0,9913 (variante `(c)` de MES-12, campagne filtrée), d'intervalle
+   [0,9870 ; 0,9955] ; sur la campagne principale, la même variante donne 0,9903,
+   d'intervalle [0,9864 ; 0,9943]. Les deux chevauchent 0,99.
 2. **N = 2000 manque la cible sur la campagne principale** : 0,9887, intervalle
    [0,9840 ; 0,9933] qui chevauche 0,99. La structure `decisions` tombe à
    **0,9835**, sous la cible, et c'est elle qui pèse (200 requêtes sur 300). La
@@ -220,11 +221,15 @@ Ce que la mesure permet d'affirmer :
    Quatre requêtes de la campagne principale ne sont pas parfaites (Q33, J031,
    J040, J136, toutes `decisions`, recall 0,8 à 0,9). Le harnais a calculé le
    rang de Hamming des dix passages du top-10 exact de chacune : un ou deux de
-   ces passages ont un rang supérieur à 5000 (5 554 pour Q33, 9 561 pour J031,
-   15 996 pour J040, 5 643 pour J136 ; rang 0 = passage le plus proche). Le scan
-   ne peut pas les garder, et aucun rescoring ne les récupère. La perte restante
-   vient donc du classement binaire lui-même. Ces rangs sont dans le bloc
-   `residuals` de l'artefact daté, requête par requête, sans `doc_id`.
+   ces passages ont un rang supérieur à 5000 (5 554 pour Q33 ; 5 050 et 9 561
+   pour J031 ; 7 731 et 15 996 pour J040 ; 5 074 et 5 643 pour J136 ; rang 0 =
+   passage le plus proche). Le scan ne peut pas les garder, et aucun rescoring
+   ne les récupère. La perte restante vient donc du classement binaire lui-même.
+   Ces rangs sont dans le bloc `residuals` de l'artefact daté, requête par
+   requête, sans `doc_id`. Le bloc `residuals.filtered` est vide : les rangs de
+   la campagne filtrée ne sont dans aucun artefact commité, et la campagne n'a
+   pas été rejouée ; les trois passages manquants à `N = 5000` y restent donc
+   sans rang publié.
 6. **Le coût de N = 5000 se lit ailleurs.** Cette mesure ne dit rien de la
    latence : 5 000 candidats rescored par requête contre 1 000 est un facteur 5
    sur l'étape de rescoring, que MES-02 et MES-03 doivent chiffrer avant que le

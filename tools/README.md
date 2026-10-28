@@ -217,11 +217,19 @@ relatif, chaque chemin et son contenu entrant dans le calcul (voir
 change pas la somme.
 
 ```
-synth-small : blake3:a9854f1e3f14b8c6e9afb5bd484a85d0cdc453d6812670d7f092e31760112b1f
+synth-small : blake3:357de46a0e288ae3f5c85f1241558494d12cf092d1d8c4f348c0fa289aaaeee2
 ```
 
 Elle couvre `index.json`, les trois lots, `queries.jsonl` et `expected.jsonl`.
 `reference_topk.py` la réaffiche après avoir écrit `expected.jsonl`.
+
+Cette somme a changé le **2026-10-28** (ADR-0078, décisions 2 et 3) : le gabarit
+de `index.json` passe `search.rescore_candidates` et `search.exact_threshold` de
+1 000 à 5 000, le seuil suivant `N` à la création de l'index. `scan` reste
+`none`, donc aucune stratégie de test ne change. Le générateur n'écrit rien
+d'autre différemment. Les rapports datés antérieurs (`docs/jalons/J1-*`,
+MES-13, MES-14) citent l'ancienne somme `blake3:a9854f1e…` et restent tels
+quels.
 
 ## Requêtes et résultats attendus
 

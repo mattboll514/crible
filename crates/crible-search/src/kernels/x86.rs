@@ -90,10 +90,11 @@ unsafe fn dot_bits(a: &[f16], b: &[f32]) -> f32 {
     let mut acc_low = _mm256_setzero_pd();
     let mut acc_high = _mm256_setzero_pd();
     let mut index = 0;
-    // SAFETY: `index + 8 <= len` keeps the 16-byte load of `a`, the 32-byte
-    // load of `b` and the four `f64` stores of the accumulator inside their
-    // buffers. `f16` is `repr(transparent)` over `u16` (`half`), so the cast to
-    // `*const __m128i` reinterprets the same 16 bytes.
+    // SAFETY: `index + 8 <= len` keeps the 16-byte load of `a` and the 32-byte
+    // load of `b` inside their buffers. `f16` is `repr(transparent)` over `u16`
+    // (`half`), so the cast to `*const __m128i` reinterprets the same 16 bytes.
+    // The 32-byte store of the four `f64` lanes into `lanes` happens once, after
+    // the loop, into a local `[f64; 4]`, and does not depend on `index`.
     unsafe {
         while index + 8 <= len {
             let packed = _mm_loadu_si128(a.as_ptr().add(index).cast::<__m128i>());

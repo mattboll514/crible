@@ -119,11 +119,11 @@ def replay_verdicts(entry: dict) -> dict:
     The replay is a latency A/B like the others: a `final` point whose delta
     stays inside its own pass-to-pass dispersion is a tie, however large the
     delta looks. Its first pass is cold and widens that dispersion a lot.
+
+    The rule is written for the p50 only; the p95 keeps its relative change and
+    carries no verdict, because ADR-0082 gives no noise rule for it.
     """
     entry["verdict"] = verdict(entry["gain_percent"], entry["dispersion_percent"])
-    entry["verdict_p95"] = verdict(
-        entry["gain_percent_p95"], entry["dispersion_percent"]
-    )
     return entry
 
 
@@ -270,8 +270,7 @@ def main() -> int:
         print(
             f"replay N = {n:5d} base p50 {replay['base'][str(n)]['p50']:8.1f} "
             f"final p50 {entry['p50']:8.1f} gain {entry['gain_percent']:+.1f}% "
-            f"({entry['verdict']}) p95 gain {entry['gain_percent_p95']:+.1f}% "
-            f"({entry['verdict_p95']})"
+            f"({entry['verdict']}) p95 gain {entry['gain_percent_p95']:+.1f}%"
         )
     for n in CONFIRMATION_NS:
         entry = confirmation["b-only"][str(n)]

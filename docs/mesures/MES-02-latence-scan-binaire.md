@@ -70,8 +70,8 @@ Deux écarts au protocole d'ADR-0077, déclarés :
   plus grands écarts relatifs y sont sur les petits pools et sur 1 M dispersé — 1 k contigu à N = 5000 :
   48,08 / 47,54 / 56,62 µs, 19,1 % pour 9,1 µs ; 1 k contigu à N = 1000 : 11,1 % (6,0 µs) ; 1 k
   dispersé à N = 5000 : 9,0 % (4,4 µs) ; 1 M dispersé à N = 1000 : 11,42 / 11,70 / 12,31 ms, 7,8 %
-  (0,89 ms). Les pools de 10 k à 100 k restent sous 3,2 % et **27,2 µs** (100 k dispersé, N = 2000 :
-  1 737,96 / 1 765,12 / 1 749,00 µs) ; 1 M contigu sous 2,2 % (119 µs) ; le pool complet va de 0,6 % à
+  (0,89 ms). Les pools de 10 k à 100 k restent sous **3,2 %** (10 k contigu, N = 2000) et sous
+  **27,2 µs** (100 k dispersé, N = 2000 : 1 737,96 / 1 765,12 / 1 749,00 µs) ; 1 M contigu sous 2,2 % (119 µs) ; le pool complet va de 0,6 % à
   4,9 %, soit **1,91 ms** à N = 1000 (38 856,67 / 40 343,50 / 40 763,75 µs). Sur les **18 points forcés**
   (`scan-forced-dense` et `scan-forced-sparse`, tous à N = 1000), l'étendue va de 0,2 % à **19,1 %**, et
   c'est là que se trouve le plus grand écart absolu de la campagne : pool complet, clairsemé forcé,
@@ -245,7 +245,7 @@ paire, après une passe d'échauffement séparée, sur des pools construits à d
 40, 50, 60, 75 et 90 % de plage d'iid, à 1 M et 7,74 M d'iid) et sur les deux pools de cette campagne,
 à N = 5000 et, sur ces deux pools, à N = 1000.
 
-Résultat : **le clairsemé n'est jamais plus lent que le dense** sur les 18 points ; l'inversion du pool
+Résultat : **le clairsemé n'est jamais plus lent : dix-sept gains et un match nul** sur les 18 points ; l'inversion du pool
 complet est confirmée (−19,2 % à N = 5000, −21,7 % à N = 1000), et celle de 1 M contigu se réduit à un
 match nul à N = 1000 puis à −5,6 % à N = 5000. La conclusion sur le seuil d'ADR-0071, et la
 proposition qui en découle, sont dans ce rapport dédié ; ce complément ne les reprend pas.

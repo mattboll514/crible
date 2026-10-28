@@ -33,6 +33,12 @@
 # single index does not overwrite the raw files a later report cites.
 # `MES08_DAY` names the campaign date; the default is the UTC date, which can be
 # the day before the local one around midnight.
+#
+# `MES08_MERGE` moves the merged JSON written at the end (default:
+# `docs/mesures/MES-08-duree-attache-quotidienne.<MES08_DAY>.json`). The merge
+# **refuses to overwrite** an existing file: a campaign already committed keeps
+# its data. Set `MES08_OVERWRITE=1` to accept the replacement, and only after
+# checking that the day is a new campaign.
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -137,6 +143,10 @@ uptime >>"$RAW/conditions-end.txt"
 ps -Ao pcpu,comm -r | head -8 >>"$RAW/conditions-end.txt"
 
 # shellcheck disable=SC2086 # one path per measured index, none of them has a space
-python3 "$ROOT/tools/bench/mes08/merge.py" \
-    "$ROOT/docs/mesures/MES-08-duree-attache-quotidienne.$DAY.json" \
-    $FILES
+MERGED=${MES08_MERGE:-"$ROOT/docs/mesures/MES-08-duree-attache-quotidienne.$DAY.json"}
+if [ -e "$MERGED" ] && [ "${MES08_OVERWRITE:-0}" != 1 ]; then
+    echo "refusing to overwrite $MERGED: set MES08_OVERWRITE=1 to replace it," \
+        "or MES08_MERGE to write the merge elsewhere" >&2
+    exit 1
+fi
+python3 "$ROOT/tools/bench/mes08/merge.py" "$MERGED" $FILES
