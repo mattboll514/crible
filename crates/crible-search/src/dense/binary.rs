@@ -32,7 +32,7 @@
 //! the answer; the tests compare it to a full sort.
 //!
 //! The segment of a passage comes from a cursor that advances with the sorted
-//! identifiers ([`SegmentCursor`], ADR-0081 decision 2, ADR-0082 decision 1).
+//! identifiers (`SegmentCursor`, ADR-0081 decision 2, ADR-0082 decision 1).
 //! The former lookup cost a binary search in the segment table per live
 //! passage — 0.93 to 1.03 ns per passage at 100 segments, measured in MES-02 —
 //! and the cursor pays one step per segment instead: it is positioned once per

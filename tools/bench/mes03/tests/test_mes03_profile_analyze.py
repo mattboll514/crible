@@ -22,7 +22,7 @@ ROWS = [
     ("start", "thread", "  ", 1000, "start"),
     ("main", "start", "  ", 1000, "main"),
     ("run", "main", "  ", 600, "run"),
-    ("rescore", "run", "  ", 600, "ExactSearcher7rescore"),
+    ("rescore", "run", "  ", 600, "DenseSearcher7rescore"),
     ("rpk", "rescore", "  ", 400, "read_passage_key"),
     ("advance", "rpk", "  ", 300, "advance"),
     ("step", "advance", "  ", 300, "sqlite3_step"),

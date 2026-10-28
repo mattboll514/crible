@@ -17,10 +17,10 @@
 //! reads on its own:
 //!
 //! ```text
-//! crible_search::dense::exact::ExactSearcher::open(
+//! crible_search::dense::exact::DenseSearcher::open(
 //!     segments_dir: &Path, segments: &[SegmentMeta], records_path: &Path)
 //!     -> Result<Self, CribleError>;
-//! ExactSearcher::top_k(&self, query: &[f32], pool: &Pool, k: usize)
+//! DenseSearcher::top_k(&self, query: &[f32], pool: &Pool, k: usize)
 //!     -> Result<Vec<Hit>, CribleError>;
 //!
 //! pub struct Hit {
@@ -64,7 +64,7 @@ mod common;
 
 use crible_core::error::ErrorCode;
 use crible_core::filter::Filter;
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::pool::Pool;
 use serde_json::json;
 
@@ -328,7 +328,7 @@ fn the_result_does_not_depend_on_the_rayon_thread_count() {
     let records_path = fixture.records_path();
     let snapshot = fixture.snapshot();
     let narrow = one
-        .install(|| ExactSearcher::open(&segments_dir, snapshot.segments(), &records_path))
+        .install(|| DenseSearcher::open(&segments_dir, snapshot.segments(), &records_path))
         .unwrap_or_else(|error| panic!("a searcher must open inside a one-thread pool: {error}"));
     let narrow_wide = several
         .install(|| narrow.top_k(&query, &pool, 10))
@@ -433,7 +433,7 @@ fn a_pool_without_segment_is_an_internal_error() {
     let mut fixture = DenseFixture::create(3);
     fixture.add_generation(&[Sample::new("doc-a", 0, vec![1.0, 0.0, 0.0])]);
     let pool = fixture.pool(&match_all());
-    let searcher = ExactSearcher::open(&fixture.segments_dir(), &[], &fixture.records_path())
+    let searcher = DenseSearcher::open(&fixture.segments_dir(), &[], &fixture.records_path())
         .unwrap_or_else(|error| panic!("a searcher over no segment must open: {error}"));
     let error = searcher
         .top_k(&[1.0, 0.0, 0.0], &pool, 3)
@@ -526,7 +526,7 @@ fn opening_refuses_a_missing_or_foreign_records_database() {
         .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
 
     let missing = temp.path().join("absent.sqlite");
-    let error = ExactSearcher::open(&fixture.segments_dir(), snapshot.segments(), &missing)
+    let error = DenseSearcher::open(&fixture.segments_dir(), snapshot.segments(), &missing)
         .err()
         .unwrap_or_else(|| panic!("a missing records database must be refused at open"));
     assert_eq!(
@@ -538,7 +538,7 @@ fn opening_refuses_a_missing_or_foreign_records_database() {
     let foreign = temp.path().join("foreign.sqlite");
     std::fs::write(&foreign, b"not a SQLite database at all\n")
         .unwrap_or_else(|error| panic!("the foreign file must be written: {error}"));
-    let error = ExactSearcher::open(&fixture.segments_dir(), snapshot.segments(), &foreign)
+    let error = DenseSearcher::open(&fixture.segments_dir(), snapshot.segments(), &foreign)
         .err()
         .unwrap_or_else(|| panic!("a foreign file must be refused at open"));
     assert_eq!(
@@ -572,7 +572,7 @@ fn missing_document_row_renders_passage_fields() {
     let snapshot = fixture.snapshot();
     let pool = Pool::evaluate(snapshot.filters(), &match_all())
         .unwrap_or_else(|error| panic!("the fixture filter must evaluate: {error}"));
-    let searcher = ExactSearcher::open(
+    let searcher = DenseSearcher::open(
         &fixture.segments_dir(),
         snapshot.segments(),
         &fixture.records_path(),

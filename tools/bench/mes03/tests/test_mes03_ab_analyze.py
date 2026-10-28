@@ -109,14 +109,14 @@ def test_replay_applies_the_noise_rule_of_adr_0082():
     entry = {"gain_percent": -80.0, "gain_percent_p95": -50.0, "dispersion_percent": 90.0}
     replay_verdicts(entry)
     assert entry["verdict"] == "nul"
-    assert entry["verdict_p95"] == "nul"
+    assert "verdict_p95" not in entry
 
 
 def test_replay_beyond_its_dispersion_is_a_gain():
     entry = {"gain_percent": -70.0, "gain_percent_p95": -64.0, "dispersion_percent": 11.0}
     replay_verdicts(entry)
     assert entry["verdict"] == "gain"
-    assert entry["verdict_p95"] == "gain"
+    assert "verdict_p95" not in entry
 
 
 def test_confirmation_series_covers_the_delivered_variant_against_base_and_final():

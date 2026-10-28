@@ -18,9 +18,9 @@
 //! `crible_search::dense::exact`, as `src/dense/exact.rs` implements it:
 //!
 //! ```text
-//! crible_search::dense::exact::ExactSearcher
+//! crible_search::dense::exact::DenseSearcher
 //!
-//! impl ExactSearcher {
+//! impl DenseSearcher {
 //!     /// Opens one reader per segment, and the payload reader of the epoch.
 //!     pub fn open(segments_dir: &Path, segments: &[SegmentMeta],
 //!                 records_path: &Path) -> Result<Self, CribleError>;
@@ -67,7 +67,7 @@
 //!
 //! The second test is written against the API `PLANIFIER-STRATEGIE` must
 //! provide: `crible_search::dense::plan(&SearchConfig, pool_len, k, exact)` and
-//! `crible_search::dense::search(&Snapshot, &ExactSearcher, &Pool, &[f32], k,
+//! `crible_search::dense::search(&Snapshot, &DenseSearcher, &Pool, &[f32], k,
 //! &SearchConfig, exact)`. See `tests/planifier_strategie.rs` for the whole
 //! supposed API.
 //!
@@ -88,7 +88,7 @@ use crible_core::config::{IndexConfig, ScanStrategy, Schema};
 use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation};
 use crible_core::model::ModelConfig;
-use crible_search::dense::exact::ExactSearcher;
+use crible_search::dense::exact::DenseSearcher;
 use crible_search::dense::{Strategy, plan, search};
 use crible_search::pool::Pool;
 use crible_store::attach::attach;
@@ -417,8 +417,8 @@ impl SynthIndex {
     }
 
     /// Searcher over the segments of the published generation.
-    fn searcher(&self, snapshot: &Snapshot) -> ExactSearcher {
-        ExactSearcher::open(
+    fn searcher(&self, snapshot: &Snapshot) -> DenseSearcher {
+        DenseSearcher::open(
             &segments_dir(&self.index),
             snapshot.segments(),
             &self.records_path(),

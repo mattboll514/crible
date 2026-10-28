@@ -25,6 +25,7 @@
 //! | `dedup_runs_before_grouping_so_k_documents_survive` | ADR-0075 §1: dedup first, then the grouping fills up again |
 //! | `fewer_than_k_documents_when_the_candidates_run_out` | ADR-0075 §1: fewer than `k` documents, without error |
 //! | `a_request_that_regroups_nothing_keeps_k_passages` | `group_by` and `dedup` null: no grouping |
+//! | `candidates_per_branch_follows_the_over_sampling_rule` | `docs/03-recherche.md`: `clamp(k × 20, 200, 1000)` when grouping, `max(k, 100)` otherwise |
 //! | `passages_per_document_out_of_bounds_is_refused` | the domain of `docs/05-api.md` (1 to 5) |
 //! | `binary_scan_keeps_max_of_n_and_the_over_sampled_candidates` | ADR-0075 §4, ADR-0074 decision 4 |
 //!

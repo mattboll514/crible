@@ -13,7 +13,7 @@
 //! # API under test
 //!
 //! ```text
-//! crible_search::dense::exact::ExactSearcher::rescore(
+//! crible_search::dense::exact::DenseSearcher::rescore(
 //!     &self, query: &[f32], candidates: &[binary::Candidate])
 //!     -> Result<Vec<Scored>, CribleError>;
 //!

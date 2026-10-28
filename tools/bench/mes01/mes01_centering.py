@@ -215,9 +215,9 @@ def single_segment(index_dir: Path, epoch: int) -> Path:
     """Returns the only segment of the epoch, refusing a multi-segment index.
 
     The harness reads the whole ``codes.bin`` and the whole ``vectors.f16`` of one
-    segment and compares their row count to the passages of SQLite. Reading one
-    segment of several would silently measure a truncated index, so the case is
-    refused rather than guessed.
+    segment and treats them as the whole index. Reading one segment of several
+    would silently measure a truncated index, so the case is refused rather than
+    guessed.
     """
     segments = sorted((index_dir / "epochs" / str(epoch) / "segments").glob("seg-*"))
     if len(segments) != 1:

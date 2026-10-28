@@ -58,7 +58,7 @@ use crible_store::generation::Snapshot;
 
 use super::Scored;
 use super::binary;
-use super::exact::{ExactSearcher, Hit};
+use super::exact::{DenseSearcher, Hit};
 use crate::group::Grouping;
 use crate::pool::Pool;
 
@@ -126,9 +126,9 @@ pub fn plan(search: &SearchConfig, pool_len: u32, k: usize, exact: bool) -> Plan
 
 /// Runs the dense branch of one query with the planned strategy.
 ///
-/// `EXACT` is [`ExactSearcher::top_k`], unchanged. `BINARY` is the scan of
+/// `EXACT` is [`DenseSearcher::top_k`], unchanged. `BINARY` is the scan of
 /// [`binary::top_k`], run on `max(N, k)` candidates, followed by
-/// [`ExactSearcher::rescore`], which scores them with the same dot product as
+/// [`DenseSearcher::rescore`], which scores them with the same dot product as
 /// the exact strategy (ADR-0072); the `k` best are kept. Both strategies
 /// normalise the query through the searcher, so a passage receives the same
 /// bits from either of them.
@@ -142,7 +142,7 @@ pub fn plan(search: &SearchConfig, pool_len: u32, k: usize, exact: bool) -> Plan
 /// strategy does.
 pub fn search(
     snapshot: &Snapshot,
-    searcher: &ExactSearcher,
+    searcher: &DenseSearcher,
     pool: &Pool,
     query: &[f32],
     k: usize,
@@ -165,7 +165,7 @@ pub fn search(
 /// text and their fields.
 pub fn candidates(
     snapshot: &Snapshot,
-    searcher: &ExactSearcher,
+    searcher: &DenseSearcher,
     pool: &Pool,
     query: &[f32],
     k: usize,
@@ -173,7 +173,11 @@ pub fn candidates(
     exact: bool,
 ) -> Result<Vec<Scored>, CribleError> {
     let plan = plan(search, pool.len(), k, exact);
-    if plan.strategy == Strategy::Exact {
+    // `k == 0` short-circuits like the exact strategy: `top_k_candidates`
+    // validates the query and returns no result without scanning the pool, so a
+    // BINARY plan does not pay for the scan and the rescoring of `N` candidates
+    // that nothing would consume.
+    if k == 0 || plan.strategy == Strategy::Exact {
         return searcher.top_k_candidates(query, pool, k);
     }
 
@@ -228,10 +232,14 @@ pub struct DenseQuery<'a> {
 /// decides the rescoring.
 ///
 /// [`Grouping::none`] asks for `max(k, 100)` candidates and keeps the first
-/// `k` of them, which is the same answer as [`search`] for the same query.
+/// `k` of them. That is the same answer as [`search`] for the same query when
+/// the plan already rescores at least `max(k, 100)` candidates, which is the
+/// case of the default `N` (5000, ADR-0078): a `BINARY` plan with an `N` below
+/// that count rescans fewer candidates and may miss a result `search` would
+/// have returned.
 pub fn search_grouped(
     snapshot: &Snapshot,
-    searcher: &ExactSearcher,
+    searcher: &DenseSearcher,
     pool: &Pool,
     request: &DenseQuery<'_>,
     search: &SearchConfig,

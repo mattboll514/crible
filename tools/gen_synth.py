@@ -192,8 +192,8 @@ def index_config(name: str = INDEX_NAME) -> dict[str, Any]:
         "lexical": {"enabled": False, "language": "fr", "positions": False},
         "search": {
             "scan": "none",
-            "rescore_candidates": 1000,
-            "exact_threshold": 1000,
+            "rescore_candidates": 5000,
+            "exact_threshold": 5000,
             "candidates_per_branch": 100,
             "fusion": {"method": "rrf"},
         },
@@ -263,6 +263,23 @@ def _cluster_centres(rng: np.random.Generator) -> np.ndarray:
     centres = rng.standard_normal((CLUSTERS, DIMS))
     centres /= np.linalg.norm(centres, axis=1, keepdims=True)
     return centres
+
+
+def unit_vectors(seed: int, stream: int, count: int) -> np.ndarray:
+    """Returns `count` unit vectors of the named stream, as `float32`.
+
+    This is the public entry point for a caller that needs standalone query
+    vectors from the generator's own law, without writing a dataset. The draws
+    are the ones of :func:`_rng` and :func:`_unit_vector`, in the same order, so
+    the bytes are the ones the generator produces and no stored vector changes.
+    """
+    if count <= 0:
+        raise ValueError("count must be strictly positive")
+    rng = _rng(seed, stream)
+    rows = np.empty((count, DIMS), dtype=np.float32)
+    for index in range(count):
+        rows[index] = _unit_vector(rng).astype(np.float32)
+    return rows
 
 
 def _document_fields(rng: np.random.Generator, cluster: int) -> dict[str, Any]:

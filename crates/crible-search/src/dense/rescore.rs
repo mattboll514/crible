@@ -63,7 +63,7 @@
 //! one, so the regrouping still reads the keys it consumes beyond `k`
 //! (ADR-0075). `N` key reads become about `k` plus the ties of the boundary.
 //!
-//! **Nesting rule.** As with [`ExactSearcher::top_k`], a caller must not hold a
+//! **Nesting rule.** As with [`DenseSearcher::top_k`], a caller must not hold a
 //! connection of the searcher's read pool when it calls this method: the key
 //! reads would wait for it, and the pool would run out of connections. The
 //! rescoring holds none itself, and every vector read is finished before the
@@ -99,7 +99,7 @@
 //!
 //! An `fp32` reference has no grouped path: its rows are wider, its calculation
 //! is already scalar, and ADR-0080 only decides the `f16` access. Those segments
-//! keep the per-candidate read of [`cosine`].
+//! keep the per-candidate read of `cosine`.
 
 use std::ops::Range;
 
@@ -110,7 +110,7 @@ use half::f16;
 use rayon::prelude::*;
 
 use super::binary::Candidate;
-use super::exact::ExactSearcher;
+use super::exact::DenseSearcher;
 use super::{Scored, cosine, internal};
 use crate::kernels;
 
@@ -121,14 +121,14 @@ use crate::kernels;
 /// concurrency by itself. A chunk of 8 rows keeps the tasks small enough that
 /// every worker of the default pool claims one at once and reaches its first
 /// page fault without waiting for the queue to drain, while amortising the
-/// per-task cost of rayon (about 100 ns) over 8 rows. A smaller chunk adds
-/// scheduling for no extra depth; a much larger one leaves the tail of the
-/// candidate list to a single worker. The value is a constant, not a setting:
-/// ADR-0080 asks the measurement to decide whether the grouped read is kept, not
-/// to expose its chunk width.
+/// per-task cost of rayon over 8 rows. A smaller chunk adds scheduling for no
+/// extra depth; a much larger one leaves the tail of the candidate list to a
+/// single worker. The value is a constant, not a setting: ADR-0080 asks the
+/// measurement to decide whether the grouped read is kept, not to expose its
+/// chunk width.
 const VECTOR_READ_BATCH: usize = 8;
 
-impl ExactSearcher {
+impl DenseSearcher {
     /// Scores the `candidates` of the binary scan and returns them best first,
     /// by descending cosine and, at equal score, by ascending key `doc_id#ord`.
     ///

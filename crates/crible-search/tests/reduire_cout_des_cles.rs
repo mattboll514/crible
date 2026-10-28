@@ -14,7 +14,7 @@
 //!
 //! # Why these tests exist before the change
 //!
-//! `ExactSearcher::rescore` reads the key of **every** candidate today, sorts
+//! `DenseSearcher::rescore` reads the key of **every** candidate today, sorts
 //! the whole list with [`Scored`](crible_search::dense::Scored) and the planner
 //! truncates it to `k`. Reading the keys only for the retained candidates is
 //! the change of ADR-0079, decision 3. It is wrong in one case: when several

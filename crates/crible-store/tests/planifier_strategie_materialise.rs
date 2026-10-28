@@ -29,6 +29,7 @@
 //! | `an_index_created_without_the_threshold_materialises_n` | absent ⇒ `N`, written in `index.json` |
 //! | `a_patch_of_n_does_not_move_the_materialised_threshold` | the stored threshold survives a `PATCH` of `N` |
 //! | `an_index_that_names_the_threshold_keeps_it_verbatim` | the key present is read as is, and the file is not reformatted |
+//! | `a_missing_threshold_is_inserted_without_reformatting_the_file` | the key absent is inserted, and every other byte stays |
 
 use std::fs;
 use std::path::PathBuf;
@@ -192,5 +193,45 @@ fn an_index_that_names_the_threshold_keeps_it_verbatim() {
     assert_eq!(
         stored, raw,
         "a configuration that names every default must be stored verbatim"
+    );
+}
+
+/// ADR-0074, decision 2, and the choice of `NETTOYER-P4`: a missing threshold
+/// is **inserted** into the raw text, so the creation never reorders the keys
+/// nor normalises the indentation of a file it completes.
+///
+/// The two texts are compared byte for byte: removing the inserted line from the
+/// stored form must give the original file exactly.
+#[test]
+fn a_missing_threshold_is_inserted_without_reformatting_the_file() {
+    let raw = config(1_234, None);
+    let stored = IndexConfig::materialised_json(&raw)
+        .unwrap_or_else(|error| panic!("the configuration must be materialised: {error}"));
+
+    assert_ne!(stored, raw, "the missing threshold must be written");
+    assert_eq!(
+        parse(&stored).search.exact_threshold,
+        1_234,
+        "the inserted threshold must equal N"
+    );
+
+    let start = stored
+        .find("\"exact_threshold\"")
+        .unwrap_or_else(|| panic!("the stored form must name the threshold: {stored}"));
+    let line_start = stored[..start]
+        .rfind('\n')
+        .map_or(start, |offset| offset + 1);
+    let line_end = stored[line_start..]
+        .find('\n')
+        .map_or(stored.len(), |offset| line_start + offset + 1);
+    let restored = format!("{}{}", &stored[..line_start], &stored[line_end..]);
+    assert_eq!(
+        restored, raw,
+        "every byte outside the inserted member must be unchanged"
+    );
+    assert_eq!(
+        stored[line_start..line_end].trim(),
+        "\"exact_threshold\": 1234,",
+        "the inserted line must hold only the member"
     );
 }

@@ -2,7 +2,7 @@
 # Sampling profile of the rescoring at N = 1000 and N = 5000 (MES-03,
 # `REDUIRE-COUT-DES-CLES`, ADR-0079 decision 1).
 #
-# The harness runs the engine's own `ExactSearcher::rescore` in a loop and
+# The harness runs the engine's own `DenseSearcher::rescore` in a loop and
 # announces its first iteration by creating `--ready-file`; `/usr/bin/sample`
 # then attaches to that process and samples it for 20 seconds. The script waits
 # for both, so it runs in the foreground from beginning to end and leaves no

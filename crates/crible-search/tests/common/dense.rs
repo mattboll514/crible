@@ -10,10 +10,11 @@
 //!
 //! [`DenseFixture`] builds a real index in a temporary directory: a schema with
 //! one document field and one passage field, one generation per
-//! [`DenseFixture::add_generation`] call, one fp16 segment per generation, and
-//! the matching rows in `records.sqlite`. The samples give the vectors, the
-//! texts and both levels of fields, so a test states exactly which passages it
-//! searches and why the expected order is the one it asserts.
+//! [`DenseFixture::add_generation`] call, one segment per generation, in the
+//! configured reference precision, and the matching rows in `records.sqlite`.
+//! The samples give the vectors, the texts and both levels of fields, so a test
+//! states exactly which passages it searches and why the expected order is the
+//! one it asserts.
 //!
 //! # The reference comparison
 //!
@@ -53,7 +54,7 @@ use std::sync::Arc;
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::filter::Filter;
 use crible_core::ids::{Epoch, Generation, Iid};
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::pool::Pool;
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
@@ -365,9 +366,9 @@ impl DenseFixture {
     }
 
     /// Searcher over the segments of the published generation.
-    pub fn searcher(&self) -> ExactSearcher {
+    pub fn searcher(&self) -> DenseSearcher {
         let snapshot = self.snapshot();
-        ExactSearcher::open(
+        DenseSearcher::open(
             &self.segments_dir(),
             snapshot.segments(),
             &self.records_path(),

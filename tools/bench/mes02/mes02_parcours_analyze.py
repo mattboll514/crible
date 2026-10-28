@@ -172,14 +172,15 @@ def rows(raw: Path) -> list[dict]:
     return rows
 
 
-def control_rows(raw: Path) -> dict | None:
+def control_rows(raw: Path) -> dict:
     """The agreement control: both traversals returned the same candidates.
 
     The claim is cheap to state and fatal to get wrong — a replica that reads a
     different passage set would change the work being timed without changing
     anything visible. The aggregator therefore **refuses** a campaign whose
-    control says the two traversals disagree, rather than printing the figure
-    next to a warning.
+    control says the two traversals disagree, and it also **refuses** a campaign
+    with no control document at all: `controls: null` would publish a figure
+    next to no evidence that the two traversals timed the same work.
     """
     pools = 0
     queries_checked = 0
@@ -214,7 +215,10 @@ def control_rows(raw: Path) -> dict | None:
         if not document["identical"]:
             raise ValueError(f"{name}: document says the traversals disagree")
     if not found:
-        return None
+        raise FileNotFoundError(
+            f"no agreement control under {raw}: run the campaign first, the "
+            "artefact refuses a figure without its control"
+        )
     return {
         "pools_checked": pools,
         "queries_checked": queries_checked,

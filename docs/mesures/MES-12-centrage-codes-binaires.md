@@ -226,13 +226,15 @@ Limites à retenir :
 ## 5. Données brutes
 
 `docs/mesures/MES-12-centrage-codes-binaires.2026-10-27.json` : les contrôles par
-structure (mots et bits comparés, `control_comparisons` — 315 à 1 000
-comparaisons de top-10 selon la structure, 2 815 au total —, écart nul), les
+structure (`control_ok`, `codes_mismatched_words` nul, `control_comparisons` — de
+40 à 1 000 comparaisons de top-10 selon la structure, 2 815 au total —), les
 tables ci-dessus, la norme de la moyenne par structure, les **48 exécutions**
-avec le bloc `strategy_control` et le bloc `controls` (déterminisme, équivalence
-CLI), et les 563 lignes par requête (recall et recouvrement pour chaque variante
-et chaque `N`). Les rangs de Hamming du résidu sont dans l'artefact MES-01
-(`residuals`). Aucun texte de requête, aucun `doc_id`, aucun `iid` n'y figure.
+avec le bloc `strategy_control` (2 815 exécutions BINARY et 563 EXACT, dont
+1 500 et 300 pour la campagne principale) et le bloc `controls` (déterminisme,
+équivalence CLI), et les 563 lignes par requête (recall et recouvrement pour
+chaque variante et chaque `N`). Les rangs de Hamming du résidu sont dans
+l'artefact MES-01 (`residuals`). Aucun texte de requête, aucun `doc_id`, aucun
+`iid` n'y figure.
 Les fichiers de travail (`centering.json`, codes recalculés, `analysis.json`)
 restent dans `data/mes01/` (gitignoré).
 
@@ -240,7 +242,7 @@ restent dans `data/mes01/` (gitignoré).
 
 - Le harnais importe `numpy` seulement (groupe par défaut de `tools/`) : il ne
   demande ni ONNX Runtime ni le modèle, et se rejoue donc sur n'importe quelle
-  machine après la construction des index.
+  machine après la campagne.
 - Le contrôle au bit près compare le signe **strict** (`> 0`) : une composante
   nulle ne pose pas de bit, comme ADR-0004 et ADR-0069 décision 6 le fixent.
   C'est un test unitaire du harnais, en plus du contrôle sur données réelles.

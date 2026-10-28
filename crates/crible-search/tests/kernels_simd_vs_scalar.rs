@@ -4,9 +4,13 @@
 //! as the scalar reference.
 //!
 //! Hamming is exact on every backend, so the property asserts equality of the
-//! two integers. The dot product tolerates `1e-5` in absolute value, as the
-//! task sheet says: both backends compute the same `f32` products and only
-//! differ by the `f64` summation order.
+//! two integers. The dot product is compared with a **relative** tolerance:
+//! `1e-6` of the scalar result, plus an absolute floor of `1e-5` for a result
+//! close to zero, where a relative bound would be unreachable. Both backends
+//! compute the same `f32` products and differ only by the `f64` summation
+//! order, but the single rounding to `f32` can put the two results one `f32`
+//! ulp apart, which is `1.5e-5` on a product of about 150 and would exceed an
+//! absolute bound of `1e-5`.
 //!
 //! The dispatched function is the one production calls, so this test exercises
 //! the vector path on the machine that runs it (NEON here, AVX2 in the Linux
@@ -19,8 +23,16 @@ use crible_search::kernels::{self, scalar};
 use half::f16;
 use proptest::prelude::*;
 
-/// Absolute tolerance the task sheet sets for the dot product.
-const DOT_TOLERANCE: f32 = 1e-5;
+/// Relative tolerance of the dot product: `1e-6` of the scalar result.
+const DOT_RELATIVE_TOLERANCE: f32 = 1e-6;
+
+/// Absolute floor of that tolerance, for a result close to zero.
+const DOT_ABSOLUTE_FLOOR: f32 = 1e-5;
+
+/// Whether `simd` stays within the relative tolerance of `reference`.
+fn within_tolerance(simd: f32, reference: f32) -> bool {
+    (simd - reference).abs() <= DOT_RELATIVE_TOLERANCE * reference.abs() + DOT_ABSOLUTE_FLOOR
+}
 
 /// An fp16 value in `[-4, 4]`, the range a normalised component lives in.
 fn half_component() -> impl Strategy<Value = f16> {
@@ -62,7 +74,8 @@ proptest! {
         prop_assert_eq!(kernels::hamming(&a, &a), 0);
     }
 
-    /// Dot product: the SIMD result stays within `1e-5` of the scalar one.
+    /// Dot product: the SIMD result stays within the relative tolerance of the
+    /// scalar one.
     #[test]
     fn dot_simd_matches_scalar(
         a in prop::collection::vec(half_component(), 0..=1024),
@@ -71,7 +84,7 @@ proptest! {
         let simd = kernels::dot(&a, &b);
         let reference = scalar::dot(&a, &b);
         prop_assert!(
-            (simd - reference).abs() <= DOT_TOLERANCE,
+            within_tolerance(simd, reference),
             "simd {} vs scalar {} on {} elements",
             simd,
             reference,
@@ -79,8 +92,8 @@ proptest! {
         );
     }
 
-    /// Dot product: the same `1e-5` bound at the length production uses (768
-    /// fp16 components), where the number of accumulated terms is largest.
+    /// Dot product: the same relative tolerance at the length production uses
+    /// (768 fp16 components), where the number of accumulated terms is largest.
     #[test]
     fn dot_simd_matches_scalar_at_production_length(
         a in prop::collection::vec(half_component(), 768),
@@ -88,7 +101,7 @@ proptest! {
     ) {
         let simd = kernels::dot(&a, &b);
         let reference = scalar::dot(&a, &b);
-        prop_assert!((simd - reference).abs() <= DOT_TOLERANCE);
+        prop_assert!(within_tolerance(simd, reference));
     }
 }
 

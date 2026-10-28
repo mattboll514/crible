@@ -109,10 +109,11 @@ def main() -> int:
         for batch in (1, 4, 8, 16, 32):
             # Every group pays its own longest input: the last group is smaller
             # than the nominal size, so it is weighted by its real length.
-            padded = sum(
-                len(group) * max(group)
-                for group in (lengths[start : start + batch] for start in range(0, len(lengths), batch))
+            groups = (
+                lengths[start : start + batch]
+                for start in range(0, len(lengths), batch)
             )
+            padded = sum(len(group) * max(group) for group in groups)
             print(f"    B={batch:3d}: jetons avec remplissage {padded} ({padded / total - 1:+.1%})")
     return 0
 

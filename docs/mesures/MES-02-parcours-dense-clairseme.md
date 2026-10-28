@@ -128,7 +128,7 @@ de pourcentage** (`max − min`).
 - **La réplique est ancrée au moteur, et ce diff ne la change pas.** Le mode `cross` appelle
   `scan_replica`, `Scan`, `windows` et `traversal_of`, que cette campagne **n'a pas modifiés** : seuls
   le constructeur de pools (`pool_window`), le générateur (`Draw`, extraction sans changement de
-  tirage) et le mode `agree` sont neufs. L'ancrage lui-même est celui de MES-02, conservé : le mode
+  tirage), les modes `cross` (fonction `cross_points`, type `CrossPoint`) et `agree` sont neufs. L'ancrage lui-même est celui de MES-02, conservé : le mode
   `compare` y a montré que la réplique et le moteur rendent les mêmes dix premiers résultats, mêmes
   clés et mêmes scores, sur un pool de 537 500 vivants (filtre `categorie = cat-01`) et sur les
   7 740 000 vivants, `plan binary` dans les deux cas ; la CLI publique `crible search --vector-file`
@@ -138,10 +138,10 @@ de pourcentage** (`max − min`).
   documents bruts sont gitignorés ; c'est leur résumé qui est versionné, dans l'artefact de MES-02.
 - **Contrôle neuf, propre à cette campagne : les deux parcours rendent les mêmes candidats sur chaque
   pool.** Une erreur de réplique dans un seul parcours aurait changé le travail mesuré sans rien
-  changer de visible. Le mode `agree` reconstruit **les 18 pools de la campagne** avec le même
-  constructeur et la même graine, et compare, requête par requête, les listes rendues par les deux
+  changer de visible. Le mode `agree` reconstruit **les 16 pools distincts des 18 points de la
+  campagne** avec le même constructeur et la même graine, et compare, requête par requête, les listes rendues par les deux
   parcours (même iid, même distance, même ordre) sur les 5 premières requêtes. Résultat :
-  **18 pools, 90 requêtes contrôlées, 18/18 identiques**, aucune différence (`data/mes02/raw/agree-n5000.json`,
+  **18 points (16 pools distincts), 90 requêtes contrôlées, 18/18 identiques**, aucune différence (`data/mes02/raw/agree-n5000.json`,
   `agree-n1000.json`, résumé dans la clé `controls` de l'artefact). L'analyseur **refuse** d'écrire
   l'artefact si un pool diverge.
 - **Le mode `agree` ne remplace pas la comparaison à un tri complet** que `binary.rs` porte pour le
@@ -260,14 +260,16 @@ Ce que la mesure établit :
   égale ; il n'est pas monotone.** À plage de 1 M, l'écart va de −4,5 % (densité 0,90) à −25,1 %
   (0,10), mais −18,6 % à 0,40 passe devant −16,7 % à 0,25 ; à plage de 7,74 M, il va de −16,9 %
   (0,90) à −53,1 % (0,10), et −35,8 % à 0,50 passe devant −34,6 % à 0,25. Ces deux inversions valent
-  1,9 et 1,2 point, dans l'amplitude des points concernés (11,8 et 1,1 points). Le dense paie la **plage**, le clairsemé paie le **pool** : à densité 0,50 et plage
+  1,9 et 1,1 point : la première reste dans l'amplitude des points concernés (11,8 points), la
+  seconde est à la limite de la sienne (1,1 point). Le dense paie la **plage**, le clairsemé paie le **pool** : à densité 0,50 et plage
   7,74 M, le dense parcourt 7,74 M d'iid pendant que le clairsemé n'en lit que 3,87 M, et l'écart est
   de −35,8 %.
 - **17 points sur 18 dépassent l'amplitude de leur propre écart d'une paire à l'autre.** Le seul
   point dans le bruit est celui du match nul ci-dessus (1 M contigu, N = 1000). Les dispersions les
-  plus fortes (16,2 % pour le dense et 17,3 % pour le clairsemé à densité 0,40 sur 1 M ; 14,3 % pour
-  le clairsemé à densité 0,60) tombent sur des points où l'écart mesuré vaut −18,6 %, −15,9 % et
-  −15,9 %, donc au-delà de l'amplitude de leur propre écart par paire (11,8, 9,6 et 10,3 points). La dispersion de 16,1 % que MES-02
+  plus fortes parmi les points à N = 5000 (16,2 % pour le dense et 17,3 % pour le clairsemé à densité
+  0,40 sur 1 M ; 14,3 % pour le clairsemé à densité 0,60) tombent sur des points où l'écart mesuré
+  vaut −18,6 % et −15,9 %, donc au-delà de l'amplitude de leur propre écart par paire (11,8 et 10,3
+  points). La dispersion de 16,1 % que MES-02
   avait tirée de deux exécutions séparées est donc **du même ordre que la dispersion réelle de la
   machine**, mais elle n'efface pas les écarts de cette campagne, qui sont mesurés dans une même
   paire.
@@ -316,10 +318,10 @@ le seuil, ce qui revient à « toujours clairsemé » dans ce domaine. Trois rai
 
 - la campagne ne mesure que des pools de **100 000 à 7 740 000 passages**, sur des plages de 1 M et
   7,74 M ; en dessous, elle n'a **aucune donnée** ;
-- les seuls points disponibles en dessous sont ceux de MES-02, forcés à N = 1000, et ils donnent le
+- les seuls points qui comparent les deux parcours en dessous de 100 000 passages sont ceux de MES-02, forcés à N = 1000, et ils donnent le
   dense **devant**, de très peu, sur les pools contigus de 1 k, 10 k et 100 k : 0,055 contre 0,056 ms,
   0,375 contre 0,376 ms, 0,984 contre 0,991 ms (`MES-02-latence-scan-binaire.md:149-153`). Ces trois
-  écarts (0,2 à 0,7 %) sont **dans** la dispersion de 16,1 % de MES-02 et ne concluent rien dans un
+  écarts (0,3 à 2,0 %) sont **dans** la dispersion de 16,1 % de MES-02 et ne concluent rien dans un
   sens ni dans l'autre : ils ne sont ni une objection, ni un appui. Toute règle sur ces tailles
   demande une campagne à passes alternées sur ces pools, que celle-ci ne fait pas ;
 - la mesure ne fournit **aucune** densité, jusqu'à 90 %, où le dense gagne ; aucun seuil supérieur à
@@ -1004,9 +1006,9 @@ deux effets distincts, que la colonne « ancien » des tableaux sépare :
 - **6 points que l'ancienne règle envoyait déjà au clairsemé**, où le gain vient du seul remplacement
   de `segment_of` par le curseur : `density-1000000-10` **−13,7 %**, `-25` **−14,9 %** et `-40`
   **−11,9 %** à huit segments ; `density-1000000-25` **−12,7 %**, `-40` **−12,7 %** et
-  `density-7740000-10` **−8,5 %** à cent segments. C'est l'effet qu'ADR-0082 visait : la recherche
-  binaire par iid n'est remplacée par une avance de curseur que là où la table des segments a plus
-  d'une entrée, donc le gain n'apparaît pas sur la copie à un segment.
+  `density-7740000-10` **−8,5 %** à cent segments. C'est l'effet qu'ADR-0082 visait : le curseur sert
+  sur toutes les copies, mais le gain n'apparaît que là où la table compte plus d'une entrée, donc
+  pas sur la copie à un segment.
 
 Les **20 matchs nuls** sont de deux sortes : les **12** points déjà clairsemés chez l'ancien binaire,
 dont les médianes vont de −13,6 % à +6,7 % et dont les valeurs positives restent dans l'amplitude de

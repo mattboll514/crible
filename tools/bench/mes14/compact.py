@@ -99,29 +99,31 @@ def point(directory, name, round_number):
     }
 
 
-def comparison(before, after):
-    """One row per case, before versus after, plus the correctness check.
+def check_same_work(label, old, new, first, second):
+    """Raises unless both runs read the same pool and the same scanned set.
 
-    The pool and the scanned set must be the **same** in both runs: the change
-    is an optimisation of how the result bitmap is built, so a case whose pool
-    or domain size moved means the two runs did not measure the same work, and
-    a delta would be meaningless. Raise rather than emit a credible table.
+    The change is an optimisation of how the result bitmap is built, so a case
+    whose pool or domain size moved means the two runs did not measure the same
+    work, and a delta would be meaningless. Raise rather than emit a credible
+    table. The guard runs on every round, so a divergence confined to the
+    `round2-*` files cannot slip through.
     """
+    for key, name in (("pool_size", "pool"), ("scan_iids", "scan")):
+        if old[key] != new[key]:
+            raise SystemExit(
+                f"{label}: {name} {old[key]} {first}, {new[key]} {second}"
+                " — the two runs did not measure the same thing"
+            )
+
+
+def comparison(before, after):
+    """One row per case, before versus after, plus the correctness check."""
     first_before = cases_by_label(before)
     first_after = cases_by_label(after)
     rows = []
     for label, old in first_before.items():
         new = first_after[label]
-        if old["pool_size"] != new["pool_size"]:
-            raise SystemExit(
-                f"{label}: pool {old['pool_size']} before, {new['pool_size']} after"
-                " — the two runs did not measure the same thing"
-            )
-        if old["scan_iids"] != new["scan_iids"]:
-            raise SystemExit(
-                f"{label}: scan {old['scan_iids']} before, {new['scan_iids']} after"
-                " — the two runs did not measure the same thing"
-            )
+        check_same_work(label, old, new, "before", "after")
         rows.append(
             {
                 "label": label,
@@ -144,13 +146,20 @@ def comparison(before, after):
 
 
 def noise(before, before_round2, after, after_round2):
-    """Worst round-1 to round-2 gap of either campaign, per case, in percent."""
+    """Worst round-1 to round-2 gap of either campaign, per case, in percent.
+
+    Both rounds enter the guard: a round-2 file that measured another pool or
+    another scanned set would turn the reported noise into something else.
+    """
     rows = []
     b1 = cases_by_label(before)
     b2 = cases_by_label(before_round2)
     a1 = cases_by_label(after)
     a2 = cases_by_label(after_round2)
     for label in b1:
+        check_same_work(label, b1[label], b2[label], "round 1", "round 2")
+        check_same_work(label, a1[label], a2[label], "round 1", "round 2")
+        check_same_work(label, b2[label], a2[label], "before round 2", "after round 2")
         gap50 = max(
             abs(b2[label]["p50_ns"] / b1[label]["p50_ns"] - 1),
             abs(a2[label]["p50_ns"] / a1[label]["p50_ns"] - 1),

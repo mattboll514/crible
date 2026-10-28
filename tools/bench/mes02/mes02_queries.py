@@ -10,7 +10,7 @@ fixed seed, traced by SHA-256.
 The generator of ``synth-large`` builds every stored vector as a standard
 normal draw normalised to the unit sphere: no cluster structure, unlike
 ``synth-small``. The queries follow the same law, drawn from a fixed stream of
-``gen_synth._rng``, so a query is distributed like a passage. That is a
+``gen_synth.unit_vectors``, so a query is distributed like a passage. That is a
 deliberate difference from ``synth-small``'s queries, which mix cluster centres;
 it is declared in the report, and it changes which passages the scan keeps, not
 the cost of the scan.
@@ -36,18 +36,6 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import gen_synth  # noqa: E402  (the path is set just above)
 
-# The generator exposes its vector law through two private helpers (`_rng`,
-# `_unit_vector`). Renaming them in `tools/gen_synth.py` would silently change
-# the query set of MES-02 and MES-03, whose SHA-256 is quoted by the reports: the
-# campaign stops here instead. Proposed follow-up, not done here: a public entry
-# point in `tools/gen_synth.py` (`unit_vectors(seed, stream, count)`).
-if not (hasattr(gen_synth, "_rng") and hasattr(gen_synth, "_unit_vector")):
-    raise SystemExit(
-        "tools/gen_synth.py no longer exposes _rng/_unit_vector: the query set of "
-        "MES-02 and MES-03 would change. Give the generator a public entry point "
-        "before regenerating these queries."
-    )
-
 #: Number of query vectors (ADR-0077 asks for at least 300).
 QUERIES = 300
 #: Stream of the generator the queries come from (queries of `synth-small` use 4).
@@ -58,11 +46,7 @@ DEFAULT_OUT = ROOT / "data" / "mes02"
 
 def query_vectors(seed: int, count: int = QUERIES) -> np.ndarray:
     """Returns `count` unit vectors of `gen_synth.DIMS` components, `float32`."""
-    rng = gen_synth._rng(seed, STREAM)
-    rows = np.empty((count, gen_synth.DIMS), dtype=np.float32)
-    for index in range(count):
-        rows[index] = gen_synth._unit_vector(rng).astype(np.float32)
-    return rows
+    return gen_synth.unit_vectors(seed, STREAM, count)
 
 
 def write(out_dir: Path, seed: int, count: int = QUERIES) -> dict:

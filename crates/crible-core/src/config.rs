@@ -598,6 +598,13 @@ impl IndexConfig {
     /// N cannot move the stored threshold. A configuration that already names
     /// the key is returned **verbatim**, so a creation never reformats a file
     /// it does not have to complete.
+    ///
+    /// When the key is missing, the file is **edited**, not rewritten: the
+    /// member is inserted into the `search` object of the raw text, and every
+    /// other byte of the file — key order, indentation, spacing — stays exactly
+    /// as the operator wrote it. Re-serialising a decoded value would sort the
+    /// keys and normalise the indentation (`serde_json` without
+    /// `preserve_order`), which would rewrite a file for one missing key.
     pub fn materialised_json(raw: &str) -> Result<String, CribleError> {
         let value: Value = serde_json::from_str(raw)
             .map_err(|error| json::invalid(format!("invalid configuration JSON: {error}")))?;
@@ -609,22 +616,187 @@ impl IndexConfig {
         if named {
             return Ok(raw.to_owned());
         }
-        let mut completed = value;
-        let search = completed
-            .get_mut("search")
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| json::invalid("expected an object at $.search"))?;
-        search.insert(
-            "exact_threshold".to_owned(),
-            Value::from(config.search.exact_threshold),
-        );
-        serde_json::to_string_pretty(&completed).map_err(|error| {
+        let threshold = config.search.exact_threshold;
+        let completed = insert_search_threshold(raw, threshold)?;
+        // The insertion is textual, so it is checked: a bug in the scan must
+        // never leave an `index.json` that no later open can parse, and the key
+        // it adds must land under `$.search.exact_threshold`, with no other
+        // change of the decoded configuration.
+        let completed_value: Value = serde_json::from_str(&completed).map_err(|error| {
             CribleError::new(
                 ErrorCode::Internal,
-                format!("cannot serialize the materialised configuration: {error}"),
+                format!("the materialised configuration is not JSON: {error}"),
             )
-        })
+        })?;
+        let mut expected = value;
+        let search = expected
+            .get_mut("search")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    "the decoded configuration has no object at $.search".to_owned(),
+                )
+            })?;
+        search.insert("exact_threshold".to_owned(), Value::from(threshold));
+        if completed_value != expected {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                "the materialised configuration does not carry $.search.exact_threshold alone"
+                    .to_owned(),
+            ));
+        }
+        Ok(completed)
     }
+}
+
+/// Inserts `search.exact_threshold` in the raw text of a configuration.
+///
+/// The raw text is already known to be valid JSON and to hold an object at
+/// `$.search`; this function only finds the byte range of that object and adds
+/// the member after its opening brace, in the indentation of the object. It
+/// never decodes and re-encodes, so the rest of the file keeps its bytes.
+fn insert_search_threshold(raw: &str, value: u32) -> Result<String, CribleError> {
+    let (open, close) = top_level_object_range(raw, "search").ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "cannot locate the object at $.search in the configuration text".to_owned(),
+        )
+    })?;
+    let inner = &raw[open + 1..close];
+    let member = format!("\"exact_threshold\": {value}");
+    let insertion = if inner.contains('\n') {
+        // Follow the file's line ending: a CRLF configuration keeps CRLF on
+        // the inserted line, so the edit does not mix the two conventions.
+        let newline = if raw.contains("\r\n") { "\r\n" } else { "\n" };
+        let close_indent = line_indent(raw, close);
+        let indent = member_indent(inner, &close_indent);
+        let comma = if inner.trim().is_empty() { "" } else { "," };
+        format!("{newline}{indent}{member}{comma}")
+    } else if inner.trim().is_empty() {
+        member
+    } else {
+        format!("{member},")
+    };
+    let mut completed = String::with_capacity(raw.len() + insertion.len());
+    completed.push_str(&raw[..open + 1]);
+    completed.push_str(&insertion);
+    completed.push_str(&raw[open + 1..]);
+    Ok(completed)
+}
+
+/// Byte range of the object value of the top-level member `key`, braces
+/// included, in a text already known to be a JSON object.
+///
+/// The scan skips string contents, so a key named `search` inside a value never
+/// matches. `None` means the member or its object is absent, which the caller
+/// treats as a contradiction with the decoded value.
+fn top_level_object_range(raw: &str, key: &str) -> Option<(usize, usize)> {
+    let bytes = raw.as_bytes();
+    let mut depth = 0_usize;
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let start = index;
+                index = string_end(bytes, start)?;
+                if depth == 1 {
+                    let token = &raw[start + 1..index - 1];
+                    let mut cursor = index;
+                    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                        cursor += 1;
+                    }
+                    if cursor < bytes.len()
+                        && bytes[cursor] == b':'
+                        && !token.contains('\\')
+                        && token == key
+                    {
+                        let mut open = cursor + 1;
+                        while open < bytes.len() && bytes[open].is_ascii_whitespace() {
+                            open += 1;
+                        }
+                        if bytes.get(open) != Some(&b'{') {
+                            return None;
+                        }
+                        return Some((open, matching_close(bytes, open)?));
+                    }
+                }
+                // `string_end` already points past the closing quote: the byte
+                // it lands on may be `}`, `]` or `,` and must still be scanned.
+                continue;
+            }
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Index just past the closing quote of the string that starts at `start`.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return Some(index + 1),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// Index of the `}` that closes the object opened at `open`.
+fn matching_close(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut index = open;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                index = string_end(bytes, index)?;
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Leading whitespace of the line that holds `position`, which must be the
+/// first non-whitespace character of that line; empty when it is not.
+fn line_indent(raw: &str, position: usize) -> String {
+    let line_start = raw[..position].rfind('\n').map_or(0, |offset| offset + 1);
+    let line = &raw[line_start..position];
+    if line
+        .chars()
+        .all(|character| character == ' ' || character == '\t')
+    {
+        line.to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// Indentation of one member of a pretty-printed object: the indentation of its
+/// first member, or one level below the closing brace for an empty object.
+fn member_indent(inner: &str, close_indent: &str) -> String {
+    if let Some(first) = inner.find(|character: char| !character.is_whitespace()) {
+        let line_start = inner[..first].rfind('\n').map_or(0, |offset| offset + 1);
+        let indent = &inner[line_start..first];
+        if !indent.is_empty() {
+            return indent.to_owned();
+        }
+    }
+    format!("{close_indent}  ")
 }
 
 fn string_array(value: &Value, path: &str) -> Result<Vec<String>, CribleError> {
@@ -1098,7 +1270,7 @@ fn immutable(setting: &str, path: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{IngestConfig, Schema};
+    use super::{IndexConfig, IngestConfig, Schema};
     use crate::error::ErrorCode;
 
     /// `to_json_string` round-trips through `from_json_str`, writes both
@@ -1165,5 +1337,158 @@ mod tests {
             "the message names the setting: {}",
             error.message()
         );
+    }
+
+    /// Threshold the insertion tests use.
+    const THRESHOLD: u32 = 1_234;
+
+    /// A full, valid configuration whose `search` member is `search` and whose
+    /// `name` is `name`, pretty-printed and without a trailing newline.
+    fn pretty_configuration(search: &str, name: &str) -> String {
+        let template = r#"{
+  "name": "__NAME__",
+  "model": "m",
+  "reference_precision": "fp16",
+  "schema": { "document_fields": {}, "passage_fields": {} },
+  "cluster_by": ["juridiction"],
+  "lexical": { "enabled": false, "language": "fr", "positions": false },
+  "search": __SEARCH__,
+  "ingest": { "acceptance_sample": 1, "acceptance_min_cosine": 0.9 },
+  "compaction": { "dead_ratio": 0.1 }
+}"#;
+        template
+            .replace("__NAME__", name)
+            .replace("__SEARCH__", search)
+    }
+
+    /// The same configuration on one line, with no whitespace at all.
+    fn compact_configuration(search: &str) -> String {
+        let template = r#"{"name":"n","model":"m","reference_precision":"fp16","schema":{"document_fields":{},"passage_fields":{}},"cluster_by":["juridiction"],"lexical":{"enabled":false,"language":"fr","positions":false},"search":__SEARCH__,"ingest":{"acceptance_sample":1,"acceptance_min_cosine":0.9},"compaction":{"dead_ratio":0.1}}"#;
+        template.replace("__SEARCH__", search)
+    }
+
+    /// `text` without the inserted `exact_threshold` member, and without the
+    /// line the insertion added when it added one.
+    fn without_threshold(text: &str) -> String {
+        let start = text
+            .find("\"exact_threshold\"")
+            .unwrap_or_else(|| panic!("the stored form must name the threshold: {text}"));
+        let colon = start + text[start..].find(':').expect("the member has a colon");
+        let digits = colon
+            + text[colon..]
+                .find(|character: char| character.is_ascii_digit())
+                .expect("the member has a number");
+        let width = text[digits..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .count();
+        let mut end = digits + width;
+        while text[end..].starts_with(' ') {
+            end += 1;
+        }
+        if text[end..].starts_with(',') {
+            end += 1;
+        }
+        let line_start = text[..start].rfind('\n').map_or(start, |offset| offset + 1);
+        let indentation_only = start > line_start
+            && text[line_start..start]
+                .chars()
+                .all(|character| character == ' ' || character == '\t');
+        if indentation_only {
+            let after = text[end..]
+                .find('\n')
+                .map_or(end, |offset| end + offset + 1);
+            format!("{}{}", &text[..line_start], &text[after..])
+        } else {
+            format!("{}{}", &text[..start], &text[end..])
+        }
+    }
+
+    /// Materialises `raw`, checks the decoded result is `raw` plus the one key,
+    /// and checks that every byte of `raw` survives outside the inserted member.
+    fn assert_inserted(raw: &str) {
+        let stored = IndexConfig::materialised_json(raw)
+            .unwrap_or_else(|error| panic!("the configuration must be materialised: {error}"));
+        let config = IndexConfig::from_json_str(&stored)
+            .unwrap_or_else(|error| panic!("the stored configuration must parse: {error}"));
+        assert_eq!(
+            config.search.exact_threshold, THRESHOLD,
+            "the inserted threshold must equal N"
+        );
+
+        let mut expected: serde_json::Value = serde_json::from_str(raw)
+            .unwrap_or_else(|error| panic!("the fixture must be JSON: {error}"));
+        expected["search"]["exact_threshold"] = serde_json::Value::from(THRESHOLD);
+        let after: serde_json::Value = serde_json::from_str(&stored)
+            .unwrap_or_else(|error| panic!("the stored configuration must be JSON: {error}"));
+        assert_eq!(
+            after, expected,
+            "the insertion must add that one key and nothing else"
+        );
+
+        assert_eq!(
+            without_threshold(&stored),
+            raw,
+            "every byte outside the inserted member must be unchanged"
+        );
+    }
+
+    /// A string array before `search`, and strings holding `{`, `}` and escaped
+    /// quotes: the scan must still find the top-level `search` member. A skipped
+    /// `]` or `}` after a string is what the scan used to get wrong.
+    #[test]
+    fn materialised_json_finds_search_after_a_string_array_and_braces_in_strings() {
+        let raw = pretty_configuration(
+            r#"{ "scan": "binary", "rescore_candidates": 1234, "candidates_per_branch": 10, "fusion": { "method": "rrf" } }"#,
+            r#"a { brace } and a \"quoted\" name"#,
+        );
+        assert!(!raw.ends_with('\n'), "the fixture has no trailing newline");
+        assert_inserted(&raw);
+    }
+
+    /// An empty `search` object takes the member alone, with no leading comma;
+    /// no valid configuration can reach it — `search.rescore_candidates` is
+    /// required — so the helper is tested directly, compact and pretty.
+    #[test]
+    fn insert_search_threshold_completes_an_empty_object() {
+        let compact = super::insert_search_threshold(r#"{"search":{}}"#, 7)
+            .expect("an empty object is completable");
+        assert_eq!(compact, r#"{"search":{"exact_threshold": 7}}"#);
+
+        let pretty = super::insert_search_threshold("{\n  \"search\": {\n  }\n}", 7)
+            .expect("an empty pretty object is completable");
+        assert_eq!(
+            pretty,
+            "{\n  \"search\": {\n    \"exact_threshold\": 7\n  }\n}"
+        );
+    }
+
+    /// A CRLF configuration keeps CRLF on the inserted line.
+    #[test]
+    fn materialised_json_keeps_crlf_line_endings() {
+        let raw = pretty_configuration(
+            "{\n    \"scan\": \"binary\",\n    \"rescore_candidates\": 1234,\n    \"candidates_per_branch\": 10,\n    \"fusion\": { \"method\": \"rrf\" }\n  }",
+            "n",
+        )
+        .replace('\n', "\r\n");
+        assert!(raw.contains("\"search\": {\r\n"), "the fixture is CRLF");
+        let stored = IndexConfig::materialised_json(&raw)
+            .unwrap_or_else(|error| panic!("the configuration must be materialised: {error}"));
+        assert!(
+            stored.contains("\r\n    \"exact_threshold\": 1234,"),
+            "the inserted line must be introduced by CRLF: {stored}"
+        );
+        assert_inserted(&raw);
+    }
+
+    /// A compact configuration, with a string array and an object after a
+    /// string value before `search`, keeps every byte.
+    #[test]
+    fn materialised_json_handles_a_compact_configuration() {
+        let raw = compact_configuration(
+            r#"{"scan":"binary","rescore_candidates":1234,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#,
+        );
+        assert!(!raw.contains('\n'), "the fixture is one line");
+        assert_inserted(&raw);
     }
 }

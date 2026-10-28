@@ -48,7 +48,7 @@
 //!
 //! # The pool is the only input set
 //!
-//! [`ExactSearcher::top_k`] scores the passages of the pool and nothing else; a
+//! [`DenseSearcher::top_k`] scores the passages of the pool and nothing else; a
 //! tombstoned passage is never in the pool, because [`Pool`] already
 //! intersects the filter with the live bitmap. During the scan, only the key of
 //! a candidate is read; the payload of the `k` retained results comes from
@@ -96,7 +96,7 @@ use crate::pool::Pool;
 /// branch of `docs/03-recherche.md`, step 5) would have to revisit the capacity
 /// with a measurement.
 ///
-/// **Nesting rule.** A caller must not call [`ExactSearcher::top_k`] while it
+/// **Nesting rule.** A caller must not call [`DenseSearcher::top_k`] while it
 /// already holds a connection of this same [`ReadPool`]: `checkout` is never
 /// re-entered here, and an outer holder that waited for the search would wait on
 /// itself once every connection is checked out.
@@ -131,11 +131,11 @@ pub struct Hit {
 /// It owns what the dense branch reads from an epoch: the reference vectors of
 /// the segments, through their memory maps, and the read-only connections to
 /// `records.sqlite`. The exact strategy scores the pool with them
-/// ([`ExactSearcher::top_k`]); the binary strategy rescores the candidates its
-/// scan kept with them ([`ExactSearcher::rescore`], ADR-0072). One opening
+/// ([`DenseSearcher::top_k`]); the binary strategy rescores the candidates its
+/// scan kept with them ([`DenseSearcher::rescore`], ADR-0072). One opening
 /// therefore serves either strategy, and both read the same bytes.
 #[derive(Debug)]
-pub struct ExactSearcher {
+pub struct DenseSearcher {
     /// One reader per segment, sorted by `iid_start`.
     segments: Vec<SegmentReader>,
     /// Read-only connections used for the payloads.
@@ -144,7 +144,7 @@ pub struct ExactSearcher {
     dims: u32,
 }
 
-impl ExactSearcher {
+impl DenseSearcher {
     /// Opens one reader per segment and the payload reader of the epoch.
     ///
     /// `segments_dir` is the `segments/` directory of the epoch and `segments`
@@ -228,7 +228,7 @@ impl ExactSearcher {
 
     /// Returns the `k` best candidates of `pool`, payload unread.
     ///
-    /// This is [`ExactSearcher::top_k`] without the payload step: it is what
+    /// This is [`DenseSearcher::top_k`] without the payload step: it is what
     /// the regrouping step of `docs/03-recherche.md` (step 7) consumes, so that
     /// only the candidates it keeps pay for their text and their fields.
     pub fn top_k_candidates(

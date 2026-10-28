@@ -267,6 +267,23 @@ def test_queries_have_unit_vectors_and_varied_filters(synth_dataset):
     assert {"source": {"exists": False}} in filters
 
 
+def test_unit_vectors_reproduce_the_generator_draws():
+    vectors = gen_synth.unit_vectors(seed=7, stream=3, count=5)
+    rng = gen_synth._rng(7, 3)
+    expected = np.stack([gen_synth._unit_vector(rng) for _ in range(5)]).astype(np.float32)
+
+    assert vectors.dtype == np.float32
+    assert vectors.shape == (5, gen_synth.DIMS)
+    assert np.array_equal(vectors, expected)
+    norms = np.linalg.norm(vectors.astype(np.float64), axis=1)
+    assert np.max(np.abs(norms - 1.0)) < 1e-5
+
+
+def test_unit_vectors_refuse_a_non_positive_count():
+    with pytest.raises(ValueError):
+        gen_synth.unit_vectors(seed=0, stream=0, count=0)
+
+
 def test_large_dataset_is_written_in_parts_with_normalized_vectors(
     tmp_path, monkeypatch
 ):

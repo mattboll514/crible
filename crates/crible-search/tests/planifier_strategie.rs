@@ -14,16 +14,17 @@
 //! the dot product, so a binary plan whose `N` covers the pool returns the
 //! exact result bit for bit).
 //!
-//! # API under test (supposed; these tests do not compile before `@dev` writes it)
+//! # API under test
 //!
 //! The task sheet asks for a strategy selection, an `exact` option, the chosen
 //! strategy exposed in the plan, and the library-level `PATCH`. The crate has
-//! the two strategies ([`crible_search::dense::exact::ExactSearcher::top_k`] and
+//! the two strategies ([`crible_search::dense::exact::DenseSearcher::top_k`] and
 //! [`crible_search::dense::binary::top_k`] followed by
-//! [`crible_search::dense::exact::ExactSearcher::rescore`]) but nothing chooses
-//! between them yet (`crates/crible-search/src/dense/mod.rs`, module doc). The
-//! names below follow the vocabulary of `docs/03-recherche.md` (EXACT, BINARY)
-//! and of the `plan` object of `docs/05-api.md` (`dense_strategy`):
+//! [`crible_search::dense::exact::DenseSearcher::rescore`]), and
+//! `dense::planner` chooses between them from the settings, the pool and the
+//! request option (ADR-0074). The names below follow the vocabulary of
+//! `docs/03-recherche.md` (EXACT, BINARY) and of the `plan` object of
+//! `docs/05-api.md` (`dense_strategy`):
 //!
 //! ```text
 //! #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,7 +59,7 @@
 //! /// Runs the dense branch of one query with the planned strategy.
 //! crible_search::dense::search(
 //!     snapshot: &crible_store::generation::Snapshot,
-//!     searcher: &crible_search::dense::exact::ExactSearcher,
+//!     searcher: &crible_search::dense::exact::DenseSearcher,
 //!     pool: &crible_search::pool::Pool,
 //!     query: &[f32],
 //!     k: usize,
@@ -69,7 +70,7 @@
 //!
 //! `dense::search` runs EXACT on a plan that says `Exact`, and the scan of
 //! `binary::top_k` (`N = search.rescore_candidates`) followed by
-//! `ExactSearcher::rescore` on a plan that says `Binary`, then keeps the `k`
+//! `DenseSearcher::rescore` on a plan that says `Binary`, then keeps the `k`
 //! best. The query code the scan needs is quantized inside, from the query the
 //! searcher normalises, so a caller passes the raw vector only.
 //!
@@ -100,6 +101,7 @@
 //! | `inv_06_pool_below_the_threshold_returns_the_exact_result` | INV-06 on a real index: same keys, same order, bit-identical scores |
 //! | `inv_06_exact_requested_above_the_threshold_returns_the_exact_result` | `exact: true` gives the exact result whatever the pool |
 //! | `an_empty_pool_is_planned_exact_and_returns_no_result` | a filter that empties the pool is not an error |
+//! | `a_zero_k_short_circuits_the_binary_plan` | `k == 0` returns no result under BINARY, without scanning, and still validates the query |
 //! | `binary_pool_with_n_covering_the_pool_returns_the_exact_result` | the BINARY path is really scan → rescore (ADR-0072, N ≥ pool) |
 //! | `binary_pool_with_n_below_the_pool_returns_the_best_rescored_candidates` | the BINARY path rescues the `N` candidates of the scan |
 //! | `patching_the_exact_threshold_moves_the_planned_strategy` | the library `PATCH` changes the selection |
@@ -111,6 +113,7 @@ mod common;
 use crible_core::config::{
     FusionConfig, IndexConfig, IndexPatch, ScanStrategy, SearchConfig, apply_patch,
 };
+use crible_core::error::ErrorCode;
 use crible_core::filter::Filter;
 use crible_search::dense::binary;
 use crible_search::dense::exact::Hit;
@@ -448,6 +451,39 @@ fn an_empty_pool_is_planned_exact_and_returns_no_result() {
     assert!(got.is_empty(), "an empty pool must return no result");
 }
 
+/// `k == 0` short-circuits a BINARY plan as it does EXACT: the plan still names
+/// BINARY (the pool is above the threshold), yet the search returns no result
+/// without scanning the pool and rescoring `N` candidates nothing would consume.
+/// The query is validated all the same, as the exact strategy validates it
+/// before its own `k == 0` check.
+#[test]
+fn a_zero_k_short_circuits_the_binary_plan() {
+    let fixture = fixture();
+    let snapshot = fixture.snapshot();
+    let searcher = fixture.searcher();
+    let pool = fixture.pool(&match_all());
+    let config = settings(ScanStrategy::Binary, 10, 10);
+
+    assert_eq!(
+        plan(&config, pool.len(), 0, false).strategy,
+        Strategy::Binary,
+        "the pool is above the threshold, so the plan must be BINARY"
+    );
+    let got = search(&snapshot, &searcher, &pool, &query(), 0, &config, false)
+        .unwrap_or_else(|error| panic!("k = 0 must not be an error: {error}"));
+    assert!(got.is_empty(), "k = 0 returns no result");
+
+    let malformed = vec![1.0_f32; 3];
+    let error = search(&snapshot, &searcher, &pool, &malformed, 0, &config, false)
+        .err()
+        .unwrap_or_else(|| panic!("a malformed query must be refused even at k = 0"));
+    assert_eq!(
+        error.code(),
+        ErrorCode::InvalidRequest,
+        "the short-circuit keeps the query validation of the exact strategy"
+    );
+}
+
 /// The BINARY path really is scan → rescore: when `N` covers the pool, the
 /// scan keeps every passage and the rescoring scores them all, so the answer is
 /// the exact one, bit for bit (ADR-0072, decision 3, and the criterion of
@@ -486,7 +522,7 @@ fn binary_pool_with_n_covering_the_pool_returns_the_exact_result() {
 
 /// When `N` is below the pool, the answer is the rescoring of the `N`
 /// candidates the scan kept, and nothing else: the oracle is recomputed here
-/// from `binary::top_k` and `ExactSearcher::rescore`, the two functions the
+/// from `binary::top_k` and `DenseSearcher::rescore`, the two functions the
 /// planned BINARY strategy must call.
 #[test]
 fn binary_pool_with_n_below_the_pool_returns_the_best_rescored_candidates() {

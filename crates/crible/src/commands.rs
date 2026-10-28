@@ -42,7 +42,7 @@ use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
-use crible_search::dense::exact::{ExactSearcher, Hit};
+use crible_search::dense::exact::{DenseSearcher, Hit};
 use crible_search::dense::{DenseQuery, search_grouped as dense_search_grouped};
 use crible_search::group::Grouping;
 use crible_search::pool::Pool;
@@ -291,8 +291,9 @@ pub fn export_index(
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let model = load_model(models, &config.model)?;
-    // Read opening, like `search` and `inspect`: no cleanup of `<data>/tmp`,
-    // and the store's recovery only repairs what a crash left behind.
+    // The write open runs the recovery of INV-04 and rebuilds a missing
+    // `codes.bin`, whose array the snapshot then loads; `<data>/tmp` is left
+    // alone, as for a read command.
     let store = GenerationStore::open(&index_dir, &config.schema)?;
     let report = crible_store::export::export(&store, &config, &model, exchange)?;
     println!(
@@ -397,9 +398,10 @@ fn print_report(name: &str, report: &AttachReport) {
 /// `<data>/tmp` are removed first, under the presence lock that protects a live
 /// lot (ADR-0056, decision 4), then the store runs its recovery (INV-04).
 ///
-/// A read command calls [`GenerationStore::open`] directly: `search` and
-/// `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
-/// index is ingesting.
+/// A read command calls [`GenerationStore::open_read_only`] directly: `search`
+/// and `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
+/// index is ingesting, and they never write `codes.bin` (ADR-0056,
+/// `ADR-0069`, decision 2).
 fn open_store_for_write(
     data: &Path,
     index_dir: &Path,
@@ -547,9 +549,13 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
             request.k
         )));
     }
+    // The regrouping options are validated before the index is opened, the
+    // model loaded and the pool evaluated: a request the command can refuse
+    // pays for none of that.
+    let grouping = grouping_of(request)?;
     let name = path_component(request.index, "index name")?;
     let (index_dir, config) = load_index(request.data, name)?;
-    let store = GenerationStore::open(&index_dir, &config.schema)?;
+    let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
     let (vector, truncated_query) = match (request.vector_file, request.query) {
         (Some(path), None) => (vector::load(path)?, false),
         (None, Some(text)) => encode_text_query(request.models, &config, request.model, text)?,
@@ -575,13 +581,12 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     let snapshot = store.snapshot();
     let pool = Pool::evaluate(snapshot.filters(), &filter)?;
-    let grouping = grouping_of(request)?;
     let scan = ScanPool::new(0)?;
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
     let searcher =
-        scan.install(|| ExactSearcher::open(&segments_directory, &segments, &records_path))?;
+        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
     let hits = scan.install(|| {
         dense_search_grouped(
             &snapshot,
@@ -728,7 +733,8 @@ fn encode_text_query(
 /// `inspect` removes leftover `tmp-*` entries and segments SQLite does not
 /// reference, and rewrites a missing manifest. It therefore needs a writable
 /// mount, not a read-only one. It leaves the online batches of `<data>/tmp`
-/// alone: only a write opening cleans them (ADR-0056).
+/// alone, and it never rebuilds a missing `codes.bin`: the codes are quantized
+/// in RAM (ADR-0056; ADR-0069, decision 2).
 pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     let names = match index {
         Some(name) => vec![path_component(name, "index name")?.to_owned()],
@@ -742,7 +748,7 @@ pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     }
     for name in names {
         let (index_dir, config) = load_index(data, &name)?;
-        let store = GenerationStore::open(&index_dir, &config.schema)?;
+        let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
         let state = store.state()?;
         print_state(&name, &state);
     }
