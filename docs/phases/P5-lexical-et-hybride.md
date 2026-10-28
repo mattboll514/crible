@@ -112,3 +112,4 @@
   - l'effet des élisions et des identifiants.
 - **Critères d'acceptation** : le rapport recommande une fusion par défaut et un traitement des élisions et des identifiants (Q-02, Q-04), qui sont ensuite validés par le propriétaire.
 - **Invariants / mesures** : MES-10, MES-11.
+- **Protocole** : fixé par ADR-0092 (jeu de référence et jeu de mesure enrichi `data/mes10/`, métriques recall@10 et MRR@10 au document, configuration mesurée aux défauts de production, variantes du cas « article 1240 », variantes d'analyse de MES-11, règle de décision, harnais et artefacts).
