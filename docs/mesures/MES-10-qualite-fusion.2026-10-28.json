@@ -1,0 +1,1175 @@
+{
+  "measure": "MES-10",
+  "protocol": "ADR-0092",
+  "date": "2026-10-28",
+  "commit": "b9e0ea6d46a5c2f5b5b5ad1c9381081b1717c0ee",
+  "machine": "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7, native",
+  "query_vectors": {
+    "path": "data/mes10/query-vectors-2026-10-28.json",
+    "sha256": "0a0348e670172fe1b800e53fec9af557434f7c4b507c64dc50510c38100ea482",
+    "precision": "fp32",
+    "model": "mdenseon"
+  },
+  "raw": {
+    "data/mes10/raw/eval-articles-binary.json": "f6c829238c8cbd1170e904cec0b8c11f83b8718e8757e4a705c18cd89a4bc911",
+    "data/mes10/raw/eval-articles-exact.json": "9eae92eca5d29717e1b9872928ddb57dbac32239e71cab7a421934128735d2cf",
+    "data/mes10/raw/eval-decisions-binary.json": "c5adb0e4c0ad6b392074dc4066d2a4f3d7c0526faafe1e34230635b0a7bb78e9",
+    "data/mes10/raw/eval-decisions-exact.json": "a90539286f5845235ae9e8a7453bc7698a5a11c85f4394c1263ef3de38ea39f4",
+    "data/mes10/raw/eval-dole-binary.json": "7c37a375275799a13d31d09f330417b6bbf25234e58b7e98a719919e0a029b28",
+    "data/mes10/raw/eval-dole-exact.json": "5f515dc3ed4ca4f308667caa24d4a5d7c549c5131f727ad3b7154298658dded3",
+    "data/mes10/raw/eval-jorf-binary.json": "85c21f2be9101cc854d39db96b698a3512b596c85a3d86aa5fbee9d845b67aed",
+    "data/mes10/raw/eval-jorf-exact.json": "e313d71f5787cdff63814a06ef0cebb38051674af5ebccf801133758fa9783cd",
+    "data/mes10/raw/eval-sarde-binary.json": "0544ad7f4557a102a47a89fcce235f13df8ed1b478674f91452f4710fb51ced9",
+    "data/mes10/raw/eval-sarde-exact.json": "551250ba2521db30fd6856445b535de638638c9e9077bc29d8fb1405caaf442e",
+    "data/mes10/raw/eval-titres-binary.json": "c58d0bdd642b8af9a4959693ba288649c711bef77eec4e78fff347f7b5101598",
+    "data/mes10/raw/eval-titres-exact.json": "e45d5af54ea144978ab1ce15a908aeb2ddfa0de5b0ab4a1d8feb16e822090cf1"
+  },
+  "k": 10,
+  "grouping": "document",
+  "passages_per_document": 1,
+  "candidates_per_branch": 200,
+  "enriched_set": {
+    "path": "data/mes10/extraction.json",
+    "sha256": "4aa4a1721c5047412ac0586a6c05b4cf39ddf54f09924384f45f2394e2b7eadb",
+    "documents": 55,
+    "passages": 445,
+    "structures": {
+      "articles": {
+        "documents": 13,
+        "passages": 15,
+        "batch": "data/mes10/batches/legifacile-mes10-articles-v1"
+      },
+      "decisions": {
+        "documents": 35,
+        "passages": 258,
+        "batch": "data/mes10/batches/legifacile-mes10-decisions-v1"
+      },
+      "jorf": {
+        "documents": 4,
+        "passages": 169,
+        "batch": "data/mes10/batches/legifacile-mes10-jorf-v1"
+      },
+      "sarde": {
+        "documents": 3,
+        "passages": 3,
+        "batch": "data/mes10/batches/legifacile-mes10-sarde-v1"
+      }
+    },
+    "passages_measured": 258071,
+    "pool_by_structure": {
+      "articles": 50015,
+      "decisions": 50256,
+      "jorf": 50169,
+      "sarde": 50003,
+      "dole": 7628,
+      "titres": 50000
+    }
+  },
+  "methods": [
+    "dense",
+    "lexical",
+    "rrf",
+    "relative_0",
+    "relative_0.3",
+    "relative_0.5",
+    "relative_0.75",
+    "relative_1",
+    "dense_exact"
+  ],
+  "main": {
+    "questions": 57,
+    "averaged": 56,
+    "excluded": [
+      "Q30"
+    ],
+    "resolution": 0.017857142857142856,
+    "summary": {
+      "dense": {
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "mrr": 0.6839498299319728,
+        "found": 48,
+        "median_rank": 1.0
+      },
+      "lexical": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7699404761904762,
+        "found": 51,
+        "median_rank": 1
+      },
+      "rrf": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7644841269841269,
+        "found": 51,
+        "median_rank": 1
+      },
+      "relative_0": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7699404761904762,
+        "found": 51,
+        "median_rank": 1
+      },
+      "relative_0.3": {
+        "n": 56,
+        "recall": 0.9464285714285714,
+        "mrr": 0.78125,
+        "found": 53,
+        "median_rank": 1
+      },
+      "relative_0.5": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7794642857142857,
+        "found": 51,
+        "median_rank": 1
+      },
+      "relative_0.75": {
+        "n": 56,
+        "recall": 0.8928571428571429,
+        "mrr": 0.7419642857142856,
+        "found": 50,
+        "median_rank": 1.0
+      },
+      "relative_1": {
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "mrr": 0.6839498299319728,
+        "found": 48,
+        "median_rank": 1.0
+      },
+      "dense_exact": {
+        "n": 56,
+        "recall": 0.8571428571428571,
+        "mrr": 0.6839498299319728,
+        "found": 48,
+        "median_rank": 1.0
+      }
+    },
+    "bootstrap": {
+      "dense": {
+        "difference": -0.05357142857142857,
+        "low": -0.125,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "lexical": {
+        "difference": 0.0,
+        "low": -0.05357142857142857,
+        "high": 0.05357142857142857,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0": {
+        "difference": 0.0,
+        "low": -0.05357142857142857,
+        "high": 0.05357142857142857,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.3": {
+        "difference": 0.03571428571428571,
+        "low": 0.0,
+        "high": 0.08928571428571429,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.5": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.75": {
+        "difference": -0.017857142857142856,
+        "low": -0.05357142857142857,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_1": {
+        "difference": -0.05357142857142857,
+        "low": -0.125,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "dense_exact": {
+        "difference": -0.05357142857142857,
+        "low": -0.125,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "by_corpus": {
+      "dole": {
+        "dense": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.625,
+          "found": 2,
+          "median_rank": 2.5
+        },
+        "lexical": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 2,
+          "median_rank": 1.0
+        },
+        "rrf": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.75,
+          "found": 2,
+          "median_rank": 1.5
+        },
+        "relative_0": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 2,
+          "median_rank": 1.0
+        },
+        "relative_0.3": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.75,
+          "found": 2,
+          "median_rank": 1.5
+        },
+        "relative_0.5": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.75,
+          "found": 2,
+          "median_rank": 1.5
+        },
+        "relative_0.75": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.75,
+          "found": 2,
+          "median_rank": 1.5
+        },
+        "relative_1": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.625,
+          "found": 2,
+          "median_rank": 2.5
+        },
+        "dense_exact": {
+          "n": 2,
+          "recall": 1.0,
+          "mrr": 0.625,
+          "found": 2,
+          "median_rank": 2.5
+        }
+      },
+      "jorf_normatif": {
+        "dense": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "lexical": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.5833333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "rrf": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8125,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "relative_0": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.5833333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.3": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "relative_0.5": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8333333333333334,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "relative_0.75": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "relative_1": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8,
+          "found": 4,
+          "median_rank": 1.0
+        },
+        "dense_exact": {
+          "n": 4,
+          "recall": 1.0,
+          "mrr": 0.8,
+          "found": 4,
+          "median_rank": 1.0
+        }
+      },
+      "juri_sommaires": {
+        "dense": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.53125,
+          "found": 3,
+          "median_rank": 1
+        },
+        "lexical": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.625,
+          "found": 3,
+          "median_rank": 1
+        },
+        "rrf": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.5833333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.625,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.3": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.5625,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.5": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.55,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.75": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.55,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_1": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.53125,
+          "found": 3,
+          "median_rank": 1
+        },
+        "dense_exact": {
+          "n": 4,
+          "recall": 0.75,
+          "mrr": 0.53125,
+          "found": 3,
+          "median_rank": 1
+        }
+      },
+      "juri_texte_integral": {
+        "dense": {
+          "n": 31,
+          "recall": 0.8387096774193549,
+          "mrr": 0.6524577572964669,
+          "found": 26,
+          "median_rank": 1.0
+        },
+        "lexical": {
+          "n": 31,
+          "recall": 0.967741935483871,
+          "mrr": 0.8478494623655914,
+          "found": 30,
+          "median_rank": 1.0
+        },
+        "rrf": {
+          "n": 31,
+          "recall": 0.9354838709677419,
+          "mrr": 0.7815412186379929,
+          "found": 29,
+          "median_rank": 1
+        },
+        "relative_0": {
+          "n": 31,
+          "recall": 0.967741935483871,
+          "mrr": 0.8478494623655914,
+          "found": 30,
+          "median_rank": 1.0
+        },
+        "relative_0.3": {
+          "n": 31,
+          "recall": 1.0,
+          "mrr": 0.832258064516129,
+          "found": 31,
+          "median_rank": 1
+        },
+        "relative_0.5": {
+          "n": 31,
+          "recall": 0.9354838709677419,
+          "mrr": 0.8102150537634408,
+          "found": 29,
+          "median_rank": 1
+        },
+        "relative_0.75": {
+          "n": 31,
+          "recall": 0.9032258064516129,
+          "mrr": 0.7306451612903225,
+          "found": 28,
+          "median_rank": 1.0
+        },
+        "relative_1": {
+          "n": 31,
+          "recall": 0.8387096774193549,
+          "mrr": 0.6524577572964669,
+          "found": 26,
+          "median_rank": 1.0
+        },
+        "dense_exact": {
+          "n": 31,
+          "recall": 0.8387096774193549,
+          "mrr": 0.6524577572964669,
+          "found": 26,
+          "median_rank": 1.0
+        }
+      },
+      "sarde": {
+        "dense": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 3,
+          "median_rank": 1
+        },
+        "lexical": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 0.8333333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "rrf": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 0.8333333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.3": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 0.8333333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.5": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 0.8333333333333334,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_0.75": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 3,
+          "median_rank": 1
+        },
+        "relative_1": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 3,
+          "median_rank": 1
+        },
+        "dense_exact": {
+          "n": 3,
+          "recall": 1.0,
+          "mrr": 1.0,
+          "found": 3,
+          "median_rank": 1
+        }
+      },
+      "textes_vigueur": {
+        "dense": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.7083333333333334,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "lexical": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.625,
+          "found": 10,
+          "median_rank": 1.5
+        },
+        "rrf": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.7083333333333334,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "relative_0": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.625,
+          "found": 10,
+          "median_rank": 1.5
+        },
+        "relative_0.3": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.7083333333333334,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "relative_0.5": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.75,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "relative_0.75": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.75,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "relative_1": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.7083333333333334,
+          "found": 10,
+          "median_rank": 1.0
+        },
+        "dense_exact": {
+          "n": 12,
+          "recall": 0.8333333333333334,
+          "mrr": 0.7083333333333334,
+          "found": 10,
+          "median_rank": 1.0
+        }
+      }
+    }
+  },
+  "controls": {
+    "alpha_0_equals_lexical": 56,
+    "alpha_1_equals_dense": 56,
+    "questions": 56
+  },
+  "secondary": {
+    "questions": 145,
+    "summary": {
+      "dense": {
+        "n": 145,
+        "recall": 0.7793103448275862,
+        "mrr": 0.6462999452654625,
+        "found": 113,
+        "median_rank": 1
+      },
+      "lexical": {
+        "n": 145,
+        "recall": 0.8620689655172413,
+        "mrr": 0.7651888341543513,
+        "found": 125,
+        "median_rank": 1
+      },
+      "rrf": {
+        "n": 145,
+        "recall": 0.8413793103448276,
+        "mrr": 0.7149425287356322,
+        "found": 122,
+        "median_rank": 1.0
+      },
+      "relative_0": {
+        "n": 145,
+        "recall": 0.8620689655172413,
+        "mrr": 0.7651888341543513,
+        "found": 125,
+        "median_rank": 1
+      },
+      "relative_0.3": {
+        "n": 145,
+        "recall": 0.8689655172413793,
+        "mrr": 0.7604789272030651,
+        "found": 126,
+        "median_rank": 1.0
+      },
+      "relative_0.5": {
+        "n": 145,
+        "recall": 0.8689655172413793,
+        "mrr": 0.7460043787629995,
+        "found": 126,
+        "median_rank": 1.0
+      },
+      "relative_0.75": {
+        "n": 145,
+        "recall": 0.8137931034482758,
+        "mrr": 0.6916091954022988,
+        "found": 118,
+        "median_rank": 1.0
+      },
+      "relative_1": {
+        "n": 145,
+        "recall": 0.7793103448275862,
+        "mrr": 0.6462999452654625,
+        "found": 113,
+        "median_rank": 1
+      },
+      "dense_exact": {
+        "n": 145,
+        "recall": 0.7793103448275862,
+        "mrr": 0.6462999452654625,
+        "found": 113,
+        "median_rank": 1
+      }
+    },
+    "bootstrap": {
+      "dense": {
+        "difference": -0.06206896551724138,
+        "low": -0.1103448275862069,
+        "high": -0.020689655172413793,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "lexical": {
+        "difference": 0.020689655172413793,
+        "low": -0.013793103448275862,
+        "high": 0.05517241379310345,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0": {
+        "difference": 0.020689655172413793,
+        "low": -0.013793103448275862,
+        "high": 0.05517241379310345,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.3": {
+        "difference": 0.027586206896551724,
+        "low": 0.0,
+        "high": 0.06206896551724138,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.5": {
+        "difference": 0.027586206896551724,
+        "low": 0.0,
+        "high": 0.06206896551724138,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_0.75": {
+        "difference": -0.027586206896551724,
+        "low": -0.05517241379310345,
+        "high": -0.006896551724137931,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "relative_1": {
+        "difference": -0.06206896551724138,
+        "low": -0.1103448275862069,
+        "high": -0.020689655172413793,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "dense_exact": {
+        "difference": -0.06206896551724138,
+        "low": -0.1103448275862069,
+        "high": -0.020689655172413793,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    }
+  },
+  "guardrails": {
+    "dense": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.8387096774193549,
+        "difference": -0.0967741935483871,
+        "low": -0.22580645161290322,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "lexical": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.967741935483871,
+        "difference": 0.03225806451612903,
+        "low": 0.0,
+        "high": 0.0967741935483871,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "relative_0": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.967741935483871,
+        "difference": 0.03225806451612903,
+        "low": 0.0,
+        "high": 0.0967741935483871,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "relative_0.3": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 1.0,
+        "difference": 0.06451612903225806,
+        "low": 0.0,
+        "high": 0.16129032258064516,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "relative_0.5": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.9354838709677419,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "relative_0.75": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.9032258064516129,
+        "difference": -0.03225806451612903,
+        "low": -0.0967741935483871,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "relative_1": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.8387096774193549,
+        "difference": -0.0967741935483871,
+        "low": -0.22580645161290322,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "dense_exact": {
+      "juri_texte_integral": {
+        "n": 31,
+        "rrf": 0.9354838709677419,
+        "method": 0.8387096774193549,
+        "difference": -0.0967741935483871,
+        "low": -0.22580645161290322,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "textes_vigueur": {
+        "n": 12,
+        "rrf": 0.8333333333333334,
+        "method": 0.8333333333333334,
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    }
+  },
+  "decision": {
+    "recommended": "rrf",
+    "reason": "no method beats rrf by a lower bound above zero",
+    "rejected": [
+      {
+        "method": "dense",
+        "low": -0.125,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "lexical",
+        "low": -0.05357142857142857,
+        "high": 0.05357142857142857,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "relative_0",
+        "low": -0.05357142857142857,
+        "high": 0.05357142857142857,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "relative_0.3",
+        "low": 0.0,
+        "high": 0.08928571428571429,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "relative_0.5",
+        "low": 0.0,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "relative_0.75",
+        "low": -0.05357142857142857,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "relative_1",
+        "low": -0.125,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "dense_exact",
+        "low": -0.125,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      }
+    ],
+    "reference": {
+      "n": 56,
+      "recall": 0.9107142857142857,
+      "mrr": 0.7644841269841269,
+      "found": 51,
+      "median_rank": 1
+    }
+  },
+  "unsatisfiable": [
+    {
+      "id": "Q30",
+      "expected": [
+        "LEGIARTI000029370748"
+      ],
+      "top": {
+        "dense": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000022393154",
+          "LEGIARTI000018164254",
+          "LEGIARTI000020630869",
+          "LEGIARTI000006462658",
+          "LEGIARTI000006847978",
+          "LEGIARTI000045068689",
+          "LEGIARTI000038375870",
+          "LEGIARTI000049418011",
+          "LEGIARTI000045099996"
+        ],
+        "lexical": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000045068689",
+          "LEGIARTI000022006530",
+          "LEGIARTI000047667254",
+          "LEGIARTI000006671142",
+          "LEGIARTI000020630869",
+          "LEGIARTI000049418011",
+          "LEGIARTI000006462658",
+          "LEGIARTI000027806855",
+          "LEGIARTI000052036688"
+        ],
+        "relative_0": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000045068689",
+          "LEGIARTI000022006530",
+          "LEGIARTI000047667254",
+          "LEGIARTI000006671142",
+          "LEGIARTI000020630869",
+          "LEGIARTI000049418011",
+          "LEGIARTI000006462658",
+          "LEGIARTI000027806855",
+          "LEGIARTI000052036688"
+        ],
+        "relative_0.3": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000020630869",
+          "LEGIARTI000045068689",
+          "LEGIARTI000022393154",
+          "LEGIARTI000006462658",
+          "LEGIARTI000049418011",
+          "LEGIARTI000022290727",
+          "LEGIARTI000038375870",
+          "LEGIARTI000018164254",
+          "LEGIARTI000033975095"
+        ],
+        "relative_0.5": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000022393154",
+          "LEGIARTI000020630869",
+          "LEGIARTI000006462658",
+          "LEGIARTI000045068689",
+          "LEGIARTI000018164254",
+          "LEGIARTI000049418011",
+          "LEGIARTI000038375870",
+          "LEGIARTI000022290727",
+          "LEGIARTI000045099996"
+        ],
+        "relative_0.75": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000022393154",
+          "LEGIARTI000020630869",
+          "LEGIARTI000018164254",
+          "LEGIARTI000006462658",
+          "LEGIARTI000045068689",
+          "LEGIARTI000038375870",
+          "LEGIARTI000006847978",
+          "LEGIARTI000045099996",
+          "LEGIARTI000049418011"
+        ],
+        "relative_1": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000022393154",
+          "LEGIARTI000018164254",
+          "LEGIARTI000020630869",
+          "LEGIARTI000006462658",
+          "LEGIARTI000006847978",
+          "LEGIARTI000045068689",
+          "LEGIARTI000038375870",
+          "LEGIARTI000049418011",
+          "LEGIARTI000045099996"
+        ],
+        "rrf": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000045068689",
+          "LEGIARTI000020630869",
+          "LEGIARTI000006462658",
+          "LEGIARTI000049418011",
+          "LEGIARTI000022393154",
+          "LEGIARTI000022290727",
+          "LEGIARTI000038375870",
+          "LEGIARTI000033975095",
+          "LEGIARTI000045099996"
+        ],
+        "dense_exact": [
+          "LEGIARTI000029370748",
+          "LEGIARTI000022393154",
+          "LEGIARTI000018164254",
+          "LEGIARTI000020630869",
+          "LEGIARTI000006462658",
+          "LEGIARTI000006847978",
+          "LEGIARTI000045068689",
+          "LEGIARTI000038375870",
+          "LEGIARTI000049418011",
+          "LEGIARTI000045099996"
+        ]
+      }
+    }
+  ],
+  "case_1240": {
+    "expected": "LEGIARTI000032041571",
+    "variants": [
+      {
+        "name": "V1",
+        "rank": {
+          "dense": 1,
+          "lexical": 1,
+          "relative_0": 1,
+          "relative_0.3": 1,
+          "relative_0.5": 1,
+          "relative_0.75": 1,
+          "relative_1": 1,
+          "rrf": 1
+        },
+        "text": "l'article 1240 du code civil"
+      },
+      {
+        "name": "V2",
+        "rank": {
+          "dense": 1,
+          "lexical": 1,
+          "relative_0": 1,
+          "relative_0.3": 1,
+          "relative_0.5": 1,
+          "relative_0.75": 1,
+          "relative_1": 1,
+          "rrf": 1
+        },
+        "text": "article 1240 du code civil"
+      },
+      {
+        "name": "V3",
+        "rank": {
+          "dense": 1,
+          "lexical": 5,
+          "relative_0": 5,
+          "relative_0.3": 2,
+          "relative_0.5": 1,
+          "relative_0.75": 1,
+          "relative_1": 1,
+          "rrf": 2
+        },
+        "text": "article 1240"
+      },
+      {
+        "name": "V4",
+        "rank": {
+          "dense": 1,
+          "lexical": 1,
+          "relative_0": 1,
+          "relative_0.3": 1,
+          "relative_0.5": 1,
+          "relative_0.75": 1,
+          "relative_1": 1,
+          "rrf": 1
+        },
+        "text": "art. 1240 code civil"
+      },
+      {
+        "name": "V5",
+        "rank": {
+          "dense": 1,
+          "lexical": 1,
+          "relative_0": 1,
+          "relative_0.3": 1,
+          "relative_0.5": 1,
+          "relative_0.75": 1,
+          "relative_1": 1,
+          "rrf": 1
+        },
+        "text": "Code civil, article 1240"
+      }
+    ]
+  },
+  "exact_column": {
+    "note": "dense with exact_threshold at its maximum on a clone of the index",
+    "interval_against_rrf": {
+      "difference": -0.05357142857142857,
+      "low": -0.125,
+      "high": 0.0,
+      "resamples": 10000,
+      "seed": 20261028
+    }
+  }
+}
