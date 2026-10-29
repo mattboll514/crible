@@ -111,6 +111,6 @@ crible eval --index articles --queries golden.jsonl --modes dense,lexical,hybrid
 ## Santé et logs
 
 - **`GET /health`** : le processus est vivant.
-- **`GET /ready`** : les modèles sont chargés, chaque index a publié un instantané, et il n'y a pas de reprise en cours.
+- **`GET /ready`** : les modèles sont chargés, chaque index a publié un instantané, et il n'y a pas de reprise en cours. Il rend `503` tant que ces trois conditions ne sont pas réunies, puis `200` ; `/health` rend `200` dès la liaison au port (ADR-0099). Une instance sans index est prête, et un index dont le lexical est refusé ne bloque pas `/ready` : la génération est publiée et seule la branche lexicale est refusée (ADR-0087, ADR-0088, ADR-0089).
 - **Logs** : `tracing` au format JSON sur stdout (Docker). Chaque ligne porte le `request_id` quand il existe.
-- **Ce que les logs ne contiennent jamais** : le texte des requêtes et les valeurs de filtre, sauf en niveau `trace`, désactivé en production.
+- **Ce que les logs ne contiennent jamais** : le texte des requêtes et les valeurs de filtre, à aucun niveau de log et quel que soit `RUST_LOG` (INV-13, ADR-0096).

@@ -15,16 +15,16 @@
 - **Dépend de** : —
 - **À lire** : `07-stack-et-deploiement.md` (config, Docker : arrêt propre) ; `05-api.md` (conventions).
 - **Livrables** :
-  - `crible-server` : lecture de `crible.toml` avec surcharges par variables d'environnement ;
-  - au démarrage, chargement des modèles et des index, avec la reprise ;
-  - routes `/health` et `/ready` ;
-  - `x-request-id` sur chaque réponse ;
-  - logs `tracing` en JSON ;
-  - arrêt propre sur SIGTERM ;
-  - commande `crible serve`.
+  - `crible-server` : lecture de `crible.toml` avec surcharges par variables d'environnement (forme, refus et liste des variables exclues : ADR-0097) ;
+  - au démarrage, chargement des modèles et des index, avec la reprise (ADR-0099) ;
+  - routes `/health` et `/ready` (formes et sens : ADR-0099) ;
+  - `x-request-id` sur chaque réponse (reprise ou génération : ADR-0098) ;
+  - logs `tracing` en JSON (`RUST_LOG`, défaut `info` : ADR-0096) ;
+  - arrêt propre sur SIGTERM et SIGINT (drainage borné : ADR-0099) ;
+  - commande `crible serve` (ADR-0097).
 - **Critères d'acceptation** :
-  - `/ready` ne répond 200 qu'une fois tous les index publiés ;
-  - un test d'arrêt montre qu'aucun job en cours n'est perdu.
+  - `/ready` rend `503` tant que tous les index n'ont pas publié leur instantané, puis `200` (ADR-0099) ;
+  - un test d'arrêt montre qu'une requête en vol se termine avant la sortie (drainage borné, ADR-0099). Le critère « aucun job en cours n'est perdu à l'arrêt » passe à FILE-D-ECRITURE-ET-JOBS (ADR-0095).
 
 ### AUTHENTIFIER-CLES
 - **Objectif** : les clés d'API et les rôles.
@@ -37,7 +37,7 @@
   - la commande `crible key generate`, qui affiche la clé et son haché.
 - **Critères d'acceptation** :
   - `401` sans clé ou avec une clé inconnue ;
-  - `403` si le rôle est insuffisant, avec un test par famille de routes ;
+  - le middleware et les trois rôles (`read`, `write`, `admin`) sont testés sur un routeur de test : chaque rôle atteint les routes de son niveau, et une clé d'un rôle inférieur reçoit `403 forbidden` sur une route d'un rôle supérieur ; le test `403` de chaque famille de routes réelles est porté par la tâche qui la crée (ADR-0095) ;
   - la clé en clair n'apparaît jamais dans les logs.
 
 ### FORMAT-ERREURS-ET-LIMITES
@@ -63,6 +63,8 @@
 - **Critères d'acceptation** :
   - les jobs d'un même index s'exécutent dans l'ordre d'arrivée ;
   - les jobs terminés restent consultables après un redémarrage ;
+  - un test d'arrêt montre qu'aucun job en cours n'est perdu : les jobs acceptés avant le signal se terminent, et l'attente bornée de l'arrêt les couvre (repris de DEMARRER-SERVEUR-AXUM, ADR-0095, avec le drainage d'ADR-0099) ;
+  - une clé `read` reçoit `403` sur `GET /v1/jobs` et `GET /v1/jobs/{job_id}`, réservés au rôle `write` (ADR-0095) ;
   - à l'échéance de `wait_timeout_ms`, `?wait=true` rend `202` avec le job en cours ; un job terminé avant est rendu terminé ; un test pour chaque cas (ADR-0067) ;
   - le test de file pleine renvoie bien `503`.
 
@@ -75,7 +77,8 @@
 - **Critères d'acceptation** :
   - **INV-16** : un `PATCH` sur un réglage figé renvoie `409` en nommant le champ ;
   - `DELETE` exige `confirm` ;
-  - un `PATCH` de `lexical.language` déclenche le job `rebuild_lexical`.
+  - un `PATCH` de `lexical.language` déclenche le job `rebuild_lexical` ;
+  - une clé `write` reçoit `403` sur une route `admin` de `/v1/indexes`, et les deux `GET` restent accessibles avec une clé `read` (ADR-0095).
 - **Invariants** : INV-16.
 
 ### ROUTES-DOCUMENTS-ET-LOTS
@@ -89,6 +92,7 @@
 - **Critères d'acceptation** :
   - un chemin de lot hors de l'inbox est refusé (test de sécurité) ;
   - chaque route a un test d'intégration ;
+  - une clé `read` reçoit `403` sur les familles `write` (documents, lots) et `admin` (compaction, export, instantanés) écrites ici (ADR-0095) ;
   - les réponses ne contiennent aucun iid (**INV-01**).
 - **Invariants** : INV-01.
 
@@ -100,7 +104,9 @@
   - tous les champs de la requête, sauf `debug` et `explain_ids` (P7), acceptés et validés ;
   - la réponse conforme au doc, avec `generation`, `pool_size`, `took_ms` et `truncated_query` ;
   - les calculs exécutés sur le pool rayon, jamais sur les threads tokio.
-- **Critères d'acceptation** : les résultats de l'API sont identiques à ceux de la CLI sur les requêtes de l'échantillon.
+- **Critères d'acceptation** :
+  - les résultats de l'API sont identiques à ceux de la CLI sur les requêtes de l'échantillon ;
+  - les trois rôles atteignent la route : aucun `403` n'y est atteignable, puisque `write` et `admin` incluent `read` (ADR-0095).
 
 ### RECHERCHE-MULTI-INDEX
 - **Objectif** : `POST /v1/search`.
@@ -114,7 +120,8 @@
   - le champ `index` dans chaque résultat.
 - **Critères d'acceptation** :
   - en dense, la fusion donne le même résultat qu'un tri global des top-k par index ;
-  - l'encodage n'est appelé qu'une fois (test).
+  - l'encodage n'est appelé qu'une fois (test) ;
+  - les trois rôles atteignent la route : aucun `403` n'y est atteignable (ADR-0095).
 
 ### PUBLIER-OPENAPI
 - **Objectif** : une spécification et une UI à jour.
