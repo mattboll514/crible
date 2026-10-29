@@ -114,6 +114,16 @@ Le nom du test est un contrat, comme les trois déjà exclus : le renommer sans 
 | **Rendre le test silencieux quand les données manquent** (`if !path.exists() { return; }`) | Interdit par `docs/08:43`. Un test qui saute sans le dire se lit comme vert. |
 | **Faire tourner le test en CI sans son prérequis, et le laisser échouer** | Un test rouge à chaque push ne prouve rien et rend la CI inutilisable : on ne distingue plus une régression d'un prérequis manquant. |
 
+## Complément du 2026-10-29
+
+Un renvoi, sans changement des décisions ci-dessus.
+
+**Constat.** L'« À surveiller » ci-dessus (`:103`) prévoit le cas d'un cinquième test de l'échantillon : « ne pas improviser : rouvrir cet ADR plutôt que d'ajouter une exclusion sans décision ». La fiche `ROUTE-RECHERCHE` demande que « les résultats de l'API sont identiques à ceux de la CLI sur les requêtes de l'échantillon » (`docs/phases/P6-serveur-et-api.md:108`), ce qui demande un tel test.
+
+**Décision.** ADR-0109 admet ce cinquième test, `api_and_cli_return_the_same_results_on_the_legifacile_sample`, avec un cinquième `--skip` explicite dans la commande du job `rust-onnx`. Il compare la réponse de `POST /v1/indexes/{index}/search` et la sortie JSON de `crible search` sur `data/legifacile-sample`, pour chaque question étiquetée et pour les modes `dense`, `lexical` et `hybrid` à `k = 10`. La règle du point 1 reste entière : exclusion nommée, aucun motif commun, aucun autre test exclu.
+
+**Raison.** Le test demande ONNX Runtime, le vrai modèle et l'échantillon, comme les quatre autres, et ne peut donc pas entrer en CI (ADR-0032). La preuve continue du critère est portée par la comparaison de la décision 3 d'ADR-0109 qui tourne en CI sur un petit index construit dans le test, sans l'échantillon.
+
 ## Modifications à appliquer après acceptation
 
 Cette section décrit les modifications. **Aucune n'est appliquée par cet ADR** : elles le seront après acceptation du propriétaire, dans un commit qui cite `ADR-0085`, et par une tâche dédiée.

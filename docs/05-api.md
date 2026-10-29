@@ -246,6 +246,8 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
 | `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
 
+Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le cas d'un nom absent du tableau ci-dessus, d'un nom absent de `fusion` ou de `return`, et de tout objet imbriqué, et le message nomme le **chemin JSON** du champ, comme pour un `PATCH` de configuration (ADR-0031, ADR-0109). Dans `filter`, une clause hors de la grammaire reste `invalid_filter` (400), avec `details.path` : son code ne change pas. En P6, `debug` et `explain_ids` ne sont pas encore acceptés : ils sont refusés en `invalid_request`, avec un message qui dit que le champ n'est pas encore pris en charge ; P7 les ouvre (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`, ADR-0109). Aucun champ n'est ignoré en silence.
+
 ## Recherche : réponse
 
 ```json
@@ -263,6 +265,8 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
   "request_id": "…"
 }
 ```
+
+`took_ms` est la durée totale du traitement, **de la prise du jeton de concurrence à la fin du calcul** : elle couvre l'encodage de la requête ou sa lecture dans le cache, la planification, les deux branches, la fusion, le regroupement et la lecture des payloads (ADR-0109). C'est la même durée que celle de `crible search`, qui mesure depuis l'entrée de sa commande.
 
 Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ». Avec `group_by: "document"`, la réponse garde cette forme : une **liste plate** d'entrées de niveau passage, sans objet par document, et `doc_id` suffit à rattacher une entrée à son document (ADR-0075). `k` compte alors des **documents distincts**, et la liste porte au plus `k × passages_per_document` entrées. Les entrées d'un même document sont consécutives ; les documents sont rangés selon leur meilleur passage (score décroissant, puis clé croissante), et les passages d'un document par score décroissant puis clé croissante. Quand les candidats sur-échantillonnés sont épuisés avant `k` documents, la réponse en contient moins, sans erreur. Avec `dedup: "content"`, la fusion s'applique avant le regroupement. Aucun champ nouveau n'est ajouté aux résultats en P4.
 
@@ -349,4 +353,4 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 | `wait_timeout_ms` | 60 000 par défaut : attente au plus de `?wait=true`, puis `202` avec le job dans son état courant (ADR-0067) |
 | Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |
 
-Toute requête dont le corps dépasse **32 Mio (33 554 432 octets)** est refusée en `payload_too_large` (413) : cette borne est une constante du code, non configurable, et les « 32 Mo » des sections « Lot en ligne » et « Patch de métadonnées » s'entendent en Mio (ADR-0102). Les recherches concurrentes sont limitées par un sémaphore pris **sans attente** : au-delà, la réponse est `503 overloaded` immédiate avec `Retry-After: 1` ; la limite ne s'applique qu'aux routes de recherche, jamais à `/health`, `/ready` ni aux écritures (ADR-0102). À l'échéance de `timeout_ms`, la réponse est `504 timeout` ; le calcul n'est pas annulé et garde son jeton de concurrence jusqu'à sa fin réelle. `timeout_ms` ne s'applique pas aux écritures : `?wait=true` rend `202` à l'échéance de `wait_timeout_ms` (ADR-0067, ADR-0102).
+Toute requête dont le corps dépasse **32 Mio (33 554 432 octets)** est refusée en `payload_too_large` (413) : cette borne est une constante du code, non configurable, et les « 32 Mo » des sections « Lot en ligne » et « Patch de métadonnées » s'entendent en Mio (ADR-0102). Les recherches concurrentes sont limitées par un sémaphore pris **sans attente** : au-delà, la réponse est `503 overloaded` immédiate avec `Retry-After: 1` ; la limite ne s'applique qu'aux routes de recherche, jamais à `/health`, `/ready` ni aux écritures (ADR-0102). À l'échéance de `timeout_ms`, la réponse est `504 timeout` ; le calcul n'est pas annulé et garde son jeton de concurrence jusqu'à sa fin réelle. L'échéance part de la prise du jeton et couvre tout le pipeline — encodage de la requête ou lecture dans le cache, planification, branches, fusion, regroupement et lecture des payloads —, l'authentification et le décodage du corps restant hors du chronomètre (ADR-0109). `timeout_ms` ne s'applique pas aux écritures : `?wait=true` rend `202` à l'échéance de `wait_timeout_ms` (ADR-0067, ADR-0102).
