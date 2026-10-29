@@ -54,6 +54,18 @@ Ce qui n'est pas décidé ici : la version exacte des crates, épinglée par la 
 | Un identifiant monotone par processus (compteur) | Fuit l'ordre et le volume de trafic, et se confond entre deux instances ou deux redémarrages, ce qui rend le rapprochement des logs faux. |
 | Régler explicitement `worker_threads` de tokio | Aucun besoin mesuré ; la règle 12 interdit la configuration d'une valeur fixe, et les calculs restent sur rayon. |
 
+## Complément du 2026-10-29 (relecture de DEMARRER-SERVEUR-AXUM)
+
+La relecture de `DEMARRER-SERVEUR-AXUM` a relevé trois features employées par le code et absentes de la liste de la décision. Elles sont **consignées** ici, sans décision nouvelle de crate : les trois crates (`tokio`, `tower`, `tower-http`) figurent déjà dans `docs/07`. Les décisions ci-dessus ne changent pas.
+
+| Crate | Feature | Dépendance | Emploi |
+|---|---|---|---|
+| `tokio` | `sync` | normale (`[workspace.dependencies]` de `Cargo.toml`, racine) | Canal `watch` du signal d'arrêt et de l'état prêt du serveur |
+| `tokio` | `io-util` | **de développement seulement** (`[dev-dependencies]` de `crates/crible-server/Cargo.toml`) | `AsyncReadExt` / `AsyncWriteExt` : les tests du serveur parlent HTTP sur une socket |
+| `tower` | `util` | **de développement seulement** (`[dev-dependencies]` de `crates/crible-server/Cargo.toml`) | `ServiceExt` (`oneshot`) : tests du routeur et du service sans socket |
+
+Aucune de ces features n'ajoute de crate à l'arbre de dépendances, et aucune n'est active dans le binaire de production : `io-util` et `util` ne servent qu'aux tests. La liste de la décision se lit donc avec ce tableau pour être complète, et `docs/07` (ligne HTTP du tableau des dépendances) est complétée en conséquence.
+
 ## Références
 
 `docs/07-stack-et-deploiement.md` (tableau des dépendances, Docker) ; `docs/06-observabilite.md` (santé et logs, INV-13) ; `docs/02-architecture.md:164` (calculs sur le pool rayon) ; `docs/suivi.md`, « Idées hors périmètre » (2026-10-24, `RUST_LOG`) et contenu de NETTOYER-P2, ligne 187 ; ADR-0098 (`x-request-id`) ; ADR-0052 (défauts d'ONNX Runtime) ; ADR-0057 (job `rust-onnx`).

@@ -8,5 +8,6 @@ pub mod error;
 pub mod filter;
 pub mod ids;
 pub mod model;
+pub mod path;
 
 mod json;

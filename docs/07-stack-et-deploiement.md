@@ -28,7 +28,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 
 | Rôle | Crate | Remarque |
 |---|---|---|
-| HTTP | `axum` 0.8, `tokio`, `tower`, `tower-http` | Comme NextPlaid. Features : `tokio` (`rt-multi-thread`, `macros`, `signal`, `net`, `time`) et `tower-http` (`trace`, plus celles qu'exigent les limites) ; les threads tokio restent aux défauts de la bibliothèque (ADR-0096) |
+| HTTP | `axum` 0.8, `tokio`, `tower`, `tower-http` | Comme NextPlaid. Features : `tokio` (`rt-multi-thread`, `macros`, `signal`, `net`, `time`, `sync`) et `tower-http` (`trace`, plus celles qu'exigent les limites) ; `tokio` (`io-util`) et `tower` (`util`) sont des dépendances de développement seulement (complément du 2026-10-29 à ADR-0096) ; les threads tokio restent aux défauts de la bibliothèque (ADR-0096) |
 | OpenAPI | `utoipa`, `utoipa-swagger-ui` | Spécification générée depuis le code |
 | Instantanés sans verrou | `arc-swap` | |
 | Calcul parallèle | `rayon` | Pool dédié, séparé de tokio |

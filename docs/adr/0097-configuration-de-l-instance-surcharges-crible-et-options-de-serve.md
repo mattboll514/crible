@@ -73,6 +73,24 @@ Ce qui n'est pas décidé ici : le contenu de chaque clé, décrit par `docs/07`
 | Chercher `crible.toml` dans le dossier courant, puis dans `/etc` | Deux emplacements possibles rendent le diagnostic ambigu : le serveur lirait un fichier que l'exploitant ne regarde pas. |
 | Exiger `--config` sans valeur par défaut | Le conteneur de `docs/07` monte le fichier à un emplacement fixe ; une valeur par défaut évite un drapeau dans chaque ligne de commande. |
 
+## Complément du 2026-10-29 (relecture de DEMARRER-SERVEUR-AXUM)
+
+Deux précisions, qui ne changent pas la décision.
+
+**Les scalaires acceptés.** La décision parle de « scalaire du type de la clé visée ». La liste est fermée :
+
+| Scalaire | Exemple de clé |
+|---|---|
+| Entier | `CRIBLE_LIMITS__QUERY_CACHE_ENTRIES` |
+| Nombre flottant | `CRIBLE_DEBUG_JOURNAL__SAMPLE_RATE` (`docs/07`, valeur par défaut `0.0`) |
+| Booléen | les clés de bascule de `crible.toml` |
+| Chaîne | `CRIBLE_SERVER__BIND` |
+| Chaîne d'énumération | les clés à valeurs nommées |
+
+Le **nombre flottant** manquait à la liste. Il est nécessaire : `[debug_journal].sample_rate` vaut `0.0` par défaut (`docs/07`, section « Configuration de l'instance »), et une valeur telle que `0.25` doit pouvoir être surchargée sans éditer le fichier monté en lecture seule. L'analyse se fait en virgule flottante décimale, sans séparateur de milliers ni notation dépendant de la locale.
+
+**Variables non UTF-8.** Une variable d'environnement de préfixe `CRIBLE_` dont le **nom** ou la **valeur** n'est pas en UTF-8 est refusée au démarrage comme une variable invalide, avec le même code de sortie non nul. Son nom est cité dans le message sous une forme approchée (substitution des octets non décodables), faute de pouvoir l'écrire exactement. Le but est qu'aucune variable `CRIBLE_*` ne soit ignorée en silence : le système d'exploitation permet des octets arbitraires dans l'environnement, et le contrôle de la décision, qui lit des chaînes, ne verrait pas ces variables sans cette règle.
+
 ## Références
 
 `docs/07-stack-et-deploiement.md` (sections « Configuration de l'instance » et « Docker ») ; `docs/08-invariants-et-tests.md:35` (`CRIBLE_FAILPOINT`) ; `docs/suivi.md` (« Idées hors périmètre », `CRIBLE_DEPOT`) ; ADR-0031 (clé inconnue refusée) ; ADR-0027 (renvoi erroné à corriger) ; ADR-0051 (`:139`, renvoi erroné à corriger) ; ADR-0068 (failpoints) ; ADR-0050 (export) ; fiche `DEMARRER-SERVEUR-AXUM`.
