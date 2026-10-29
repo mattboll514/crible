@@ -18,15 +18,18 @@
 //! bytes of `[A-Za-z0-9._:-]`; otherwise a UUID v4 is generated and the refused
 //! value is never journalised (ADR-0098).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
+use crible_core::error::{CribleError, ErrorCode};
+use crible_store::jobs::JobState;
 use serde_json::{Value, json};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -35,7 +38,10 @@ use tracing::{Instrument, Level, error, info_span};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::auth::{Auth, protect};
+use crate::config::Role;
 use crate::error;
+use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
 
 /// Header carrying the request identifier on every response (ADR-0098).
@@ -55,13 +61,94 @@ pub struct RequestId(pub String);
 ///
 /// The state is the one created at the bind: the router answers `503` on
 /// `/ready` until [`AppState::mark_ready`] is called.
+///
+/// The job routes of `docs/05-api.md` are mounted here with the `write` role
+/// (ADR-0095, ADR-0103). When no authenticator is published yet — a test router,
+/// or the bind before the startup — the closed-by-default one refuses every
+/// request with `401`, as an empty `[[auth.keys]]` does (ADR-0100).
 pub fn build_router(state: Arc<AppState>) -> Router {
+    let auth = state.auth().unwrap_or_else(|| Arc::new(Auth::closed()));
+    let jobs = protect(jobs_routes(), auth, Role::Write);
     with_common_layers(
         Router::new()
             .route("/health", get(health))
-            .route("/ready", get(ready)),
+            .route("/ready", get(ready))
+            .merge(jobs),
     )
     .with_state(state)
+}
+
+/// The job routes of the instance: the list and the detail, `write` only.
+///
+/// No write route exists yet (`ROUTES-INDEX`, `ROUTES-DOCUMENTS-ET-LOTS`); the
+/// routes that create a job will call [`AppState::submit_job`] and
+/// [`accepted`], and mount beside these.
+fn jobs_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/jobs", get(list_jobs))
+        .route("/v1/jobs/{job_id}", get(get_job))
+}
+
+/// `GET /v1/jobs`: the retained jobs, filtered by `index` and `state`.
+///
+/// The order is `created_at` descending then `id`, without pagination, and a
+/// `state` outside the four of `docs/05-api.md` is `400 invalid_request`
+/// (ADR-0103, decision 7).
+async fn list_jobs(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let wanted = match query.get("state") {
+        Some(raw) => match JobState::parse(raw) {
+            Some(state) => Some(state),
+            None => {
+                let failure =
+                    error::invalid("'state' must be one of queued, running, succeeded or failed");
+                return error::rendered(&failure, &identifier.0);
+            }
+        },
+        None => None,
+    };
+    let jobs = state.list_jobs(query.get("index").map(String::as_str), wanted);
+    Json(json!({
+        "jobs": jobs.iter().map(JobView::to_json).collect::<Vec<_>>()
+    }))
+    .into_response()
+}
+
+/// `GET /v1/jobs/{job_id}`: one retained job, or `404 not_found`.
+async fn get_job(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Path(job_id): Path<String>,
+) -> Response {
+    match state.job(&job_id) {
+        Some(job) => (StatusCode::OK, Json(job.to_json())).into_response(),
+        None => {
+            let failure = CribleError::new(ErrorCode::NotFound, "job not found");
+            error::rendered(&failure, &identifier.0)
+        }
+    }
+}
+
+/// Renders the answer to a job submission, the helper every write route uses.
+///
+/// Without `?wait=true`, the answer is `202 Accepted` with the job as accepted.
+/// With it, the call waits for the job under `[limits].wait_timeout_ms`: a job
+/// that finishes in the delay is rendered terminal, in `200`; at the deadline,
+/// and as soon as the server begins to drain, the answer is `202 Accepted` with
+/// the job in its current state, never `504` (ADR-0067, ADR-0104).
+pub async fn accepted(state: &AppState, job: JobView, wait: bool) -> Response {
+    if wait && let Some(current) = state.wait_for_job(&job.id).await {
+        let status = if current.state.is_terminal() {
+            StatusCode::OK
+        } else {
+            StatusCode::ACCEPTED
+        };
+        return (status, Json(current.to_json())).into_response();
+    }
+    (StatusCode::ACCEPTED, Json(job.to_json())).into_response()
 }
 
 /// Applies the layers every router of the server shares.

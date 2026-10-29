@@ -3,6 +3,7 @@
 ## Conventions
 
 - **Format** : base `/v1`, JSON en UTF-8, noms en anglais et en `snake_case`.
+- **Routes de liste** : une route de liste rend un objet à une clé, le nom pluriel de la ressource (ADR-0103) : `{ "jobs": [ … ] }` pour `GET /v1/jobs`, `{ "indexes": [ … ] }` pour `GET /v1/indexes`.
 - **Authentification** : en-tête `Authorization: Bearer <clé>`. Les clés sont déclarées dans `crible.toml` sous forme de hash SHA-256, avec un nom et un rôle :
 
   | Rôle | Droits |
@@ -262,7 +263,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 - **Redémarrage** : un job resté `queued` ou `running` quand le serveur s'arrête passe à `failed` au démarrage suivant, avec `finished_at` à l'heure du démarrage, `error.code` à `internal` et le message fixe « the job was interrupted by a server restart ». Aucun job n'est rejoué : le client resoumet, et une attache est idempotente par `batch_id` (ADR-0103).
 - **Erreur d'un job** : `{ "code", "message", "details" }`, sans `request_id` — un job n'est pas une requête —, avec les règles du corps d'erreur d'ADR-0101 : message générique et fixe pour `internal`, cause journalisée avec le `job_id` (ADR-0103).
 - **Rétention** : les jobs terminés depuis plus de 30 jours sont purgés, de la table et de la mémoire, au démarrage et à la fin de chaque job ; les jobs en cours ne sont jamais purgés. La valeur est fixe, sans clé de configuration. Un job inconnu ou purgé rend `404 not_found` (ADR-0103).
-- **Liste** : `GET /v1/jobs` rend tous les jobs retenus, filtrables par `index` et par `state`, triés par `created_at` décroissant puis `id`, sans pagination en v1 ; une valeur de `state` hors des quatre états rend `invalid_request` (400). Aucune isolation par clé : toute clé `write` ou `admin` voit les jobs de l'instance (ADR-0103).
+- **Liste** : `GET /v1/jobs` rend tous les jobs retenus, dans un objet à une seule clé, `{ "jobs": [ … ] }` (ADR-0103), filtrables par `index` et par `state`, triés par `created_at` décroissant puis `id`, sans pagination en v1 ; une valeur de `state` hors des quatre états rend `invalid_request` (400). Aucune isolation par clé : toute clé `write` ou `admin` voit les jobs de l'instance (ADR-0103).
 - **Arrêt du serveur** : dès le début du drainage, toute nouvelle soumission rend `503 overloaded` avec le message « the server is shutting down » ; les jobs acceptés avant le signal se terminent, et l'attente est bornée par `wait_timeout_ms` comptée depuis le signal, en parallèle du drainage des requêtes. À l'échéance, le processus sort et les jobs non terminés passent à `failed` au démarrage suivant (ADR-0104).
 
 ## Limites par défaut (configurables)

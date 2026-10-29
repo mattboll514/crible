@@ -28,6 +28,7 @@ use std::any::Any;
 
 use axum::body::Body;
 use axum::extract::Request;
+use axum::http::header::RETRY_AFTER;
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -38,7 +39,7 @@ use uuid::Uuid;
 
 use crate::auth::{FORBIDDEN_MESSAGE, UNAUTHORIZED_MESSAGE};
 use crate::http::{REQUEST_ID_HEADER, RequestId};
-use crate::limits::OVERLOADED_MESSAGE;
+use crate::limits::{OVERLOADED_MESSAGE, RETRY_AFTER_SECONDS};
 
 /// Fixed message of every `internal` response (ADR-0101, decision 2).
 pub const INTERNAL_MESSAGE: &str = "internal error; see the server log for this request_id";
@@ -85,6 +86,13 @@ pub(crate) fn body(code: ErrorCode, message: &str, details: Value, request_id: &
 /// The `x-request-id` header is set here as well: an error rendered inside the
 /// router must carry it even when it is produced outside the request-id layer
 /// (ADR-0098). The value is the one of the body, so the two never disagree.
+///
+/// Every `overloaded` carries `Retry-After: 1`, whatever produced it: the search
+/// limit, the write queue, a server in drainage, a SQLite lock, the lexical
+/// branch (ADR-0103, decision 9). The rule is here and nowhere else, so a new
+/// producer of `overloaded` inherits it without a decision; the `503` of
+/// `/ready` is not an `overloaded` and never comes through this function
+/// (ADR-0099).
 pub(crate) fn response(
     code: ErrorCode,
     message: &str,
@@ -96,6 +104,12 @@ pub(crate) fn response(
     let mut response =
         (status, axum::Json(body(code, message, details, request_id))).into_response();
     response.extensions_mut().insert(Rendered(code));
+    if code == ErrorCode::Overloaded {
+        response.headers_mut().insert(
+            RETRY_AFTER,
+            axum::http::HeaderValue::from(RETRY_AFTER_SECONDS),
+        );
+    }
     if let Ok(value) = axum::http::HeaderValue::from_str(request_id) {
         response.headers_mut().insert(
             axum::http::HeaderName::from_static(REQUEST_ID_HEADER),
@@ -236,12 +250,11 @@ fn no_route(method: &Method, path: &str) -> String {
 /// `415` and gives `422` another meaning (ADR-0101, decision 6). Any other
 /// client error is `invalid_request` too. A `503` that no route rendered is
 /// `overloaded`, because `docs/05` gives that status to a transient contention
-/// and an overload must not become an `internal`; the `Retry-After` header is
-/// not added here, because `limits::refusal` carries the value fixed for the
-/// concurrency limit and the other producers of `overloaded` have none yet
-/// (ADR-0102); any other server error is `internal`: no route produces them
-/// through this path, which is a last resort that keeps the format instead of
-/// leaking a body.
+/// and an overload must not become an `internal`; the `Retry-After: 1` of
+/// ADR-0103 is added by [`response`], like for every producer of `overloaded`;
+/// any other server error is `internal`: no route produces them through this
+/// path, which is a last resort that keeps the format instead of leaking a
+/// body.
 fn from_status(status: StatusCode, method: &Method, path: &str) -> (ErrorCode, String) {
     match status {
         StatusCode::BAD_REQUEST

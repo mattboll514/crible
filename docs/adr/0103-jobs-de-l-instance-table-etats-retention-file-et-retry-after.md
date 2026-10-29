@@ -88,6 +88,16 @@ Ce qui n'est décidé ici : la durée d'attente des jobs à l'arrêt, fixée par
 | `Retry-After` calculé d'après la charge observée | Demande une mesure de la durée d'attente réelle par cause, que rien ne fournit aujourd'hui ; la constante est honnête et révisable. |
 | Pas de `Retry-After` sur la file d'écriture | Un client réessaierait immédiatement et aggraverait la saturation ; ADR-0102 a déjà tranché le principe pour la recherche. |
 
+## Complément du 2026-10-29
+
+Une précision sur l'enveloppe du corps des routes de liste. Elle ne change ni le statut ni les décisions ci-dessus.
+
+**Constat.** `docs/05-api.md` ne fixe pas l'enveloppe du corps d'une route de liste ; `@dev` a rendu `GET /v1/jobs` sous la forme `{ "jobs": [ … ] }`.
+
+**Décision.** Le corps d'une route de liste est un objet JSON à une seule clé, le nom pluriel de la ressource, dont la valeur est le tableau : `{ "jobs": [ … ] }` pour `GET /v1/jobs`, et la même règle pour `GET /v1/indexes` (`{ "indexes": [ … ] }`, livrée par `ROUTES-INDEX`).
+
+**Raison.** Un objet laisse ajouter un champ (pagination éventuelle, compte) sans casser les clients ; un tableau nu ne le permet pas.
+
 ## Références
 
 `docs/02-architecture.md` (« Organisation sur disque » `:56-82`, « Reprise au démarrage » `:138-148`, « Concurrence » `:158-167`) ; `docs/05-api.md` (conventions `?wait=true` `:19-20`, table des erreurs `:35-50`, endpoints `:67`, section « Jobs » `:245-266`, « Limites par défaut » `:268-282`) ; `docs/07-stack-et-deploiement.md` (`[limits]` `:97-102`) ; `docs/phases/P6-serveur-et-api.md` (`FILE-D-ECRITURE-ET-JOBS` `:54-69`) ; `docs/08-invariants-et-tests.md` (INV-01, INV-02, INV-03, INV-10, INV-15) ; ADR-0016 (point de commit) ; ADR-0038 (`busy_timeout`, `overloaded`) ; ADR-0042 (durées d'attache non persistées) ; ADR-0055 (idempotence par `batch_id`) ; ADR-0060 (rapport de patch non persisté) ; ADR-0067 (`?wait=true`) ; ADR-0095 (rôle `write` et critère d'arrêt) ; ADR-0096 (crate `uuid`) ; ADR-0097 (liste fermée des clés) ; ADR-0099 (arrêt) ; ADR-0101 (corps d'erreur) ; ADR-0102 (`Retry-After` de la recherche, laissé ouvert ailleurs) ; ADR-0104 (arrêt et jobs).

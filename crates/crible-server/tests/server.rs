@@ -316,6 +316,7 @@ async fn the_probe_bodies_distinguish_alive_from_ready() {
         Arc::clone(&state),
         shutdown.clone(),
         Duration::from_secs(5),
+        Duration::from_secs(5),
     ));
 
     let health = http_get(address, "/health").await;
@@ -555,6 +556,7 @@ async fn a_request_in_flight_ends_before_the_exit() {
         Arc::clone(&state),
         shutdown.clone(),
         Duration::from_secs(5),
+        Duration::from_secs(5),
     ));
 
     let started = SLOW_STARTED.get_or_init(tokio::sync::Notify::new);
@@ -602,6 +604,7 @@ async fn the_drain_withdraws_readiness() {
         router,
         Arc::clone(&state),
         shutdown.clone(),
+        Duration::from_secs(5),
         Duration::from_secs(5),
     ));
 
@@ -654,6 +657,7 @@ async fn the_drainage_is_bounded() {
         Arc::clone(&state),
         shutdown.clone(),
         bound,
+        Duration::from_secs(5),
     ));
 
     let started = STUCK_STARTED.get_or_init(tokio::sync::Notify::new);
@@ -691,6 +695,7 @@ async fn a_second_signal_ends_the_drainage_at_once() {
         Arc::clone(&state),
         shutdown.clone(),
         Duration::from_secs(30),
+        Duration::from_secs(5),
     ));
     shutdown.force();
     assert_eq!(

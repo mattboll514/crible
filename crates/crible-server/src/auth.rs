@@ -152,6 +152,17 @@ struct Credential {
 }
 
 impl Auth {
+    /// Builds an authenticator with no key: the closed-by-default instance.
+    ///
+    /// Every authenticated route answers `401` (ADR-0100, decision 4). The
+    /// router uses it while the startup has not published the real one.
+    #[must_use]
+    pub fn closed() -> Self {
+        Self {
+            credentials: Vec::new(),
+        }
+    }
+
     /// Builds the authenticator of the declared keys.
     ///
     /// An empty list is accepted: the instance starts, and every authenticated

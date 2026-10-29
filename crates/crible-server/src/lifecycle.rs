@@ -95,6 +95,28 @@ impl Shutdown {
         self.set(Phase::Forced);
     }
 
+    /// Current phase of the shutdown.
+    #[must_use]
+    pub fn phase(&self) -> Phase {
+        *self.phase.borrow()
+    }
+
+    /// Whether the server has begun to drain: no new job is accepted from that
+    /// moment (ADR-0104, decision 1).
+    #[must_use]
+    pub fn is_draining(&self) -> bool {
+        self.phase() != Phase::Running
+    }
+
+    /// Waits until the server leaves [`Phase::Running`].
+    pub async fn wait_draining(&self) {
+        if self.is_draining() {
+            return;
+        }
+        let mut phase = self.receiver();
+        let _ = phase.wait_for(|phase| *phase != Phase::Running).await;
+    }
+
     fn set(&self, phase: Phase) {
         self.phase.send_if_modified(|current| {
             // `Forced` is final: a later `drain` cannot reopen the drainage.
@@ -126,6 +148,12 @@ impl Default for Shutdown {
 /// still open are cut, which is logged, and the function returns
 /// [`StopReason::BoundReached`].
 ///
+/// The write jobs are drained in parallel, bounded by `jobs` counted from the
+/// same signal (`[limits].wait_timeout_ms`, ADR-0104). Jobs accepted before the
+/// signal finish; a submission after it is refused by [`AppState`]. At the job
+/// bound, the function logs the abandoned jobs, with their identifier, kind and
+/// index, and returns [`StopReason::BoundReached`] as well.
+///
 /// # Errors
 ///
 /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
@@ -136,6 +164,7 @@ pub async fn run_server(
     state: Arc<AppState>,
     shutdown: Shutdown,
     drain: Duration,
+    jobs: Duration,
 ) -> Result<StopReason, CribleError> {
     let mut stopping = shutdown.receiver();
     let mut serving = shutdown.receiver();
@@ -167,30 +196,60 @@ pub async fn run_server(
     let forced_wait = async move {
         let _ = forced.wait_for(|phase| *phase == Phase::Forced).await;
     };
+    let drain_both = async {
+        let requests = tokio::time::timeout(drain, &mut handle);
+        let writes = async {
+            match state.jobs() {
+                Some(board) => tokio::time::timeout(jobs, board.drained()).await.is_ok(),
+                None => true,
+            }
+        };
+        tokio::join!(requests, writes)
+    };
     tokio::select! {
         () = forced_wait => {
             warn!("a second signal cuts the drainage and the process exits now");
             handle.abort();
             Ok(StopReason::Forced)
         }
-        outcome = tokio::time::timeout(drain, &mut handle) => {
-            match outcome {
+        (requests, writes) = drain_both => {
+            let mut reason = StopReason::Drained;
+            match requests {
                 Ok(joined) => {
                     let outcome = joined.map_err(join_failure)?;
                     outcome.map_err(|error| {
                         internal(format!("the HTTP server stopped on an I/O failure: {error}"))
                     })?;
-                    Ok(StopReason::Drained)
                 }
                 Err(_) => {
                     warn!(
                         bound_ms = drain.as_millis(),
                         "the drainage bound is reached; the requests still in flight are cut"
                     );
+                    reason = StopReason::BoundReached;
                     handle.abort();
-                    Ok(StopReason::BoundReached)
                 }
             }
+            if !writes {
+                let abandoned = state
+                    .jobs()
+                    .map_or_else(Vec::new, |board| board.unfinished());
+                warn!(
+                    abandoned = abandoned.len(),
+                    bound_ms = jobs.as_millis(),
+                    "the job bound is reached; the write jobs still unfinished are abandoned"
+                );
+                for job in &abandoned {
+                    warn!(
+                        job_id = %job.id,
+                        kind = job.kind.as_str(),
+                        index = %job.index,
+                        "abandoned write job"
+                    );
+                }
+                reason = StopReason::BoundReached;
+            }
+            Ok(reason)
         }
     }
 }
@@ -223,19 +282,24 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         .map_err(|error| internal(format!("cannot read the bound address: {error}")))?;
     info!(address = %address, "the server is bound");
     let state = Arc::new(AppState::new());
+    let shutdown = Shutdown::new();
+    state.set_shutdown(shutdown.clone())?;
     // ADR-0100, decision 4: an empty `[[auth.keys]]` is the closed-by-default
     // instance. It starts, and says so once instead of failing every request
     // silently.
     warn_if_empty(&config.auth.keys);
     state.set_auth(Arc::new(Auth::new(&config.auth.keys)?))?;
     let router = build_router(Arc::clone(&state));
-    let shutdown = Shutdown::new();
     let drain = Duration::from_millis(
         config
             .limits
             .default_timeout_ms
             .saturating_add(DRAIN_MARGIN_MS),
     );
+    // ADR-0104, decision 3: the wait of the write jobs is bounded by
+    // `[limits].wait_timeout_ms`, counted from the signal, in parallel with the
+    // request drainage above.
+    let jobs_drain = Duration::from_millis(config.limits.wait_timeout_ms);
     install_signal_handlers(shutdown.clone())?;
 
     let mut server = tokio::spawn(run_server(
@@ -244,6 +308,7 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         Arc::clone(&state),
         shutdown.clone(),
         drain,
+        jobs_drain,
     ));
     let loading = {
         let state = Arc::clone(&state);
@@ -255,6 +320,7 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         loaded = &mut loading => {
             match loaded {
                 Ok(Ok(())) => {
+                    state.start_writers();
                     state.mark_ready();
                     info!(
                         indexes = state.loaded().map_or(0, |loaded| loaded.indexes().len()),
