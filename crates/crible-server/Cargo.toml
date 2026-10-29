@@ -13,6 +13,9 @@ crible-core = { path = "../crible-core" }
 crible-encode = { path = "../crible-encode" }
 crible-store = { path = "../crible-store" }
 getrandom.workspace = true
+# The bodies of the write routes are decoded into the types of `crible-store`,
+# which derive `Deserialize` (`ROUTES-DOCUMENTS-ET-LOTS`, ADR-0107).
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
@@ -31,6 +34,17 @@ tower = { workspace = true, features = ["util"] }
 # feature is a test need, so the server build keeps the list of ADR-0096.
 tokio = { workspace = true, features = ["io-util"] }
 tempfile.workspace = true
+# The tests that arm the failpoints of `crible-store` live behind the server's
+# own `failpoints` feature (`compaction_recovery.rs`), so the normal build never
+# compiles them and `crible-store` keeps its feature off by default
+# (complement of 2026-10-29 to ADR-0068, decision 2).
+crible-store = { path = "../crible-store" }
+
+[features]
+# Off by default: it turns on the failpoints of `crible-store` for the test
+# build only, so a plain `cargo test` exercises the build without them
+# (complement of 2026-10-29 to ADR-0068, decision 2).
+failpoints = ["crible-store/failpoints"]
 
 [lints]
 workspace = true

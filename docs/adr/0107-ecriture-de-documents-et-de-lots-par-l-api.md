@@ -151,6 +151,24 @@ Ce qui n'est pas décidé ici : les libellés exacts des messages autres que ceu
 | Exposer la restauration par l'API en v1 | La restauration est hors ligne (ADR-0065) : elle remplace une époque sous les lecteurs d'un index servi et demande l'arrêt du serveur. Un job ne peut pas la rendre sûre. |
 | Accepter un corps sur `compact`, `exports` et `snapshots` | Aucun réglage de ces opérations n'est décidé : destinations et bornes viennent de la génération publiée et de `docs/04`. Un corps accepté puis ignoré serait un contrat faux. |
 
+## Complément du 2026-10-29 (relecture de ROUTES-DOCUMENTS-ET-LOTS)
+
+Deux précisions, sur les décisions 5 et 1. Le statut de l'ADR ne change pas, et le corps des décisions reste écrit tel qu'il a été accepté ; les deux règles ci-dessous font foi à sa place.
+
+**Constat (a).** La décision 5 finit par : « Le lecteur de lot ouvre les fichiers sans suivre de lien lorsque la plateforme le permet. » Or ouvrir un fichier sans suivre de lien demande l'appel système `openat` avec `O_NOFOLLOW`, donc la crate `libc`, qui n'est pas dans `docs/07`. La relecture de `ROUTES-DOCUMENTS-ET-LOTS` montre en outre que le chemin qui lit réellement le lot est **l'écrivain**, au moment du job, et non le lecteur de l'attache.
+
+**Décision (a).** La phrase de la décision 5 est **remplacée** par : « Le job revalide le dossier du lot — même règle : chemin canonique sous l'inbox, aucun lien symbolique à aucune profondeur, aucune entrée spéciale — juste avant de le lire, dans l'écrivain ; la fenêtre résiduelle entre cette revalidation et la lecture est assumée (l'inbox est sous le contrôle de l'exploitant). »
+
+**Raison (a).** `O_NOFOLLOW` fermerait la fenêtre au prix d'une crate absente de `docs/07`, donc d'un ADR de dépendance, pour un intervalle que la revalidation réduit déjà à quelques millisecondes. Le coût de la règle augmente en revanche pour l'exploitant : deux parcours du dossier par lot, celui de la soumission et celui du job.
+
+**Constat (b).** La décision 1 accepte un corps qui ne porte que des `deletions`, et ne dit rien d'un corps qui ne porte **ni** `documents` **ni** `deletions`. Le chemin par fichier refuse déjà un fichier vide (`crates/crible-store/src/online.rs`) : laisser passer le corps vide donnerait deux comportements pour la même absence de contenu, et créerait une génération sans rien à attacher.
+
+**Décision (b).** Un corps de lot en ligne **sans aucun document et sans aucune suppression** rend **`400 invalid_request`**, avant la mise en file, comme le chemin par fichier refuse un fichier vide. Un corps qui ne porte que des `deletions` reste accepté : c'est un lot sans passage, et la décision 1 le décrit.
+
+**Raison (b).** Un lot vide n'est un lot ni par ses documents ni par ses suppressions : l'accepter ferait écrire un lot interne aux fichiers vides, créerait une génération et un rapport sans effet, ou ferait échouer le job plus tard, loin de la requête qui pouvait être corrigée.
+
+**Application.** `docs/05-api.md` reçoit les deux règles : la revalidation dans « Lot déposé » et dans la ligne `POST /batches` de la table des routes, le refus du corps vide dans « Lot en ligne », dans la table des routes et dans la ligne `invalid_request` de la table des codes. `docs/04-donnees-et-ingestion.md:144` n'est pas modifié : sa règle d'inbox décrit la canonicalisation, les liens et la course assumée, sans citer d'ouverture sans lien.
+
 ## Références
 
 - `docs/phases/P6-serveur-et-api.md:84-97` — fiche `ROUTES-DOCUMENTS-ET-LOTS`, et `:131`, `:139`, `:141` pour les tâches qui en dépendent.

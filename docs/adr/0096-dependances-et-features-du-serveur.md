@@ -66,6 +66,19 @@ La relecture de `DEMARRER-SERVEUR-AXUM` a relevé trois features employées par 
 
 Aucune de ces features n'ajoute de crate à l'arbre de dépendances, et aucune n'est active dans le binaire de production : `io-util` et `util` ne servent qu'aux tests. La liste de la décision se lit donc avec ce tableau pour être complète, et `docs/07` (ligne HTTP du tableau des dépendances) est complétée en conséquence.
 
+### Suite du complément : relecture de ROUTES-DOCUMENTS-ET-LOTS
+
+**Statut de cette suite** : acceptée par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série. Elle ne change aucune décision ci-dessus, ni le statut de l'ADR.
+
+La relecture de `ROUTES-DOCUMENTS-ET-LOTS` ajoute **deux entrées** de même nature : une dépendance déjà nommée par `docs/07`, et une feature du paquet serveur.
+
+| Crate | Feature | Dépendance | Emploi |
+|---|---|---|---|
+| `serde` | `derive` | normale (`[dependencies]` de `crates/crible-server/Cargo.toml`), même déclaration que `crible-core` et `crible-store` | Décoder les corps des routes d'écriture dans les types de `crible-store` qui dérivent `Deserialize` (ADR-0107) |
+| `crible-server` | `failpoints` | **feature du paquet**, éteinte par défaut ; active `crible-store/failpoints` | Prouver la reprise d'ADR-0108 au niveau du serveur par le point de panne `after_epoch_switch` de la compaction ; les deux étapes de CI correspondantes sont fixées par le complément du 2026-10-29 à ADR-0068 |
+
+`serde` avec `derive` ne crée aucune dépendance : la ligne « Config » de `docs/07:48` nomme déjà `serde` pour le serveur, `crible-core` et `crible-store`, avec la même déclaration. La feature `failpoints` du serveur n'ajoute pas non plus de crate : elle n'active celle de `crible-store` que sous la ligne de commande qui la demande, et le binaire de production ne la reçoit pas.
+
 ## Références
 
 `docs/07-stack-et-deploiement.md` (tableau des dépendances, Docker) ; `docs/06-observabilite.md` (santé et logs, INV-13) ; `docs/02-architecture.md:164` (calculs sur le pool rayon) ; `docs/suivi.md`, « Idées hors périmètre » (2026-10-24, `RUST_LOG`) et contenu de NETTOYER-P2, ligne 187 ; ADR-0098 (`x-request-id`) ; ADR-0052 (défauts d'ONNX Runtime) ; ADR-0057 (job `rust-onnx`).

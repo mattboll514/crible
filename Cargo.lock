@@ -909,6 +909,7 @@ dependencies = [
  "crible-encode",
  "crible-store",
  "getrandom 0.4.3",
+ "serde",
  "serde_json",
  "sha2",
  "subtle",

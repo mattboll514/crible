@@ -880,6 +880,37 @@ impl GenerationStore {
     where
         F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
     {
+        // ADR-0108, decision 1: before any commit, the pointer is the authority
+        // on which epoch is current. A store left on E while `CURRENT_EPOCH`
+        // names E+1 (a failed `adopt_epoch`) would write generations no reader
+        // reopens, so the commit is refused without writing anything.
+        let on_disk = read_current_epoch(&self.index_dir).map_err(|failure| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "cannot read CURRENT_EPOCH of {}: {}",
+                    self.index_dir.display(),
+                    failure.message()
+                ),
+            )
+        })?;
+        if on_disk != self.lease.epoch {
+            tracing::error!(
+                index = %self.index_dir.display(),
+                pointer = on_disk.get(),
+                epoch = self.lease.epoch.get(),
+                "CURRENT_EPOCH names another epoch than the store; refusing to commit (ADR-0108)"
+            );
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "CURRENT_EPOCH names epoch {} but this store holds epoch {}; a commit there \
+                     would be lost, reopen the store first (ADR-0108)",
+                    on_disk.get(),
+                    self.lease.epoch.get()
+                ),
+            ));
+        }
         let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
 
         let transaction_started = Instant::now();
@@ -1009,7 +1040,12 @@ impl GenerationStore {
     }
 
     /// Root directory of the index: `<index>`.
-    pub(crate) fn index_dir(&self) -> &Path {
+    ///
+    /// The server keeps it to reopen the writer after a failed compaction
+    /// (ADR-0108) and to let a route read the reference database of the epoch a
+    /// snapshot holds (ADR-0107).
+    #[must_use]
+    pub fn index_dir(&self) -> &Path {
         &self.index_dir
     }
 
@@ -1942,6 +1978,15 @@ fn delta_of(change: GenerationChange) -> CommitDelta {
 /// Directory of one epoch: `<index>/epochs/<epoch>`.
 pub(crate) fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
     epochs_directory(index_dir).join(epoch.get().to_string())
+}
+
+/// Path of the reference database of one epoch of an index.
+///
+/// A reader of a document opens it on the epoch of the snapshot it holds, never
+/// on the current state (ADR-0107, decision 6).
+#[must_use]
+pub fn epoch_records_path(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    epoch_directory(index_dir, epoch).join(RECORDS_FILE_NAME)
 }
 
 /// Directory holding every epoch of an index: `<index>/epochs`.
@@ -3441,6 +3486,57 @@ mod tests {
              generation stamp (ADR-0066); a bounded read goes through passages(doc_id) or the \
              primary key of documents. Offending statements:\n{}",
             offenders.join("\n")
+        );
+    }
+
+    /// ADR-0108, decision 1: `CURRENT_EPOCH` is the authority. A store still
+    /// holding epoch E while the pointer names E+1 — the state a compaction
+    /// leaves behind when it dies after its switch — must refuse the commit
+    /// before opening its transaction, and write nothing.
+    #[test]
+    fn commit_refuses_when_current_epoch_names_another_epoch() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let schema = empty_schema();
+        let mut store =
+            GenerationStore::create(&index, Epoch::new(1), &schema).expect("the index is created");
+        let before = store
+            .with_connection(crate::records::read_meta)
+            .expect("the meta of the created index is readable");
+
+        super::write_current_epoch(&index, Epoch::new(2))
+            .expect("the pointer of a switched epoch is written");
+        let error = store
+            .commit(GenerationChange {
+                segments: Vec::new(),
+                documents: Vec::new(),
+                passages: Vec::new(),
+                deletions: Vec::new(),
+            })
+            .expect_err("a store on epoch 1 must not commit while the pointer names epoch 2");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "the epoch mismatch is an internal error, not a request error: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("ADR-0108"),
+            "the refusal must name the decision it applies, so the log points at it: {}",
+            error.message()
+        );
+
+        let after = store
+            .with_connection(crate::records::read_meta)
+            .expect("the meta stays readable after the refused commit");
+        assert_eq!(
+            after.generation, before.generation,
+            "the refused commit must not advance the generation"
+        );
+        assert_eq!(
+            after.next_iid, before.next_iid,
+            "the refused commit must not consume an internal identifier"
         );
     }
 

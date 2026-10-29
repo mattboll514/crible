@@ -278,7 +278,12 @@ impl AttachReport {
     /// the ignored deletions is `ignored`, the name ADR-0041 and `docs/04` use.
     /// A missing acceptance check is written `null`, so a reader of the report
     /// tells "no check ran" from "a check ran and found nothing wrong".
-    fn to_json(&self) -> Value {
+    ///
+    /// The server renders it as the `result.report` of an `attach_batch` or
+    /// `online_batch` job (ADR-0107); it carries no duration, so no API answer
+    /// can expose one.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
         json!({
             "generation": self.generation.get(),
             "added": self.added,

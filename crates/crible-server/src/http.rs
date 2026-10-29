@@ -44,6 +44,7 @@ use crate::error;
 use crate::indexes;
 use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
+use crate::{batches, documents, maintenance};
 
 /// Header carrying the request identifier on every response (ADR-0098).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -69,6 +70,7 @@ pub struct RequestId(pub String);
 /// request with `401`, as an empty `[[auth.keys]]` does (ADR-0100).
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = state.auth().unwrap_or_else(|| Arc::new(Auth::closed()));
+    let write = protect(writes_routes(), Arc::clone(&auth), Role::Write);
     let jobs = protect(jobs_routes(), Arc::clone(&auth), Role::Write);
     let admin = protect(indexes_admin_routes(), Arc::clone(&auth), Role::Admin);
     let read = protect(indexes_read_routes(), auth, Role::Read);
@@ -76,11 +78,23 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         Router::new()
             .route("/health", get(health))
             .route("/ready", get(ready))
+            .merge(write)
             .merge(jobs)
             .merge(admin)
             .merge(read),
     )
     .with_state(state)
+}
+
+/// The write routes of documents and deposited batches, `write` only
+/// (ADR-0107, decision 8).
+fn writes_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route(
+            "/v1/indexes/{index}/documents",
+            post(documents::post_documents).patch(documents::patch_documents),
+        )
+        .route("/v1/indexes/{index}/batches", post(batches::post_batch))
 }
 
 /// The administration routes of `/v1/indexes`, `admin` only (ADR-0105,
@@ -92,6 +106,12 @@ fn indexes_admin_routes() -> Router<Arc<AppState>> {
             "/v1/indexes/{index}",
             patch(indexes::patch_index).delete(indexes::delete_index),
         )
+        .route("/v1/indexes/{index}/compact", post(maintenance::compact))
+        .route("/v1/indexes/{index}/exports", post(maintenance::exports))
+        .route(
+            "/v1/indexes/{index}/snapshots",
+            post(maintenance::snapshots),
+        )
 }
 
 /// The two reads of `/v1/indexes`, open to `read` (ADR-0105, decision 7).
@@ -99,6 +119,10 @@ fn indexes_read_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/v1/indexes", get(indexes::list_indexes))
         .route("/v1/indexes/{index}", get(indexes::get_index))
+        .route(
+            "/v1/indexes/{index}/documents/{doc_id}",
+            get(documents::get_document),
+        )
 }
 
 /// The job routes of the instance: the list and the detail, `write` only.

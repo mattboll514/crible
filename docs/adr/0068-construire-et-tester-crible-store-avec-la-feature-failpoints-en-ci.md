@@ -82,6 +82,23 @@ Appliqué dans le même travail que cet ADR, sur la branche `tache/NETTOYER-P3`,
 
 Rien d'autre dans `docs/07` n'est modifié.
 
+## Complément du 2026-10-29 (relecture de ROUTES-DOCUMENTS-ET-LOTS)
+
+**Statut du complément** : accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série. Il ne change ni le statut ni les décisions ci-dessus.
+
+**Constat.** `crates/crible-server/Cargo.toml:40` déclare une **dev-dependency** `crible-store` avec `features = ["failpoints"]`, pour prouver la reprise d'ADR-0108 au niveau du serveur par le point de panne `after_epoch_switch` de la compaction. Avec le résolveur 2, une feature activée par une dev-dependency est unifiée pour tout le graphe de test du workspace : un simple `cargo test` construit donc `crible-store` avec `failpoints`, alors que la décision 2 dit qu'« aucune autre crate ne la reçoit ». Le défaut est silencieux : aucun test ne casse, la CI fait seulement tourner la feature partout.
+
+**Décision.** `crible-server` déclare sa **propre feature** `failpoints = ["crible-store/failpoints"]`, **éteinte par défaut**. Aucune dev-dependency ne l'active. Les tests du serveur qui en dépendent sont gardés par `#![cfg(feature = "failpoints")]`. Le job Rust de la CI reçoit **deux étapes de plus**, à la suite des deux étapes `crible-store` de la décision 1 :
+
+```
+cargo clippy -p crible-server --all-targets --locked --features failpoints -- -D warnings
+cargo test -p crible-server --locked --features failpoints
+```
+
+Le `cargo test` simple reste construit **sans** `failpoints`. `docs/07-stack-et-deploiement.md:143` reçoit les deux commandes, et `docs/07:144` compte désormais les **quatre** étapes `failpoints`. La décision 3 ne change pas : rien d'autre n'est modifié dans le workflow, et `--workspace` n'est toujours pas ajouté.
+
+**Raison.** La décision 2 nomme une propriété vérifiable — la feature n'est active que là où elle sert — et une unification par le résolveur la rendait fausse sans qu'aucun test ne le signale. Une feature de paquet, éteinte par défaut et activée par la seule ligne de commande qui la demande, rend la propriété vraie à nouveau, sans crate nouvelle, sans second chemin de test et sans toucher au binaire de production. Elle permet en outre de garder les tests du serveur dans le paquet qui les porte, plutôt que de les déplacer dans `crible-store` où ils n'auraient pas accès au routeur ni à l'écrivain.
+
 ## Références
 
 - `docs/07-stack-et-deploiement.md`, section « CI (GitHub Actions) ».
