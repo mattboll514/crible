@@ -21,18 +21,22 @@
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{Value, json};
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::{Instrument, Level, error, info_span};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::error;
+use crate::limits::MAX_BODY_BYTES;
 
 /// Header carrying the request identifier on every response (ADR-0098).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -66,11 +70,45 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 /// added by another task, or a test router of the middleware, carries them the
 /// same way: a `401` rendered before a route still names its request (ADR-0098),
 /// and no log line records the path with its query string (ADR-0096).
+///
+/// The same holds for the limits and the error format of
+/// `FORMAT-ERREURS-ET-LIMITES`, which are mounted here rather than in
+/// [`build_router`]: a test router meets the `400`, `404`, `413`, `500` and
+/// `503` of `docs/05-api.md` exactly as the real routes do (ADR-0095,
+/// ADR-0101, ADR-0102).
 pub fn with_common_layers<S>(router: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
 {
+    with_body_limit(router, MAX_BODY_BYTES)
+}
+
+/// Applies the layers of [`with_common_layers`] with an explicit body bound.
+///
+/// The bound is a parameter so a test proves the path without a declared
+/// `Content-Length` with two kilobytes instead of 32 MiB; the server passes
+/// [`MAX_BODY_BYTES`], the constant of ADR-0102, and no configuration key
+/// reaches this function (ADR-0097).
+fn with_body_limit<S>(router: Router<S>, body_limit: usize) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
     router
+        // The fallback is added before the layers so they wrap it as well: an
+        // unknown route carries the identifier, follows the body bound and gets
+        // the format of ADR-0101.
+        .fallback(error::unknown_route)
+        // One body bound for the whole instance, a constant of the code
+        // (ADR-0102, decision 1). axum's own bound is removed first, so the one
+        // of the code is the only bound a client meets.
+        .layer(DefaultBodyLimit::disable())
+        .layer(RequestBodyLimitLayer::new(body_limit))
+        // A panic becomes a `500` instead of a dropped connection (ADR-0101,
+        // decision 7); the formatting layer below writes its body.
+        .layer(CatchPanicLayer::custom(error::panic_response))
+        // Every response of another layer takes the format of `docs/05-api.md`,
+        // and every error response gets its one line (ADR-0101).
+        .layer(middleware::from_fn(error::render_layer_errors))
         .layer(
             TraceLayer::new_for_http()
                 // The path only: `docs/06` forbids a query text and a filter
@@ -102,16 +140,18 @@ async fn health() -> (StatusCode, Json<Value>) {
 ///
 /// `503` with `{"status":"not_ready"}` until the loader has finished, `200` with
 /// `{"status":"ready"}` after. The two bodies tell "alive" from "ready" and
-/// reveal nothing else (ADR-0099).
-async fn ready(State(state): State<Arc<AppState>>) -> (StatusCode, Json<Value>) {
-    if state.is_ready() {
-        (StatusCode::OK, Json(json!({ "status": "ready" })))
+/// reveal nothing else (ADR-0099). They are the one body the error format of
+/// ADR-0101 leaves alone, which [`error::preserved`] marks.
+async fn ready(State(state): State<Arc<AppState>>) -> Response {
+    let (status, body) = if state.is_ready() {
+        (StatusCode::OK, json!({ "status": "ready" }))
     } else {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "status": "not_ready" })),
+            json!({ "status": "not_ready" }),
         )
-    }
+    };
+    error::preserved((status, Json(body)).into_response())
 }
 
 /// Assigns the request identifier and returns it on the response.
@@ -171,6 +211,7 @@ fn accepted_request_id(value: &HeaderValue) -> Option<String> {
 mod tests {
     use super::{REQUEST_ID_HEADER, build_router};
     use crate::state::AppState;
+    use axum::Json;
     use axum::Router;
     use axum::body::Body;
     use axum::extract::Request;
@@ -316,6 +357,46 @@ mod tests {
             .await
             .expect("the body is readable");
         serde_json::from_slice(&bytes).expect("the body of a probe is JSON")
+    }
+
+    /// Echoes its body, for the test of the body bound.
+    async fn echo(Json(value): Json<serde_json::Value>) -> Json<serde_json::Value> {
+        Json(value)
+    }
+
+    #[tokio::test]
+    async fn a_body_without_a_declared_length_above_the_bound_is_a_payload_too_large() {
+        // ADR-0102, decision 1, second path of the bound: without a
+        // `Content-Length` header, the body is read and the limit fails while it
+        // streams; axum turns that `http_body_util::LengthLimitError` into a
+        // `413`, which the formatting layer renders. The bound is a parameter of
+        // this module, so the test sends four kilobytes: the server passes the
+        // constant of the ADR, and no configuration key reaches it.
+        let router = super::with_body_limit(
+            Router::new().route("/echo", axum::routing::post(echo)),
+            1_024,
+        );
+        let payload = format!(r#"{{"value":"{}"}}"#, "a".repeat(4_096));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/echo")
+            .header(REQUEST_ID_HEADER, "body-bound-test")
+            .header("content-type", "application/json")
+            .body(Body::from(payload))
+            .expect("the request is well formed");
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("the router always answers");
+        assert_eq!(
+            response.status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "a streamed body above the bound is refused"
+        );
+        assert_eq!(identifier_of(&response), "body-bound-test");
+        let body = body_json(response).await;
+        assert_eq!(body["error"]["code"], "payload_too_large");
+        assert_eq!(body["error"]["request_id"], "body-bound-test");
     }
 
     #[test]

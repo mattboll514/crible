@@ -31,7 +31,13 @@ tokio = { version = "=1.54.1", features = [
     "sync",
 ] }
 tower = { version = "=0.5.3" }
-tower-http = { version = "=0.7.1", features = ["trace"] }
+tower-http = { version = "=0.7.1", features = [
+    "trace",
+    # `limit`: the global body bound of ADR-0102, decision 1.
+    "limit",
+    # `catch-panic`: a panicking handler renders a `500` (ADR-0102, decision 4).
+    "catch-panic",
+] }
 
 # OpenAPI
 utoipa = { version = "=6.0.0" }

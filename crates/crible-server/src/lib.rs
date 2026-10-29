@@ -22,6 +22,7 @@ pub mod config;
 mod error;
 pub mod http;
 pub mod lifecycle;
+pub mod limits;
 pub mod logging;
 pub mod state;
 

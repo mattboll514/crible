@@ -10,17 +10,29 @@
 //! **Confidentiality does not depend on the level.** Whatever `RUST_LOG` says,
 //! no log call of the server carries a query text or a filter value: no such
 //! field is ever journalised, at any level (INV-13, ADR-0096). The filter only
-//! decides which lines are printed.
+//! decides which lines are printed. The dependency is held to the same rule:
+//! the rejection journal of axum, which quotes the body it refused, is
+//! silenced by a directive forced after the one of `RUST_LOG`
+//! (ADR-0101, decision 4).
 
 use std::io;
 
 use crible_core::error::{CribleError, ErrorCode};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Directive;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// Filter used when `RUST_LOG` is absent or empty (ADR-0096).
 pub const DEFAULT_FILTER: &str = "info";
+
+/// Target on which axum journals the rejection of an extractor, body text
+/// included.
+pub const REJECTION_TARGET: &str = "axum::rejection";
+
+/// Directive that silences [`REJECTION_TARGET`], forced after the one of
+/// `RUST_LOG`.
+pub const SILENCED_REJECTION_DIRECTIVE: &str = "axum::rejection=off";
 
 /// Installs the journal of the server on stdout.
 ///
@@ -56,6 +68,15 @@ pub fn effective_filter(raw: Option<&str>) -> String {
 /// The writer is a parameter so a test captures a line; the server passes
 /// stdout.
 ///
+/// The filter of `RUST_LOG` is applied, then [`SILENCED_REJECTION_DIRECTIVE`]
+/// is added after it: a directive on a target wins over a bare level, and a
+/// later directive on the same target replaces the earlier one, so no operator
+/// can turn the rejection journal back on. axum journals the body text of an
+/// extractor rejection on that target at `TRACE`, and that text quotes the
+/// value the client sent (`invalid type: string "<value>"`): a filter of
+/// `trace` or `axum::rejection=trace` would print a request field, which
+/// `docs/06` and ADR-0096 forbid at any level (ADR-0101, decision 4).
+///
 /// # Errors
 ///
 /// [`ErrorCode::InvalidRequest`] when `filter` is not a valid `RUST_LOG`
@@ -75,11 +96,25 @@ where
             format!("RUST_LOG does not hold a valid filter: {error}"),
         )
     })?;
+    let filter = filter.add_directive(silenced_directive()?);
     Ok(tracing_subscriber::fmt()
         .json()
         .with_writer(writer)
         .with_env_filter(filter)
         .finish())
+}
+
+/// Parses the directive that silences the rejection journal of axum.
+///
+/// The text is a constant of the code: a failure to parse it is a bug of the
+/// server, not a fault of the configuration, hence [`ErrorCode::Internal`].
+fn silenced_directive() -> Result<Directive, CribleError> {
+    SILENCED_REJECTION_DIRECTIVE.parse().map_err(|error| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("the fixed log directive of the server is malformed: {error}"),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -166,6 +201,55 @@ mod tests {
             sink.contents().is_empty(),
             "the filter comes from RUST_LOG: {:?}",
             String::from_utf8_lossy(&sink.contents())
+        );
+    }
+
+    #[test]
+    fn the_rejection_journal_of_axum_is_silenced_whatever_rust_log_says() {
+        // ADR-0096, ADR-0101 decision 4: axum journals the body text of an
+        // extractor rejection on the target `axum::rejection` at `TRACE`, and
+        // that text quotes the value the client sent. The forced directive cuts
+        // the target under a bare `trace` and under a directive that names it,
+        // and the later directive replaces the earlier one.
+        for filter in [
+            "trace",
+            "debug",
+            "axum::rejection=trace",
+            "info,axum::rejection=trace",
+            "trace,axum=trace",
+        ] {
+            let sink = Sink::default();
+            let subscriber =
+                log_subscriber(sink.clone(), filter).expect("a valid filter is accepted");
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::event!(
+                    target: "axum::rejection",
+                    tracing::Level::TRACE,
+                    body = "zz-rejected-value-zz",
+                    "Failed to deserialize the JSON body into the target type"
+                );
+            });
+            assert!(
+                sink.contents().is_empty(),
+                "a rejected value reached the journal under {filter}: {:?}",
+                String::from_utf8_lossy(&sink.contents())
+            );
+        }
+    }
+
+    #[test]
+    fn the_forced_directive_does_not_silence_the_server() {
+        // The directive names one target: the lines of the server keep coming
+        // under the same filters (ADR-0096).
+        let sink = Sink::default();
+        let subscriber =
+            log_subscriber(sink.clone(), "trace,axum::rejection=trace").expect("a valid filter");
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(index = "alpha", "the index is published");
+        });
+        assert!(
+            !sink.contents().is_empty(),
+            "the lines of the server are still printed"
         );
     }
 
