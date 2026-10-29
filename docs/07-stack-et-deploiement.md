@@ -41,6 +41,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Lexical | `tantivy` 0.27 | Analyse française intégrée |
 | Lots | `arrow`, `parquet` (arrow-rs) | |
 | Hash | `blake3` | Empreintes, checksums, `passage_hash` |
+| Authentification | `sha2`, `subtle`, `getrandom` | SHA-256 du jeton reçu, comparaison en temps constant (`ConstantTimeEq` sur 32 octets), aléa de `crible key generate` ; l'hexadécimal est écrit et lu à la main, sans crate d'encodage (ADR-0100) |
 | Erreurs | `thiserror` (bibliothèques), `anyhow` (binaire) | |
 | Logs | `tracing`, `tracing-subscriber` (JSON) | Feature `env-filter` : `RUST_LOG` est honoré, avec `info` par défaut quand il est absent (ADR-0096). Quel que soit `RUST_LOG`, aucun log ne contient de texte de requête ni de valeur de filtre (INV-13) |
 | Identifiant de requête | `uuid` (feature `v4`) | Génère `x-request-id` quand l'en-tête entrant est absent ou hors bornes (ADR-0098) |
@@ -75,7 +76,7 @@ exchange = "/exchange"
 [[auth.keys]]
 name = "legifacile-mcp"
 role = "read"
-sha256 = "…"                  # généré par `crible key generate`
+sha256 = "…"                  # 64 caractères hexadécimaux minuscules, généré par `crible key generate` (ADR-0100)
 
 [[auth.keys]]
 name = "legifacile-sync"
