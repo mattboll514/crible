@@ -51,18 +51,15 @@
 //! # The payload step
 //!
 //! Only the survivors of the regrouping pay for their text and their fields
-//! (step 8), through [`DenseSearcher::payload`]: the reader of `records.sqlite`
+//! (step 8), through `DenseSearcher::payload`: the reader of `records.sqlite`
 //! serves the three modes, since a lexical result is a passage row too.
-
-use std::collections::HashMap;
 
 use crible_core::config::{FusionConfig, SearchConfig};
 use crible_core::error::{CribleError, ErrorCode};
-use crible_core::ids::Iid;
 use crible_store::generation::Snapshot;
 
 use crate::dense::exact::{DenseSearcher, Hit};
-use crate::dense::{Scored, candidates};
+use crate::dense::{Scored, candidates, grouped_candidates, ranks};
 use crate::fusion::{self, BranchScore, Fused};
 use crate::group::{Candidate, Grouping, candidates_per_branch, group};
 use crate::lexical;
@@ -214,7 +211,7 @@ pub fn search(
     // them must be able to fill the regrouped answer.
     let requested = candidates_per_branch(request.k, request.grouping);
     let results = match request.mode {
-        Mode::Dense => dense(snapshot, searcher, pool, request, search, requested)?,
+        Mode::Dense => dense(snapshot, searcher, pool, request, search)?,
         Mode::Lexical => lexical(snapshot, searcher, pool, request, requested)?,
         Mode::Hybrid => hybrid(snapshot, searcher, pool, request, search, requested)?,
     };
@@ -237,28 +234,25 @@ const fn score_type(mode: Mode, fusion: FusionConfig) -> ScoreType {
 }
 
 /// Runs the dense branch alone.
+///
+/// The over-sampling, the branch and the regrouping are those of
+/// [`grouped_candidates`], the same composition [`crate::dense::search_grouped`]
+/// runs, so the two cannot drift apart.
 fn dense(
     snapshot: &Snapshot,
     searcher: &DenseSearcher,
     pool: &Pool,
     request: &Request<'_>,
     search: &SearchConfig,
-    requested: usize,
 ) -> Result<Vec<RankedHit>, CribleError> {
     let vector = vector(request)?;
-    let branch = candidates(
-        snapshot,
-        searcher,
-        pool,
+    let query = crate::dense::DenseQuery {
         vector,
-        requested,
-        search,
-        request.exact,
-    )?;
-    let ranks = ranks(&branch);
-    let kept = group(branch, request.k, request.grouping, |iid| {
-        searcher.passage_hash_of(iid)
-    })?;
+        k: request.k,
+        exact: request.exact,
+        grouping: request.grouping,
+    };
+    let (ranks, kept) = grouped_candidates(snapshot, searcher, pool, &query, search)?;
     kept.into_iter()
         .map(|candidate| {
             let dense = ranks.get(&candidate.iid()).copied();
@@ -368,29 +362,6 @@ fn text<'a>(request: &Request<'a>) -> Result<&'a str, CribleError> {
             request.mode.as_str()
         ))
     })
-}
-
-/// Rank and score of every candidate of one branch, by internal identifier.
-///
-/// The grouping reorders the candidates (a grouped answer gathers the passages
-/// of a document, ADR-0075), so the rank of a result in its branch cannot be
-/// read from the answer: it is read here, from the branch ranking, before the
-/// grouping touches it.
-fn ranks(branch: &[Scored]) -> HashMap<Iid, BranchScore> {
-    branch
-        .iter()
-        .enumerate()
-        .map(|(position, candidate)| {
-            let rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
-            (
-                candidate.iid,
-                BranchScore {
-                    rank,
-                    score: candidate.score,
-                },
-            )
-        })
-        .collect()
 }
 
 /// Error raised when the request itself is malformed.

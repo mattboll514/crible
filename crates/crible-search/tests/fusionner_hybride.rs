@@ -30,9 +30,11 @@
 //! |---|---|
 //! | `a_document_of_one_branch_only_still_appears` | "un document présent dans une seule branche est traité correctement" |
 //! | `grouping_runs_after_the_fusion` | "le regroupement s'applique bien après la fusion" |
+//! | `dedup_content_runs_after_the_fusion` | "la déduplication de contenu s'applique bien après la fusion" |
 //! | `relative_score_weights_the_dense_ranking_and_changes_the_order` | "les deux fusions : `rrf` et `relative_score`" |
 //! | `the_two_branches_share_the_pool` | INV-05 |
 //! | `each_mode_reports_the_score_type_of_its_score` | "le `score_type`" |
+//! | `a_mode_without_its_input_is_refused` | "un mode qui manque son entrée est refusé en `invalid_request`" |
 //!
 //! The fusion itself is pinned on known lists by the unit tests of
 //! `crates/crible-search/src/fusion.rs`; these tests pin what only a real index
@@ -315,6 +317,65 @@ fn grouping_runs_after_the_fusion() {
     );
 }
 
+/// `dedup: "content"` also runs **after** the fusion (step 7 after step 6,
+/// ADR-0075): the copy it keeps is the first of the fused ranking, which here is
+/// the one only the lexical branch found.
+///
+/// The two passages share the same `passage_hash`, so a deduplication applied
+/// before the fusion, branch by branch, would keep both: `dup-dense` is alone in
+/// the dense branch and `dup-lexical` alone in the lexical one. Fusing first
+/// ranks `dup-lexical` above `dup-dense`, because it sums the two branch terms,
+/// and the deduplication then keeps it alone.
+#[test]
+fn dedup_content_runs_after_the_fusion() {
+    let mut fixture = LexicalFixture::create(true);
+    let shared = "blake3:shared-content".to_owned();
+    fixture.add_generation(&[
+        Doc {
+            passage_hash: shared.clone(),
+            ..doc("dup-dense", "contrat force", [1.0, 0.0, 0.0, 0.0])
+        },
+        Doc {
+            passage_hash: shared,
+            ..doc(
+                "dup-lexical",
+                "article 1240 responsabilite",
+                [0.0, 1.0, 0.0, 0.0],
+            )
+        },
+    ]);
+    let snapshot = fixture.snapshot();
+    let pool = pool_of(&snapshot, &match_all());
+
+    // The fusion alone keeps both copies, in the fused order.
+    let both = search(
+        &fixture,
+        &snapshot,
+        &pool,
+        &request(Mode::Hybrid, 3, &no_grouping(), FusionConfig::Rrf),
+    )
+    .unwrap_or_else(|error| panic!("a hybrid search must run: {}", error.message()));
+    assert_eq!(documents(&both), vec!["dup-lexical", "dup-dense"]);
+
+    let dedup = Grouping {
+        by_document: false,
+        passages_per_document: 1,
+        dedup_content: true,
+    };
+    let deduplicated = search(
+        &fixture,
+        &snapshot,
+        &pool,
+        &request(Mode::Hybrid, 3, &dedup, FusionConfig::Rrf),
+    )
+    .unwrap_or_else(|error| panic!("a deduplicated hybrid search must run: {}", error.message()));
+    assert_eq!(
+        documents(&deduplicated),
+        vec!["dup-lexical"],
+        "the deduplication keeps the copy the fused ranking put first"
+    );
+}
+
 /// `relative_score` normalises each branch on its own candidates, so the dense
 /// ranking can win a document that `rrf` gave to the lexical one.
 ///
@@ -346,6 +407,11 @@ fn relative_score_weights_the_dense_ranking_and_changes_the_order() {
         answer.score_type,
         ScoreType::Relative,
         "relative_score reports the score type `relative` of docs/03-recherche.md"
+    );
+    assert_eq!(
+        answer.score_type.as_str(),
+        "relative",
+        "the answer publishes the score type under its documented spelling"
     );
     assert_eq!(
         documents(&answer),
@@ -509,6 +575,11 @@ fn each_mode_reports_the_score_type_of_its_score() {
     )
     .unwrap_or_else(|error| panic!("the hybrid mode must serve: {}", error.message()));
     assert_eq!(hybrid.score_type, ScoreType::Rrf);
+    assert_eq!(
+        hybrid.score_type.as_str(),
+        "rrf",
+        "the answer publishes the score type under its documented spelling"
+    );
     assert_eq!(
         hybrid.results[0].hit.score,
         (1.0_f64 / 61.0 + 1.0_f64 / 63.0) as f32,

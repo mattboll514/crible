@@ -1718,10 +1718,11 @@ pub(crate) fn passage_key_by_iid(
 
 /// Reads the internal identifier of one passage, the query "passage iid by key".
 ///
-/// The key `doc_id#ord` designates one passage of a document, and the pair is
-/// unique by construction (`docs/01`), so a second row would be an
-/// inconsistency: `query_row` then fails and the caller receives an
-/// [`ErrorCode::Internal`] error rather than an arbitrary one of the two.
+/// The key `doc_id#ord` designates one passage of a document. `rusqlite` reads
+/// the first row of the query and ignores the ones that follow, so this query
+/// does not detect a duplicate: uniqueness is guaranteed upstream, by the batch
+/// reader, which refuses a document whose `ord`s are not the contiguous
+/// sequence of `docs/04` (ADR-0039, ADR-0040), and `docs/01` states it.
 pub(crate) fn passage_iid_by_key(
     connection: &Connection,
     key: &PassageKey,

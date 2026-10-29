@@ -34,11 +34,14 @@
 //! is what the debug output reports, and it differs from `N` only when `k`
 //! exceeds it.
 //!
-//! [`search_grouped`] is the entry point of the pipeline: it asks for
-//! `candidates_per_branch(k, grouping)` candidates, regroups them with
-//! [`crate::group::group`] (step 7 of `docs/03-recherche.md`), and reads the
-//! payload of the survivors only (step 8). [`search`] is the same branch without
-//! over-sampling, for a caller that supplies its own candidate count.
+//! [`search_grouped`] and [`crate::pipeline::search`] both compose the same
+//! steps: [`grouped_candidates`] asks for `candidates_per_branch(k, grouping)`
+//! candidates, keeps the rank of every one of them, regroups them with
+//! [`crate::group::group`] (step 7 of `docs/03-recherche.md`), and leaves the
+//! payload step (step 8) to the caller. Sharing that composition is what keeps
+//! the dense mode of the pipeline and [`search_grouped`] from drifting apart.
+//! [`search`] is the same branch without over-sampling, for a caller that
+//! supplies its own candidate count.
 //!
 //! Under `EXACT`, nothing is rescored, so the plan carries `N` as configured:
 //! the plan then describes the settings the strategy runs with, which is what
@@ -51,14 +54,18 @@
 //! fields. [`Strategy::as_str`] gives the two published spellings, `"exact"`
 //! and `"binary"`, and nothing else (ADR-0074, decision 3).
 
+use std::collections::HashMap;
+
 use crible_core::config::{ScanStrategy, SearchConfig};
 use crible_core::error::CribleError;
+use crible_core::ids::Iid;
 use crible_store::codes::quantize;
 use crible_store::generation::Snapshot;
 
 use super::Scored;
 use super::binary;
 use super::exact::{DenseSearcher, Hit};
+use crate::fusion::BranchScore;
 use crate::group::Grouping;
 use crate::pool::Pool;
 
@@ -218,6 +225,43 @@ pub struct DenseQuery<'a> {
     pub grouping: &'a Grouping,
 }
 
+/// Candidates of one dense request after over-sampling and regrouping, with the
+/// rank of every candidate in the branch ranking.
+///
+/// This is steps 7 of `docs/03-recherche.md` without the payload step (step 8):
+/// the over-sampled count of [`crate::group::candidates_per_branch`] is the `k`
+/// of [`candidates`], so under `BINARY` the scan keeps and rescores
+/// `max(N, candidates_per_branch)` candidates (ADR-0074, decision 4; ADR-0075,
+/// decision 4). The ranks are read from the branch ranking before the grouping
+/// reorders the survivors.
+///
+/// [`search_grouped`] and [`crate::pipeline::search`] both read their payload
+/// from here, so the two cannot drift apart; the ranks are ignored by a caller
+/// that reports no branch contribution.
+pub(crate) fn grouped_candidates(
+    snapshot: &Snapshot,
+    searcher: &DenseSearcher,
+    pool: &Pool,
+    request: &DenseQuery<'_>,
+    search: &SearchConfig,
+) -> Result<(HashMap<Iid, BranchScore>, Vec<Scored>), CribleError> {
+    let requested = crate::group::candidates_per_branch(request.k, request.grouping);
+    let branch = candidates(
+        snapshot,
+        searcher,
+        pool,
+        request.vector,
+        requested,
+        search,
+        request.exact,
+    )?;
+    let ranks = super::ranks(&branch);
+    let grouped = crate::group::group(branch, request.k, request.grouping, |iid| {
+        searcher.passage_hash_of(iid)
+    })?;
+    Ok((ranks, grouped))
+}
+
 /// Runs the dense branch of one query as the input of the regrouping step.
 ///
 /// The branch is asked for `candidates_per_branch(k, grouping)` candidates
@@ -237,6 +281,10 @@ pub struct DenseQuery<'a> {
 /// case of the default `N` (5000, ADR-0078): a `BINARY` plan with an `N` below
 /// that count rescans fewer candidates and may miss a result `search` would
 /// have returned.
+///
+/// The pipeline reads its dense branch from the same composition, because it
+/// also reports the rank of each result; this entry point is the same
+/// composition for a caller that only wants the payload of the survivors.
 pub fn search_grouped(
     snapshot: &Snapshot,
     searcher: &DenseSearcher,
@@ -245,19 +293,7 @@ pub fn search_grouped(
     search: &SearchConfig,
 ) -> Result<Vec<Hit>, CribleError> {
     request.grouping.validate()?;
-    let requested = crate::group::candidates_per_branch(request.k, request.grouping);
-    let candidates = candidates(
-        snapshot,
-        searcher,
-        pool,
-        request.vector,
-        requested,
-        search,
-        request.exact,
-    )?;
-    let grouped = crate::group::group(candidates, request.k, request.grouping, |iid| {
-        searcher.passage_hash_of(iid)
-    })?;
+    let (_, grouped) = grouped_candidates(snapshot, searcher, pool, request, search)?;
     grouped
         .into_iter()
         .map(|candidate| searcher.payload(candidate))

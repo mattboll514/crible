@@ -63,10 +63,11 @@
 //! than the request needs (`docs/03-recherche.md:110-113`): when the request
 //! regroups, the branch receives `clamp(k × 20, 200, 1000)` candidates; then
 //! `max(k, 100)`. [`candidates_per_branch`] is that rule, and the caller passes
-//! its result as the `k` of the dense branch, which is what
-//! [`crate::dense::search_grouped`] plans with (ADR-0074, decision 4, and
-//! ADR-0075, decision 4: under `BINARY` the scan keeps `max(N, k)`, so the
-//! effective rescoring follows the over-sampling without a second rule).
+//! its result as the `k` of the dense branch, which is what both
+//! [`crate::dense::search_grouped`] and [`crate::pipeline::search`] plan with
+//! (ADR-0074, decision 4, and ADR-0075, decision 4: under `BINARY` the scan
+//! keeps `max(N, k)`, so the effective rescoring follows the over-sampling
+//! without a second rule).
 //!
 //! The rule lives here, in the shared search crate, and not in the CLI: the
 //! server of P6 and the evaluation call the same function, so the candidate

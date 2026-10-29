@@ -340,20 +340,19 @@ pub fn rebuild_lexical(data: &Path, index: &str) -> Result<(), CribleError> {
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
-    let state = store.state()?;
-    let generation = crible_store::generation::rebuild_lexical(&mut store)?;
-    if state.live_passages == 0 {
-        println!(
-            "index '{}': nothing to rebuild, the reference state at generation {} holds no live \
-             passage",
-            name,
-            generation.get(),
-        );
-    } else {
+    let outcome = crible_store::generation::rebuild_lexical(&mut store)?;
+    if outcome.rebuilt {
         println!(
             "index '{}': lexical index rebuilt from the reference state at generation {}",
             name,
-            generation.get(),
+            outcome.generation.get(),
+        );
+    } else {
+        println!(
+            "index '{}': nothing to rebuild, the reference state at generation {} never carried a \
+             passage",
+            name,
+            outcome.generation.get(),
         );
     }
     Ok(())

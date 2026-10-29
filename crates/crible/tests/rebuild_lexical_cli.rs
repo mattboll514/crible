@@ -319,7 +319,7 @@ fn rebuild_lexical(prepared: &Prepared) -> std::process::Output {
 }
 
 /// Acceptance criterion of `RECONSTRUIRE-LEXICAL`: the command rebuilds a missing
-/// lexical index of the committed generation, without a write open of the store.
+/// lexical index of the committed generation, without a write open by the test.
 #[test]
 fn rebuild_lexical_command_rebuilds_a_missing_lexical_index_at_the_committed_generation() {
     let prepared = prepare();

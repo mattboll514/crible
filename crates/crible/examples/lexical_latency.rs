@@ -1071,7 +1071,8 @@ fn rebuild_mode(data: &Path, index: &str, out: &Path) -> Result<(), Box<dyn std:
     });
 
     let started = Instant::now();
-    let generation = crible_store::generation::rebuild_lexical(&mut opened.store)?;
+    let outcome = crible_store::generation::rebuild_lexical(&mut opened.store)?;
+    let generation = outcome.generation;
     let elapsed = started.elapsed();
     stop.store(true, AtomicOrdering::Relaxed);
     progress.store(true, AtomicOrdering::Relaxed);
