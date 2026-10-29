@@ -75,6 +75,16 @@ ATTACHER-LOT reste bloquée jusqu'à la décision.
 | **A.** Persister les seules durées connues avant le COMMIT, `validation` et `segment`. | Le rapport ne porterait qu'un sous-ensemble arbitraire de deux étapes sur cinq, choisi par la position du COMMIT et non par l'intérêt de la mesure. Le schéma du rapport dépendrait du chemin : un appel direct pourrait rendre les cinq durées, un rejeu seulement deux, ou un rapport à trous. Un client ne saurait pas si une clé absente signifie « non mesurée » ou « pas encore connue ». Le gain d'information est faible, et il ne supprime pas la différence entre le rapport rendu en direct et celui rendu au rejeu. |
 | **C.** Faire écrire la ligne `batches` par le commit juste avant le COMMIT, pour y inclure la durée de la transaction. | La durée mesurée exclurait le COMMIT lui-même et l'essentiel du coût `fsync` : elle serait trompeuse, et d'autant plus courte que le commit est cher. `manifest` et `snapshot` resteraient dehors, donc le problème ne serait que déplacé. La variante qui écrit un fichier de rapport hors SQLite après le COMMIT échangerait un `UPDATE` contre un nouveau format sur disque, non reconstruit par la reprise et non couvert par la transaction : une seconde source de vérité, contraire à l'esprit de l'ADR-0016 et au principe « point de commit unique ». |
 
+## Complément du 2026-10-29
+
+Un renvoi, sans changement de la décision ci-dessus.
+
+**Constat.** La décision laisse ouverte « la forme exacte sous laquelle un appelant reçoit ses durées » (`:31`), en la qualifiant de point d'API.
+
+**Décision.** ADR-0107, décision 4, la tranche pour le serveur : aucune réponse de l'API ne rend les durées, `?wait=true` compris ; le job les journalise une fois, à sa fin, au niveau `info`, avec `job_id`, `kind` et `index`, sans texte client ; elles ne sont ni persistées ni portées par le job. La CLI continue de les afficher à son appelant.
+
+**Raison.** Un job est asynchrone et peut être relu par d'autres que son auteur ; la télémétrie d'exploitation est le journal, et les métriques de P7.
+
 ## Références
 
 - `docs/04-donnees-et-ingestion.md` : `:159` (pas de seconde écriture après le point de commit), `:162` (idempotence, rapport d'origine, INV-10), `:176-180` (recette), `:184-200` (rapport d'attache).

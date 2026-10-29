@@ -308,10 +308,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
 
 /// `<data>/indexes/<name>`, the directory of the index.
 fn index_directory(state: &AppState, name: &str) -> Result<PathBuf, CribleError> {
-    let data = state
-        .data_root()
-        .ok_or_else(|| error::internal("the instance has not loaded its indexes"))?;
-    Ok(data.join("indexes").join(name))
+    state.index_directory(name)
 }
 
 /// Size of a directory tree, in bytes.

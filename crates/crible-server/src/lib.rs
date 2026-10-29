@@ -18,7 +18,13 @@
 //! router they mount on and the middleware they wrap their routes with.
 
 pub mod auth;
+// Test barriers of the `failpoints` build only: they hold a job at a precise
+// point while a test reads the instance (ADR-0107, decisions 5 and 6).
+#[cfg(feature = "failpoints")]
+mod barriers;
+mod batches;
 pub mod config;
+mod documents;
 mod error;
 pub mod http;
 mod indexes;
@@ -26,6 +32,7 @@ pub mod jobs;
 pub mod lifecycle;
 pub mod limits;
 pub mod logging;
+mod maintenance;
 pub mod state;
 
 pub use auth::{Auth, Client, protect};

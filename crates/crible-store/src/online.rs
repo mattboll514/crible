@@ -62,7 +62,7 @@
 //! (ADR-0056). [`remove_stale_batches`] uses the same lock to tell a live lot
 //! from a leftover: it deletes only what it can lock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File, TryLockError};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -81,6 +81,7 @@ use crible_core::batch::{
 use crible_core::config::{FieldLevel, FieldType, IndexConfig, ReferencePrecision, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::{ModelConfig, ModelKind};
+use crible_core::path::path_component;
 use crible_encode::{Model, Side, TokenCounter};
 use half::f16;
 use parquet::arrow::ArrowWriter;
@@ -105,9 +106,10 @@ const LOCK_SUFFIX: &str = ".lock";
 /// `online-*` ones.
 const DELETED_PREFIX: &str = "deleted-";
 
-/// Highest number of passages accepted by one online request
-/// (`docs/05-api.md`, "Lot en ligne": 10 000).
-const MAX_ONLINE_PASSAGES: u64 = 10_000;
+/// Highest number of entries accepted by one online request
+/// (`docs/05-api.md`, "Lot en ligne": 10 000 passages and `deletions` together,
+/// ADR-0107).
+pub const MAX_ONLINE_ENTRIES: u64 = 10_000;
 
 /// Sub-directory of the data root that holds the temporary batches.
 pub const TEMPORARY_DIRECTORY: &str = "tmp";
@@ -249,7 +251,7 @@ pub struct OnlineIngest<'a> {
 /// # Errors
 ///
 /// - [`ErrorCode::InvalidRequest`] for a missing or invalid file, a file that
-///   changes while it is read, a file holding more than `MAX_ONLINE_PASSAGES`
+///   changes while it is read, a file holding more than `MAX_ONLINE_ENTRIES`
 ///   passages, an empty file, a passage without a vector on an `external`
 ///   model, a vector that is not base64 of `dims` fp32 components, an undeclared
 ///   or mistyped field, a passage longer than `max_tokens`, or `replace_all`;
@@ -270,6 +272,125 @@ pub fn ingest(
         document_encoder,
         mode,
     } = *request;
+    run(
+        store,
+        Source::File(documents),
+        OnlineIdentity::FileBytes,
+        data_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        mode,
+    )
+}
+
+/// Identity of one online batch (ADR-0107, decision 2).
+///
+/// The CLI derives it from the bytes of its input file (ADR-0055); the route of
+/// P6 takes it from the request body. This is the single constructor of a
+/// `batch_id`: the two callers hand it over here, never deriving it themselves.
+#[derive(Debug, Clone, Copy)]
+pub enum OnlineIdentity<'a> {
+    /// `online-<blake3 of the input file bytes>` (ADR-0055).
+    FileBytes,
+    /// The identifier of the request body, mandatory on the route.
+    Given(&'a str),
+}
+
+/// One online batch whose documents are already parsed, as `POST
+/// /v1/indexes/{index}/documents` builds it (ADR-0107).
+///
+/// The members are the inputs of [`ingest_documents`]; the batch goes through
+/// the same internal lot as [`ingest`], so an online batch and a deposited batch
+/// share one attach path, one report and one atomicity (INV-03).
+pub struct OnlineDocuments<'a> {
+    /// Identifier of the batch, taken from the body of the request.
+    pub batch_id: &'a str,
+    /// Documents to write, in the order of the body.
+    pub documents: &'a [OnlineDocument],
+    /// External identifiers to remove; their rows fall in the commit of the
+    /// attach (ADR-0041, ADR-0107, decision 1).
+    pub deletions: &'a [String],
+    /// Root data directory of the instance; the internal batch goes to its
+    /// `tmp/` sub-directory.
+    pub data_dir: &'a Path,
+    /// Configuration of the target index.
+    pub index_config: &'a IndexConfig,
+    /// Configuration resolved for the model of the index.
+    pub model_config: &'a ModelConfig,
+    /// Tokenizer of an `onnx` model (control 8, INV-11); required for `onnx`.
+    pub token_counter: Option<&'a TokenCounter>,
+    /// Loader of the fp32 encoder of an `onnx` model (control 9, INV-12);
+    /// required for `onnx`.
+    pub document_encoder: Option<&'a dyn Fn() -> Result<Arc<Model>, CribleError>>,
+}
+
+/// Ingests documents held in memory into `store`, as the route of P6 does.
+///
+/// The batch identity is the one of the body (ADR-0107, decision 2); the mode is
+/// `upsert` only, as for [`ingest`] (ADR-0055). The body was already checked for
+/// its shape before the job was queued; the validation of every document and the
+/// attach itself run here, on the writer of the index.
+///
+/// # Errors
+///
+/// The errors of [`ingest`], with the identity and the deletions of the body.
+pub fn ingest_documents(
+    store: &mut GenerationStore,
+    request: &OnlineDocuments<'_>,
+) -> Result<AttachReport, CribleError> {
+    let OnlineDocuments {
+        batch_id,
+        documents,
+        deletions,
+        data_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+    } = *request;
+    run(
+        store,
+        Source::Documents {
+            documents,
+            deletions,
+        },
+        OnlineIdentity::Given(batch_id),
+        data_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        BatchMode::Upsert,
+    )
+}
+
+/// Where the documents of one online batch come from.
+enum Source<'a> {
+    /// A JSONL file, surveyed twice so that its bytes are the batch identity
+    /// (ADR-0055).
+    File(&'a Path),
+    /// Documents parsed from a request body (ADR-0107).
+    Documents {
+        documents: &'a [OnlineDocument],
+        deletions: &'a [String],
+    },
+}
+
+/// The single path of an online batch: survey, internal lot, attach.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    store: &mut GenerationStore,
+    source: Source<'_>,
+    identity: OnlineIdentity<'_>,
+    data_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    mode: BatchMode,
+) -> Result<AttachReport, CribleError> {
     if mode != BatchMode::Upsert {
         return Err(invalid(format!(
             "the online lot accepts mode '{}' only, got '{}': at most 10 000 passages per \
@@ -298,11 +419,30 @@ pub fn ingest(
         }
     }
 
-    let survey = survey(documents, index_config, model_config, token_counter)?;
+    let survey = match &source {
+        Source::File(documents) => survey_file(
+            documents,
+            identity,
+            index_config,
+            model_config,
+            token_counter,
+        )?,
+        Source::Documents {
+            documents,
+            deletions,
+        } => survey_documents(
+            documents,
+            deletions,
+            identity,
+            index_config,
+            model_config,
+            token_counter,
+        )?,
+    };
     // The presence lock is taken before anything is created and before the
     // fp32 graph is loaded: a contended ingestion fails without creating a
     // directory and without paying a session (ADR-0056).
-    let directory = TemporaryBatch::create(data_dir, &survey.batch_id)?;
+    let directory = TemporaryBatch::create(data_dir, &temporary_name(&survey.batch_id))?;
     // The graph is loaded only when a passage needs encoding: a file that
     // brings every vector never pays a session for its own encoding.
     let encoder = if survey.encoded_passage.is_some() {
@@ -311,13 +451,30 @@ pub fn ingest(
         None
     };
     let mut batch = InternalBatch::new(directory.path(), index_config, model_config)?;
-    let digest = visit_documents(documents, |document, _number| {
-        batch.push(&document, encoder.as_deref())
-    })?;
-    // The batch identity comes from the first pass. A file modified in between
-    // would make `attach` store bytes that the `batch_id` does not describe, so
-    // the second pass recomputes the digest and refuses the lot (TOCTOU).
-    ensure_unchanged(&digest, &survey.digest, documents)?;
+    match &source {
+        Source::File(documents) => {
+            let digest = visit_documents(documents, |document, _number| {
+                batch.push(&document, encoder.as_deref())
+            })?;
+            // The batch identity comes from the first pass. A file modified in
+            // between would make `attach` store bytes that the `batch_id` does
+            // not describe, so the second pass recomputes the digest and refuses
+            // the lot (TOCTOU).
+            let surveyed = survey.digest.as_deref().ok_or_else(|| {
+                internal("the file identity of the online lot holds no digest of its bytes")
+            })?;
+            ensure_unchanged(&digest, surveyed, documents)?;
+        }
+        Source::Documents {
+            documents,
+            deletions,
+        } => {
+            batch.set_deletions(deletions)?;
+            for document in *documents {
+                batch.push(document, encoder.as_deref())?;
+            }
+        }
+    }
     let (counts, files) = batch.finish()?;
     write_manifest(
         directory.path(),
@@ -329,13 +486,15 @@ pub fn ingest(
     )?;
     if counts != survey.counts {
         return Err(internal(format!(
-            "the internal batch of '{}' holds {} document(s) and {} passage(s), but the file \
-             survey counted {} and {}",
+            "the internal batch of '{}' holds {} document(s), {} passage(s) and {} deletion(s), \
+             but the survey counted {}, {} and {}",
             survey.batch_id,
             counts.documents,
             counts.passages,
+            counts.deletions,
             survey.counts.documents,
-            survey.counts.passages
+            survey.counts.passages,
+            survey.counts.deletions
         )));
     }
 
@@ -511,22 +670,51 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
     Ok(())
 }
 
-/// What the first pass over the input file learned.
+/// What the survey of one online batch learned.
 struct Survey {
-    /// `online-<blake3 of the file bytes>`.
+    /// `online-<blake3 of the file bytes>`, or the identifier of the body.
     batch_id: String,
-    /// Hex digest of the file bytes, recomputed by the second pass.
-    digest: String,
+    /// Hex digest of the file bytes, recomputed by the second pass; `None` for a
+    /// body, whose identity is not derived from bytes (ADR-0107).
+    digest: Option<String>,
     /// Rows the internal batch will hold.
     counts: Counts,
     /// Key of the first passage that needs the encoder (`doc_id#ord`), if any.
     encoded_passage: Option<String>,
 }
 
-/// First pass: hashes the file, validates every document and counts the tokens
-/// of every passage, without writing anything and without loading the graph.
-fn survey(
+/// The single constructor of a `batch_id` (ADR-0107, decision 2).
+fn batch_id(identity: OnlineIdentity<'_>, digest: Option<&str>) -> Result<String, CribleError> {
+    match identity {
+        OnlineIdentity::FileBytes => {
+            let digest = digest.ok_or_else(|| {
+                internal("the file identity of an online batch needs the digest of its bytes")
+            })?;
+            Ok(format!("{BATCH_PREFIX}{digest}"))
+        }
+        OnlineIdentity::Given(name) => Ok(path_component(name, "batch id")?.to_owned()),
+    }
+}
+
+/// Name of the temporary directory and of its presence lock, in `<data>/tmp`.
+///
+/// The CLI identity already starts with [`BATCH_PREFIX`]; a body identity does
+/// not, so it is prefixed here. Both then form a residue the startup collects
+/// ([`remove_stale_batches`]).
+fn temporary_name(batch_id: &str) -> String {
+    if batch_id.starts_with(BATCH_PREFIX) {
+        batch_id.to_owned()
+    } else {
+        format!("{BATCH_PREFIX}{batch_id}")
+    }
+}
+
+/// First pass over the input file: hashes it, validates every document and
+/// counts the tokens of every passage, without writing anything and without
+/// loading the graph.
+fn survey_file(
     documents: &Path,
+    identity: OnlineIdentity<'_>,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
@@ -573,10 +761,10 @@ fn survey(
         let after = counts
             .passages
             .saturating_add(u64::try_from(document.passages.len()).unwrap_or(u64::MAX));
-        if after > MAX_ONLINE_PASSAGES {
+        if after > MAX_ONLINE_ENTRIES {
             return Err(invalid(format!(
                 "line {number} would bring the online lot to {after} passages, above the \
-                 {MAX_ONLINE_PASSAGES} passages of one request (docs/05-api.md, \"Lot en \
+                 {MAX_ONLINE_ENTRIES} passages of one request (docs/05-api.md, \"Lot en \
                  ligne\"); split the file"
             )));
         }
@@ -627,8 +815,137 @@ fn survey(
     }
     let digest = hasher.finalize().to_hex().to_string();
     Ok(Survey {
-        batch_id: format!("{BATCH_PREFIX}{digest}"),
-        digest,
+        batch_id: batch_id(identity, Some(&digest))?,
+        digest: Some(digest),
+        counts,
+        encoded_passage,
+    })
+}
+
+/// Survey of a body: validates every document and every deletion, and counts
+/// the entries of the request.
+///
+/// The limit counts the passages described **and** the `doc_id` of `deletions`
+/// (ADR-0107, decision 1 and `docs/05-api.md`, "Lot en ligne"). The checks of
+/// fields, vectors and passage lengths are the ones of [`survey_file`], so a
+/// body and a file are refused for the same reasons.
+fn survey_documents(
+    documents: &[OnlineDocument],
+    deletions: &[String],
+    identity: OnlineIdentity<'_>,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+) -> Result<Survey, CribleError> {
+    let counter = match model_config.kind {
+        ModelKind::External => None,
+        ModelKind::Onnx => Some(token_counter.ok_or_else(|| {
+            internal(
+                "the index model is onnx, whose passage lengths must be checked, but the caller \
+                 passed no token counter (INV-11)",
+            )
+        })?),
+    };
+    let limit = counter.map(TokenCounter::max_tokens);
+    let mut counts = Counts {
+        documents: 0,
+        passages: 0,
+        deletions: 0,
+    };
+    let mut encoded_passage = None;
+    let mut seen_documents = HashSet::new();
+    let mut seen_deletions = HashSet::new();
+    for (position, document) in documents.iter().enumerate() {
+        if document.doc_id.is_empty() {
+            return Err(invalid(format!(
+                "documents[{position}] has an empty doc_id"
+            )));
+        }
+        if document.passages.is_empty() {
+            return Err(invalid(format!(
+                "documents[{position}]: document '{}' holds no passage; an online document \
+                 carries at least one",
+                document.doc_id
+            )));
+        }
+        if !seen_documents.insert(document.doc_id.as_str()) {
+            return Err(invalid(format!(
+                "the doc_id '{}' appears twice in the documents of the online lot; a doc_id \
+                 appears at most once in documents (ADR-0040)",
+                document.doc_id
+            )));
+        }
+        check_fields(
+            &document.fields,
+            index_config,
+            FieldLevel::Document,
+            &format!("document '{}'", document.doc_id),
+        )?;
+        counts.documents = counts.documents.saturating_add(1);
+        for (ord, passage) in document.passages.iter().enumerate() {
+            let ord = u32::try_from(ord).map_err(|_| too_many_passages(&document.doc_id))?;
+            let key = format!("{}#{ord}", document.doc_id);
+            check_fields(
+                &passage.fields,
+                index_config,
+                FieldLevel::Passage,
+                &format!("passage '{key}'"),
+            )?;
+            if let Some(limit) = limit {
+                let counter = counter.ok_or_else(|| {
+                    internal("the token limit of an onnx model needs its token counter (INV-11)")
+                })?;
+                let tokens = counter.count_document(&passage.text)?;
+                if u64::try_from(tokens).unwrap_or(u64::MAX) > u64::from(limit) {
+                    return Err(invalid(format!(
+                        "passage '{key}' of the online lot holds {tokens} tokens, above \
+                         max_tokens = {limit} (control 8, INV-11); no model truncates a passage, \
+                         shorten it or split it"
+                    )));
+                }
+            }
+            if passage.vector.is_none() && model_config.kind == ModelKind::External {
+                return Err(invalid(format!(
+                    "passage '{key}' of the online lot holds no vector, and the model '{}' of \
+                     the index is external, which has no encoder; provide a vector",
+                    model_config.name
+                )));
+            }
+            if passage.vector.is_none() {
+                encoded_passage.get_or_insert_with(|| key.clone());
+            }
+            counts.passages = counts.passages.saturating_add(1);
+        }
+    }
+    for doc_id in deletions {
+        if doc_id.is_empty() {
+            return Err(invalid("a deletion of the online lot has an empty doc_id"));
+        }
+        if !seen_deletions.insert(doc_id.as_str()) {
+            return Err(invalid(format!(
+                "the deletion '{doc_id}' appears twice in the online lot; a doc_id appears at \
+                 most once in deletions (ADR-0040)"
+            )));
+        }
+        if seen_documents.contains(doc_id.as_str()) {
+            return Err(invalid(format!(
+                "the doc_id '{doc_id}' is declared both in the documents and in the deletions \
+                 of the online lot; a batch cannot add and remove one document (ADR-0040)"
+            )));
+        }
+        counts.deletions = counts.deletions.saturating_add(1);
+    }
+    let entries = counts.passages.saturating_add(counts.deletions);
+    if entries > MAX_ONLINE_ENTRIES {
+        return Err(invalid(format!(
+            "the online lot holds {entries} entries, above the {MAX_ONLINE_ENTRIES} entries of \
+             one request (docs/05-api.md, \"Lot en ligne\"); passages and deletions count \
+             together, split the request"
+        )));
+    }
+    Ok(Survey {
+        batch_id: batch_id(identity, None)?,
+        digest: None,
         counts,
         encoded_passage,
     })
@@ -998,10 +1315,12 @@ struct InternalBatch<'a> {
     precision: ReferencePrecision,
     documents_schema: SchemaRef,
     passages_schema: SchemaRef,
+    deletions_schema: SchemaRef,
     documents: ArrowWriter<File>,
     passages: ArrowWriter<File>,
     pending_documents: Vec<PendingDocument>,
     pending_passages: Vec<PendingPassage>,
+    pending_deletions: Vec<String>,
     counts: Counts,
 }
 
@@ -1037,6 +1356,11 @@ impl<'a> InternalBatch<'a> {
             false,
         ));
         let passages_schema = Arc::new(ArrowSchema::new(fields));
+        let deletions_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "doc_id",
+            DataType::Utf8,
+            false,
+        )]));
         let properties = WriterProperties::builder()
             // Fixed so that the Parquet bytes of an online batch do not carry
             // the version of the `parquet` crate: the checksums of the manifest
@@ -1065,16 +1389,27 @@ impl<'a> InternalBatch<'a> {
             precision,
             documents_schema,
             passages_schema,
+            deletions_schema,
             documents,
             passages,
             pending_documents: Vec::new(),
             pending_passages: Vec::new(),
+            pending_deletions: Vec::new(),
             counts: Counts {
                 documents: 0,
                 passages: 0,
                 deletions: 0,
             },
         })
+    }
+
+    /// Sets the deletions of the lot: their rows go to a `deletions.parquet`,
+    /// written at [`InternalBatch::finish`] (ADR-0107, decision 1).
+    fn set_deletions(&mut self, deletions: &[String]) -> Result<(), CribleError> {
+        self.pending_deletions = deletions.to_vec();
+        self.counts.deletions = u64::try_from(deletions.len())
+            .map_err(|_| internal("the online lot holds more deletions than a u64 can count"))?;
+        Ok(())
     }
 
     /// Buffers one document and its passages, encoding the passages without a
@@ -1266,10 +1601,44 @@ impl<'a> InternalBatch<'a> {
         Ok(())
     }
 
+    /// Writes the deletions file, when the lot carries deletions.
+    ///
+    /// The format requires the file if and only if `counts.deletions > 0`
+    /// (`docs/format-lot-v1.md`), so a lot without deletion has no
+    /// `deletions.parquet` and no entry for it in the manifest checksums.
+    fn write_deletions(&self) -> Result<(), CribleError> {
+        if self.pending_deletions.is_empty() {
+            return Ok(());
+        }
+        let path = self.directory.join("deletions.parquet");
+        let file = File::create(&path)
+            .map_err(|error| io_error("create a Parquet file", &path, &error))?;
+        let mut writer = ArrowWriter::try_new(file, self.deletions_schema.clone(), None)
+            .map_err(|error| parquet_error("open a Parquet file", &path, &error))?;
+        let ids = self
+            .pending_deletions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            self.deletions_schema.clone(),
+            vec![Arc::new(StringArray::from(ids))],
+        )
+        .map_err(|error| internal(format!("cannot build the deletions record batch: {error}")))?;
+        writer
+            .write(&batch)
+            .map_err(|error| internal(format!("cannot write deletions.parquet: {error}")))?;
+        writer
+            .close()
+            .map(|_| ())
+            .map_err(|error| internal(format!("cannot close deletions.parquet: {error}")))
+    }
+
     /// Writes the remaining rows, closes the files and returns their checksums.
     fn finish(mut self) -> Result<(Counts, BTreeMap<String, String>), CribleError> {
         self.flush_documents()?;
         self.flush_passages()?;
+        self.write_deletions()?;
         let counts = self.counts;
         self.documents
             .close()
@@ -1281,6 +1650,13 @@ impl<'a> InternalBatch<'a> {
         for name in ["documents.parquet", "passages.parquet"] {
             let path = self.directory.join(name);
             files.insert(name.to_owned(), format!("blake3:{}", hash_file(&path)?));
+        }
+        if counts.deletions > 0 {
+            let path = self.directory.join("deletions.parquet");
+            files.insert(
+                "deletions.parquet".to_owned(),
+                format!("blake3:{}", hash_file(&path)?),
+            );
         }
         Ok((counts, files))
     }

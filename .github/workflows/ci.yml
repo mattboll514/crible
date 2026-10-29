@@ -41,6 +41,13 @@ jobs:
         run: cargo clippy -p crible-store --all-targets --locked --features failpoints -- -D warnings
       - name: Test the failpoint build
         run: cargo test -p crible-store --locked --features failpoints
+      # `compaction_recovery` arms the store failpoint through the server's own
+      # `failpoints` feature (complement of 2026-10-29 to ADR-0068, decision 2):
+      # without these two steps the recovery of ADR-0108 is never run in CI.
+      - name: Lint the server failpoint build
+        run: cargo clippy -p crible-server --all-targets --locked --features failpoints -- -D warnings
+      - name: Test the server failpoint build
+        run: cargo test -p crible-server --locked --features failpoints
       - name: Test the Python client against the binary
         working-directory: clients/python
         env:

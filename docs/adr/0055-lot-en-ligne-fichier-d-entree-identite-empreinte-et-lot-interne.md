@@ -108,6 +108,16 @@ Pour que la route P6 n'ait pas à rouvrir cet ADR :
 | 4 | (c) `tmp-*` dans le dossier de l'index | Effacé par la reprise (INV-04, `docs/02-architecture.md:120-121`) lors d'une ouverture concurrente, en pleine attache |
 | 4 | (d) lot en mémoire | La conception et `attach` travaillent sur des fichiers, et `manifest_blake3` est calculé sur les octets lus (ADR-0041) : un lot en mémoire imposerait un second chemin d'attache |
 
+## Complément du 2026-10-29
+
+Un renvoi, sans changement des décisions ci-dessus.
+
+**Constat.** L'« À surveiller » ci-dessus (`:89`) dit qu'un besoin de suppression en ligne demanderait un nouvel ADR. La route `POST /v1/indexes/{index}/documents` porte `deletions` (`docs/05-api.md:128`).
+
+**Décision.** ADR-0107 accepte les `deletions` sur la route : le lot interne écrit un `deletions.parquet` conforme au format de lot v1, et l'attache les applique comme pour tout lot. Le fichier d'entrée de `crible ingest` (décision 1) reste sans `deletions` : une suppression en CLI passe par un lot déposé. ADR-0107 confirme aussi que la route prend son `batch_id` dans le corps (« Cohérence avec P6 »), le constructeur de lot interne restant le même pour la CLI et la route.
+
+**Raison.** `docs/05-api.md:128` montre `deletions` depuis l'origine, et `replace_all` est refusé en ligne : sans ce chemin, l'API ne pourrait retirer aucun document.
+
 ## Références
 
 - `docs/phases/P2-encodeur-et-recette.md`, tâche ENCODER-DOCUMENTS-EN-LIGNE

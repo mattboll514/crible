@@ -20,17 +20,19 @@
 //! between.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
+use crible_store::attach::AttachDurations;
 use crible_store::generation::{GenerationStore, LastBatch, Snapshot};
 use crible_store::jobs::{JobKind, JobRecord, JobState, JobStore};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, watch};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::error;
@@ -38,6 +40,11 @@ use crate::lifecycle::Shutdown;
 
 /// Message of the `503 overloaded` a draining instance renders (ADR-0104).
 pub const SHUTTING_DOWN_MESSAGE: &str = "the server is shutting down";
+
+/// Message of every job of an index that could not reopen after a failed
+/// compaction; the cause is in the server log, once (ADR-0108, decision 2).
+const BROKEN_MESSAGE: &str =
+    "the index cannot write until the server restarts; its store could not be reopened";
 
 /// One job as the API renders it (`docs/05-api.md`, "Jobs").
 ///
@@ -198,9 +205,10 @@ pub type JobWork = Box<
         + 'static,
 >;
 
-/// One queued job: its identifier, its work and its progression handle.
+/// One queued job: its identifier, its kind, its work and its progression handle.
 struct Command {
     id: String,
+    kind: JobKind,
     work: JobWork,
     progress: JobProgress,
 }
@@ -297,7 +305,12 @@ impl JobBoard {
             jobs.insert(id.clone(), sender);
         }
         self.pending.fetch_add(1, Ordering::AcqRel);
-        permit.send(Command { id, work, progress });
+        permit.send(Command {
+            id,
+            kind,
+            work,
+            progress,
+        });
         Ok(view)
     }
 
@@ -311,23 +324,38 @@ impl JobBoard {
     }
 
     /// Writes the end of a job and publishes it.
+    ///
+    /// The report of a `patch_documents` job lives in memory only: ADR-0060 and
+    /// ADR-0103, decision 3, say it is never persisted, so a job read back after a
+    /// restart carries none. Every other report is already persisted elsewhere
+    /// (the `batches` history for an attach), so it is written to the table.
     fn mark_finished(
         &self,
         id: &str,
+        kind: JobKind,
         outcome: Result<JobOutcome, CribleError>,
         progress: &JobProgress,
     ) {
         let progress = progress.current();
         match outcome {
             Ok(outcome) => {
-                let result = outcome.result.map(|value| value.to_string());
+                let in_memory = if kind == JobKind::PatchDocuments {
+                    outcome.result.clone()
+                } else {
+                    None
+                };
+                let persisted = if kind == JobKind::PatchDocuments {
+                    None
+                } else {
+                    outcome.result.map(|value| value.to_string())
+                };
                 match self.store.finish_succeeded(
                     id,
                     outcome.generation,
                     progress.as_deref(),
-                    result.as_deref(),
+                    persisted.as_deref(),
                 ) {
-                    Ok(record) => self.publish(record),
+                    Ok(record) => self.publish_with(record, in_memory),
                     Err(failure) => self.fail_transition(id, failure),
                 }
             }
@@ -373,8 +401,20 @@ impl JobBoard {
 
     /// Publishes a row and decrements the pending count when it is terminal.
     fn publish(&self, record: JobRecord) {
+        self.publish_with(record, None);
+    }
+
+    /// Publishes a row, adding `in_memory` as the result when the row carries
+    /// none. This is how the report of a `patch_documents` job reaches its
+    /// author without being persisted (ADR-0060, ADR-0103).
+    fn publish_with(&self, record: JobRecord, in_memory: Option<Value>) {
         match JobView::from_record(record) {
-            Ok(view) => self.store_and_notify(view),
+            Ok(mut view) => {
+                if view.result.is_none() {
+                    view.result = in_memory;
+                }
+                self.store_and_notify(view);
+            }
             Err(failure) => error!(
                 cause = failure.message(),
                 "a job transitioned to a row this build cannot read"
@@ -621,12 +661,19 @@ impl IndexSummary {
 /// One writer task per index, owning the writable store of that index.
 pub struct IndexWriter {
     index: String,
+    /// Directory of the index on disk, kept to reopen the store after a failed
+    /// compaction (ADR-0108).
+    directory: PathBuf,
     queue: mpsc::Sender<Command>,
     receiver: Mutex<Option<mpsc::Receiver<Command>>>,
     store: Mutex<Option<GenerationStore>>,
     board: Arc<JobBoard>,
     published: RwLock<Published>,
     deleted: AtomicBool,
+    /// Set when the store could not be reopened after a failed compaction: the
+    /// index still serves reads on its last snapshot, and every later job fails
+    /// in `internal` until the restart (ADR-0108, decision 2).
+    broken: AtomicBool,
 }
 
 impl IndexWriter {
@@ -648,9 +695,11 @@ impl IndexWriter {
     ) -> Result<Self, CribleError> {
         let snapshot = store.snapshot();
         let summary = IndexSummary::of_snapshot(&store, &snapshot)?;
+        let directory = store.index_dir().to_path_buf();
         let (queue, receiver) = mpsc::channel(writer_queue.max(1));
         Ok(Self {
             index,
+            directory,
             queue,
             receiver: Mutex::new(Some(receiver)),
             store: Mutex::new(Some(store)),
@@ -661,6 +710,7 @@ impl IndexWriter {
                 summary,
             }),
             deleted: AtomicBool::new(false),
+            broken: AtomicBool::new(false),
         })
     }
 
@@ -780,18 +830,42 @@ impl IndexWriter {
 
     /// Runs the queue until every sender is dropped: the running job and every
     /// waiting one run, in arrival order, on a blocking thread.
-    async fn run(
-        self: Arc<Self>,
-        mut receiver: mpsc::Receiver<Command>,
-        mut store: GenerationStore,
-    ) {
+    ///
+    /// A failed `compact` abandons the in-memory store and reopens the index from
+    /// disk, then republishes the snapshot before the next job (ADR-0108,
+    /// decision 2). If that reopen fails, the index keeps serving its last
+    /// snapshot and the later jobs fail in `internal` until the restart, with a
+    /// single `error` line.
+    async fn run(self: Arc<Self>, mut receiver: mpsc::Receiver<Command>, store: GenerationStore) {
+        let mut holder = Some(store);
         while let Some(command) = receiver.recv().await {
             self.board.mark_running(&command.id, &command.progress);
+            let Some(current) = holder.take() else {
+                self.board.mark_finished(
+                    &command.id,
+                    command.kind,
+                    Err(error::internal(BROKEN_MESSAGE)),
+                    &command.progress,
+                );
+                continue;
+            };
+            if self.broken.load(Ordering::Acquire) {
+                holder = Some(current);
+                self.board.mark_finished(
+                    &command.id,
+                    command.kind,
+                    Err(error::internal(BROKEN_MESSAGE)),
+                    &command.progress,
+                );
+                continue;
+            }
             let progress = command.progress.clone();
+            let kind = command.kind;
             let work = command.work;
             let id = command.id.clone();
             let writer = Arc::clone(&self);
             let joined = tokio::task::spawn_blocking(move || {
+                let mut store = current;
                 let outcome = work(&mut store, &progress, &writer);
                 let snapshot = store.snapshot();
                 if let Ok(summary) = IndexSummary::of_snapshot(&store, &snapshot)
@@ -808,8 +882,13 @@ impl IndexWriter {
             .await;
             match joined {
                 Ok((returned, outcome)) => {
-                    store = returned;
-                    self.board.mark_finished(&id, outcome, &command.progress);
+                    let failed = outcome.is_err();
+                    holder = Some(returned);
+                    self.board
+                        .mark_finished(&id, kind, outcome, &command.progress);
+                    if failed && kind == JobKind::Compact {
+                        holder = self.reopen_off_threads(holder.take()).await;
+                    }
                     if self.deleted.load(Ordering::Acquire) {
                         fail_queued(&mut receiver, &self.board, &self.index).await;
                         return;
@@ -817,28 +896,130 @@ impl IndexWriter {
                 }
                 Err(join) => {
                     // The store is lost with a panicking job. The job is failed,
-                    // and the jobs still queued are failed too rather than left
-                    // `queued` forever.
+                    // and the writer goes on from a reopened store when it can.
                     self.board.mark_finished(
                         &id,
+                        kind,
                         Err(error::internal(format!(
                             "the blocking task of a write job failed: {join}"
                         ))),
                         &command.progress,
                     );
-                    while let Some(command) = receiver.recv().await {
-                        self.board.mark_running(&command.id, &command.progress);
-                        self.board.mark_finished(
-                            &command.id,
-                            Err(error::internal(
-                                "the writer of the index stopped after a failed job",
-                            )),
-                            &command.progress,
-                        );
+                    // A panic during a compaction is an aborted compaction: the
+                    // same reopen as a returned error, without a store to drop,
+                    // then the next job runs on the epoch `CURRENT_EPOCH` names
+                    // (ADR-0108, decision 2). A store that cannot reopen leaves
+                    // the writer broken: every later job fails in `internal` and
+                    // the reads keep their last snapshot.
+                    holder = self.reopen_off_threads(None).await;
+                    if self.deleted.load(Ordering::Acquire) {
+                        fail_queued(&mut receiver, &self.board, &self.index).await;
+                        return;
                     }
-                    return;
+                    continue;
                 }
             }
+        }
+    }
+
+    /// Abandons `previous` and reopens the index from disk, off the async
+    /// threads, then republishes the snapshot and the summary (ADR-0108,
+    /// decision 2).
+    ///
+    /// The reopen runs the recovery of `docs/02` and rebuilds the derived
+    /// structures: it is a store operation, paid on a blocking thread like every
+    /// other (ADR-0054). The failed store is dropped inside the same blocking
+    /// task, because the write open needs the SQLite writer lock and the tantivy
+    /// writer lock the old one still holds. `mark_broken` is called after the
+    /// task returns, never from a store thread.
+    async fn reopen_off_threads(
+        self: &Arc<Self>,
+        previous: Option<GenerationStore>,
+    ) -> Option<GenerationStore> {
+        let writer = Arc::clone(self);
+        let joined = tokio::task::spawn_blocking(move || match previous {
+            Some(previous) => writer.reopen(previous),
+            None => writer.reopen_without_store(),
+        })
+        .await;
+        match joined {
+            Ok(Ok(reopened)) => Some(reopened),
+            Ok(Err(())) => {
+                self.mark_broken();
+                None
+            }
+            Err(join) => {
+                error!(
+                    index = %self.index,
+                    cause = %join,
+                    "the reopen of an index panicked; it cannot write until the restart"
+                );
+                self.mark_broken();
+                None
+            }
+        }
+    }
+
+    /// Abandons `previous` and reopens the index from disk, then republishes the
+    /// snapshot and the summary (ADR-0108, decision 2).
+    ///
+    /// The failed store is dropped first: the write open needs the SQLite writer
+    /// lock and the tantivy writer lock the old one still holds. The reopen runs
+    /// the recovery of `docs/02`, which republishes the epoch `CURRENT_EPOCH`
+    /// names.
+    fn reopen(&self, previous: GenerationStore) -> Result<GenerationStore, ()> {
+        drop(previous);
+        self.reopen_without_store()
+    }
+
+    /// Reopens the index from disk and republishes its state.
+    ///
+    /// The cause of a failure is logged at `warn`: the single `error` line of a
+    /// broken index is [`Self::mark_broken`]'s, so a failure of the reopen leaves
+    /// one error line and not one per failure nor one per refused job (ADR-0108,
+    /// decision 2).
+    fn reopen_without_store(&self) -> Result<GenerationStore, ()> {
+        let config = self.configuration().map_err(|failure| {
+            warn!(
+                index = %self.index,
+                cause = failure.message(),
+                "the published configuration of an index is unreadable; the index cannot reopen"
+            );
+        })?;
+        let store = GenerationStore::open(&self.directory, &config.schema).map_err(|failure| {
+            warn!(
+                index = %self.index,
+                cause = failure.message(),
+                "the index could not reopen after a failed compaction"
+            );
+        })?;
+        let snapshot = store.snapshot();
+        let summary = IndexSummary::of_snapshot(&store, &snapshot).map_err(|failure| {
+            warn!(
+                index = %self.index,
+                cause = failure.message(),
+                "the reopened index could not publish its summary"
+            );
+        })?;
+        self.publish(config, snapshot, summary).map_err(|failure| {
+            warn!(
+                index = %self.index,
+                cause = failure.message(),
+                "the reopened index could not publish its snapshot"
+            );
+        })?;
+        Ok(store)
+    }
+
+    /// Marks the writer as unable to write until the restart, with one `error`
+    /// line (ADR-0108, decision 2).
+    fn mark_broken(&self) {
+        if !self.broken.swap(true, Ordering::AcqRel) {
+            error!(
+                index = %self.index,
+                "the index cannot reopen after a failed compaction; it still serves reads and \
+                 its jobs fail with an internal error until the server restarts (ADR-0108)"
+            );
         }
     }
 }
@@ -850,6 +1031,7 @@ async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, i
         board.mark_running(&command.id, &command.progress);
         board.mark_finished(
             &command.id,
+            command.kind,
             Err(CribleError::new(
                 ErrorCode::UnknownIndex,
                 format!("unknown index '{index}'"),
@@ -857,6 +1039,41 @@ async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, i
             &command.progress,
         );
     }
+}
+
+/// Logs the durations of an attach once, at the end of its job (ADR-0107,
+/// decision 4).
+///
+/// No response and no job body carries them (ADR-0042): this line is the only
+/// place they are read back. It names the job, its kind and its index, never a
+/// document, a field value or a passage text (INV-13, ADR-0096).
+pub(crate) fn log_attach_durations(
+    job_id: &str,
+    kind: JobKind,
+    index: &str,
+    durations: Option<AttachDurations>,
+) {
+    let Some(durations) = durations else {
+        return;
+    };
+    info!(
+        job_id = %job_id,
+        kind = kind.as_str(),
+        index = %index,
+        validation_ms = millis(durations.validation),
+        segment_ms = millis(durations.segment),
+        transaction_ms = millis(durations.transaction),
+        lexical_ms = millis(durations.lexical),
+        manifest_ms = millis(durations.manifest),
+        snapshot_ms = millis(durations.snapshot),
+        "attach durations"
+    );
+}
+
+/// One duration in whole milliseconds, for the line of
+/// [`log_attach_durations`].
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A fresh job identifier: `job_` followed by 32 lowercase hexadecimal

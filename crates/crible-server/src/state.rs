@@ -79,17 +79,61 @@ impl IndexHandle {
 pub struct Loaded {
     /// Encoders loaded at startup or at a creation, one session per referenced
     /// fingerprint. Never unloaded before the restart (ADR-0105, decision 2).
-    pub models: Mutex<ModelRegistry>,
+    /// Shared as an [`Arc`] so a write job can load the fp32 graph of an `onnx`
+    /// model in its blocking task (ADR-0054, ADR-0107).
+    pub models: Arc<Mutex<ModelRegistry>>,
     indexes: RwLock<Vec<Arc<IndexHandle>>>,
     /// Root of `<data>`, for the creation and the deletion of an index.
     data: PathBuf,
     /// Root of `[paths].models`.
     models_root: PathBuf,
+    /// Root of `[paths].exchange`, for the batch, export and snapshot routes.
+    exchange: PathBuf,
     /// Depth of the write queue of a new index.
     writer_queue: usize,
     /// Serialises the creations, so two of them never write the same name nor
     /// load the same model twice (ADR-0105, decision 1).
     creation: Mutex<()>,
+}
+
+/// One model of the instance, as a write job reads it.
+///
+/// The configuration and the directory are read once per job, from
+/// `<models>/<model>/model.json`; the registry is shared with the startup, so an
+/// `onnx` graph loaded by a job is the one the next job reuses (ADR-0105,
+/// decision 2).
+pub struct ModelAccess {
+    /// Resolved configuration, with `dims`, `normalize` and the encoder fields.
+    pub config: ModelConfig,
+    /// Directory holding `model.json` and the graph files.
+    pub directory: PathBuf,
+    registry: Arc<Mutex<ModelRegistry>>,
+}
+
+impl ModelAccess {
+    /// Returns the fp32 encoder of the model, loading it on first use.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`ModelRegistry::get_or_load`], plus
+    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    pub fn encoder(&self) -> Result<Arc<crible_encode::Model>, CribleError> {
+        let registry = self
+            .registry
+            .lock()
+            .map_err(|_| internal("the model registry of the instance is poisoned"))?;
+        registry.get_or_load(&self.directory)
+    }
+
+    /// Loads the token counter of an `onnx` model.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`crible_encode::TokenCounter::load_with_config`], plus
+    /// [`ErrorCode::Internal`] when the model is not an `onnx` one.
+    pub fn token_counter(&self) -> Result<crible_encode::TokenCounter, CribleError> {
+        crible_encode::TokenCounter::load_with_config(&self.directory, &self.config)
+    }
 }
 
 impl Loaded {
@@ -139,6 +183,59 @@ impl Loaded {
             .map_err(|_| internal("the index registry is poisoned"))?;
         let position = indexes.iter().position(|handle| handle.name == name);
         Ok(position.map(|position| indexes.remove(position)))
+    }
+
+    /// Root of `[paths].exchange`, for the batch, export and snapshot routes.
+    #[must_use]
+    pub fn exchange(&self) -> &Path {
+        &self.exchange
+    }
+
+    /// Directory of the index named `name`: `<data>/indexes/<name>`.
+    #[must_use]
+    pub fn index_directory(&self, name: &str) -> PathBuf {
+        self.data.join("indexes").join(name)
+    }
+
+    /// Configuration and encoder directory of the model `name`.
+    ///
+    /// The name comes from `index.json`, not from a request, and is checked as
+    /// one path component so a `..` in a configuration never reads outside
+    /// `[paths].models` (ADR-0105, decision 2).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] for a name that is not one path component,
+    /// a missing or unreadable `model.json`, and the errors of the model
+    /// configuration; the errors of the registry when the model is `onnx`.
+    pub fn model(&self, name: &str) -> Result<ModelAccess, CribleError> {
+        let model = path_component(name, "model of an index")?;
+        let directory = self.models_root.join(model);
+        let path = directory.join("model.json");
+        let raw = fs::read_to_string(&path).map_err(|error| {
+            invalid(format!(
+                "cannot read the model configuration {}: {error}",
+                path.display()
+            ))
+        })?;
+        let config = ModelConfig::from_json_str(&raw).map_err(|error| {
+            named(
+                error,
+                &format!("the model '{}' at {}", model, directory.display()),
+            )
+        })?;
+        let registry = Arc::clone(&self.models);
+        let access = ModelAccess {
+            config,
+            directory,
+            registry,
+        };
+        if access.config.kind == ModelKind::Onnx {
+            // The startup already loaded the graph; this keeps a model created
+            // after the startup reachable by the first write job (ADR-0105).
+            access.encoder()?;
+        }
+        Ok(access)
     }
 }
 
@@ -407,6 +504,39 @@ impl AppState {
         self.loaded.get().map(|loaded| loaded.data.as_path())
     }
 
+    /// Root of `[paths].exchange`, once the startup has published its
+    /// configuration.
+    #[must_use]
+    pub fn exchange_root(&self) -> Option<&Path> {
+        self.loaded.get().map(|loaded| loaded.exchange.as_path())
+    }
+
+    /// Directory of the served index named `name`.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the instance has not loaded its
+    /// configuration.
+    pub fn index_directory(&self, name: &str) -> Result<PathBuf, CribleError> {
+        self.loaded
+            .get()
+            .map(|loaded| loaded.index_directory(name))
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))
+    }
+
+    /// Model of a served index, read from its configuration.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Loaded::model`], and [`ErrorCode::Internal`] when the
+    /// instance has not loaded its configuration.
+    pub fn model(&self, name: &str) -> Result<ModelAccess, CribleError> {
+        self.loaded
+            .get()
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))?
+            .model(name)
+    }
+
     /// Removes `name` from the registry, for the execution of `delete_index`
     /// (ADR-0105, decision 6).
     ///
@@ -561,10 +691,11 @@ impl AppState {
             indexes.push(Arc::new(IndexHandle { name, writer }));
         }
         let loaded = Loaded {
-            models: Mutex::new(models),
+            models: Arc::new(Mutex::new(models)),
             indexes: RwLock::new(indexes),
             data: config.paths.data.clone(),
             models_root: config.paths.models.clone(),
+            exchange: config.paths.exchange.clone(),
             writer_queue: config.limits.writer_queue,
             creation: Mutex::new(()),
         };

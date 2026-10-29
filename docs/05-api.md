@@ -35,14 +35,14 @@ Toute réponse d'erreur du serveur suit ce format et porte `x-request-id` (ADR-0
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) ; `directory` d'un lot hors de l'inbox, lien symbolique ou entrée qui n'est ni un fichier ni un dossier (ADR-0107) ; `doc_id` présent à la fois dans `documents` et dans `deletions` d'un lot en ligne (ADR-0040, ADR-0107) ; corps de lot en ligne sans aucun document ni aucune suppression (ADR-0107) ; corps non vide sur `compact`, `exports` ou `snapshots` (ADR-0107) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente, mal formée ou inconnue ; réponse avec `WWW-Authenticate: Bearer` et un corps identique dans les trois cas (ADR-0100) |
 | `forbidden` | 403 | Rôle insuffisant ; sans `WWW-Authenticate` (ADR-0100) |
 | `unknown_index` | 404 | Index inexistant |
-| `not_found` | 404 | Document, job ou lot introuvable ; route inconnue ou méthode non permise sur une route connue (ADR-0101) ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) |
+| `not_found` | 404 | Document, job ou lot introuvable ; route inconnue ou méthode non permise sur une route connue (ADR-0101) ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) ou dans `GET /documents/{doc_id}`, et `directory` absent dans `POST /batches` (ADR-0107) |
 | `immutable_setting` | 409 | Tentative de modifier un réglage figé |
-| `batch_conflict` | 409 | Même `batch_id`, manifeste différent |
+| `batch_conflict` | 409 | Même `batch_id`, manifeste différent ; rendu par le job d'un lot en ligne ou déposé, jamais par la soumission (ADR-0107) |
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
@@ -61,16 +61,16 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `GET /v1/indexes/{index}` | read | Config + état : époque, génération, documents, passages vivants et morts, ratio de morts, nombre de segments, tailles, dernier lot (ADR-0105) |
 | `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables → `202` avec un job `rebuild_lexical` ou `patch_config` ; un réglage figé → `409` ; une clé inconnue → `400` (ADR-0105) |
 | `DELETE /v1/indexes/{index}?confirm={index}` | admin | Supprimer l'index → `202` avec un job `delete_index` ; `confirm` absent ou différent du nom → `400` (ADR-0105) |
-| `POST /v1/indexes/{index}/documents` | write | Lot en ligne : documents et passages (texte, ou vecteurs fournis), suppressions → job |
-| `PATCH /v1/indexes/{index}/documents` | write | Mettre à jour des métadonnées de documents → job |
-| `GET /v1/indexes/{index}/documents/{doc_id}` | read | Document, ses passages et son état (`?text=true` pour inclure le texte) |
-| `POST /v1/indexes/{index}/batches` | write | Attacher un lot déposé dans `exchange/inbox/<dossier>` → job |
+| `POST /v1/indexes/{index}/documents` | write | Lot en ligne : `batch_id` obligatoire, documents et passages (texte, ou vecteurs fournis), `deletions` → `202` avec un job `online_batch` ; un corps sans document ni suppression rend `400` ; erreurs d'attache dans le job (ADR-0107) |
+| `PATCH /v1/indexes/{index}/documents` | write | Mettre à jour des métadonnées de documents → job ; `not_found` porté par le job (ADR-0107) |
+| `GET /v1/indexes/{index}/documents/{doc_id}` | read | Document, ses passages et son état, lus dans l'instantané publié (`?text=true` pour inclure le texte) (ADR-0107) |
+| `POST /v1/indexes/{index}/batches` | write | Attacher un lot déposé dans `exchange/inbox/<nom>` ; corps `{ "directory": "<nom>" }`, un seul composant de chemin, sans lien symbolique ; le job revalide le dossier avant de le lire → job (ADR-0107) |
 | `GET /v1/jobs/{job_id}` · `GET /v1/jobs` | write | Suivre un job ; lister les jobs (filtres `index`, `state`) |
 | `POST /v1/indexes/{index}/search` | read | Recherche dans un index |
 | `POST /v1/search` | read | Recherche multi-index |
-| `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction → job |
-| `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` → job |
-| `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` → job ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065) |
+| `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction ; sans corps → `202` avec un job `compact` (ADR-0107) |
+| `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` ; sans corps → `202` avec un job `export` (ADR-0107) |
+| `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` ; sans corps → `202` avec un job `snapshot` ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065, ADR-0107) |
 | `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
@@ -131,9 +131,25 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 - Si `doc_hash` est absent, il vaut le blake3 du **JSON canonique des passages** (ADR-0055) : pour chaque passage, `ord`, `text` et `fields`, clés triées, dans la forme canonique d'ADR-0019 ; le digest est rendu `blake3:<hex>` (ADR-0034, ADR-0041). Cette forme couvre le texte, les champs et le découpage, donc un `doc_hash` identique signifie bien que rien n'a changé **dans les passages**. Les champs de **document** restent hors du hash : un patch de métadonnées ne change pas le `doc_hash` (ADR-0060). Le lot interne remplit toujours la colonne `doc_hash`, qui est non nullable.
 - Si un passage porte un `vector`, il est encodé en base64 (fp32 little-endian) ; sinon, le serveur encode le texte.
-- Limite : 10 000 passages par requête.
-- **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 passages le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé.
+- **`batch_id`** : obligatoire, pris dans le corps de la requête et passé à `crible-store::online` par le même constructeur que la CLI (ADR-0055, ADR-0107). Un rejeu du même `batch_id` avec le même contenu ne fait rien (INV-10) ; un contenu différent rend `batch_conflict` dans le job.
+- **`deletions`** : liste de `doc_id` à retirer. Le lot interne les écrit dans un `deletions.parquet` conforme au format de lot v1, et l'attache les applique comme pour tout lot : la ligne `documents` tombe dans la transaction du commit (ADR-0041, ADR-0107). Un `doc_id` présent à la fois dans `documents` et dans `deletions` rend `400 invalid_request` (ADR-0040). Un corps qui ne porte que des `deletions` est un lot sans passage : son rapport porte `acceptance: null`, et ses fichiers `documents` et `passages` sont vides.
+- **Corps vide** : un corps qui ne porte **ni** `documents` **ni** `deletions` rend `400 invalid_request`, avant la mise en file, avec un message qui nomme les deux champs attendus ; c'est le refus du fichier vide du chemin par fichier, appliqué au corps (ADR-0107).
+- **Erreurs d'attache** : `batch_conflict`, `acceptance_failed` et `incompatible_model` sont détectés pendant le job. La soumission rend `202` et le job passe à `failed` avec le `error.code` correspondant (ADR-0103, ADR-0107). Seule la forme du corps est refusée avant la mise en file (`400 invalid_request`, `413 payload_too_large`).
+- Limite : 10 000 entrées par requête, passages décrits et `doc_id` de `deletions` confondus (ADR-0107).
+- **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 entrées le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé.
 - **Manifeste du lot interne** : déterministe, `producer` vaut `crible-online` ; ses valeurs sont fixées par ADR-0055 et décrites dans `04-donnees-et-ingestion.md` (mode en ligne) et `format-lot-v1.md` (lot interne du mode en ligne).
+
+### Lot déposé
+
+`POST /v1/indexes/{index}/batches` attache un lot déjà écrit dans `<exchange>/inbox/<nom>/`.
+
+```json
+{ "directory": "legifacile-decisions-2026-10-19" }
+```
+
+- `<nom>` est **un seul composant de chemin** : ni vide, ni `.`, ni `..`, ni `/`, ni `\` (`path_component`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox.
+- `<nom>` ne doit pas être un **lien symbolique**, et aucun lien symbolique n'est admis **dans le dossier du lot, à toute profondeur**, y compris vers un autre lot de l'inbox ; toute entrée qui n'est ni un fichier ni un dossier fait aussi refuser le lot. Un refus rend `400 invalid_request`, et le message nomme le champ `directory`, jamais un chemin absolu du serveur (ADR-0101).
+- Un dossier absent rend `404 not_found`. Sinon la réponse est `202` avec un job `attach_batch`. Le job **revalide le dossier du lot juste avant de le lire**, dans l'écrivain, par la même règle que ci-dessus : chemin canonique sous l'inbox, aucun lien symbolique à aucune profondeur, aucune entrée spéciale. Il n'ouvre pas les fichiers avec `O_NOFOLLOW` — la crate `libc` n'est pas dans `docs/07` —, et la fenêtre résiduelle entre cette revalidation et la lecture est assumée : l'inbox est sous le contrôle de l'exploitant, et le serveur seul la lit (ADR-0107).
 
 ### Patch de métadonnées
 
@@ -147,13 +163,29 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 - **`null`** est une valeur posée ; il ne retire jamais la clé.
 - **Champs** : seuls les champs de document du schéma sont acceptés. Une clé inconnue, un champ de passage, `doc_id` ou `doc_hash` donnent `invalid_request`, avec un message qui nomme le champ, le niveau attendu (`document_fields`) et le chemin JSON — jamais la valeur. Un champ `filterable: false` ou `returned: false` accepte la valeur, qui reste invisible aux filtres ou au payload du document.
 - **Valeur mal typée** : `invalid_request`, avec le type attendu ; jamais `invalid_filter`, qui appartient à la grammaire des filtres.
-- **Document inconnu ou retiré** : `not_found`, et aucun document du corps n'est appliqué. Un patch ne crée jamais de document.
+- **Document inconnu ou retiré** : `not_found`, et aucun document du corps n'est appliqué. Un patch ne crée jamais de document. Le refus est porté par le **job** : la soumission rend `202`, et le job passe à `failed` avec `error.code` à `not_found` (ADR-0103, ADR-0107).
 - **Limites** : 32 Mo et 10 000 documents (voir « Limites par défaut »), sinon `payload_too_large`.
 - **Rapport** : `{ updated, unchanged, generation }`, par document. Il n'est pas persisté (voir « Jobs »).
 - **CLI** : `crible patch --data <dir> --index <nom> <fichier>.jsonl` lit le même objet, un par ligne, le fichier étant passé en argument positionnel, sans `--models` : un patch n'encode rien.
 - **Effet** : `doc_hash` inchangé, `updated_generation = G+1` sur les lignes patchées, aucun segment, aucune ligne `batches` ; aucune génération n'est créée si aucun document ne change (`docs/02`, ADR-0060).
 - **Non-durabilité** : une attache ultérieure du même document avec un `doc_hash` identique réécrit les champs de document et écrase la valeur patchée (`docs/04`).
 - Le patch passe la même file d'écriture que les autres écritures de l'index. Lancer `crible patch` sur un index servi par un serveur reste une règle d'exploitation : `busy_timeout` n'assure que la vivacité (ADR-0038), pas l'exclusion entre processus.
+
+### Lecture d'un document
+
+`GET /v1/indexes/{index}/documents/{doc_id}` rend un document, ses champs et ses passages vivants (ADR-0107). `?text=true` ajoute le texte des passages.
+
+```json
+{ "doc_id": "LEGIARTI…", "generation": 1288, "doc_hash": "blake3:…",
+  "fields": { "num": "1240", "fonds": "LEGI" },
+  "passages": [ { "ord": 0, "fields": { "partie": "motifs" }, "text": "…" } ] }
+```
+
+- le document est lu dans la **base de l'époque de l'instantané publié**, jamais dans l'état SQLite courant ; `generation` est celle de l'instantané ;
+- seuls les champs **`returned`** du schéma sont rendus, à la même règle que les résultats de recherche ; les passages sont les passages **vivants**, triés par `ord` croissant ;
+- `text` n'apparaît qu'avec `?text=true` ; aucun vecteur, aucun `iid` (**INV-01**) ;
+- un document inconnu ou retiré rend `404 not_found` ;
+- rôle `read`.
 
 ## Grammaire des filtres
 
@@ -294,7 +326,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
 - `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport.
-- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
+- `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel (ADR-0042) : le serveur les **journalise une fois, à la fin du job**, au niveau `info`, avec `job_id`, `kind` et `index`, et **aucune réponse de l'API ne les rend**, `?wait=true` compris ; elles ne sont ni persistées ni portées par le job (ADR-0107). La CLI continue de les afficher à son appelant. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `patch_config`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`. `patch_config` est le patch d'un réglage de l'index qui ne reconstruit pas le lexical, et `rebuild_lexical` celui qui le reconstruit (ADR-0105).
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 - **Redémarrage** : un job resté `queued` ou `running` quand le serveur s'arrête passe à `failed` au démarrage suivant, avec `finished_at` à l'heure du démarrage, `error.code` à `internal` et le message fixe « the job was interrupted by a server restart ». Aucun job n'est rejoué : le client resoumet, et une attache est idempotente par `batch_id` (ADR-0103).
@@ -309,7 +341,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 |---|---|
 | `k` | 1000 au plus |
 | Longueur de requête | `max_tokens` du modèle ; au-delà, la requête est tronquée et `truncated_query: true` |
-| Corps de requête (lot en ligne) | 32 Mio, 10 000 passages |
+| Corps de requête (lot en ligne) | 32 Mio, 10 000 entrées : passages décrits et `doc_id` de `deletions` confondus (ADR-0107) |
 | Corps d'un patch de métadonnées | 32 Mio, 10 000 documents (mêmes bornes pour le fichier de `crible patch`) |
 | File d'écriture par index | 16 jobs en attente, puis `503 overloaded` avec `Retry-After: 1` (ADR-0103) |
 | Recherches concurrentes | 2 × le nombre de cœurs (`[server].max_concurrent_searches`, 0 = 2 × cœurs), puis `503 overloaded` avec `Retry-After: 1` |

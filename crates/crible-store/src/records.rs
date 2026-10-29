@@ -1141,6 +1141,15 @@ impl ReadPool {
         self.with_connection(|connection| document_by_id(connection, doc_id))
     }
 
+    /// Reads the passages of one document, in `ord` order, dead ones included.
+    ///
+    /// The caller filters the dead passages against the generation of the
+    /// snapshot it holds: the payload view of `GET /documents/{doc_id}` renders
+    /// the live ones only (ADR-0107, decision 6).
+    pub fn passages_of_document(&self, doc_id: &str) -> Result<Vec<PassageRecord>, CribleError> {
+        self.with_connection(|connection| passages_of_document(connection, doc_id))
+    }
+
     /// Reads the key of one passage by internal identifier, or `None` when it
     /// is unknown.
     ///
@@ -1664,6 +1673,26 @@ pub(crate) fn document_by_id(
         .optional()
         .map_err(|error| database_error("read a document", &error))?;
     row.map(document_from_row).transpose()
+}
+
+/// Reads the passages of one document, in `ord` order, dead ones included.
+pub(crate) fn passages_of_document(
+    connection: &Connection,
+    doc_id: &str,
+) -> Result<Vec<PassageRecord>, CribleError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT iid, doc_id, ord, text, passage_hash, fields, segment_id,
+                    created_generation, dead_since_gen
+             FROM passages WHERE doc_id = ?1 ORDER BY ord",
+        )
+        .map_err(|error| database_error("prepare the passages query", &error))?;
+    let rows = statement
+        .query_map(params![doc_id], passage_row)
+        .map_err(|error| database_error("query the passages of a document", &error))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| database_error("read the passages of a document", &error))?;
+    rows.into_iter().map(passage_from_row).collect()
 }
 
 /// Raw columns of a `documents` row.
