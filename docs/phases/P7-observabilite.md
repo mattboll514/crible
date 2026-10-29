@@ -46,7 +46,7 @@
 - **Critères d'acceptation** :
   - désactivé par défaut : aucun fichier écrit ;
   - la purge supprime bien les entrées expirées ;
-  - un rôle `read` reçoit `403`.
+  - un rôle `read` reçoit `403` (ADR-0095).
 
 ### REPONSE-DEBUG
 - **Objectif** : `debug: true` dans la réponse.
@@ -78,7 +78,9 @@
 - **Livrables** :
   - `GET /v1/stats` : comptes, erreurs par code, p50/p95/p99 par étape, taux de requêtes sans résultat, index et formes de filtre les plus fréquents, état journalier ;
   - la commande `crible stats`, qui affiche des tableaux.
-- **Critères d'acceptation** : les chiffres affichés pour un trafic de test connu sont exacts.
+- **Critères d'acceptation** :
+  - les chiffres affichés pour un trafic de test connu sont exacts ;
+  - une clé `read` ou `write` reçoit `403` sur `/v1/stats`, réservé au rôle `admin` (ADR-0095).
 
 ### COMMANDE-EVAL
 - **Objectif** : l'instrument de validation du propriétaire.

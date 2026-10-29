@@ -11,7 +11,7 @@
   | `write` | `read` + documents, lots, jobs |
   | `admin` | `write` + administration des index, compaction, export, instantanés, stats, journal de debug |
 
-- **Traçabilité** : chaque réponse porte l'en-tête `x-request-id`, et chaque réponse de recherche donne la `generation` lue.
+- **Traçabilité** : chaque réponse porte l'en-tête `x-request-id`, et chaque réponse de recherche donne la `generation` lue. Un `x-request-id` entrant est repris s'il fait au plus 128 octets et ne contient que des caractères `[A-Za-z0-9._:-]` ; sinon, et s'il est absent, le serveur génère un UUID v4 et ne journalise jamais la valeur refusée. La valeur retenue est renvoyée sur **toutes** les réponses, y compris `404`, `405`, `413` et `500`, portée dans le champ `request_id` du corps d'erreur et dans chaque ligne de log de la requête (ADR-0098).
 - **Mutations asynchrones** : elles renvoient `202 Accepted` avec un objet `job`.
   - Avec `?wait=true`, l'appel attend la fin du job (au plus `wait_timeout_ms`, 60 s par défaut). Un job terminé dans le délai est rendu **terminé**, en `200`, avec son objet `job` complet (`state` à `succeeded` ou `failed`, et son `error` le cas échéant). À l'échéance de `wait_timeout_ms`, l'appel rend `202 Accepted` avec le job **dans son état courant** (`queued` ou `running`), sans erreur, et le client suit l'avancement par `GET /v1/jobs/{job_id}` : jamais `504`, jamais un code `timeout`, le job n'est pas annulé (ADR-0067).
 - **Dates** : ISO 8601 pour les horodatages, `YYYY-MM-DD` pour les champs de type `date`.
@@ -66,7 +66,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` → job ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065) |
 | `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
-| `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, générations cohérentes) |
+| `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
 
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).

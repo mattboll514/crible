@@ -5,8 +5,29 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "HTTP server of the Crible engine"
 
 [dependencies]
+axum.workspace = true
+crible-core = { path = "../crible-core" }
+crible-encode = { path = "../crible-encode" }
+crible-store = { path = "../crible-store" }
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `oneshot` drives the router of a test without a socket. `util` is a
+# development feature (complement of 2026-10-29 to ADR-0096).
+tower = { workspace = true, features = ["util"] }
+# `AsyncReadExt`/`AsyncWriteExt` let the tests speak HTTP over a socket; the
+# feature is a test need, so the server build keeps the list of ADR-0096.
+tokio = { workspace = true, features = ["io-util"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

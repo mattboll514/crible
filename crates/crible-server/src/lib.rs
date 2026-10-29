@@ -1,3 +1,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! HTTP server for the Crible engine.
+//!
+//! References: `docs/05-api.md` (conventions), `docs/06-observabilite.md`
+//! ("Santé et logs"), `docs/07-stack-et-deploiement.md` ("Configuration de
+//! l'instance", "Docker"), and ADR-0096 to ADR-0099.
+//!
+//! This crate carries the skeleton of the server: the instance configuration
+//! with its `CRIBLE_*` overrides ([`config`]), the startup that loads the
+//! models and opens the indexes for writing with their recovery ([`state`]),
+//! the probes and the request identifier ([`http`]), the JSON journal
+//! ([`logging`]) and the lifecycle with its bounded drainage ([`lifecycle`]).
+//!
+//! The `/v1` routes, the authentication, the error bodies and the write jobs
+//! arrive with the tasks that create them; this crate only provides the state
+//! and the router they mount on.
+
+pub mod config;
+mod error;
+pub mod http;
+pub mod lifecycle;
+pub mod logging;
+pub mod state;
+
+pub use config::Config;
+pub use http::{REQUEST_ID_HEADER, RequestId, build_router};
+pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};
+pub use logging::{DEFAULT_FILTER, effective_filter, init_logging, log_subscriber};
+pub use state::{AppState, IndexHandle, Loaded};

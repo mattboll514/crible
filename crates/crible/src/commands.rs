@@ -38,6 +38,7 @@ use crible_core::config::{FusionConfig, IndexConfig, check_alpha};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::model::{ModelConfig, ModelKind};
+use crible_core::path::path_component;
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
@@ -1120,16 +1121,6 @@ fn list_indexes(data: &Path) -> Result<Vec<String>, CribleError> {
     }
     names.sort();
     Ok(names)
-}
-
-/// Accepts `name` only as one path component.
-fn path_component<'a>(name: &'a str, what: &str) -> Result<&'a str, CribleError> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
-        return Err(invalid_request(format!(
-            "{what} '{name}' must be a single path component"
-        )));
-    }
-    Ok(name)
 }
 
 /// Serializes a response, or reports the serialization fault.

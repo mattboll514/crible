@@ -28,7 +28,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 
 | Rôle | Crate | Remarque |
 |---|---|---|
-| HTTP | `axum` 0.8, `tokio`, `tower`, `tower-http` | Comme NextPlaid |
+| HTTP | `axum` 0.8, `tokio`, `tower`, `tower-http` | Comme NextPlaid. Features : `tokio` (`rt-multi-thread`, `macros`, `signal`, `net`, `time`, `sync`) et `tower-http` (`trace`, plus celles qu'exigent les limites) ; `tokio` (`io-util`) et `tower` (`util`) sont des dépendances de développement seulement (complément du 2026-10-29 à ADR-0096) ; les threads tokio restent aux défauts de la bibliothèque (ADR-0096) |
 | OpenAPI | `utoipa`, `utoipa-swagger-ui` | Spécification générée depuis le code |
 | Instantanés sans verrou | `arc-swap` | |
 | Calcul parallèle | `rayon` | Pool dédié, séparé de tokio |
@@ -42,8 +42,9 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Lots | `arrow`, `parquet` (arrow-rs) | |
 | Hash | `blake3` | Empreintes, checksums, `passage_hash` |
 | Erreurs | `thiserror` (bibliothèques), `anyhow` (binaire) | |
-| Logs | `tracing`, `tracing-subscriber` (JSON) | |
-| Config | `serde`, `serde_json`, `toml` | Plus les surcharges par variables d'environnement `CRIBLE_*` (ADR-0027) |
+| Logs | `tracing`, `tracing-subscriber` (JSON) | Feature `env-filter` : `RUST_LOG` est honoré, avec `info` par défaut quand il est absent (ADR-0096). Quel que soit `RUST_LOG`, aucun log ne contient de texte de requête ni de valeur de filtre (INV-13) |
+| Identifiant de requête | `uuid` (feature `v4`) | Génère `x-request-id` quand l'en-tête entrant est absent ou hors bornes (ADR-0098) |
+| Config | `serde`, `serde_json`, `toml` | Plus les surcharges par variables d'environnement `CRIBLE_*` (ADR-0097) |
 | CLI | `clap` | |
 | Tests | `proptest`, `criterion`, `tempfile` | |
 
@@ -99,7 +100,11 @@ wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le 
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
 
-Chaque clé peut être surchargée par une variable d'environnement, par exemple `CRIBLE_SERVER__BIND`.
+**Surcharges par l'environnement (ADR-0097).** Chaque clé de `crible.toml` peut être surchargée par une variable d'environnement : `CRIBLE_` suivi du chemin de la clé en majuscules, les sections séparées par `__`. Exemples : `CRIBLE_SERVER__BIND`, `CRIBLE_LIMITS__QUERY_CACHE_ENTRIES`. La valeur est analysée comme un scalaire du type de la clé visée. Le serveur refuse de démarrer, avec un message qui nomme la variable et un code de sortie non nul, si la clé est inconnue, si la valeur ne s'analyse pas dans ce type, ou si la variable vise un tableau de tables (`[[auth.keys]]` ne se surcharge pas par l'environnement en v1). Même raisonnement qu'ADR-0031 : une faute de frappe ne doit pas passer sans effet.
+
+Les variables `CRIBLE_*` documentées **hors configuration** sont exclues de ce contrôle, et la liste est fermée : `CRIBLE_FAILPOINT` (ADR-0068), `CRIBLE_BIN`, `CRIBLE_PYTHON`, `CRIBLE_EXPORT_REPRO`, `CRIBLE_CRASH_CHILD`, `CRIBLE_CRASH_BATCH` et `CRIBLE_CRASH_INDEX` (outils et tests). Toute autre variable `CRIBLE_*` inconnue fait échouer le démarrage.
+
+**Commande.** `crible serve [--config <chemin>]`, chemin par défaut `/etc/crible/crible.toml`. Un fichier absent ou illisible fait échouer le démarrage, avec un code de sortie non nul : le serveur ne démarre jamais sur des valeurs par défaut implicites. Les chemins `data`, `models` et `exchange` viennent de la section `[paths]` ; aucune option de ligne de commande ne les remplace.
 
 `crible-encode` ne règle ni `intra_op_num_threads` ni le niveau d'optimisation de la session ONNX Runtime : les **défauts de la bibliothèque** sont conservés, MES-05 ayant montré qu'ils sont les plus rapides dans les deux précisions (ADR-0052). Un réglage n'aurait de sens que pour brider la consommation, et se déciderait en conteneur, en P8.
 
@@ -112,7 +117,7 @@ Chaque clé peut être surchargée par une variable d'environnement, par exemple
 - utilisateur non-root ;
 - port 8080 ;
 - `HEALTHCHECK` sur `/health` ;
-- arrêt propre sur SIGTERM : on arrête d'accepter, on termine les jobs d'écriture en cours, on vide les analytics, puis on sort.
+- arrêt propre sur SIGTERM et SIGINT (ADR-0099) : `/ready` passe à `503`, le serveur arrête d'accepter, il draine les requêtes en vol pendant au plus `[limits].default_timeout_ms` + 1 000 ms, il vide les analytics quand elles existent (P7), puis il sort en journalisant les requêtes coupées ; l'attente des jobs d'écriture est fixée par `FILE-D-ECRITURE-ET-JOBS` (ADR-0095). Un second signal pendant le drainage fait sortir immédiatement avec un code non nul.
 
 Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 

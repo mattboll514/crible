@@ -220,6 +220,12 @@ enum Command {
         #[arg(long)]
         index: Option<String>,
     },
+    /// Serve the HTTP API of an instance until SIGTERM or SIGINT (ADR-0099).
+    Serve {
+        /// Path of the instance configuration file (ADR-0097).
+        #[arg(long, default_value = "/etc/crible/crible.toml")]
+        config: PathBuf,
+    },
 }
 
 /// Operations on indexes.
@@ -249,7 +255,14 @@ fn main() -> ExitCode {
 
 /// Runs one command, mapping every engine error to the printed report.
 fn run(cli: Cli) -> Result<(), CribleError> {
-    init_logging();
+    // The server journals on stdout, in JSON, at the level `RUST_LOG` asks for
+    // (ADR-0096): its subscriber replaces the fixed one of the commands, which
+    // stays on stderr.
+    if matches!(cli.command, Command::Serve { .. }) {
+        crible_server::init_logging()?;
+    } else {
+        init_logging();
+    }
     match cli.command {
         Command::Index { command } => match command {
             IndexCommand::Create { data, config } => commands::create_index(&data, &config),
@@ -317,6 +330,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
+        Command::Serve { config } => crible_server::serve_blocking(&config),
     }
 }
 
@@ -328,9 +342,10 @@ fn run(cli: Cli) -> Result<(), CribleError> {
 /// the journal is one JSON object, as `docs/07-stack-et-deploiement.md` lists
 /// `tracing-subscriber` "(JSON)". The level is fixed, because raising it
 /// through `RUST_LOG` would need the `env-filter` feature of
-/// `tracing-subscriber`, which `docs/07` does not list; the warnings that
-/// matter are those of the online-batch cleanup (ADR-0056, decision 3). The
-/// variable and the filter are deferred to P6, with the server.
+/// `tracing-subscriber`, which `docs/07` does not list for a command; the
+/// warnings that matter are those of the online-batch cleanup (ADR-0056,
+/// decision 3). `RUST_LOG` is honored by the server, which installs its own
+/// subscriber on stdout (ADR-0096); a command keeps this fixed level.
 /// `try_init` rather than `init`: a second subscriber is not a reason to abort
 /// a command. No message carries a query text or a document value.
 fn init_logging() {
