@@ -44,7 +44,7 @@ use crate::error;
 use crate::indexes;
 use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
-use crate::{batches, documents, maintenance};
+use crate::{batches, documents, maintenance, search};
 
 /// Header carrying the request identifier on every response (ADR-0098).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -123,6 +123,9 @@ fn indexes_read_routes() -> Router<Arc<AppState>> {
             "/v1/indexes/{index}/documents/{doc_id}",
             get(documents::get_document),
         )
+        // The search is open to `read`, and `write` and `admin` include it, so
+        // the three roles reach the route (ADR-0095, ADR-0109).
+        .route("/v1/indexes/{index}/search", post(search::search))
 }
 
 /// The job routes of the instance: the list and the detail, `write` only.

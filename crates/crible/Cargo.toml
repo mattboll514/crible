@@ -23,6 +23,11 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The `API = CLI` proof drives the axum router of the server in the test and
+# needs a tokio runtime; both crates are already the server's own stack
+# (ADR-0109, decision 3).
+axum.workspace = true
+tokio.workspace = true
 arrow.workspace = true
 blake3.workspace = true
 half.workspace = true
@@ -40,6 +45,9 @@ sha2.workspace = true
 # `docs/07-stack-et-deploiement.md` and a dependency of `crible-store` and
 # `crible-search`, so this adds no crate outside the stack.
 tantivy.workspace = true
+# The `API = CLI` proof of `ROUTE-RECHERCHE` drives the server router in the
+# test, without a socket (ADR-0109, decision 3).
+tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
 zstd.workspace = true
 

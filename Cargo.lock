@@ -837,6 +837,7 @@ name = "crible"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "axum",
  "blake3",
  "clap",
  "crible-core",
@@ -854,6 +855,8 @@ dependencies = [
  "sha2",
  "tantivy",
  "tempfile",
+ "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "zstd",
@@ -907,6 +910,7 @@ dependencies = [
  "axum",
  "crible-core",
  "crible-encode",
+ "crible-search",
  "crible-store",
  "getrandom 0.4.3",
  "serde",

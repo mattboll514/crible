@@ -68,7 +68,17 @@ impl Instance {
     pub fn new() -> Self {
         let directory = tempfile::tempdir().expect("a temporary instance is creatable");
         let exchange = directory.path().join("exchange");
-        Self::with_exchange(directory, &exchange)
+        Self::with_exchange(directory, &exchange, 0)
+    }
+
+    /// Creates an instance whose `[server].max_concurrent_searches` is `max`.
+    ///
+    /// The search limit tests need one token, so a second search is refused at
+    /// once (ADR-0102, decision 2).
+    pub fn with_max_concurrent_searches(max: usize) -> Self {
+        let directory = tempfile::tempdir().expect("a temporary instance is creatable");
+        let exchange = directory.path().join("exchange");
+        Self::with_exchange(directory, &exchange, max)
     }
 
     /// Creates an instance that shares `exchange` with another instance.
@@ -77,12 +87,12 @@ impl Instance {
     /// directory is not owned here.
     pub fn sharing(exchange: &Path) -> Self {
         let directory = tempfile::tempdir().expect("a temporary instance holder is creatable");
-        Self::with_exchange(directory, exchange)
+        Self::with_exchange(directory, exchange, 0)
     }
 
     /// Writes the directories, the model and `crible.toml`, then loads the
     /// configuration with an empty environment.
-    fn with_exchange(directory: TempDir, exchange: &Path) -> Self {
+    fn with_exchange(directory: TempDir, exchange: &Path, max_concurrent_searches: usize) -> Self {
         let root = directory.path();
         for name in ["data", "models"] {
             std::fs::create_dir_all(root.join(name)).expect("an instance directory is creatable");
@@ -93,7 +103,8 @@ impl Instance {
             .expect("the outbox of the exchange is creatable");
         write_external_model(root);
         let path = root.join("crible.toml");
-        std::fs::write(&path, config_toml(root, exchange)).expect("crible.toml is writable");
+        std::fs::write(&path, config_toml(root, exchange, max_concurrent_searches))
+            .expect("crible.toml is writable");
         let config = Config::load_with_env(&path, Vec::new()).unwrap_or_else(|error| {
             panic!("the fixture configuration must load: {}", error.message())
         });
@@ -146,13 +157,13 @@ impl Instance {
 }
 
 /// `crible.toml` of the fixture, with an `admin`, a `write` and a `read` key.
-fn config_toml(root: &Path, exchange: &Path) -> String {
+fn config_toml(root: &Path, exchange: &Path, max_concurrent_searches: usize) -> String {
     format!(
         r#"
 [server]
 bind = "127.0.0.1:0"
 search_threads = 0
-max_concurrent_searches = 0
+max_concurrent_searches = {max_concurrent_searches}
 
 [paths]
 data = "{data}"
@@ -244,6 +255,21 @@ pub async fn send(
     secret: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    let (status, _headers, body) = send_with_headers(router, method, path, secret, body).await;
+    (status, body)
+}
+
+/// Same as [`send`], and returns the response headers as well.
+///
+/// The concurrency limit of ADR-0102 adds `Retry-After: 1` to its `503`; the
+/// search-limit tests read it here.
+pub async fn send_with_headers(
+    router: &Router,
+    method: Method,
+    path: &str,
+    secret: &str,
+    body: Option<Value>,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
     let mut request = axum::http::Request::builder()
         .method(method)
         .uri(path)
@@ -262,17 +288,24 @@ pub async fn send(
         .await
         .expect("the router answers");
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .expect("the body is readable");
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (status, body)
+    (status, headers, body)
 }
 
 /// Creates the fixture index `alpha` and returns the instance, its state and
 /// its router.
 pub async fn instance_with_alpha() -> (Instance, Arc<AppState>, Router) {
-    let instance = Instance::new();
+    instance_with_alpha_and_limit(0).await
+}
+
+/// Same as [`instance_with_alpha`], with `[server].max_concurrent_searches`
+/// set to `max` for the search-limit tests of ADR-0102.
+pub async fn instance_with_alpha_and_limit(max: usize) -> (Instance, Arc<AppState>, Router) {
+    let instance = Instance::with_max_concurrent_searches(max);
     let state = instance.state();
     let router = build_router(Arc::clone(&state));
     let (status, body) = send(
@@ -340,7 +373,7 @@ pub fn deletion_batch(batch_id: &str) -> Value {
 
 /// Base64 of the little-endian `f32` components of `vector`, the vector of an
 /// `external` model (`docs/format-lot-v1.md`).
-pub fn base64_vector(vector: [f32; DIMS]) -> String {
+pub fn base64_vector<const N: usize>(vector: [f32; N]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut bytes = Vec::with_capacity(vector.len() * 4);
     for component in vector {

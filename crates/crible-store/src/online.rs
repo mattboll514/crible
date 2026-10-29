@@ -1808,7 +1808,11 @@ pub(crate) fn store_vector(vector: &[f32], precision: ReferencePrecision) -> Vec
 /// most two of them, and the bits a padding character covers must be zero. A
 /// non-zero remainder is refused, so `Zh==` is not another spelling of `Zg==`.
 /// The returned message never quotes the text.
-fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+///
+/// The route of `POST /v1/indexes/{index}/search` decodes the `vector` of a
+/// request with this function, so the online batch and the search accept
+/// exactly the same spelling (ADR-0109, `docs/05-api.md`).
+pub fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     let bytes = text.as_bytes();
     if !bytes.len().is_multiple_of(4) {
         return Err(format!(
