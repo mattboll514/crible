@@ -9,13 +9,15 @@
 //! This crate carries the skeleton of the server: the instance configuration
 //! with its `CRIBLE_*` overrides ([`config`]), the startup that loads the
 //! models and opens the indexes for writing with their recovery ([`state`]),
-//! the probes and the request identifier ([`http`]), the JSON journal
-//! ([`logging`]) and the lifecycle with its bounded drainage ([`lifecycle`]).
+//! the probes and the request identifier ([`http`]), the API keys and their
+//! roles ([`auth`]), the JSON journal ([`logging`]) and the lifecycle with its
+//! bounded drainage ([`lifecycle`]).
 //!
-//! The `/v1` routes, the authentication, the error bodies and the write jobs
-//! arrive with the tasks that create them; this crate only provides the state
-//! and the router they mount on.
+//! The `/v1` routes, the general error conversion and the write jobs arrive
+//! with the tasks that create them; this crate only provides the state, the
+//! router they mount on and the middleware they wrap their routes with.
 
+pub mod auth;
 pub mod config;
 mod error;
 pub mod http;
@@ -23,6 +25,7 @@ pub mod lifecycle;
 pub mod logging;
 pub mod state;
 
+pub use auth::{Auth, Client, protect};
 pub use config::Config;
 pub use http::{REQUEST_ID_HEADER, RequestId, build_router};
 pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};

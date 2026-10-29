@@ -31,6 +31,9 @@ parquet.workspace = true
 rayon.workspace = true
 roaring.workspace = true
 rusqlite.workspace = true
+# The `key generate` test recomputes the printed digest instead of trusting the
+# crate that prints it (ADR-0100).
+sha2.workspace = true
 # MES-06: the `lexical_latency` harness replicates the collector of
 # `crible-search` to count the candidates a segment hands over (block-WAND
 # finding of ADR-0091); `tantivy` 0.27 is already the lexical entry of

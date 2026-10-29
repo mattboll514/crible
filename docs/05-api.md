@@ -11,6 +11,10 @@
   | `write` | `read` + documents, lots, jobs |
   | `admin` | `write` + administration des index, compaction, export, instantanés, stats, journal de debug |
 
+  Un haché vaut 64 caractères hexadécimaux minuscules : c'est le SHA-256 des octets UTF-8 de la clé telle qu'elle est transmise dans l'en-tête. `crible key generate` affiche la clé et son haché (ADR-0100).
+
+  L'en-tête est analysé ainsi : schéma `Bearer` insensible à la casse, un seul espace, puis la clé, non vide et sans espace. Un en-tête absent, mal formé, vide ou présent plusieurs fois reçoit `401`, avec l'en-tête de réponse `WWW-Authenticate: Bearer` et le même corps qu'une clé inconnue : aucun indice ne distingue ces cas. Un rôle insuffisant reçoit `403`, sans `WWW-Authenticate` (ADR-0100).
+
 - **Traçabilité** : chaque réponse porte l'en-tête `x-request-id`, et chaque réponse de recherche donne la `generation` lue. Un `x-request-id` entrant est repris s'il fait au plus 128 octets et ne contient que des caractères `[A-Za-z0-9._:-]` ; sinon, et s'il est absent, le serveur génère un UUID v4 et ne journalise jamais la valeur refusée. La valeur retenue est renvoyée sur **toutes** les réponses, y compris `404`, `405`, `413` et `500`, portée dans le champ `request_id` du corps d'erreur et dans chaque ligne de log de la requête (ADR-0098).
 - **Mutations asynchrones** : elles renvoient `202 Accepted` avec un objet `job`.
   - Avec `?wait=true`, l'appel attend la fin du job (au plus `wait_timeout_ms`, 60 s par défaut). Un job terminé dans le délai est rendu **terminé**, en `200`, avec son objet `job` complet (`state` à `succeeded` ou `failed`, et son `error` le cas échéant). À l'échéance de `wait_timeout_ms`, l'appel rend `202 Accepted` avec le job **dans son état courant** (`queued` ou `running`), sans erreur, et le client suit l'avancement par `GET /v1/jobs/{job_id}` : jamais `504`, jamais un code `timeout`, le job n'est pas annulé (ADR-0067).
@@ -30,8 +34,8 @@ Format unique :
 |---|---|---|
 | `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
-| `unauthorized` | 401 | Clé absente ou inconnue |
-| `forbidden` | 403 | Rôle insuffisant |
+| `unauthorized` | 401 | Clé absente, mal formée ou inconnue ; réponse avec `WWW-Authenticate: Bearer` et un corps identique dans les trois cas (ADR-0100) |
+| `forbidden` | 403 | Rôle insuffisant ; sans `WWW-Authenticate` (ADR-0100) |
 | `unknown_index` | 404 | Index inexistant |
 | `not_found` | 404 | Document, job ou lot introuvable ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) |
 | `immutable_setting` | 409 | Tentative de modifier un réglage figé |

@@ -35,6 +35,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
+use crate::auth::{Auth, warn_if_empty};
 use crate::config::Config;
 use crate::error::{internal, invalid};
 use crate::http::build_router;
@@ -222,6 +223,11 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         .map_err(|error| internal(format!("cannot read the bound address: {error}")))?;
     info!(address = %address, "the server is bound");
     let state = Arc::new(AppState::new());
+    // ADR-0100, decision 4: an empty `[[auth.keys]]` is the closed-by-default
+    // instance. It starts, and says so once instead of failing every request
+    // silently.
+    warn_if_empty(&config.auth.keys);
+    state.set_auth(Arc::new(Auth::new(&config.auth.keys)?))?;
     let router = build_router(Arc::clone(&state));
     let shutdown = Shutdown::new();
     let drain = Duration::from_millis(
