@@ -4,7 +4,7 @@
   "protocol": "ADR-0091",
   "task": "MESURER-LEXICAL",
   "date": "2026-10-28",
-  "commit": "3614092a196aad0128157b5d42139122b9c6e55b",
+  "commit": "d09201682c0245e758df979da60b8f096ca7da94",
   "machine": "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7, native",
   "target_passages": 8580000,
   "budget_ms": 698.0,
@@ -1758,9 +1758,9 @@
           "source": "docs/mesures/MES-02-latence-scan-binaire.md (pool entier)"
         },
         {
-          "term": "rescoring p95 livré, N = 1000",
-          "ms": 16.05,
-          "source": "docs/mesures/MES-03-latence-rescoring.md (groupe, N = 1000)"
+          "term": "rescoring p95 livré, N = 5000",
+          "ms": 31.24,
+          "source": "docs/mesures/MES-03-latence-rescoring.md:1418 (groupe, N = 5000 ; 20,03 à 31,24 ms)"
         },
         {
           "term": "payload, groupement et sérialisation",
@@ -1768,8 +1768,8 @@
           "source": "docs/03-recherche.md:155 (ordre de grandeur)"
         }
       ],
-      "spent_ms": 116.99719999999999,
-      "remaining_ms": 581.0028
+      "spent_ms": 132.1872,
+      "remaining_ms": 565.8128
     },
     "sensitivity": {
       "term": {
@@ -1777,8 +1777,8 @@
         "ms": 216.9,
         "source": "docs/mesures/MES-14-cout-filtres-intervalles.md:183 (`annee 2000..2010`, domaine plein, p95 216,9 ms)"
       },
-      "spent_ms": 333.845,
-      "remaining_ms": 364.155,
+      "spent_ms": 349.035,
+      "remaining_ms": 348.965,
       "points_that_change": 0,
       "changes_verdict": false
     }
@@ -1792,7 +1792,7 @@
       "pool_size": 1027,
       "k": 10,
       "p95_ms": 0.836542,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1803,7 +1803,7 @@
       "pool_size": 1027,
       "k": 100,
       "p95_ms": 1.1628340000000001,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1814,7 +1814,7 @@
       "pool_size": 12247,
       "k": 10,
       "p95_ms": 0.708834,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1825,7 +1825,7 @@
       "pool_size": 12247,
       "k": 100,
       "p95_ms": 1.071917,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1836,7 +1836,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.412166,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1847,7 +1847,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.9771249999999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1858,7 +1858,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.424625,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1869,7 +1869,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.980084,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1880,7 +1880,7 @@
       "pool_size": 997,
       "k": 10,
       "p95_ms": 0.849208,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1891,7 +1891,7 @@
       "pool_size": 997,
       "k": 100,
       "p95_ms": 1.142125,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1902,7 +1902,7 @@
       "pool_size": 9690,
       "k": 10,
       "p95_ms": 0.6952079999999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1913,7 +1913,7 @@
       "pool_size": 9690,
       "k": 100,
       "p95_ms": 1.0945,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1924,7 +1924,7 @@
       "pool_size": 49998,
       "k": 10,
       "p95_ms": 0.724666,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1935,7 +1935,7 @@
       "pool_size": 49998,
       "k": 100,
       "p95_ms": 1.085125,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1946,7 +1946,7 @@
       "pool_size": 49998,
       "k": 10,
       "p95_ms": 0.7281660000000001,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1957,7 +1957,7 @@
       "pool_size": 49998,
       "k": 100,
       "p95_ms": 1.090625,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1968,7 +1968,7 @@
       "pool_size": 1905,
       "k": 10,
       "p95_ms": 0.8594160000000001,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1979,7 +1979,7 @@
       "pool_size": 1905,
       "k": 100,
       "p95_ms": 1.14075,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -1990,7 +1990,7 @@
       "pool_size": 9877,
       "k": 10,
       "p95_ms": 0.694916,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2001,7 +2001,7 @@
       "pool_size": 9877,
       "k": 100,
       "p95_ms": 0.9838749999999998,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2012,7 +2012,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.6007910000000001,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2023,7 +2023,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.944334,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2034,7 +2034,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.6025419999999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2045,7 +2045,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.964583,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2056,7 +2056,7 @@
       "pool_size": 863,
       "k": 10,
       "p95_ms": 0.390583,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2067,7 +2067,7 @@
       "pool_size": 863,
       "k": 100,
       "p95_ms": 0.9105829999999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2078,7 +2078,7 @@
       "pool_size": 863,
       "k": 10,
       "p95_ms": 0.38854099999999997,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2089,7 +2089,7 @@
       "pool_size": 863,
       "k": 100,
       "p95_ms": 0.914541,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2100,7 +2100,7 @@
       "pool_size": 4428,
       "k": 10,
       "p95_ms": 0.15645799999999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2111,7 +2111,7 @@
       "pool_size": 4428,
       "k": 100,
       "p95_ms": 0.39325,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2122,7 +2122,7 @@
       "pool_size": 7623,
       "k": 10,
       "p95_ms": 0.137958,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2133,7 +2133,7 @@
       "pool_size": 7623,
       "k": 100,
       "p95_ms": 0.385416,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2144,7 +2144,7 @@
       "pool_size": 7623,
       "k": 10,
       "p95_ms": 0.148917,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2155,7 +2155,7 @@
       "pool_size": 7623,
       "k": 100,
       "p95_ms": 0.399834,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2166,7 +2166,7 @@
       "pool_size": 6499,
       "k": 10,
       "p95_ms": 0.348375,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2177,7 +2177,7 @@
       "pool_size": 6499,
       "k": 100,
       "p95_ms": 0.589625,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2188,7 +2188,7 @@
       "pool_size": 11946,
       "k": 10,
       "p95_ms": 0.375667,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2199,7 +2199,7 @@
       "pool_size": 11946,
       "k": 100,
       "p95_ms": 0.6150840000000001,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2210,7 +2210,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.32275,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2221,7 +2221,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.573625,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2232,7 +2232,7 @@
       "pool_size": 50000,
       "k": 10,
       "p95_ms": 0.333166,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2243,7 +2243,7 @@
       "pool_size": 50000,
       "k": 100,
       "p95_ms": 0.574042,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "sous le reste"
     },
     {
@@ -2254,7 +2254,7 @@
       "pool_size": 537500,
       "k": 10,
       "p95_ms": 2104.003042,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2265,7 +2265,7 @@
       "pool_size": 537500,
       "k": 100,
       "p95_ms": 2099.5999589999997,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2276,7 +2276,7 @@
       "pool_size": 1075000,
       "k": 10,
       "p95_ms": 3326.794042,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2287,7 +2287,7 @@
       "pool_size": 1075000,
       "k": 100,
       "p95_ms": 3377.4515420000002,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2298,7 +2298,7 @@
       "pool_size": 2150000,
       "k": 10,
       "p95_ms": 6007.674666999999,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2309,7 +2309,7 @@
       "pool_size": 2150000,
       "k": 100,
       "p95_ms": 6207.241666,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2320,7 +2320,7 @@
       "pool_size": 7740000,
       "k": 10,
       "p95_ms": 21617.472125,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2331,7 +2331,7 @@
       "pool_size": 7740000,
       "k": 100,
       "p95_ms": 21665.288291,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     },
     {
@@ -2342,7 +2342,7 @@
       "pool_size": 7740000,
       "k": 10,
       "p95_ms": 22840.205333,
-      "remaining_ms": 581.0028,
+      "remaining_ms": 565.8128,
       "verdict": "ALERTE"
     }
   ],

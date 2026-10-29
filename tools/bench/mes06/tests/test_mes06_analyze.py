@@ -119,8 +119,8 @@ def test_extrapolate_defaults_to_the_legifacile_target():
 def test_budget_subtracts_every_cited_term_and_keeps_its_source():
     remainder = analyze.budget()
     assert remainder["budget_ms"] == 698.0
-    assert remainder["spent_ms"] == pytest.approx(116.9972, abs=1e-4)
-    assert remainder["remaining_ms"] == pytest.approx(581.0028, abs=1e-4)
+    assert remainder["spent_ms"] == pytest.approx(132.1872, abs=1e-4)
+    assert remainder["remaining_ms"] == pytest.approx(565.8128, abs=1e-4)
     assert all(term["source"] for term in remainder["terms"])
 
 
@@ -134,12 +134,21 @@ def test_budget_filter_term_is_the_keyword_p95_of_mes14():
     assert "MES-14-cout-filtres-intervalles.md:182" in term["source"]
 
 
+def test_budget_rescoring_term_is_the_delivered_group_at_n_5000():
+    term = next(
+        term for term in analyze.BUDGET_TERMS if term["term"].startswith("rescoring")
+    )
+    assert "N = 5000" in term["term"]
+    assert term["ms"] == pytest.approx(31.24)
+    assert "MES-03-latence-rescoring.md:1418" in term["source"]
+
+
 def test_sensitivity_replaces_the_filter_term_with_the_interval_case():
     line = analyze.sensitivity()
     assert line["term"]["ms"] == pytest.approx(216.9)
     assert "MES-14-cout-filtres-intervalles.md:183" in line["term"]["source"]
-    assert line["spent_ms"] == pytest.approx(333.845, abs=1e-9)
-    assert line["remaining_ms"] == pytest.approx(364.155, abs=1e-9)
+    assert line["spent_ms"] == pytest.approx(349.035, abs=1e-9)
+    assert line["remaining_ms"] == pytest.approx(348.965, abs=1e-9)
 
 
 def test_display_path_is_repository_relative_inside_the_tree():
@@ -191,7 +200,7 @@ def test_alert_verdicts_judge_every_point_of_both_campaigns():
         },
     }
 
-    rows = analyze.alert_verdicts(latency, synth, remaining_ms=581.0028)
+    rows = analyze.alert_verdicts(latency, synth, remaining_ms=565.8128)
 
     assert len(rows) == 4
     assert [row["verdict"] for row in rows] == [
@@ -200,7 +209,7 @@ def test_alert_verdicts_judge_every_point_of_both_campaigns():
         "ALERTE",
         "ALERTE",
     ]
-    assert all(row["remaining_ms"] == pytest.approx(581.0028) for row in rows)
+    assert all(row["remaining_ms"] == pytest.approx(565.8128) for row in rows)
     assert rows[0]["campaign"] == "echantillon"
     assert rows[3]["campaign"].startswith("synth-large froid")
 

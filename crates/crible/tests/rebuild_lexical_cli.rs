@@ -50,14 +50,19 @@
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
+use arrow::array::{ArrayRef, StringArray, new_null_array};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use crible_core::config::{IndexConfig, Schema};
 use crible_store::generation::GenerationStore;
 use crible_store::lexical::read_state;
 use crible_store::records::RecordStore;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde_json::Value;
 
 use crate::common::{SYNTH_BATCHES, crible_ok, path, require_synth, synth_root};
@@ -216,6 +221,109 @@ fn removed_documents() -> u64 {
     value["counts"]["deletions"]
         .as_u64()
         .unwrap_or_else(|| panic!("{} must count its deletions", manifest.display()))
+}
+
+/// External identifiers of every document the reference state still holds.
+fn live_doc_ids(prepared: &Prepared) -> Vec<String> {
+    let records = RecordStore::open(&prepared.epoch_dir.join("records.sqlite"))
+        .unwrap_or_else(|error| panic!("the records of the epoch must open: {error}"));
+    let mut ids = BTreeSet::new();
+    for iid in records
+        .live_iids()
+        .unwrap_or_else(|error| panic!("the live iids must be readable: {error}"))
+    {
+        let passage = records
+            .read_passage(iid)
+            .unwrap_or_else(|error| panic!("the passage of {iid:?} must be readable: {error}"))
+            .unwrap_or_else(|| panic!("the live iid {iid:?} must have a passage row"));
+        ids.insert(passage.doc_id);
+    }
+    ids.into_iter().collect()
+}
+
+/// Writes a deletion-only batch that removes every `doc_id` of `deletions`.
+///
+/// The manifest is the one of `template`, with the identifier and the counts of
+/// this batch; `documents.parquet` and `passages.parquet` keep the schema of the
+/// template and hold no row, which `docs/04` allows for a batch that only
+/// deletes (ADR-0040, ADR-0041). The attach then removes every document of the
+/// epoch in one transaction.
+fn write_deletion_only_batch(
+    root: &Path,
+    template: &Path,
+    batch_id: &str,
+    deletions: &[String],
+) -> PathBuf {
+    let directory = root.join(batch_id);
+    fs::create_dir_all(&directory)
+        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", directory.display()));
+
+    empty_parquet_with_schema(
+        &template.join("documents.parquet"),
+        &directory.join("documents.parquet"),
+    );
+    empty_parquet_with_schema(
+        &template.join("passages-0001.parquet"),
+        &directory.join("passages.parquet"),
+    );
+    let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+        "doc_id",
+        DataType::Utf8,
+        false,
+    )]));
+    let ids: StringArray = deletions.iter().map(|id| Some(id.as_str())).collect();
+    common::write_parquet(
+        &directory.join("deletions.parquet"),
+        &schema,
+        vec![Arc::new(ids)],
+    );
+
+    let mut files = serde_json::Map::new();
+    for name in ["documents.parquet", "passages.parquet", "deletions.parquet"] {
+        let bytes = fs::read(directory.join(name))
+            .unwrap_or_else(|error| panic!("{name} must be readable: {error}"));
+        files.insert(
+            name.to_owned(),
+            Value::from(format!("blake3:{}", blake3::hash(&bytes).to_hex())),
+        );
+    }
+
+    let raw = fs::read_to_string(template.join("manifest.json"))
+        .unwrap_or_else(|error| panic!("the template manifest must be readable: {error}"));
+    let mut manifest: Value = serde_json::from_str(&raw)
+        .unwrap_or_else(|error| panic!("the template manifest must be valid JSON: {error}"));
+    manifest["batch_id"] = Value::from(batch_id);
+    manifest["mode"] = Value::from("upsert");
+    manifest["counts"] = serde_json::json!({
+        "documents": 0,
+        "passages": 0,
+        "deletions": deletions.len(),
+    });
+    manifest["files"] = Value::Object(files);
+    let manifest = serde_json::to_string_pretty(&manifest)
+        .unwrap_or_else(|error| panic!("the manifest must serialize: {error}"));
+    fs::write(directory.join("manifest.json"), manifest)
+        .unwrap_or_else(|error| panic!("manifest.json must be written: {error}"));
+    directory
+}
+
+/// Writes an empty Parquet file with the Arrow schema of `source`.
+///
+/// A batch carries at least one `documents.parquet` and one `passages.parquet`
+/// file (`docs/04`), even when it only deletes; copying the schema of the
+/// template keeps the columns and types `attach` checks.
+fn empty_parquet_with_schema(source: &Path, target: &Path) {
+    let file = fs::File::open(source)
+        .unwrap_or_else(|error| panic!("{} must open: {error}", source.display()));
+    let builder = ParquetRecordBatchReaderBuilder::try_new(file)
+        .unwrap_or_else(|error| panic!("{} must be Parquet: {error}", source.display()));
+    let schema = builder.schema().clone();
+    let columns: Vec<ArrayRef> = schema
+        .fields()
+        .iter()
+        .map(|field| new_null_array(field.data_type(), 0))
+        .collect();
+    common::write_parquet(target, &schema, columns);
 }
 
 /// The generation and the iids the lexical index of `prepared` holds, or `None`
@@ -455,6 +563,70 @@ fn rebuild_lexical_command_reports_an_epoch_without_passage_as_nothing_to_rebuil
         indexed_state(&prepared),
         None,
         "nothing was rebuilt, so nothing may appear"
+    );
+}
+
+/// An epoch that carried passages and then lost every one of them keeps a
+/// positive `passage_change_generation` marker: the command must rebuild and say
+/// so, unlike an epoch that never carried a passage (`docs/02`, step 4).
+///
+/// This is the divergence the message follows since NETTOYER-P5: a rule based on
+/// the live count alone would answer "nothing to rebuild" here, while the marker
+/// based rule of ADR-0088, decision 3, rebuilds. The last batch of `synth-small`
+/// deletes documents, so the epoch already carries tombstones; a deletion-only
+/// batch then removes every remaining document.
+#[test]
+fn rebuild_lexical_command_rebuilds_an_epoch_emptied_by_deletions() {
+    let prepared = prepare();
+    let documents = live_doc_ids(&prepared);
+    assert!(
+        !documents.is_empty(),
+        "the attached epoch must hold live documents before the deletion"
+    );
+    let root = synth_root();
+    let batch = write_deletion_only_batch(
+        &prepared.data.join("batches"),
+        &root.join("l3"),
+        "empty-epoch",
+        &documents,
+    );
+    let models = prepared
+        .data
+        .parent()
+        .unwrap_or_else(|| panic!("{} must have a parent directory", prepared.data.display()))
+        .join("models");
+    crible_ok(&[
+        "attach",
+        "--data",
+        path(&prepared.data),
+        "--models",
+        path(&models),
+        "--index",
+        "synth-small",
+        path(&batch),
+    ]);
+    assert!(
+        live_iids(&prepared).is_empty(),
+        "the deletion-only batch must empty the epoch"
+    );
+
+    let output = rebuild_lexical(&prepared);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("lexical index rebuilt"),
+        "an epoch emptied by deletions carried passages, so the command must rebuild and say \
+         so, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("nothing to rebuild"),
+        "the live count alone must not decide, got: {stdout}"
+    );
+    let (_, rebuilt) = indexed_state(&prepared)
+        .unwrap_or_else(|| panic!("crible rebuild-lexical must leave a committed lexical index"));
+    assert!(
+        rebuilt.is_empty(),
+        "the rebuilt index must hold the live passages, of which there are none"
     );
 }
 

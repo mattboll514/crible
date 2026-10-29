@@ -322,10 +322,10 @@ fn grouping_runs_after_the_fusion() {
 /// the one only the lexical branch found.
 ///
 /// The two passages share the same `passage_hash`, so a deduplication applied
-/// before the fusion, branch by branch, would keep both: `dup-dense` is alone in
-/// the dense branch and `dup-lexical` alone in the lexical one. Fusing first
-/// ranks `dup-lexical` above `dup-dense`, because it sums the two branch terms,
-/// and the deduplication then keeps it alone.
+/// before the fusion, branch by branch, would keep both: `dup-dense` is the only
+/// dense match, and the lexical branch contributes only `dup-lexical`. Fusing
+/// first ranks `dup-lexical` above `dup-dense`, because it sums the two branch
+/// terms, and the deduplication then keeps it alone.
 #[test]
 fn dedup_content_runs_after_the_fusion() {
     let mut fixture = LexicalFixture::create(true);

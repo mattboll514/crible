@@ -1216,7 +1216,7 @@ fn write_json(path: &Path, document: &Value) -> Result<(), Box<dyn std::error::E
 
 /// `path` relative to the repository root, so that no artefact carries a local
 /// absolute path. A path outside the repository is returned as it is, and the
-/// analyser refuses it.
+/// analyser prints it as an absolute path.
 fn relative_path(path: &Path) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
