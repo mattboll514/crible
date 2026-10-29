@@ -121,7 +121,9 @@ impl Instance {
         state
             .set_shutdown(shutdown.clone())
             .unwrap_or_else(|error| panic!("the trigger is published: {}", error.message()));
-        state.start_writers();
+        state
+            .start_writers()
+            .unwrap_or_else(|error| panic!("the writers must start: {}", error.message()));
         (state, shutdown)
     }
 
@@ -218,7 +220,7 @@ fn create_index(root: &Path) {
 
 /// Work that appends `marker` to `seen` and does nothing to the store.
 fn appending(seen: Arc<Mutex<Vec<String>>>, marker: &'static str) -> crible_server::jobs::JobWork {
-    Box::new(move |_store, _progress| {
+    Box::new(move |_store, _progress, _writer| {
         seen.lock()
             .map_err(|_| {
                 crible_core::error::CribleError::new(ErrorCode::Internal, "the log is poisoned")
@@ -287,7 +289,7 @@ async fn a_finished_job_is_read_after_a_restart() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(|_store, _progress| {
+            Box::new(|_store, _progress, _writer| {
                 Ok(JobOutcome {
                     generation: Some(7),
                     result: Some(json!({"report": "kept"})),
@@ -366,7 +368,7 @@ async fn wait_true_renders_202_at_the_deadline_with_the_job_still_running() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(move |_store, _progress| {
+            Box::new(move |_store, _progress, _writer| {
                 let _ = blocked.recv_timeout(Duration::from_secs(5));
                 Ok(JobOutcome::default())
             }),
@@ -398,7 +400,7 @@ async fn wait_true_renders_200_when_the_job_finished_before_the_deadline() {
         .submit_job(
             "alpha",
             JobKind::Snapshot,
-            Box::new(|_store, _progress| Ok(JobOutcome::default())),
+            Box::new(|_store, _progress, _writer| Ok(JobOutcome::default())),
         )
         .await
         .expect("the job is accepted");
@@ -422,7 +424,7 @@ async fn wait_true_renders_202_as_soon_as_the_drainage_begins() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(move |_store, _progress| {
+            Box::new(move |_store, _progress, _writer| {
                 let _ = blocked.recv_timeout(Duration::from_secs(5));
                 Ok(JobOutcome::default())
             }),
@@ -466,7 +468,7 @@ async fn the_drain_wait_armed_before_the_last_job_is_woken_by_it() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(move |_store, _progress| {
+            Box::new(move |_store, _progress, _writer| {
                 let _ = blocked.recv_timeout(Duration::from_secs(5));
                 Ok(JobOutcome::default())
             }),
@@ -503,7 +505,7 @@ async fn a_full_queue_renders_503_with_retry_after() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(move |_store, _progress| {
+            Box::new(move |_store, _progress, _writer| {
                 let _ = blocked.recv_timeout(Duration::from_secs(5));
                 Ok(JobOutcome::default())
             }),
@@ -524,7 +526,7 @@ async fn a_full_queue_renders_503_with_retry_after() {
         .submit_job(
             "alpha",
             JobKind::Export,
-            Box::new(|_store, _progress| Ok(JobOutcome::default())),
+            Box::new(|_store, _progress, _writer| Ok(JobOutcome::default())),
         )
         .await
         .expect("the waiting job fills the queue");
@@ -595,7 +597,7 @@ async fn submit(axum::extract::State(state): axum::extract::State<Arc<AppState>>
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(|_store, _progress| Ok(JobOutcome::default())),
+            Box::new(|_store, _progress, _writer| Ok(JobOutcome::default())),
         )
         .await
     {
@@ -616,7 +618,7 @@ async fn the_list_filters_and_the_detail_answers_404_for_an_unknown_job() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(|_store, _progress| Ok(JobOutcome::default())),
+            Box::new(|_store, _progress, _writer| Ok(JobOutcome::default())),
         )
         .await
         .expect("the job is accepted");
@@ -700,7 +702,7 @@ async fn the_shutdown_drains_the_accepted_jobs_and_refuses_the_later_ones() {
             .submit_job(
                 "alpha",
                 JobKind::Compact,
-                Box::new(move |_store, _progress| {
+                Box::new(move |_store, _progress, _writer| {
                     std::thread::sleep(Duration::from_millis(50));
                     done.fetch_add(1, Ordering::AcqRel);
                     Ok(JobOutcome::default())
@@ -715,7 +717,7 @@ async fn the_shutdown_drains_the_accepted_jobs_and_refuses_the_later_ones() {
         .submit_job(
             "alpha",
             JobKind::Export,
-            Box::new(|_store, _progress| Ok(JobOutcome::default())),
+            Box::new(|_store, _progress, _writer| Ok(JobOutcome::default())),
         )
         .await
         .expect_err("a submission during the drainage is refused");
@@ -817,7 +819,7 @@ async fn the_shutdown_bound_abandons_the_jobs_still_unfinished_and_logs_them() {
         .submit_job(
             "alpha",
             JobKind::Compact,
-            Box::new(move |_store, _progress| {
+            Box::new(move |_store, _progress, _writer| {
                 let _ = blocked.recv_timeout(Duration::from_secs(5));
                 Ok(JobOutcome::default())
             }),

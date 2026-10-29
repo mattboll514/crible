@@ -79,6 +79,58 @@ Une panne **avant** le renommage laisse l'index intact : le job passe à `failed
 
 Ce qui n'est pas décidé ici : la forme exacte de `config` au-delà de « `index.json` matérialisé », qui suit `docs/04` ; le déchargement d'une session de modèle devenue inutile, qui n'existe pas en P6 ; la conduite à tenir si le renommage échoue pour une raison de système de fichiers, qui rend le job `failed` avec l'index intact ; le protocole de suppression d'une **époque** (compaction, instantané), qui appartient à ses tâches.
 
+## Complément du 2026-10-29 — ordre des contrôles d'un `PATCH` sur le niveau d'un champ
+
+- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série). Les décisions 1 à 7 ci-dessus restent inchangées ; ce complément lève une ambiguïté entre deux règles déjà écrites.
+- **Origine** : relecture de `ROUTES-INDEX` et rapport de `@testeur`, même jour.
+
+### Contexte du complément
+
+Un `PATCH` qui déclare un champ **existant** à l'autre niveau que le sien — par exemple `passage_fields.numero` alors que `numero` est un champ de document — relève de deux règles à la fois :
+
+- la table `docs/04-donnees-et-ingestion.md:44-55` range « type et niveau des champs existants » parmi les réglages figés : changer le niveau d'un champ doit donc rendre `409 immutable_setting`, qui nomme le champ (**INV-16**) ;
+- `docs/04-donnees-et-ingestion.md:42` et ADR-0030 refusent qu'un même nom soit déclaré à la fois dans `document_fields` et dans `passage_fields` : la déclaration doit donc rendre `400 invalid_request`.
+
+Aucun texte ne disait laquelle des deux règles l'emporte. Deux implémentations également conformes pouvaient donc rendre deux codes différents pour la même requête, et `@testeur` ne pouvait pas écrire un test unique.
+
+### Décision du complément
+
+1. **Dans un `PATCH`, le contrôle des réglages figés passe avant la règle de collision d'ADR-0030.** Déclarer un champ existant à l'autre niveau est un **changement de niveau** : la requête est refusée en `409 immutable_setting`, et le message nomme le chemin du champ (par exemple `passage_fields.numero`).
+2. **La règle d'ADR-0030 reste celle des cas où elle s'applique seule** : la **création** d'un index, et l'**ajout par `PATCH`** d'un champ **nouveau** déclaré aux deux niveaux dans le même corps. Ces deux cas rendent `400 invalid_request`, et le message nomme le champ et les deux niveaux.
+3. **ADR-0030 n'est pas modifié** : il est accepté, et ce complément ne fait que fixer l'ordre des contrôles dans le `PATCH`.
+4. **Le contrôle est celui de la décision 4**, sans mécanisme nouveau : validation synchrone, avant toute mise en file ; seuls l'ordre et le code rendu sont précisés.
+
+### Raison
+
+La table de `docs/04` nomme explicitement le **niveau des champs existants** parmi les réglages figés : le cas est donc un changement de niveau avant d'être une collision de noms. Le `409` porte en outre une information que le `400` ne porte pas : le client apprend qu'il doit **recréer l'index**, puisque le niveau d'un champ ne se change pas à chaud.
+
+### Conséquences du complément
+
+- **Positives** :
+  - un seul code pour une même requête, donc un test unique et une implémentation non ambiguë dans `ROUTES-INDEX` ;
+  - le client reçoit l'action à faire — recréer l'index — au lieu d'un refus de forme qui laisse croire qu'un autre corps serait accepté ;
+  - l'ordre des contrôles est écrit dans un ADR, donc il ne dépend plus de l'ordre des branches d'un validateur.
+- **Négatives / coûts** :
+  - deux codes voisins pour des déclarations proches : un client qui envoie un champ existant au mauvais niveau reçoit `409`, alors qu'il pourrait s'attendre à `400` ;
+  - l'ordre des contrôles devient un comportement observable, donc une régression possible : il devra être testé, pas seulement implémenté.
+- **À surveiller** :
+  - un test de `PATCH` déclarant un champ de document dans `passage_fields` : `409 immutable_setting`, message nommant `passage_fields.<champ>` ;
+  - un test de `PATCH` ajoutant un champ **nouveau** aux deux niveaux dans le même corps : `400 invalid_request` ;
+  - un test de création d'index déclarant un même nom aux deux niveaux : `400 invalid_request` ;
+  - un test qui vérifie que le `409` cite le chemin du champ et non le seul nom du champ.
+- **Documents mis à jour par ce complément** :
+
+| Document | Modification |
+|---|---|
+| `docs/04-donnees-et-ingestion.md:42` | la règle de collision d'ADR-0030 s'applique à la création et à l'ajout d'un champ **nouveau** ; déclarer un champ existant à l'autre niveau rend `409 immutable_setting` |
+| `docs/adr/README.md:161` | ligne d'index de cet ADR : ajout du complément du 2026-10-29 |
+
+### Alternative écartée pour ce complément
+
+| Alternative | Pourquoi écartée |
+|---|---|
+| Appliquer d'abord la règle de collision d'ADR-0030, donc `400 invalid_request` | Le `400` dit que le corps est invalide, pas que le réglage est figé : le client réessaierait avec un autre corps, alors qu'aucun `PATCH` ne peut changer le niveau d'un champ existant. La table de `docs/04` range ce cas parmi les réglages figés. |
+
 ## Conséquences
 
 - **Positives** :

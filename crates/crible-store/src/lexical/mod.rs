@@ -133,6 +133,32 @@ const WRITER_THREADS: usize = 1;
 /// settles whether the value is right.
 const WRITER_MEMORY_BUDGET_IN_BYTES: usize = 50 * 1024 * 1024;
 
+/// Analysis chain an index was built with (ADR-0106, decision 1).
+///
+/// The two settings `lexical.language` and `lexical.positions` describe the
+/// chain that analysed the text: the tokenizer, its filters and its stemmer, and
+/// whether term positions were indexed. The chain is recorded in the payload of
+/// the last tantivy commit, beside the generation, so an open can compare it with
+/// the configuration it is asked to serve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisChain {
+    /// Language of the analyzer, one of `lexical.language`.
+    pub language: String,
+    /// Whether term positions were indexed.
+    pub positions: bool,
+}
+
+impl AnalysisChain {
+    /// Chain `config` asks for.
+    #[must_use]
+    pub fn of(config: &LexicalConfig) -> Self {
+        Self {
+            language: config.language.clone(),
+            positions: config.positions,
+        }
+    }
+}
+
 /// State of the lexical index of one epoch, as `INV-04` reads it.
 ///
 /// It is what a test and a recovery compare: the generation carried by the
@@ -141,6 +167,9 @@ const WRITER_MEMORY_BUDGET_IN_BYTES: usize = 50 * 1024 * 1024;
 pub struct LexicalState {
     /// Generation carried by the payload of the last tantivy commit.
     pub generation: Option<Generation>,
+    /// Analysis chain recorded beside it, or `None` for a payload of the
+    /// previous format (ADR-0106, decision 3).
+    pub chain: Option<AnalysisChain>,
     /// iids of the indexed passages (any order).
     pub iids: Vec<Iid>,
 }
@@ -159,7 +188,9 @@ pub fn read_state(epoch_dir: &Path) -> Result<LexicalState, CribleError> {
     let Some(index) = existing_index(&directory)? else {
         return Ok(LexicalState::default());
     };
-    let generation = committed_generation_of(&index, &directory)?;
+    let payload = committed_payload_of(&index, &directory)?;
+    let generation = payload.as_ref().map(|payload| payload.generation);
+    let chain = payload.and_then(|payload| payload.chain);
 
     let mut iids = Vec::new();
     let segments = index.searchable_segments().map_err(|error| {
@@ -188,7 +219,11 @@ pub fn read_state(epoch_dir: &Path) -> Result<LexicalState, CribleError> {
             iids.push(iid_of(value, &directory)?);
         }
     }
-    Ok(LexicalState { generation, iids })
+    Ok(LexicalState {
+        generation,
+        chain,
+        iids,
+    })
 }
 
 /// Reader of the lexical index of one epoch, as one published snapshot holds it.
@@ -328,6 +363,11 @@ pub enum LexicalStatus {
     /// The epoch holds no committed lexical index, and no generation of it ever
     /// created or killed a passage (`M = 0`): the branch has nothing to serve.
     Missing,
+    /// The index was built with another analysis chain than the configuration
+    /// asks for (ADR-0106, decision 4). A write open rebuilds it before serving;
+    /// a read-only open refuses the lexical branch in `overloaded` and leaves
+    /// `lexical/` untouched.
+    OtherChain,
     /// The lexical index describes the committed generation, `M ≤ Gt ≤ G`: a
     /// reader over the commit `Gt` renders exactly what a reader of `G` would,
     /// because the generations of `]Gt, G]` changed neither a text nor the set
@@ -421,8 +461,8 @@ pub(crate) fn observe(
             ));
         }
     };
-    let committed = match committed_generation_of(&index, &directory) {
-        Ok(committed) => committed,
+    let payload = match committed_payload_of(&index, &directory) {
+        Ok(payload) => payload,
         Err(error) => {
             return Ok(unreadable(
                 &directory,
@@ -440,6 +480,28 @@ pub(crate) fn observe(
             format!("marker {} > generation {}", marker.get(), generation.get()),
         ));
     }
+    // ADR-0106, decision 2: a recorded chain that differs from the configuration
+    // is a state the write open repairs and the read-only open refuses. A
+    // payload of the previous format carries no chain and is read as built with
+    // the configuration's chain (decision 3), so an existing index is never
+    // rebuilt for the sole fact of this ADR.
+    let expected = AnalysisChain::of(config);
+    if let Some(recorded) = payload.as_ref().and_then(|payload| payload.chain.as_ref())
+        && recorded != &expected
+    {
+        tracing::warn!(
+            epoch = %epoch_dir.display(),
+            recorded_language = %recorded.language,
+            recorded_positions = recorded.positions,
+            configured_language = %expected.language,
+            configured_positions = expected.positions,
+            "the lexical index was built with another analysis chain (ADR-0106)"
+        );
+        return Ok(LexicalObservation::without_reader(
+            LexicalStatus::OtherChain,
+        ));
+    }
+    let committed = payload.map(|payload| payload.generation);
     let status = status_of(committed, generation, marker);
     if !matches!(status, LexicalStatus::Ready { .. }) {
         return Ok(LexicalObservation::without_reader(status));
@@ -527,6 +589,9 @@ pub(crate) struct LexicalWriter {
     writer: IndexWriter,
     iid_field: Field,
     text_field: Field,
+    /// Chain the index is being built with; the commit payload records it
+    /// beside the generation (ADR-0106, decision 1).
+    chain: AnalysisChain,
 }
 
 impl LexicalWriter {
@@ -560,7 +625,8 @@ impl LexicalWriter {
     /// Commits the changes of this writer with `generation` as their payload.
     ///
     /// The commit is synchronous: when it returns, tantivy has published the new
-    /// state on disk, with the payload the restart reads.
+    /// state on disk, with the payload the restart reads. The payload records the
+    /// generation **and** the analysis chain (ADR-0106, decision 1).
     pub(crate) fn commit(&mut self, generation: Generation) -> Result<(), CribleError> {
         let mut prepared = self.writer.prepare_commit().map_err(|error| {
             tantivy_error(
@@ -569,7 +635,7 @@ impl LexicalWriter {
                 error,
             )
         })?;
-        prepared.set_payload(&payload(generation));
+        prepared.set_payload(&payload(generation, &self.chain));
         prepared
             .commit()
             .map_err(|error| tantivy_error("commit the lexical index", &self.directory, error))?;
@@ -615,6 +681,7 @@ pub(crate) fn writer(
         writer,
         iid_field,
         text_field,
+        chain: AnalysisChain::of(config),
     })
 }
 
@@ -707,7 +774,8 @@ fn field_of(index: &Index, name: &str, directory: &Path) -> Result<Field, Crible
     })
 }
 
-/// The generation carried by the payload of the last commit of `index`.
+/// The commit payload of the last commit of `index`: its generation and, for
+/// the current format, its analysis chain.
 ///
 /// `None` when the index holds no committed payload: a directory a writer
 /// created before its first commit, which describes no generation. A payload
@@ -715,10 +783,10 @@ fn field_of(index: &Index, name: &str, directory: &Path) -> Result<Field, Crible
 /// the index, and the state is then undecidable. [`observe`] turns that error
 /// into [`LexicalStatus::Unreadable`], which a write open rebuilds (`ADR-0088`,
 /// decision 6) and a read-only open only reports (decision 7).
-fn committed_generation_of(
+fn committed_payload_of(
     index: &Index,
     directory: &Path,
-) -> Result<Option<Generation>, CribleError> {
+) -> Result<Option<CommitPayload>, CribleError> {
     let meta = index.load_metas().map_err(|error| {
         tantivy_error("read the metadata of the lexical index", directory, error)
     })?;
@@ -728,22 +796,119 @@ fn committed_generation_of(
         .transpose()
 }
 
-/// Payload of a commit: the decimal number of `generation`.
-fn payload(generation: Generation) -> String {
-    generation.get().to_string()
+/// One decoded commit payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommitPayload {
+    /// Generation whose text the commit indexed.
+    generation: Generation,
+    /// Analysis chain of the commit, or `None` for the previous format.
+    chain: Option<AnalysisChain>,
 }
 
-/// Generation carried by the payload `payload`, or an internal error.
+/// Version of the payload written by this build (ADR-0106, decision 1).
+const PAYLOAD_VERSION: u32 = 2;
+
+/// Payload of a commit: its version, its generation and its analysis chain.
 ///
-/// A payload this build cannot read means the lexical index was written by
-/// another one, or is corrupt: `Gt` is undecidable, so nothing can be caught up
-/// and the derived directory has to be rebuilt. [`observe`] reports the state as
+/// The format is a JSON object rather than the decimal number of the previous
+/// version, so a reader can tell the two apart without a side file. The previous
+/// version wrote `Gt` alone; it is still read (decision 3).
+fn payload(generation: Generation, chain: &AnalysisChain) -> String {
+    serde_json::json!({
+        "version": PAYLOAD_VERSION,
+        "generation": generation.get(),
+        "language": &chain.language,
+        "positions": chain.positions,
+    })
+    .to_string()
+}
+
+/// The payload `payload`, decoded.
+///
+/// A payload of the previous format is a decimal number and carries no chain: it
+/// is read as built with the chain of `index.json` (ADR-0106, decision 3). Any
+/// other text is an internal error: the state is undecidable and the derived
+/// directory has to be rebuilt. [`observe`] reports it as
 /// [`LexicalStatus::Unreadable`] and logs the message built here.
-fn parse_payload(payload: &str, directory: &Path) -> Result<Generation, CribleError> {
+fn parse_payload(payload: &str, directory: &Path) -> Result<CommitPayload, CribleError> {
     let trimmed = payload.trim();
+    if trimmed.starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(trimmed).map_err(|error| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the payload {:?} of the lexical index {} is not JSON: {error}",
+                    payload,
+                    directory.display()
+                ),
+            )
+        })?;
+        let version = value.get("version").and_then(serde_json::Value::as_u64);
+        if version != Some(u64::from(PAYLOAD_VERSION)) {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the payload {:?} of the lexical index {} has version {:?}, which this \
+                     build does not read",
+                    payload,
+                    directory.display(),
+                    version
+                ),
+            ));
+        }
+        let generation = value
+            .get("generation")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the payload {:?} of the lexical index {} has no generation",
+                        payload,
+                        directory.display()
+                    ),
+                )
+            })?;
+        let language = value
+            .get("language")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the payload {:?} of the lexical index {} has no analysis language",
+                        payload,
+                        directory.display()
+                    ),
+                )
+            })?;
+        let positions = value
+            .get("positions")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the payload {:?} of the lexical index {} has no positions flag",
+                        payload,
+                        directory.display()
+                    ),
+                )
+            })?;
+        return Ok(CommitPayload {
+            generation: Generation::new(generation),
+            chain: Some(AnalysisChain {
+                language: language.to_owned(),
+                positions,
+            }),
+        });
+    }
     trimmed
         .parse::<u64>()
-        .map(Generation::new)
+        .map(|generation| CommitPayload {
+            generation: Generation::new(generation),
+            chain: None,
+        })
         .map_err(|error| {
             CribleError::new(
                 ErrorCode::Internal,
@@ -785,7 +950,8 @@ fn tantivy_error(action: &str, directory: &Path, error: impl std::fmt::Display) 
 #[cfg(test)]
 mod tests {
     use super::{
-        LexicalState, index_directory, parse_payload, payload, read_state, remove_index, writer,
+        AnalysisChain, LexicalState, index_directory, parse_payload, payload, read_state,
+        remove_index, writer,
     };
     use crible_core::config::LexicalConfig;
     use crible_core::error::ErrorCode;
@@ -800,18 +966,29 @@ mod tests {
         }
     }
 
-    /// The payload of a commit is the decimal number of its generation, in both
-    /// directions: the restart compares what the commit wrote.
+    /// The payload of a commit carries its generation and its analysis chain,
+    /// and a payload of the previous format — the decimal number alone — is
+    /// still read, with no chain (ADR-0106, decisions 1 and 3).
     #[test]
-    fn the_payload_of_a_commit_is_the_generation_it_indexed() {
+    fn the_payload_of_a_commit_carries_its_generation_and_its_chain() {
         let directory = std::path::Path::new("lexical");
-        let text = payload(Generation::new(412));
-        assert_eq!(text, "412");
+        let chain = AnalysisChain::of(&config());
+        let text = payload(Generation::new(412), &chain);
         let parsed = parse_payload(&text, directory)
-            .unwrap_or_else(|error| panic!("'412' must parse as a generation: {error}"));
-        assert_eq!(parsed, Generation::new(412));
+            .unwrap_or_else(|error| panic!("{text:?} must parse: {error}"));
+        assert_eq!(parsed.generation, Generation::new(412));
+        assert_eq!(parsed.chain, Some(chain));
+
+        let legacy = parse_payload("412", directory)
+            .unwrap_or_else(|error| panic!("the previous format must still be read: {error}"));
+        assert_eq!(legacy.generation, Generation::new(412));
+        assert_eq!(
+            legacy.chain, None,
+            "a payload of the previous format records no chain (ADR-0106, decision 3)"
+        );
+
         let error = match parse_payload("gen-412", directory) {
-            Ok(generation) => panic!("'gen-412' is not a generation, got {generation:?}"),
+            Ok(payload) => panic!("'gen-412' is not a generation, got {payload:?}"),
             Err(error) => error,
         };
         assert_eq!(error.code(), ErrorCode::Internal);
@@ -864,6 +1041,11 @@ mod tests {
         let state = read_state(&epoch_dir)
             .unwrap_or_else(|error| panic!("the lexical index must be readable: {error}"));
         assert_eq!(state.generation, Some(Generation::new(3)));
+        assert_eq!(
+            state.chain,
+            Some(AnalysisChain::of(&config())),
+            "the commit records the chain that analysed its text (ADR-0106, decision 1)"
+        );
         let mut iids: Vec<u32> = state.iids.iter().map(|iid| iid.get()).collect();
         iids.sort_unstable();
         assert_eq!(iids, vec![0, 1]);

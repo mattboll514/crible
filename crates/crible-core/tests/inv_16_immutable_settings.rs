@@ -140,19 +140,20 @@ fn inv_16_changing_the_type_of_an_existing_field_is_rejected() {
 }
 
 #[test]
-fn apply_patch_rejects_a_field_added_at_both_levels() {
-    // ADR-0030 and `docs/04`: a field name designates one level. Adding
-    // `titre` at passage level while it is a document field is a 400, not a
-    // frozen-setting 409.
-    assert_invalid(
+fn apply_patch_rejects_a_field_moved_to_the_other_level() {
+    // ADR-0030 and `docs/04`: a field name designates one level. Declaring
+    // `titre` at passage level while it is a document field is a level change,
+    // and the level is frozen with the type (INV-16). The frozen-setting control
+    // runs before the same-name collision.
+    assert_immutable(
         r#"{ "schema": { "passage_fields": { "titre": { "type": "keyword" } } } }"#,
         &["titre", "document_fields", "passage_fields"],
     );
 }
 
 #[test]
-fn apply_patch_rejects_a_passage_field_added_at_document_level() {
-    assert_invalid(
+fn apply_patch_rejects_a_passage_field_moved_to_document_level() {
+    assert_immutable(
         r#"{ "schema": { "document_fields": { "partie": { "type": "keyword" } } } }"#,
         &["partie", "document_fields", "passage_fields"],
     );
