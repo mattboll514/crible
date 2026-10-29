@@ -7,6 +7,10 @@
 - **Proposé par** : agent greffier, sur demande de l'orchestrateur, pour la tâche `QUANTIFIER-BINAIRE` (phase P4), à la suite d'une `QUESTION-CONCEPTION` remontée par `@testeur` avant `@dev` et des verdicts de `@architecte` du 2026-10-26
 - **Remplace** : —
 
+## Erratum du 2026-10-29
+
+La citation de `docs/07-stack-et-deploiement.md:15`, dans la section « Contexte », décrit l'inventaire des sous-commandes à la date de cet ADR. Depuis la tâche `NETTOYER-P5` (commit `7ca3e63`), cette ligne compte aussi `rebuild-lexical`, juste après `compact` : la commande `crible rebuild-lexical` est exigée par la fiche `RECONSTRUIRE-LEXICAL` (`docs/phases/P5-lexical-et-hybride.md:53`) et livrée en P5. Cette citation est laissée telle quelle, comme un état daté. Rien ne change dans les décisions de cet ADR : aucune sous-commande n'est ajoutée pour `codes.bin`, et la décision 5 reste en vigueur. ADR-0087 range « une sous-commande de réparation explicite » parmi ce qu'il ne décide pas. La note est demandée par le propriétaire le 2026-10-29, après un constat de `@relecteur` à la fin de `NETTOYER-P5`.
+
 ## Contexte
 
 ### Ce que la fiche demande
