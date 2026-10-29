@@ -30,6 +30,8 @@ Format unique :
              "details": { "path": "$.filter.juridicton" }, "request_id": "…" } }
 ```
 
+Toute réponse d'erreur du serveur suit ce format et porte `x-request-id` (ADR-0098, ADR-0101). Seule exception : le `503` de `/ready`, dont le corps reste celui d'ADR-0099. `message` est le message de l'erreur ; pour `internal`, il est générique et fixe (« internal error; see the server log for this request_id »), et un message ne contient jamais d'iid (**INV-01**) ni de chemin absolu du serveur. `details` vaut `{}`, sauf une clé documentée ici pour ce code — aujourd'hui `path` pour `invalid_filter` seulement. Une route inconnue et une méthode non permise sur une route connue rendent toutes deux `not_found` (404), avec le message `no route for <METHOD> <path>` ; il n'y a pas de `405`. Un rejet d'extracteur (JSON mal formé, type de contenu absent ou faux, corps illisible) rend `invalid_request` (400) ; un corps au-delà de la limite rend `payload_too_large` (413). Chaque réponse d'erreur est journalisée avec son code, son statut et son `request_id` ; le `message` n'est journalisé que pour `internal` (ADR-0101).
+
 | Code | HTTP | Cas |
 |---|---|---|
 | `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
@@ -37,7 +39,7 @@ Format unique :
 | `unauthorized` | 401 | Clé absente, mal formée ou inconnue ; réponse avec `WWW-Authenticate: Bearer` et un corps identique dans les trois cas (ADR-0100) |
 | `forbidden` | 403 | Rôle insuffisant ; sans `WWW-Authenticate` (ADR-0100) |
 | `unknown_index` | 404 | Index inexistant |
-| `not_found` | 404 | Document, job ou lot introuvable ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) |
+| `not_found` | 404 | Document, job ou lot introuvable ; route inconnue ou méthode non permise sur une route connue (ADR-0101) ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) |
 | `immutable_setting` | 409 | Tentative de modifier un réglage figé |
 | `batch_conflict` | 409 | Même `batch_id`, manifeste différent |
 | `payload_too_large` | 413 | Corps au-delà des limites |
@@ -264,10 +266,12 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 |---|---|
 | `k` | 1000 au plus |
 | Longueur de requête | `max_tokens` du modèle ; au-delà, la requête est tronquée et `truncated_query: true` |
-| Corps de requête (lot en ligne) | 32 Mo, 10 000 passages |
-| Corps d'un patch de métadonnées | 32 Mo, 10 000 documents (mêmes bornes pour le fichier de `crible patch`) |
+| Corps de requête (lot en ligne) | 32 Mio, 10 000 passages |
+| Corps d'un patch de métadonnées | 32 Mio, 10 000 documents (mêmes bornes pour le fichier de `crible patch`) |
 | File d'écriture par index | 16 jobs, puis `503` avec `Retry-After` |
-| Recherches concurrentes | 2 × le nombre de cœurs, puis `503` |
-| `timeout_ms` | 2 000 par défaut, 30 000 au plus |
+| Recherches concurrentes | 2 × le nombre de cœurs (`[server].max_concurrent_searches`, 0 = 2 × cœurs), puis `503 overloaded` avec `Retry-After: 1` |
+| `timeout_ms` | 2 000 par défaut (`[limits].default_timeout_ms`), 30 000 au plus ; à l'échéance, `504 timeout` |
 | `wait_timeout_ms` | 60 000 par défaut : attente au plus de `?wait=true`, puis `202` avec le job dans son état courant (ADR-0067) |
 | Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |
+
+Toute requête dont le corps dépasse **32 Mio (33 554 432 octets)** est refusée en `payload_too_large` (413) : cette borne est une constante du code, non configurable, et les « 32 Mo » des sections « Lot en ligne » et « Patch de métadonnées » s'entendent en Mio (ADR-0102). Les recherches concurrentes sont limitées par un sémaphore pris **sans attente** : au-delà, la réponse est `503 overloaded` immédiate avec `Retry-After: 1` ; la limite ne s'applique qu'aux routes de recherche, jamais à `/health`, `/ready` ni aux écritures (ADR-0102). À l'échéance de `timeout_ms`, la réponse est `504 timeout` ; le calcul n'est pas annulé et garde son jeton de concurrence jusqu'à sa fin réelle. `timeout_ms` ne s'applique pas aux écritures : `?wait=true` rend `202` à l'échéance de `wait_timeout_ms` (ADR-0067, ADR-0102).
