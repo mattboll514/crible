@@ -107,6 +107,8 @@
 - **Critères d'acceptation** :
   - les résultats de l'API sont identiques à ceux de la CLI sur les requêtes de l'échantillon ;
   - les trois rôles atteignent la route : aucun `403` n'y est atteignable, puisque `write` et `admin` incluent `read` (ADR-0095).
+  - `timeout_ms` est lu dans le corps et vaut `[limits].default_timeout_ms` par défaut ; une recherche qui dépasse son échéance rend `504 timeout` et garde son jeton de concurrence jusqu'à la fin réelle du calcul (ADR-0102) ;
+  - au-delà de `[server].max_concurrent_searches` recherches simultanées, la route rend `503 overloaded` avec `Retry-After: 1` ; un test pour chaque cas (ADR-0102, mécanisme livré par FORMAT-ERREURS-ET-LIMITES).
 
 ### RECHERCHE-MULTI-INDEX
 - **Objectif** : `POST /v1/search`.
@@ -121,7 +123,8 @@
 - **Critères d'acceptation** :
   - en dense, la fusion donne le même résultat qu'un tri global des top-k par index ;
   - l'encodage n'est appelé qu'une fois (test) ;
-  - les trois rôles atteignent la route : aucun `403` n'y est atteignable (ADR-0095).
+  - les trois rôles atteignent la route : aucun `403` n'y est atteignable (ADR-0095) ;
+  - au-delà de `[server].max_concurrent_searches` recherches simultanées, la route rend `503 overloaded` avec `Retry-After: 1` (même limite que `ROUTE-RECHERCHE`, mécanisme livré par FORMAT-ERREURS-ET-LIMITES, ADR-0102).
 
 ### PUBLIER-OPENAPI
 - **Objectif** : une spécification et une UI à jour.
