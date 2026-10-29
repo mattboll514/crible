@@ -52,6 +52,7 @@
   - les comptes par index sont égaux à ceux de pgvector, ou les écarts sont expliqués ;
   - MES-07 et MES-09 sont refaites à l'échelle réelle.
 - **Invariants / mesures** : MES-07, MES-09.
+- **À relever** : mesurer la durée de la reconstruction lexicale à 8,58 M passages, par `crible rebuild-lexical` ou à la première reconstruction, et la comparer à la cible de 60 s d'ADR-0047. MES-06 (§ 8.3.1) l'extrapole à 325 s, de 49 à 762 s selon la composition du corpus, et ADR-0088 le rappelle en « À surveiller ». Le propriétaire a décidé le 2026-10-29 d'attendre cette première mesure réelle avant tout ADR : si la cible n'est pas tenue, faire rédiger un ADR qui relève la cible pour ce cas de reprise, ou qui parallélise l'écriture (`WRITER_THREADS` vaut 1 par ADR-0087).
 
 ### CONSTITUER-JEU-DE-REFERENCE
 - **Objectif** : le jeu de requêtes qui tranchera la v1.

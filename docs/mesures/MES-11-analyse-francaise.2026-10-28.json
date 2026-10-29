@@ -1,0 +1,3568 @@
+{
+  "measure": "MES-11",
+  "protocol": "ADR-0092",
+  "date": "2026-10-28",
+  "commit": "b9e0ea6d46a5c2f5b5b5ad1c9381081b1717c0ee",
+  "machine": "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7, native",
+  "query_vectors": {
+    "path": "data/mes10/query-vectors-2026-10-28.json",
+    "sha256": "0a0348e670172fe1b800e53fec9af557434f7c4b507c64dc50510c38100ea482"
+  },
+  "raw": {
+    "data/mes10/raw/analyze-articles.json": "f679be5352fdea6740c74c28325aaf5ff117ebe81768a0edf43c46bc2ac78e4c",
+    "data/mes10/raw/analyze-decisions.json": "9ff527c93d6c21f9bc1fc93ad842b5f6d0924d7f48cd0327b720017f8718ef70",
+    "data/mes10/raw/analyze-dole.json": "46ac42dc82bbea0f092d62dd8caacb7a33f25455abf667dab63fe62e8aa73ba4",
+    "data/mes10/raw/analyze-jorf.json": "6ae740e6e6a1a2068a94a808ee23828a6acef2b3d0c329538791d7e493f7aec5",
+    "data/mes10/raw/analyze-sarde.json": "199f9f621542fdb3989725ba98a10013ef01d2d98493e41bbb70f15bf5dc318f",
+    "data/mes10/raw/analyze-titres.json": "0d8bfa4b94f371d374779692156b468342e1bc820da4b4f0bf341b5f8c5be136"
+  },
+  "variants": {
+    "V0": "SimpleTokenizer, RemoveLongFilter(40), LowerCaser, AsciiFoldingFilter, StopWordFilter(fr), Stemmer(fr)",
+    "V1": "V0 plus an elision filter",
+    "V2": "V0 with identifiers kept as one token (hyphen kept)",
+    "V3": "V1 and V2"
+  },
+  "passages": 258071,
+  "token_statistics": {
+    "V0": {
+      "passages": 258071,
+      "tokens": 25774104,
+      "differing": 0
+    },
+    "V1": {
+      "passages": 258071,
+      "tokens": 25753313,
+      "differing": 15213
+    },
+    "V2": {
+      "passages": 258071,
+      "tokens": 25573270,
+      "differing": 54424
+    },
+    "V3": {
+      "passages": 258071,
+      "tokens": 25552472,
+      "differing": 63195
+    }
+  },
+  "anchor": {
+    "reproduced": 57,
+    "compared": 57
+  },
+  "questions": {
+    "averaged": 47,
+    "definition": "questions holding an elision or an identifier (union)",
+    "complement": 56,
+    "excluded": [
+      "Q30"
+    ]
+  },
+  "elisions": {
+    "count": 47,
+    "ids": [
+      "Q02",
+      "Q03",
+      "Q04",
+      "Q05",
+      "Q06",
+      "Q07",
+      "Q09",
+      "Q11",
+      "Q13",
+      "Q14",
+      "Q15",
+      "Q17",
+      "Q18",
+      "Q19",
+      "Q20",
+      "Q31",
+      "Q33",
+      "Q34",
+      "Q35",
+      "Q36",
+      "Q37",
+      "Q38",
+      "Q39",
+      "Q41",
+      "Q42",
+      "Q44",
+      "Q45",
+      "Q46",
+      "Q47",
+      "Q48",
+      "Q49",
+      "Q50",
+      "Q51",
+      "Q52",
+      "Q53",
+      "Q54",
+      "Q55",
+      "Q56",
+      "Q57",
+      "Q58",
+      "Q21",
+      "Q22",
+      "Q24",
+      "Q25",
+      "Q27",
+      "Q28",
+      "Q29"
+    ]
+  },
+  "identifiers": {
+    "count": 0,
+    "ids": []
+  },
+  "lexical": {
+    "summary": {
+      "V0": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7826241134751772,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V1": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7826241134751772,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V2": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7826241134751772,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V3": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7826241134751772,
+        "found": 43,
+        "median_rank": 1
+      }
+    },
+    "bootstrap": {
+      "V1": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "V2": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "V3": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "by_corpus": {
+      "dole": {
+        "V0": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          }
+        }
+      },
+      "jorf_normatif": {
+        "V0": {
+          "lexical": {
+            "n": 3,
+            "recall": 0.6666666666666666,
+            "mrr": 0.6666666666666666,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 3,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 3,
+            "recall": 0.6666666666666666,
+            "mrr": 0.6666666666666666,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 3,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 3,
+            "recall": 0.6666666666666666,
+            "mrr": 0.6666666666666666,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 3,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 3,
+            "recall": 0.6666666666666666,
+            "mrr": 0.6666666666666666,
+            "found": 2,
+            "median_rank": 1.0
+          },
+          "rrf": {
+            "n": 3,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 3,
+            "median_rank": 1
+          }
+        }
+      },
+      "juri_sommaires": {
+        "V0": {
+          "lexical": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.625,
+            "found": 3,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.5833333333333334,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.625,
+            "found": 3,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.5833333333333334,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.625,
+            "found": 3,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.5833333333333334,
+            "found": 3,
+            "median_rank": 1
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.625,
+            "found": 3,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 4,
+            "recall": 0.75,
+            "mrr": 0.5833333333333334,
+            "found": 3,
+            "median_rank": 1
+          }
+        }
+      },
+      "juri_texte_integral": {
+        "V0": {
+          "lexical": {
+            "n": 28,
+            "recall": 0.9642857142857143,
+            "mrr": 0.849404761904762,
+            "found": 27,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 28,
+            "recall": 0.9285714285714286,
+            "mrr": 0.7759920634920635,
+            "found": 26,
+            "median_rank": 1.0
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 28,
+            "recall": 0.9642857142857143,
+            "mrr": 0.849404761904762,
+            "found": 27,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 28,
+            "recall": 0.9285714285714286,
+            "mrr": 0.7759920634920635,
+            "found": 26,
+            "median_rank": 1.0
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 28,
+            "recall": 0.9642857142857143,
+            "mrr": 0.849404761904762,
+            "found": 27,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 28,
+            "recall": 0.9285714285714286,
+            "mrr": 0.7759920634920635,
+            "found": 26,
+            "median_rank": 1.0
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 28,
+            "recall": 0.9642857142857143,
+            "mrr": 0.849404761904762,
+            "found": 27,
+            "median_rank": 1
+          },
+          "rrf": {
+            "n": 28,
+            "recall": 0.9285714285714286,
+            "mrr": 0.7759920634920635,
+            "found": 26,
+            "median_rank": 1.0
+          }
+        }
+      },
+      "sarde": {
+        "V0": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 0.75,
+            "found": 2,
+            "median_rank": 1.5
+          },
+          "rrf": {
+            "n": 2,
+            "recall": 1.0,
+            "mrr": 1.0,
+            "found": 2,
+            "median_rank": 1.0
+          }
+        }
+      },
+      "textes_vigueur": {
+        "V0": {
+          "lexical": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.625,
+            "found": 7,
+            "median_rank": 2
+          },
+          "rrf": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.75,
+            "found": 7,
+            "median_rank": 1
+          }
+        },
+        "V1": {
+          "lexical": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.625,
+            "found": 7,
+            "median_rank": 2
+          },
+          "rrf": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.75,
+            "found": 7,
+            "median_rank": 1
+          }
+        },
+        "V2": {
+          "lexical": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.625,
+            "found": 7,
+            "median_rank": 2
+          },
+          "rrf": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.75,
+            "found": 7,
+            "median_rank": 1
+          }
+        },
+        "V3": {
+          "lexical": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.625,
+            "found": 7,
+            "median_rank": 2
+          },
+          "rrf": {
+            "n": 8,
+            "recall": 0.875,
+            "mrr": 0.75,
+            "found": 7,
+            "median_rank": 1
+          }
+        }
+      }
+    },
+    "complement": {
+      "summary": {
+        "V0": {
+          "n": 56,
+          "recall": 0.9107142857142857,
+          "mrr": 0.7699404761904762,
+          "found": 51,
+          "median_rank": 1
+        },
+        "V1": {
+          "n": 56,
+          "recall": 0.9107142857142857,
+          "mrr": 0.7699404761904762,
+          "found": 51,
+          "median_rank": 1
+        },
+        "V2": {
+          "n": 56,
+          "recall": 0.9107142857142857,
+          "mrr": 0.7699404761904762,
+          "found": 51,
+          "median_rank": 1
+        },
+        "V3": {
+          "n": 56,
+          "recall": 0.9107142857142857,
+          "mrr": 0.7699404761904762,
+          "found": 51,
+          "median_rank": 1
+        }
+      },
+      "bootstrap": {
+        "V1": {
+          "difference": 0.0,
+          "low": 0.0,
+          "high": 0.0,
+          "resamples": 10000,
+          "seed": 20261028
+        },
+        "V2": {
+          "difference": 0.0,
+          "low": 0.0,
+          "high": 0.0,
+          "resamples": 10000,
+          "seed": 20261028
+        },
+        "V3": {
+          "difference": 0.0,
+          "low": 0.0,
+          "high": 0.0,
+          "resamples": 10000,
+          "seed": 20261028
+        }
+      }
+    }
+  },
+  "rrf": {
+    "summary": {
+      "V0": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7619385342789597,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V1": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7619385342789597,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V2": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7619385342789597,
+        "found": 43,
+        "median_rank": 1
+      },
+      "V3": {
+        "n": 47,
+        "recall": 0.9148936170212766,
+        "mrr": 0.7619385342789597,
+        "found": 43,
+        "median_rank": 1
+      }
+    },
+    "bootstrap": {
+      "V1": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "V2": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      },
+      "V3": {
+        "difference": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 10000,
+        "seed": 20261028
+      }
+    },
+    "complement": {
+      "V0": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7644841269841269,
+        "found": 51,
+        "median_rank": 1
+      },
+      "V1": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7644841269841269,
+        "found": 51,
+        "median_rank": 1
+      },
+      "V2": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7644841269841269,
+        "found": 51,
+        "median_rank": 1
+      },
+      "V3": {
+        "n": 56,
+        "recall": 0.9107142857142857,
+        "mrr": 0.7644841269841269,
+        "found": 51,
+        "median_rank": 1
+      }
+    }
+  },
+  "probes": [
+    {
+      "name": "P1",
+      "text": "L. 1132-1",
+      "expected": "LEGIARTI000045391841",
+      "lexical_rank": {
+        "V0": null,
+        "V1": null,
+        "V2": 4,
+        "V3": 4
+      },
+      "lexical": {
+        "V0": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006632011",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006413883",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006460241",
+          "LEGIARTI000039337130",
+          "LEGIARTI000006364244",
+          "LEGIARTI000020828593",
+          "LEGIARTI000006632016"
+        ],
+        "V1": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006632011",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006413883",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006460241",
+          "LEGIARTI000039337130",
+          "LEGIARTI000006364244",
+          "LEGIARTI000020828593",
+          "LEGIARTI000006632016"
+        ],
+        "V2": [
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "KALIARTI000048213871",
+          "LEGIARTI000045391841"
+        ],
+        "V3": [
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "KALIARTI000048213871",
+          "LEGIARTI000045391841"
+        ]
+      },
+      "lexical_count": {
+        "V0": 10,
+        "V1": 10,
+        "V2": 4,
+        "V3": 4
+      },
+      "rrf_top3": {
+        "V0": false,
+        "V1": false,
+        "V2": true,
+        "V3": true
+      },
+      "tokens": {
+        "V0": [
+          "1132",
+          "1"
+        ],
+        "V1": [
+          "1132",
+          "1"
+        ],
+        "V2": [
+          "l1132-1"
+        ],
+        "V3": [
+          "l1132-1"
+        ]
+      },
+      "rrf": {
+        "V0": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006340015",
+          "LEGIARTI000045391841",
+          "LEGIARTI000006632011",
+          "LEGIARTI000018608552",
+          "LEGIARTI000006712527",
+          "LEGIARTI000006413883",
+          "LEGIARTI000054609777"
+        ],
+        "V1": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006340015",
+          "LEGIARTI000045391841",
+          "LEGIARTI000006632011",
+          "LEGIARTI000018608552",
+          "LEGIARTI000006712527",
+          "LEGIARTI000006413883",
+          "LEGIARTI000054609777"
+        ],
+        "V2": [
+          "LEGIARTI000045391841",
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "LEGIARTI000018608552",
+          "KALIARTI000048213871",
+          "LEGIARTI000006712527",
+          "LEGIARTI000054609777",
+          "LEGIARTI000026463208",
+          "LEGIARTI000024578259",
+          "KALIARTI000037111011"
+        ],
+        "V3": [
+          "LEGIARTI000045391841",
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "LEGIARTI000018608552",
+          "KALIARTI000048213871",
+          "LEGIARTI000006712527",
+          "LEGIARTI000054609777",
+          "LEGIARTI000026463208",
+          "LEGIARTI000024578259",
+          "KALIARTI000037111011"
+        ]
+      }
+    },
+    {
+      "name": "P2",
+      "text": "L1132-1",
+      "expected": "LEGIARTI000045391841",
+      "lexical_rank": {
+        "V0": 1,
+        "V1": 1,
+        "V2": 4,
+        "V3": 4
+      },
+      "lexical": {
+        "V0": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000028276342",
+          "LEGIARTI000018043130",
+          "LEGIARTI000020195667",
+          "KALIARTI000037398045",
+          "LEGIARTI000052844481"
+        ],
+        "V1": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000028276342",
+          "LEGIARTI000018043130",
+          "LEGIARTI000020195667",
+          "KALIARTI000037398045",
+          "LEGIARTI000052844481",
+          "KALIARTI000044159746"
+        ],
+        "V2": [
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "KALIARTI000048213871",
+          "LEGIARTI000045391841"
+        ],
+        "V3": [
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "KALIARTI000048213871",
+          "LEGIARTI000045391841"
+        ]
+      },
+      "lexical_count": {
+        "V0": 6,
+        "V1": 7,
+        "V2": 4,
+        "V3": 4
+      },
+      "rrf_top3": {
+        "V0": true,
+        "V1": true,
+        "V2": true,
+        "V3": true
+      },
+      "tokens": {
+        "V0": [
+          "l1132",
+          "1"
+        ],
+        "V1": [
+          "l1132",
+          "1"
+        ],
+        "V2": [
+          "l1132-1"
+        ],
+        "V3": [
+          "l1132-1"
+        ]
+      },
+      "rrf": {
+        "V0": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000028276342",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006712527",
+          "LEGIARTI000018043130",
+          "LEGIARTI000024578259",
+          "KALIARTI000018321586",
+          "LEGIARTI000020195667",
+          "KALIARTI000037398045"
+        ],
+        "V1": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000028276342",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006712527",
+          "LEGIARTI000018043130",
+          "LEGIARTI000024578259",
+          "KALIARTI000018321586",
+          "LEGIARTI000020195667",
+          "KALIARTI000037398045"
+        ],
+        "V2": [
+          "LEGIARTI000045391841",
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "LEGIARTI000018608552",
+          "KALIARTI000048213871",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006712527",
+          "LEGIARTI000024578259",
+          "KALIARTI000018321586",
+          "KALIARTI000045828942"
+        ],
+        "V3": [
+          "LEGIARTI000045391841",
+          "KALIARTI000042319401",
+          "KALIARTI000051328891",
+          "LEGIARTI000018608552",
+          "KALIARTI000048213871",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006712527",
+          "LEGIARTI000024578259",
+          "KALIARTI000018321586",
+          "KALIARTI000045828942"
+        ]
+      }
+    },
+    {
+      "name": "P3",
+      "text": "L. 1132-11",
+      "expected": null,
+      "lexical_rank": {
+        "V0": null,
+        "V1": null,
+        "V2": null,
+        "V3": null
+      },
+      "lexical": {
+        "V0": [
+          "LEGIARTI000006632011",
+          "LEGIARTI000026463208",
+          "LEGIARTI000006413883",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006460241",
+          "LEGIARTI000039337130",
+          "LEGIARTI000020828593",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006712527"
+        ],
+        "V1": [
+          "LEGIARTI000006632011",
+          "LEGIARTI000026463208",
+          "LEGIARTI000006413883",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006460241",
+          "LEGIARTI000039337130",
+          "LEGIARTI000020828593",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006712527"
+        ],
+        "V2": [],
+        "V3": []
+      },
+      "lexical_count": {
+        "V0": 10,
+        "V1": 10,
+        "V2": 0,
+        "V3": 0
+      },
+      "rrf_top3": {
+        "V0": null,
+        "V1": null,
+        "V2": null,
+        "V3": null
+      },
+      "tokens": {
+        "V0": [
+          "1132",
+          "11"
+        ],
+        "V1": [
+          "1132",
+          "11"
+        ],
+        "V2": [
+          "l1132-11"
+        ],
+        "V3": [
+          "l1132-11"
+        ]
+      },
+      "rrf": {
+        "V0": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006712527",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006632011",
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000006413883",
+          "LEGIARTI000024578259"
+        ],
+        "V1": [
+          "LEGIARTI000026463208",
+          "LEGIARTI000006712527",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006213899",
+          "LEGIARTI000006340015",
+          "LEGIARTI000006632011",
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000006413883",
+          "LEGIARTI000024578259"
+        ],
+        "V2": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000024578259",
+          "LEGIARTI000006712527",
+          "LEGIARTI000054609777",
+          "LEGIARTI000026463208",
+          "LEGIARTI000006903368",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006723354",
+          "LEGIARTI000006866232"
+        ],
+        "V3": [
+          "LEGIARTI000045391841",
+          "LEGIARTI000018608552",
+          "LEGIARTI000024578259",
+          "LEGIARTI000006712527",
+          "LEGIARTI000054609777",
+          "LEGIARTI000026463208",
+          "LEGIARTI000006903368",
+          "LEGIARTI000006632016",
+          "LEGIARTI000006723354",
+          "LEGIARTI000006866232"
+        ]
+      }
+    },
+    {
+      "name": "P4",
+      "text": "qu'il",
+      "expected": null,
+      "lexical_rank": {
+        "V0": null,
+        "V1": null,
+        "V2": null,
+        "V3": null
+      },
+      "lexical": {
+        "V0": [],
+        "V1": [],
+        "V2": [],
+        "V3": []
+      },
+      "lexical_count": {
+        "V0": 0,
+        "V1": 0,
+        "V2": 0,
+        "V3": 0
+      },
+      "rrf_top3": {
+        "V0": null,
+        "V1": null,
+        "V2": null,
+        "V3": null
+      },
+      "tokens": {
+        "V0": [],
+        "V1": [],
+        "V2": [],
+        "V3": []
+      },
+      "rrf": {
+        "V0": [
+          "LEGIARTI000023763582",
+          "LEGIARTI000006527248",
+          "LEGIARTI000046184493",
+          "LEGIARTI000024631095",
+          "LEGIARTI000027069939",
+          "LEGIARTI000054844670",
+          "KALIARTI000005804756",
+          "LEGIARTI000047548167",
+          "KALIARTI000042051492",
+          "LEGIARTI000045969729"
+        ],
+        "V1": [
+          "LEGIARTI000023763582",
+          "LEGIARTI000006527248",
+          "LEGIARTI000046184493",
+          "LEGIARTI000024631095",
+          "LEGIARTI000027069939",
+          "LEGIARTI000054844670",
+          "KALIARTI000005804756",
+          "LEGIARTI000047548167",
+          "KALIARTI000042051492",
+          "LEGIARTI000045969729"
+        ],
+        "V2": [
+          "LEGIARTI000023763582",
+          "LEGIARTI000006527248",
+          "LEGIARTI000046184493",
+          "LEGIARTI000024631095",
+          "LEGIARTI000027069939",
+          "LEGIARTI000054844670",
+          "KALIARTI000005804756",
+          "LEGIARTI000047548167",
+          "KALIARTI000042051492",
+          "LEGIARTI000045969729"
+        ],
+        "V3": [
+          "LEGIARTI000023763582",
+          "LEGIARTI000006527248",
+          "LEGIARTI000046184493",
+          "LEGIARTI000024631095",
+          "LEGIARTI000027069939",
+          "LEGIARTI000054844670",
+          "KALIARTI000005804756",
+          "LEGIARTI000047548167",
+          "KALIARTI000042051492",
+          "LEGIARTI000045969729"
+        ]
+      }
+    }
+  ],
+  "probes_top3": {
+    "V0": false,
+    "V1": false,
+    "V2": true,
+    "V3": true
+  },
+  "probes_without_expected": [
+    "P3",
+    "P4"
+  ],
+  "probe_token_stability": {
+    "compared": 96,
+    "identical": 96
+  },
+  "differences": [
+    {
+      "doc_id": "LEGIARTI000006738746",
+      "first_difference": 62,
+      "key": "LEGIARTI000006738746#0",
+      "v0": [
+        "etre",
+        "remplac",
+        "jusqu",
+        "a",
+        "expir",
+        "del",
+        "depot",
+        "candidatur"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "etre",
+        "remplac",
+        "a",
+        "expir",
+        "del",
+        "depot",
+        "candidatur"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000053710404",
+      "first_difference": 58,
+      "key": "LEGIARTI000053710404#1",
+      "v0": [
+        "etre",
+        "engage",
+        "jusqu",
+        "a",
+        "dissolu",
+        "comit",
+        "organis",
+        "jeux",
+        "olymp",
+        "paralymp",
+        "plus",
+        "tard"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "etre",
+        "engage",
+        "a",
+        "dissolu",
+        "comit",
+        "organis",
+        "jeux",
+        "olymp",
+        "paralymp",
+        "plus",
+        "tard",
+        "31"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000021739501",
+      "first_difference": 155,
+      "key": "LEGIARTI000021739501#0",
+      "v0": [
+        "a",
+        "verse",
+        "lorsqu",
+        "mutuel",
+        "union",
+        "relev",
+        "livr",
+        "ii",
+        "present",
+        "cod",
+        "cess",
+        "etre"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "a",
+        "verse",
+        "mutuel",
+        "union",
+        "relev",
+        "livr",
+        "ii",
+        "present",
+        "cod",
+        "cess",
+        "etre",
+        "membr"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000042807862",
+      "first_difference": 29,
+      "key": "LEGIARTI000042807862#0",
+      "v0": [
+        "r312",
+        "9",
+        "lorsqu",
+        "etrang",
+        "est",
+        "autoris",
+        "a",
+        "sejourn",
+        "franc",
+        "sous",
+        "couvert",
+        "titr"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "r312",
+        "9",
+        "etrang",
+        "est",
+        "autoris",
+        "a",
+        "sejourn",
+        "franc",
+        "sous",
+        "couvert",
+        "titr",
+        "voyag"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000006807225",
+      "first_difference": 23,
+      "key": "LEGIARTI000006807225#0",
+      "v0": [
+        "mesur",
+        "appliqu",
+        "r233",
+        "45",
+        "arret",
+        "ministeriel",
+        "determin",
+        "chaqu",
+        "natur",
+        "local",
+        "cel",
+        "prescript"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "mesur",
+        "appliqu",
+        "r233-45",
+        "arret",
+        "ministeriel",
+        "determin",
+        "chaqu",
+        "natur",
+        "local",
+        "cel",
+        "prescript",
+        "present"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000024368890",
+      "first_difference": 24,
+      "key": "LEGIARTI000024368890#0",
+      "v0": [
+        "a",
+        "urne",
+        "r176",
+        "1",
+        "10",
+        "prejudic",
+        "control",
+        "identit",
+        "prevu",
+        "a",
+        "articl",
+        "r"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "urne",
+        "r176-1-10",
+        "prejudic",
+        "control",
+        "identit",
+        "prevu",
+        "a",
+        "articl",
+        "r58",
+        "droit",
+        "prendr"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000045730760",
+      "first_difference": 19,
+      "key": "LEGIARTI000045730760#0",
+      "v0": [
+        "be",
+        "c1",
+        "c1e",
+        "d1",
+        "d1e",
+        "4",
+        "present",
+        "arret",
+        "publ",
+        "journal",
+        "officiel",
+        "republ"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "be",
+        "c1",
+        "c1",
+        "e",
+        "d1",
+        "d1",
+        "e",
+        "4",
+        "present",
+        "arret",
+        "publ",
+        "journal"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000027874787",
+      "first_difference": 23,
+      "key": "LEGIARTI000027874787#0",
+      "v0": [
+        "a",
+        "mayott",
+        "d763",
+        "5",
+        "appliqu",
+        "a",
+        "mayott",
+        "disposit",
+        "chapitr",
+        "vii",
+        "titr",
+        "ier"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "mayott",
+        "d763-5",
+        "appliqu",
+        "a",
+        "mayott",
+        "disposit",
+        "chapitr",
+        "vii",
+        "titr",
+        "ier",
+        "livr"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000006807225",
+      "first_difference": 23,
+      "key": "LEGIARTI000006807225#0",
+      "v0": [
+        "mesur",
+        "appliqu",
+        "r233",
+        "45",
+        "arret",
+        "ministeriel",
+        "determin",
+        "chaqu",
+        "natur",
+        "local",
+        "cel",
+        "prescript"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "mesur",
+        "appliqu",
+        "r233-45",
+        "arret",
+        "ministeriel",
+        "determin",
+        "chaqu",
+        "natur",
+        "local",
+        "cel",
+        "prescript",
+        "present"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000024368890",
+      "first_difference": 24,
+      "key": "LEGIARTI000024368890#0",
+      "v0": [
+        "a",
+        "urne",
+        "r176",
+        "1",
+        "10",
+        "prejudic",
+        "control",
+        "identit",
+        "prevu",
+        "a",
+        "articl",
+        "r"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "urne",
+        "r176-1-10",
+        "prejudic",
+        "control",
+        "identit",
+        "prevu",
+        "a",
+        "articl",
+        "r58",
+        "droit",
+        "prendr"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000045730760",
+      "first_difference": 19,
+      "key": "LEGIARTI000045730760#0",
+      "v0": [
+        "be",
+        "c1",
+        "c1e",
+        "d1",
+        "d1e",
+        "4",
+        "present",
+        "arret",
+        "publ",
+        "journal",
+        "officiel",
+        "republ"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "be",
+        "c1",
+        "c1",
+        "e",
+        "d1",
+        "d1",
+        "e",
+        "4",
+        "present",
+        "arret",
+        "publ",
+        "journal"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "LEGIARTI000027874787",
+      "first_difference": 23,
+      "key": "LEGIARTI000027874787#0",
+      "v0": [
+        "a",
+        "mayott",
+        "d763",
+        "5",
+        "appliqu",
+        "a",
+        "mayott",
+        "disposit",
+        "chapitr",
+        "vii",
+        "titr",
+        "ier"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "mayott",
+        "d763-5",
+        "appliqu",
+        "a",
+        "mayott",
+        "disposit",
+        "chapitr",
+        "vii",
+        "titr",
+        "ier",
+        "livr"
+      ],
+      "structure": "articles"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 372,
+      "key": "CETATEXT000021297505#1",
+      "v0": [
+        "etud",
+        "impact",
+        "lorsqu",
+        "est",
+        "exige",
+        "consider",
+        "ressort",
+        "piec",
+        "dossi",
+        "plan",
+        "mass",
+        "materialis"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "etud",
+        "impact",
+        "est",
+        "exige",
+        "consider",
+        "ressort",
+        "piec",
+        "dossi",
+        "plan",
+        "mass",
+        "materialis",
+        "cot"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000043753694",
+      "first_difference": 201,
+      "key": "CETATEXT000043753694#1",
+      "v0": [
+        "autrui",
+        "4",
+        "lorsqu",
+        "prononc",
+        "demand",
+        "regroup",
+        "familial",
+        "prefet",
+        "dispos",
+        "pouvoir",
+        "appreci",
+        "est"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "autrui",
+        "4",
+        "prononc",
+        "demand",
+        "regroup",
+        "familial",
+        "prefet",
+        "dispos",
+        "pouvoir",
+        "appreci",
+        "est",
+        "tenu"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000054320847",
+      "first_difference": 38,
+      "key": "CETATEXT000054320847#1",
+      "v0": [
+        "septembr",
+        "2021",
+        "jusqu",
+        "a",
+        "product",
+        "justif",
+        "vaccin",
+        "mention",
+        "i",
+        "articl",
+        "14",
+        "loi"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "septembr",
+        "2021",
+        "a",
+        "product",
+        "justif",
+        "vaccin",
+        "mention",
+        "i",
+        "articl",
+        "14",
+        "loi",
+        "2021"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "JURITEXT000051012393",
+      "first_difference": 115,
+      "key": "JURITEXT000051012393#1",
+      "v0": [
+        "metr",
+        "amenag",
+        "jusqu",
+        "p",
+        "dehor",
+        "tout",
+        "oblig",
+        "legal",
+        "reglementair",
+        "fix",
+        "hauteur",
+        "minimal"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "metr",
+        "amenag",
+        "p",
+        "dehor",
+        "tout",
+        "oblig",
+        "legal",
+        "reglementair",
+        "fix",
+        "hauteur",
+        "minimal",
+        "servitud"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000043524697",
+      "first_difference": 35,
+      "key": "CETATEXT000043524697#1",
+      "v0": [
+        "alin",
+        "articl",
+        "146",
+        "5",
+        "cod",
+        "action",
+        "social",
+        "famill",
+        "enjoint",
+        "premi",
+        "ministr",
+        "prendr"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "alin",
+        "articl",
+        "l146-5",
+        "cod",
+        "action",
+        "social",
+        "famill",
+        "enjoint",
+        "premi",
+        "ministr",
+        "prendr",
+        "decret"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 41,
+      "key": "CETATEXT000021297505#1",
+      "v0": [
+        "term",
+        "articl",
+        "421",
+        "3",
+        "cod",
+        "urban",
+        "perm",
+        "construir",
+        "peut",
+        "etre",
+        "accord",
+        "si"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "term",
+        "articl",
+        "l421-3",
+        "cod",
+        "urban",
+        "perm",
+        "construir",
+        "peut",
+        "etre",
+        "accord",
+        "si",
+        "construct"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 70,
+      "key": "CETATEXT000021297505#2",
+      "v0": [
+        "sen",
+        "articl",
+        "r",
+        "111",
+        "2",
+        "cod",
+        "urban",
+        "saur",
+        "etre",
+        "util",
+        "invoqu",
+        "a"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "sen",
+        "articl",
+        "r111-2",
+        "cod",
+        "urban",
+        "saur",
+        "etre",
+        "util",
+        "invoqu",
+        "a",
+        "encontr",
+        "perm"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 32,
+      "key": "CETATEXT000021297505#3",
+      "v0": [
+        "appliqu",
+        "articl",
+        "761",
+        "1",
+        "cod",
+        "justic",
+        "administr",
+        "3",
+        "no",
+        "09bx00413"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "appliqu",
+        "articl",
+        "l761-1",
+        "cod",
+        "justic",
+        "administr",
+        "3",
+        "no",
+        "09bx00413"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000043524697",
+      "first_difference": 35,
+      "key": "CETATEXT000043524697#1",
+      "v0": [
+        "alin",
+        "articl",
+        "146",
+        "5",
+        "cod",
+        "action",
+        "social",
+        "famill",
+        "enjoint",
+        "premi",
+        "ministr",
+        "prendr"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "alin",
+        "articl",
+        "l146-5",
+        "cod",
+        "action",
+        "social",
+        "famill",
+        "enjoint",
+        "premi",
+        "ministr",
+        "prendr",
+        "decret"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 41,
+      "key": "CETATEXT000021297505#1",
+      "v0": [
+        "term",
+        "articl",
+        "421",
+        "3",
+        "cod",
+        "urban",
+        "perm",
+        "construir",
+        "peut",
+        "etre",
+        "accord",
+        "si"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "term",
+        "articl",
+        "l421-3",
+        "cod",
+        "urban",
+        "perm",
+        "construir",
+        "peut",
+        "etre",
+        "accord",
+        "si",
+        "construct"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 70,
+      "key": "CETATEXT000021297505#2",
+      "v0": [
+        "sen",
+        "articl",
+        "r",
+        "111",
+        "2",
+        "cod",
+        "urban",
+        "saur",
+        "etre",
+        "util",
+        "invoqu",
+        "a"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "sen",
+        "articl",
+        "r111-2",
+        "cod",
+        "urban",
+        "saur",
+        "etre",
+        "util",
+        "invoqu",
+        "a",
+        "encontr",
+        "perm"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "CETATEXT000021297505",
+      "first_difference": 32,
+      "key": "CETATEXT000021297505#3",
+      "v0": [
+        "appliqu",
+        "articl",
+        "761",
+        "1",
+        "cod",
+        "justic",
+        "administr",
+        "3",
+        "no",
+        "09bx00413"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "appliqu",
+        "articl",
+        "l761-1",
+        "cod",
+        "justic",
+        "administr",
+        "3",
+        "no",
+        "09bx00413"
+      ],
+      "structure": "decisions"
+    },
+    {
+      "doc_id": "JORFARTI000035176996",
+      "first_difference": 44,
+      "key": "JORFARTI000035176996#0",
+      "v0": [
+        "maintenu",
+        "fonction",
+        "jusqu",
+        "30",
+        "juin",
+        "2018"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "maintenu",
+        "fonction",
+        "30",
+        "juin",
+        "2018"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000002291481",
+      "first_difference": 19,
+      "key": "JORFARTI000002291481#0",
+      "v0": [
+        "conjoint",
+        "collabor",
+        "lorsqu",
+        "est",
+        "mention",
+        "registr",
+        "commerc",
+        "societ",
+        "repertoir",
+        "meti",
+        "registr",
+        "entrepris"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "conjoint",
+        "collabor",
+        "est",
+        "mention",
+        "registr",
+        "commerc",
+        "societ",
+        "repertoir",
+        "meti",
+        "registr",
+        "entrepris",
+        "tenu"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000035297603",
+      "first_difference": 2,
+      "key": "JORFARTI000035297603#1",
+      "v0": [
+        "tentat",
+        "opere",
+        "jusqu",
+        "a",
+        "present",
+        "maitris",
+        "flux",
+        "text",
+        "reglementair",
+        "produit",
+        "resultat",
+        "a"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "tentat",
+        "opere",
+        "a",
+        "present",
+        "maitris",
+        "flux",
+        "text",
+        "reglementair",
+        "produit",
+        "resultat",
+        "a",
+        "hauteur"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000037102429",
+      "first_difference": 242,
+      "key": "JORFARTI000037102429#0",
+      "v0": [
+        "12",
+        "sauf",
+        "lorsqu",
+        "aucun",
+        "depens",
+        "recet",
+        "figur",
+        "compt",
+        "campagn",
+        "celui",
+        "ci",
+        "est"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "12",
+        "sauf",
+        "aucun",
+        "depens",
+        "recet",
+        "figur",
+        "compt",
+        "campagn",
+        "celui",
+        "ci",
+        "est",
+        "present"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000050663584",
+      "first_difference": 63,
+      "key": "JORFARTI000050663584#0",
+      "v0": [
+        "a",
+        "articl",
+        "2241",
+        "5",
+        "cod",
+        "travail",
+        "aven",
+        "present",
+        "element",
+        "diagnostic",
+        "relat",
+        "a"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l2241-5",
+        "cod",
+        "travail",
+        "aven",
+        "present",
+        "element",
+        "diagnostic",
+        "relat",
+        "a",
+        "situat"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000026844593",
+      "first_difference": 37,
+      "key": "JORFARTI000026844593#0",
+      "v0": [
+        "ii",
+        "articl",
+        "741",
+        "9",
+        "cod",
+        "rural",
+        "pech",
+        "maritim",
+        "couvr",
+        "depens",
+        "supplementair",
+        "engendre"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "ii",
+        "articl",
+        "l741-9",
+        "cod",
+        "rural",
+        "pech",
+        "maritim",
+        "couvr",
+        "depens",
+        "supplementair",
+        "engendre",
+        "depart"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000001099366",
+      "first_difference": 46,
+      "key": "JORFARTI000001099366#0",
+      "v0": [
+        "disposit",
+        "general",
+        "r",
+        "741",
+        "44",
+        "appliqu",
+        "articl",
+        "741",
+        "20",
+        "employeur",
+        "proced",
+        "lor"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "disposit",
+        "general",
+        "r741-44",
+        "appliqu",
+        "articl",
+        "l741-20",
+        "employeur",
+        "proced",
+        "lor",
+        "chaqu",
+        "pai",
+        "moin"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000002291481",
+      "first_difference": 15,
+      "key": "JORFARTI000002291481#0",
+      "v0": [
+        "ier",
+        "art",
+        "121",
+        "6",
+        "conjoint",
+        "collabor",
+        "lorsqu",
+        "est",
+        "mention",
+        "registr",
+        "commerc",
+        "societ"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "ier",
+        "art",
+        "l121-6",
+        "conjoint",
+        "collabor",
+        "lorsqu",
+        "est",
+        "mention",
+        "registr",
+        "commerc",
+        "societ",
+        "repertoir"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000035176996",
+      "first_difference": 44,
+      "key": "JORFARTI000035176996#0",
+      "v0": [
+        "maintenu",
+        "fonction",
+        "jusqu",
+        "30",
+        "juin",
+        "2018"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "maintenu",
+        "fonction",
+        "30",
+        "juin",
+        "2018"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000050663584",
+      "first_difference": 63,
+      "key": "JORFARTI000050663584#0",
+      "v0": [
+        "a",
+        "articl",
+        "2241",
+        "5",
+        "cod",
+        "travail",
+        "aven",
+        "present",
+        "element",
+        "diagnostic",
+        "relat",
+        "a"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l2241-5",
+        "cod",
+        "travail",
+        "aven",
+        "present",
+        "element",
+        "diagnostic",
+        "relat",
+        "a",
+        "situat"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000026844593",
+      "first_difference": 37,
+      "key": "JORFARTI000026844593#0",
+      "v0": [
+        "ii",
+        "articl",
+        "741",
+        "9",
+        "cod",
+        "rural",
+        "pech",
+        "maritim",
+        "couvr",
+        "depens",
+        "supplementair",
+        "engendre"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "ii",
+        "articl",
+        "l741-9",
+        "cod",
+        "rural",
+        "pech",
+        "maritim",
+        "couvr",
+        "depens",
+        "supplementair",
+        "engendre",
+        "depart"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "JORFARTI000001099366",
+      "first_difference": 46,
+      "key": "JORFARTI000001099366#0",
+      "v0": [
+        "disposit",
+        "general",
+        "r",
+        "741",
+        "44",
+        "appliqu",
+        "articl",
+        "741",
+        "20",
+        "employeur",
+        "proced",
+        "lor"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "disposit",
+        "general",
+        "r741-44",
+        "appliqu",
+        "articl",
+        "l741-20",
+        "employeur",
+        "proced",
+        "lor",
+        "chaqu",
+        "pai",
+        "moin"
+      ],
+      "structure": "jorf"
+    },
+    {
+      "doc_id": "SARDBLOC000021066777",
+      "first_difference": 104,
+      "key": "SARDBLOC000021066777#0",
+      "v0": [
+        "composit",
+        "actuel",
+        "jusqu",
+        "prochain",
+        "renouvel",
+        "membr",
+        "plus",
+        "tard",
+        "jusqu",
+        "1er",
+        "janvi",
+        "2011"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "composit",
+        "actuel",
+        "prochain",
+        "renouvel",
+        "membr",
+        "plus",
+        "tard",
+        "1er",
+        "janvi",
+        "2011"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007248853",
+      "first_difference": 6,
+      "key": "SARDBLOC000007248853#0",
+      "v0": [
+        "group",
+        "constitu",
+        "jusqu",
+        "2008",
+        "o",
+        "23",
+        "11",
+        "2004",
+        "text",
+        "49",
+        "pag",
+        "19704"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "group",
+        "constitu",
+        "2008",
+        "o",
+        "23",
+        "11",
+        "2004",
+        "text",
+        "49",
+        "pag",
+        "19704",
+        "o"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000028743081",
+      "first_difference": 57,
+      "key": "SARDBLOC000028743081#0",
+      "v0": [
+        "prorog",
+        "titr",
+        "jusqu",
+        "16",
+        "avril",
+        "2019",
+        "abrog",
+        "art",
+        "4",
+        "remplac",
+        "annex"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "prorog",
+        "titr",
+        "16",
+        "avril",
+        "2019",
+        "abrog",
+        "art",
+        "4",
+        "remplac",
+        "annex"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000028633537",
+      "first_difference": 57,
+      "key": "SARDBLOC000028633537#0",
+      "v0": [
+        "2959",
+        "suspens",
+        "jusqu",
+        "a",
+        "mis",
+        "conformit",
+        "reglement",
+        "applic",
+        "a",
+        "disposit"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "2959",
+        "suspens",
+        "a",
+        "mis",
+        "conformit",
+        "reglement",
+        "applic",
+        "a",
+        "disposit"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007337823",
+      "first_difference": 11,
+      "key": "SARDBLOC000007337823#0",
+      "v0": [
+        "publiqu",
+        "art",
+        "r",
+        "6152",
+        "501",
+        "text",
+        "non",
+        "codif",
+        "voir",
+        "64",
+        "20",
+        "04"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "publiqu",
+        "art",
+        "r6152-501",
+        "text",
+        "non",
+        "codif",
+        "voir",
+        "64",
+        "20",
+        "04",
+        "statut",
+        "assist"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007136402",
+      "first_difference": 100,
+      "key": "SARDBLOC000007136402#0",
+      "v0": [
+        "a",
+        "art",
+        "621",
+        "1",
+        "cod",
+        "rural"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "art",
+        "l621-1",
+        "cod",
+        "rural"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007180591",
+      "first_difference": 48,
+      "key": "SARDBLOC000007180591#0",
+      "v0": [
+        "03",
+        "1994",
+        "p",
+        "4633"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "03",
+        "1994",
+        "p4633"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000022267629",
+      "first_difference": 26,
+      "key": "SARDBLOC000022267629#0",
+      "v0": [
+        "transfert",
+        "art",
+        "1434",
+        "1",
+        "a",
+        "1434",
+        "20",
+        "respect",
+        "decret",
+        "2010",
+        "514",
+        "18"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "transfert",
+        "art",
+        "d1434-1",
+        "a",
+        "d1434-20",
+        "respect",
+        "decret",
+        "2010",
+        "514",
+        "18",
+        "mai",
+        "2010"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007337823",
+      "first_difference": 11,
+      "key": "SARDBLOC000007337823#0",
+      "v0": [
+        "publiqu",
+        "art",
+        "r",
+        "6152",
+        "501",
+        "text",
+        "non",
+        "codif",
+        "voir",
+        "64",
+        "20",
+        "04"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "publiqu",
+        "art",
+        "r6152-501",
+        "text",
+        "non",
+        "codif",
+        "voir",
+        "64",
+        "20",
+        "04",
+        "statut",
+        "assist"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007136402",
+      "first_difference": 100,
+      "key": "SARDBLOC000007136402#0",
+      "v0": [
+        "a",
+        "art",
+        "621",
+        "1",
+        "cod",
+        "rural"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "art",
+        "l621-1",
+        "cod",
+        "rural"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000007180591",
+      "first_difference": 48,
+      "key": "SARDBLOC000007180591#0",
+      "v0": [
+        "03",
+        "1994",
+        "p",
+        "4633"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "03",
+        "1994",
+        "p4633"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "SARDBLOC000022267629",
+      "first_difference": 26,
+      "key": "SARDBLOC000022267629#0",
+      "v0": [
+        "transfert",
+        "art",
+        "1434",
+        "1",
+        "a",
+        "1434",
+        "20",
+        "respect",
+        "decret",
+        "2010",
+        "514",
+        "18"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "transfert",
+        "art",
+        "d1434-1",
+        "a",
+        "d1434-20",
+        "respect",
+        "decret",
+        "2010",
+        "514",
+        "18",
+        "mai",
+        "2010"
+      ],
+      "structure": "sarde"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 129,
+      "key": "JORFDOLE000043496065#9",
+      "v0": [
+        "rapid",
+        "effect",
+        "lorsqu",
+        "depart",
+        "a",
+        "conclu",
+        "demandeur",
+        "est",
+        "majeur",
+        "arriv",
+        "demand",
+        "a"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "rapid",
+        "effect",
+        "depart",
+        "a",
+        "conclu",
+        "demandeur",
+        "est",
+        "majeur",
+        "arriv",
+        "demand",
+        "a",
+        "nouveau"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 314,
+      "key": "JORFDOLE000043496065#10",
+      "v0": [
+        "entre",
+        "administr",
+        "lorsqu",
+        "permettent",
+        "simplifi",
+        "demarch",
+        "usager",
+        "aupr",
+        "servic",
+        "public",
+        "articl",
+        "supprim"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "entre",
+        "administr",
+        "permettent",
+        "simplifi",
+        "demarch",
+        "usager",
+        "aupr",
+        "servic",
+        "public",
+        "articl",
+        "supprim",
+        "list"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 416,
+      "key": "JORFDOLE000043496065#12",
+      "v0": [
+        "sant",
+        "organis",
+        "lorsqu",
+        "accord",
+        "cadr",
+        "international",
+        "permet",
+        "cooper",
+        "sanitair",
+        "medico",
+        "social",
+        "autorit"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "sant",
+        "organis",
+        "accord",
+        "cadr",
+        "international",
+        "permet",
+        "cooper",
+        "sanitair",
+        "medico",
+        "social",
+        "autorit",
+        "pay"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 39,
+      "key": "JORFDOLE000043496065#14",
+      "v0": [
+        "privat",
+        "log",
+        "jusqu",
+        "disposit",
+        "comptag",
+        "visit",
+        "permet",
+        "distributeur",
+        "assur",
+        "bon",
+        "etat",
+        "canalis"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "privat",
+        "log",
+        "disposit",
+        "comptag",
+        "visit",
+        "permet",
+        "distributeur",
+        "assur",
+        "bon",
+        "etat",
+        "canalis",
+        "disposit"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 222,
+      "key": "JORFDOLE000043496065#2",
+      "v0": [
+        "actuel",
+        "articl",
+        "1112",
+        "16",
+        "cod",
+        "general",
+        "collectivit",
+        "territorial",
+        "prevoit",
+        "demand",
+        "doit",
+        "etre"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "actuel",
+        "articl",
+        "l1112-16",
+        "cod",
+        "general",
+        "collectivit",
+        "territorial",
+        "prevoit",
+        "demand",
+        "doit",
+        "etre",
+        "signe"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 98,
+      "key": "JORFDOLE000043496065#4",
+      "v0": [
+        "a",
+        "articl",
+        "2132",
+        "10",
+        "cod",
+        "general",
+        "propriet",
+        "person",
+        "publiqu",
+        "est",
+        "assort",
+        "sanction"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l2132-10",
+        "cod",
+        "general",
+        "propriet",
+        "person",
+        "publiqu",
+        "est",
+        "assort",
+        "sanction",
+        "rend"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 162,
+      "key": "JORFDOLE000043496065#5",
+      "v0": [
+        "a",
+        "articl",
+        "302",
+        "9",
+        "1",
+        "1",
+        "cod",
+        "construct",
+        "habit",
+        "comm",
+        "departemental",
+        "afferent"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l302-9-1-1",
+        "cod",
+        "construct",
+        "habit",
+        "comm",
+        "departemental",
+        "afferent",
+        "effet",
+        "mis",
+        "plac"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 70,
+      "key": "JORFDOLE000043496065#8",
+      "v0": [
+        "prevoit",
+        "articl",
+        "312",
+        "7",
+        "cod",
+        "urban",
+        "recour",
+        "a",
+        "procedur",
+        "vent",
+        "immeubl",
+        "a"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "prevoit",
+        "articl",
+        "l312-7",
+        "cod",
+        "urban",
+        "recour",
+        "a",
+        "procedur",
+        "vent",
+        "immeubl",
+        "a",
+        "renov"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 222,
+      "key": "JORFDOLE000043496065#2",
+      "v0": [
+        "actuel",
+        "articl",
+        "1112",
+        "16",
+        "cod",
+        "general",
+        "collectivit",
+        "territorial",
+        "prevoit",
+        "demand",
+        "doit",
+        "etre"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "actuel",
+        "articl",
+        "l1112-16",
+        "cod",
+        "general",
+        "collectivit",
+        "territorial",
+        "prevoit",
+        "demand",
+        "doit",
+        "etre",
+        "signe"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 98,
+      "key": "JORFDOLE000043496065#4",
+      "v0": [
+        "a",
+        "articl",
+        "2132",
+        "10",
+        "cod",
+        "general",
+        "propriet",
+        "person",
+        "publiqu",
+        "est",
+        "assort",
+        "sanction"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l2132-10",
+        "cod",
+        "general",
+        "propriet",
+        "person",
+        "publiqu",
+        "est",
+        "assort",
+        "sanction",
+        "rend"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 162,
+      "key": "JORFDOLE000043496065#5",
+      "v0": [
+        "a",
+        "articl",
+        "302",
+        "9",
+        "1",
+        "1",
+        "cod",
+        "construct",
+        "habit",
+        "comm",
+        "departemental",
+        "afferent"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "l302-9-1-1",
+        "cod",
+        "construct",
+        "habit",
+        "comm",
+        "departemental",
+        "afferent",
+        "effet",
+        "mis",
+        "plac"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "JORFDOLE000043496065",
+      "first_difference": 70,
+      "key": "JORFDOLE000043496065#8",
+      "v0": [
+        "prevoit",
+        "articl",
+        "312",
+        "7",
+        "cod",
+        "urban",
+        "recour",
+        "a",
+        "procedur",
+        "vent",
+        "immeubl",
+        "a"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "prevoit",
+        "articl",
+        "l312-7",
+        "cod",
+        "urban",
+        "recour",
+        "a",
+        "procedur",
+        "vent",
+        "immeubl",
+        "a",
+        "renov"
+      ],
+      "structure": "dole"
+    },
+    {
+      "doc_id": "KALITEXT000005646924",
+      "first_difference": 17,
+      "key": "KALITEXT000005646924#0",
+      "v0": [
+        "entrepris",
+        "emploi",
+        "jusqu",
+        "a",
+        "dix",
+        "plus",
+        "dix",
+        "salar",
+        "1596",
+        "1597",
+        "jorf",
+        "11"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "entrepris",
+        "emploi",
+        "a",
+        "dix",
+        "plus",
+        "dix",
+        "salar",
+        "1596",
+        "1597",
+        "jorf",
+        "11",
+        "janvi"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "KALITEXT000005646432",
+      "first_difference": 18,
+      "key": "KALITEXT000005646432#0",
+      "v0": [
+        "bat",
+        "entrepris",
+        "jusqu",
+        "a",
+        "dix",
+        "salar",
+        "plus",
+        "dix",
+        "salar",
+        "jorf",
+        "22",
+        "octobr"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "bat",
+        "entrepris",
+        "a",
+        "dix",
+        "salar",
+        "plus",
+        "dix",
+        "salar",
+        "jorf",
+        "22",
+        "octobr",
+        "1992"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "JORFTEXT000000480922",
+      "first_difference": 21,
+      "key": "JORFTEXT000000480922#0",
+      "v0": [
+        "recolt",
+        "1939",
+        "jusqu",
+        "a",
+        "concurrent",
+        "750",
+        "000",
+        "quintal"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "recolt",
+        "1939",
+        "a",
+        "concurrent",
+        "750",
+        "000",
+        "quintal"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "KALITEXT000005648612",
+      "first_difference": 23,
+      "key": "KALITEXT000005648612#0",
+      "v0": [
+        "entrepris",
+        "occup",
+        "jusqu",
+        "a",
+        "dix",
+        "salar",
+        "jorf",
+        "10",
+        "juillet",
+        "1996"
+      ],
+      "variant": "V1",
+      "variant_tokens": [
+        "entrepris",
+        "occup",
+        "a",
+        "dix",
+        "salar",
+        "jorf",
+        "10",
+        "juillet",
+        "1996"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "JORFTEXT000000641143",
+      "first_difference": 15,
+      "key": "JORFTEXT000000641143#0",
+      "v0": [
+        "a",
+        "articl",
+        "r",
+        "20",
+        "6",
+        "cod",
+        "post",
+        "commun",
+        "electron"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "r20-6",
+        "cod",
+        "post",
+        "commun",
+        "electron"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "JORFTEXT000000194431",
+      "first_difference": 22,
+      "key": "JORFTEXT000000194431#0",
+      "v0": [
+        "appliqu",
+        "articl",
+        "162",
+        "14",
+        "1",
+        "cod",
+        "securit",
+        "social"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "appliqu",
+        "articl",
+        "l162-14-1",
+        "cod",
+        "securit",
+        "social"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "LEGITEXT000006072780",
+      "first_difference": 13,
+      "key": "LEGITEXT000006072780#0",
+      "v0": [
+        "prevu",
+        "articl",
+        "356",
+        "cod",
+        "sant",
+        "publiqu",
+        "vu",
+        "exercic",
+        "franc",
+        "profess",
+        "medecin",
+        "chirurgien"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "prevu",
+        "articl",
+        "l356",
+        "cod",
+        "sant",
+        "publiqu",
+        "vu",
+        "exercic",
+        "franc",
+        "profess",
+        "medecin",
+        "chirurgien"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "KALITEXT000005678406",
+      "first_difference": 2,
+      "key": "KALITEXT000005678406#0",
+      "v0": [
+        "annex",
+        "ouvri",
+        "3",
+        "salair",
+        "annex",
+        "filier",
+        "convent",
+        "collect",
+        "regional",
+        "12",
+        "avril",
+        "1960"
+      ],
+      "variant": "V2",
+      "variant_tokens": [
+        "annex",
+        "ouvri",
+        "c3",
+        "salair",
+        "annex",
+        "filier",
+        "convent",
+        "collect",
+        "regional",
+        "12",
+        "avril",
+        "1960"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "KALITEXT000005646924",
+      "first_difference": 17,
+      "key": "KALITEXT000005646924#0",
+      "v0": [
+        "entrepris",
+        "emploi",
+        "jusqu",
+        "a",
+        "dix",
+        "plus",
+        "dix",
+        "salar",
+        "1596",
+        "1597",
+        "jorf",
+        "11"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "entrepris",
+        "emploi",
+        "a",
+        "dix",
+        "plus",
+        "dix",
+        "salar",
+        "1596",
+        "1597",
+        "jorf",
+        "11",
+        "janvi"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "JORFTEXT000000641143",
+      "first_difference": 15,
+      "key": "JORFTEXT000000641143#0",
+      "v0": [
+        "a",
+        "articl",
+        "r",
+        "20",
+        "6",
+        "cod",
+        "post",
+        "commun",
+        "electron"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "a",
+        "articl",
+        "r20-6",
+        "cod",
+        "post",
+        "commun",
+        "electron"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "JORFTEXT000000194431",
+      "first_difference": 22,
+      "key": "JORFTEXT000000194431#0",
+      "v0": [
+        "appliqu",
+        "articl",
+        "162",
+        "14",
+        "1",
+        "cod",
+        "securit",
+        "social"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "appliqu",
+        "articl",
+        "l162-14-1",
+        "cod",
+        "securit",
+        "social"
+      ],
+      "structure": "titres"
+    },
+    {
+      "doc_id": "LEGITEXT000006072780",
+      "first_difference": 13,
+      "key": "LEGITEXT000006072780#0",
+      "v0": [
+        "prevu",
+        "articl",
+        "356",
+        "cod",
+        "sant",
+        "publiqu",
+        "vu",
+        "exercic",
+        "franc",
+        "profess",
+        "medecin",
+        "chirurgien"
+      ],
+      "variant": "V3",
+      "variant_tokens": [
+        "prevu",
+        "articl",
+        "l356",
+        "cod",
+        "sant",
+        "publiqu",
+        "vu",
+        "exercic",
+        "franc",
+        "profess",
+        "medecin",
+        "chirurgien"
+      ],
+      "structure": "titres"
+    }
+  ],
+  "decision": {
+    "recommended": "V0",
+    "reason": "no method beats V0 by a lower bound above zero",
+    "rejected": [
+      {
+        "method": "V1",
+        "low": 0.0,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "V2",
+        "low": 0.0,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      },
+      {
+        "method": "V3",
+        "low": 0.0,
+        "high": 0.0,
+        "reason": "lower bound not above zero against the reference"
+      }
+    ],
+    "reference": {
+      "n": 47,
+      "recall": 0.9148936170212766,
+      "mrr": 0.7826241134751772,
+      "found": 43,
+      "median_rank": 1
+    },
+    "probes_top3": {
+      "V0": false,
+      "V1": false,
+      "V2": true,
+      "V3": true
+    }
+  }
+}

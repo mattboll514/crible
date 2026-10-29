@@ -14,8 +14,11 @@
 //! The regrouping is step 7 of the pipeline of `docs/03-recherche.md`: it runs
 //! after the merge of the branches and before the payload step 8. Its input is
 //! therefore a list of scored candidates, best first, and its output the list
-//! of candidates the payload step reads. The dense branch is the only branch of
-//! P4, so [`group`] is fed by the candidates of that branch alone.
+//! of candidates the payload step reads. P4 fed it from the dense branch alone;
+//! since `FUSIONNER-HYBRIDE`, the `hybrid` mode feeds it the fused list
+//! [`crate::fusion::Fused`], which carries the same order and the contributions
+//! of both branches. [`Candidate`] is what both types share, so this module
+//! knows neither the cosine nor BM25.
 //!
 //! # What it does
 //!
@@ -60,10 +63,11 @@
 //! than the request needs (`docs/03-recherche.md:110-113`): when the request
 //! regroups, the branch receives `clamp(k × 20, 200, 1000)` candidates; then
 //! `max(k, 100)`. [`candidates_per_branch`] is that rule, and the caller passes
-//! its result as the `k` of the dense branch, which is what
-//! [`crate::dense::search_grouped`] plans with (ADR-0074, decision 4, and
-//! ADR-0075, decision 4: under `BINARY` the scan keeps `max(N, k)`, so the
-//! effective rescoring follows the over-sampling without a second rule).
+//! its result as the `k` of the dense branch, which is what both
+//! [`crate::dense::search_grouped`] and [`crate::pipeline::search`] plan with
+//! (ADR-0074, decision 4, and ADR-0075, decision 4: under `BINARY` the scan
+//! keeps `max(N, k)`, so the effective rescoring follows the over-sampling
+//! without a second rule).
 //!
 //! The rule lives here, in the shared search crate, and not in the CLI: the
 //! server of P6 and the evaluation call the same function, so the candidate
@@ -79,7 +83,23 @@ use std::collections::{HashMap, HashSet};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::Iid;
 
-use crate::dense::Scored;
+/// One candidate the regrouping may keep.
+///
+/// The regrouping ranks nothing: it trusts the order of the list it receives,
+/// which is the order of the answer (descending score, then ascending key,
+/// ADR-0079). It only needs to name a passage by its internal identifier (the
+/// `passage_hash` lookup) and by its external key (the document grouping), so
+/// the dense branch's [`crate::dense::Scored`] and the fusion's
+/// [`crate::fusion::Fused`] are both accepted without the regrouping knowing how
+/// they were scored.
+pub trait Candidate {
+    /// Internal identifier of the passage, which never leaves the engine
+    /// (INV-01).
+    fn iid(&self) -> Iid;
+
+    /// External key `doc_id#ord`, the document grouping and the tie-break.
+    fn key(&self) -> &str;
+}
 
 /// Regrouping options of one search request.
 ///
@@ -166,8 +186,9 @@ pub fn candidates_per_branch(k: usize, grouping: &Grouping) -> usize {
 /// Regroups the candidates of one search.
 ///
 /// `candidates` is ordered best first, as
-/// [`crate::dense::Scored`] orders them (descending score, then ascending key).
-/// Without `group_by`, the answer is that order truncated to `k`. With
+/// [`crate::dense::Scored`] orders them (descending score, then ascending key),
+/// and so is [`crate::fusion::Fused`]: this function introduces no order of its
+/// own. Without `group_by`, the answer is that order truncated to `k`. With
 /// `group_by`, the answer follows ADR-0075, decision 3: at most `k` documents,
 /// the entries of one document consecutive, the documents ranked by their best
 /// passage and the passages of one document by descending score then ascending
@@ -182,13 +203,14 @@ pub fn candidates_per_branch(k: usize, grouping: &Grouping) -> usize {
 ///
 /// An empty list, or `k == 0`, returns no result and no error, and so does a
 /// list that holds fewer documents than `k` (ADR-0075, decision 1).
-pub fn group<F>(
-    candidates: Vec<Scored>,
+pub fn group<C, F>(
+    candidates: Vec<C>,
     k: usize,
     grouping: &Grouping,
     mut hash_of: F,
-) -> Result<Vec<Scored>, CribleError>
+) -> Result<Vec<C>, CribleError>
 where
+    C: Candidate,
     F: FnMut(Iid) -> Result<String, CribleError>,
 {
     grouping.validate()?;
@@ -215,14 +237,15 @@ where
 /// best passage: "on garde le meilleur" (`docs/03-recherche.md:108`) is that
 /// first occurrence, in the ranking already in place, and ADR-0075, decision 1
 /// introduces no second sort criterion.
-fn dedup_by_content<F>(candidates: Vec<Scored>, hash_of: &mut F) -> Result<Vec<Scored>, CribleError>
+fn dedup_by_content<C, F>(candidates: Vec<C>, hash_of: &mut F) -> Result<Vec<C>, CribleError>
 where
+    C: Candidate,
     F: FnMut(Iid) -> Result<String, CribleError>,
 {
     let mut seen: HashSet<String> = HashSet::with_capacity(candidates.len());
     let mut kept = Vec::with_capacity(candidates.len());
     for candidate in candidates {
-        if seen.insert(hash_of(candidate.iid)?) {
+        if seen.insert(hash_of(candidate.iid())?) {
             kept.push(candidate);
         }
     }
@@ -252,15 +275,15 @@ where
 /// documents. A key without the `#` that [`crible_core::ids::PassageKey`] writes
 /// can only come from a store that contradicts its own format, so it raises an
 /// internal error.
-fn keep_documents(
-    candidates: Vec<Scored>,
+fn keep_documents<C: Candidate>(
+    candidates: Vec<C>,
     documents: usize,
     per_document: usize,
-) -> Result<Vec<Scored>, CribleError> {
-    let mut groups: Vec<Vec<Scored>> = Vec::new();
+) -> Result<Vec<C>, CribleError> {
+    let mut groups: Vec<Vec<C>> = Vec::new();
     let mut selected: HashMap<String, usize> = HashMap::with_capacity(documents);
     for candidate in candidates {
-        let doc_id = doc_id_of(&candidate.key)?;
+        let doc_id = doc_id_of(candidate.key())?;
         // Read before the mutable borrow of the match: a document beyond the
         // allowance is dropped without touching the map.
         let room_for_another_document = groups.len() < documents;

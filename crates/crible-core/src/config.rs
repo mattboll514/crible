@@ -338,7 +338,8 @@ pub enum FusionConfig {
     Rrf,
     /// Relative score with a weight.
     RelativeScore {
-        /// Weight given to the dense branch, between 0 and 1.
+        /// Weight given to the dense branch, in `[0, 1]`, bounds included, on a
+        /// finite value (ADR-0090, decision 2).
         alpha: f64,
     },
 }
@@ -359,6 +360,7 @@ impl FusionConfig {
             }
             "relative_score" => {
                 let alpha = json::float_member(object, path, "alpha")?;
+                check_alpha(alpha, &format!("{path}.alpha"))?;
                 Ok(Self::RelativeScore { alpha })
             }
             other => Err(json::invalid(format!(
@@ -368,12 +370,66 @@ impl FusionConfig {
     }
 }
 
+/// Refuses any `relative_score` weight outside `[0, 1]`, or not finite.
+///
+/// `alpha` is the weight of the dense branch, and `1 - alpha` that of the
+/// lexical one (`docs/03`). The interval is closed, bounds included: `0` reduces
+/// the fusion to the lexical branch and `1` to the dense one, which gives MES-10
+/// the two isolated branches as exact comparison points. Nothing is clamped in
+/// silence, so a caller never believes a weight took effect: a negative value, a
+/// value above 1, `NaN` and an infinity are all refused (ADR-0090, decision 2).
+///
+/// The control lives here alone: `FusionConfig::from_value` applies it at the
+/// creation of the index and at a `PATCH`, and a request that names an `alpha`
+/// reuses it instead of duplicating the bounds (ADR-0090, decision 2).
+pub fn check_alpha(alpha: f64, path: &str) -> Result<(), CribleError> {
+    if alpha.is_finite() && (0.0..=1.0).contains(&alpha) {
+        return Ok(());
+    }
+    Err(json::invalid(format!(
+        "alpha must be between 0 and 1, bounds included, and finite at {path}, got {alpha}"
+    )))
+}
+
+/// Values accepted by `lexical.language`, in the order of ADR-0086:
+/// lowercase ISO 639-1 codes, one per analysis language of tantivy.
+pub const LEXICAL_LANGUAGES: [&str; 18] = [
+    "ar", "da", "de", "el", "en", "es", "fi", "fr", "hu", "it", "nl", "no", "pt", "ro", "ru", "sv",
+    "ta", "tr",
+];
+
+/// Refuses any `lexical.language` outside [`LEXICAL_LANGUAGES`].
+///
+/// The domain is a fixed table, not a range (ADR-0086). Only the lowercase
+/// form is accepted: nothing is lowercased or trimmed in silence, so the value
+/// stored in `index.json` is exactly the value the producer wrote.
+fn check_lexical_language(language: &str, path: &str) -> Result<(), CribleError> {
+    if LEXICAL_LANGUAGES.contains(&language) {
+        return Ok(());
+    }
+    Err(json::invalid(format!(
+        "unknown lexical language '{language}' at {path}; expected one of {}",
+        LEXICAL_LANGUAGES.join(", ")
+    )))
+}
+
+/// Reads a `lexical.language` value and applies [`check_lexical_language`].
+///
+/// `path` already names the member (`$.lexical.language`), so the creation of an
+/// index and a `PATCH` report the same location and apply the one control
+/// (ADR-0086).
+fn lexical_language(value: &Value, path: &str) -> Result<String, CribleError> {
+    let language = json::string(value, path)?;
+    check_lexical_language(&language, path)?;
+    Ok(language)
+}
+
 /// Lexical branch settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexicalConfig {
     /// Whether the lexical branch is built and queried.
     pub enabled: bool,
-    /// Language of the analyzer.
+    /// Language of the analyzer, one of [`LEXICAL_LANGUAGES`].
     pub language: String,
     /// Whether term positions are stored.
     pub positions: bool,
@@ -383,9 +439,13 @@ impl LexicalConfig {
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
         json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        let language = lexical_language(
+            json::member(object, path, "language")?,
+            &format!("{path}.language"),
+        )?;
         Ok(Self {
             enabled: json::boolean_member(object, path, "enabled")?,
-            language: json::string_member(object, path, "language")?,
+            language,
             positions: json::boolean_member(object, path, "positions")?,
         })
     }
@@ -1047,7 +1107,12 @@ impl LexicalPatch {
                 Some(value) => Some(json::boolean(value, &format!("{path}.enabled"))?),
                 None => None,
             },
-            language: optional_string(object, path, "language")?,
+            language: optional_patch(
+                object,
+                "language",
+                &format!("{path}.language"),
+                lexical_language,
+            )?,
             positions: match object.get("positions") {
                 Some(value) => Some(json::boolean(value, &format!("{path}.positions"))?),
                 None => None,
@@ -1270,7 +1335,9 @@ fn immutable(setting: &str, path: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{IndexConfig, IngestConfig, Schema};
+    use super::{
+        FusionConfig, IndexConfig, IndexPatch, IngestConfig, Schema, apply_patch, check_alpha,
+    };
     use crate::error::ErrorCode;
 
     /// `to_json_string` round-trips through `from_json_str`, writes both
@@ -1337,6 +1404,148 @@ mod tests {
             "the message names the setting: {}",
             error.message()
         );
+    }
+
+    /// ADR-0086: `lexical.language` takes its values in a fixed table of
+    /// eighteen lowercase ISO 639-1 codes. Nothing is normalised in silence:
+    /// a wrong case, a surrounding space or a language name is refused, so the
+    /// value stored in `index.json` is always canonical.
+    #[test]
+    fn a_lexical_language_outside_the_table_is_refused_at_creation() {
+        let search = r#"{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#;
+
+        let accepted = pretty_configuration(search, "n")
+            .replace("\"language\": \"fr\"", "\"language\": \"no\"");
+        let config = IndexConfig::from_json_str(&accepted).expect("no is a code of the table");
+        assert_eq!(config.lexical.language, "no");
+
+        for refused in [
+            "FR",
+            "Fr",
+            " fr",
+            "fr ",
+            "",
+            "French",
+            "français",
+            "nb",
+            "xx",
+        ] {
+            let raw = pretty_configuration(search, "n").replace(
+                "\"language\": \"fr\"",
+                &format!("\"language\": \"{refused}\""),
+            );
+            let error = IndexConfig::from_json_str(&raw)
+                .expect_err("a language outside the table must be refused");
+            assert_eq!(error.code(), ErrorCode::InvalidRequest, "for {refused:?}");
+            assert!(
+                error.message().contains("lexical.language"),
+                "the message names the setting, for {refused:?}: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// ADR-0086: the same domain applies to `PATCH`, since the patch parses
+    /// `lexical.language` through the same control (ADR-0054).
+    #[test]
+    fn a_patch_with_a_lexical_language_outside_the_table_is_refused() {
+        let search = r#"{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#;
+        let mut config = IndexConfig::from_json_str(&pretty_configuration(search, "n"))
+            .expect("the test configuration is valid");
+
+        let error = IndexPatch::from_json_str(r#"{"lexical":{"language":" FR "}}"#)
+            .expect_err("a language outside the table must be refused");
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert!(error.message().contains("$.lexical.language"));
+
+        let patch = IndexPatch::from_json_str(r#"{"lexical":{"language":"el"}}"#)
+            .expect("el is a code of the table");
+        apply_patch(&mut config, &patch).expect("the patch only changes the language");
+        assert_eq!(config.lexical.language, "el");
+    }
+
+    /// ADR-0090, decision 2: `alpha` is the weight of the dense branch, in
+    /// `[0, 1]`, bounds included, on a finite value. The bounds serve (0 is the
+    /// lexical branch alone, 1 the dense branch alone), and nothing outside is
+    /// clamped in silence.
+    #[test]
+    fn an_alpha_outside_the_closed_unit_interval_is_refused_at_creation() {
+        for accepted in ["0", "1", "0.5", "0.75"] {
+            let config =
+                IndexConfig::from_json_str(&pretty_configuration(&relative(accepted), "n"))
+                    .unwrap_or_else(|error| panic!("alpha {accepted} is in [0, 1]: {error}"));
+            assert_eq!(
+                config.search.fusion,
+                FusionConfig::RelativeScore {
+                    alpha: accepted.parse().unwrap_or_else(|error| panic!(
+                        "the fixture alpha must be a number: {error}"
+                    ))
+                }
+            );
+        }
+
+        for refused in ["-0.1", "1.1", "5", "-1"] {
+            let error = IndexConfig::from_json_str(&pretty_configuration(&relative(refused), "n"))
+                .expect_err("an alpha outside [0, 1] must be refused");
+            assert_eq!(error.code(), ErrorCode::InvalidRequest, "for {refused}");
+            assert!(
+                error.message().contains("fusion.alpha"),
+                "the message names fusion.alpha, for {refused}: {}",
+                error.message()
+            );
+        }
+
+        // JSON cannot carry NaN or an infinity, so the shared control is
+        // exercised directly, as for `acceptance_min_cosine`.
+        for refused in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = check_alpha(refused, "fusion.alpha")
+                .expect_err("a non-finite alpha must be refused");
+            assert_eq!(error.code(), ErrorCode::InvalidRequest);
+            assert!(
+                error.message().contains("fusion.alpha"),
+                "the message names fusion.alpha: {}",
+                error.message()
+            );
+        }
+    }
+
+    /// ADR-0090, decision 2: the `PATCH` of `search.fusion` goes through the same
+    /// control, so the domain holds at the second entry point of the setting.
+    #[test]
+    fn a_patch_with_an_alpha_outside_the_closed_unit_interval_is_refused() {
+        let search = r#"{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{"method":"rrf"}}"#;
+        let mut config = IndexConfig::from_json_str(&pretty_configuration(search, "n"))
+            .expect("the test configuration is valid");
+
+        let error = IndexPatch::from_json_str(
+            r#"{"search":{"fusion":{"method":"relative_score","alpha":1.1}}}"#,
+        )
+        .expect_err("an alpha outside [0, 1] must be refused");
+        assert_eq!(error.code(), ErrorCode::InvalidRequest);
+        assert!(
+            error.message().contains("fusion.alpha"),
+            "the message names fusion.alpha: {}",
+            error.message()
+        );
+
+        // A bound is accepted through the same control, and the patch applies.
+        let patch = IndexPatch::from_json_str(
+            r#"{"search":{"fusion":{"method":"relative_score","alpha":0}}}"#,
+        )
+        .expect("alpha = 0 is in [0, 1]");
+        apply_patch(&mut config, &patch).expect("the patch only changes the fusion");
+        assert_eq!(
+            config.search.fusion,
+            FusionConfig::RelativeScore { alpha: 0.0 }
+        );
+    }
+
+    /// The `search` member of a configuration that uses `relative_score` with
+    /// `alpha`.
+    fn relative(alpha: &str) -> String {
+        format!(
+            r#"{{"scan":"none","rescore_candidates":10,"candidates_per_branch":10,"fusion":{{"method":"relative_score","alpha":{alpha}}}}}"#
+        )
     }
 
     /// Threshold the insertion tests use.

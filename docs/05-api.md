@@ -28,7 +28,7 @@ Format unique :
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente ou inconnue |
 | `forbidden` | 403 | Rôle insuffisant |
@@ -39,7 +39,7 @@ Format unique :
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
-| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) (`Retry-After`) |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) ; index lexical non certifié, en retard ou illisible, ouvert en lecture seule : la branche lexicale est refusée, le mode `dense` reste servi, et la prochaine ouverture en écriture répare (ADR-0087, ADR-0088, ADR-0089) — le message nomme l'état constaté : « behind » (`M > Gt`), « no lexical index is committed in this epoch although passages exist (generation G); open the index for writing to rebuild it » (aucun commit tantivy alors que des passages existent : l'ouverture en écriture reconstruit, elle ne rattrape pas), « ahead » (`Gt > G`), « not certified » (colonne M absente, avec ou sans commit tantivy) ou « unreadable » (lexical illisible, `M > G`) (`Retry-After`). Une époque qui n'a jamais porté de passage (`M = 0`, aucun commit tantivy) n'est pas refusée : `lexical` et `hybrid` rendent une réponse vide (ADR-0089) |
 | `timeout` | 504 | Requête trop longue |
 | `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) ; panne disque pendant un instantané ou une restauration (ADR-0065) |
 
@@ -160,7 +160,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `mode` | `dense` · `lexical` · `hybrid` | `hybrid` si le lexical est activé, sinon `dense` | Branches à exécuter |
 | `filter` | objet | aucun | Voir la grammaire ci-dessus |
 | `k` | 1 à 1000 | 10 | Nombre de résultats ; sous `group_by: "document"`, nombre de documents distincts (ADR-0075) |
-| `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride |
+| `fusion` | `{method: "rrf"}` ou `{method: "relative_score", alpha}` | config de l'index | Fusion hybride ; `alpha ∈ [0, 1]`, bornes comprises et valeur finie, refusé en `invalid_request` hors de ce domaine (ADR-0090) |
 | `group_by` | `"document"` ou null | null | Regroupement par document |
 | `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé ; il est validé même sans `group_by`, où il est sans effet (ADR-0075) |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
@@ -234,6 +234,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 
 - Chaque résultat porte `index`. En debug, il porte aussi `target_rank`, son rang dans son index.
 - Les `explain_ids` prennent la forme `{ "index": "...", "id": "..." }`.
+- Si une cible d'une recherche `lexical` ou `hybrid` a `lexical.enabled` à `false`, la requête entière est refusée en `invalid_request` (400), avec le message « lexical branch is disabled for this index » et le nom de l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089). Le mode `dense` reste disponible sur les mêmes cibles.
 
 ## Jobs
 

@@ -13,6 +13,11 @@ half.workspace = true
 rayon.workspace = true
 roaring.workspace = true
 serde_json.workspace = true
+# RECHERCHER-BM25-DANS-LE-POOL: the lexical branch queries the tantivy index of
+# the epoch and reads the `iid` fast field of its segments. `tantivy` 0.27 is the
+# lexical entry of `docs/07-stack-et-deploiement.md` (l. 41), already a
+# dependency of `crible-store`, so the task adds no crate outside the stack.
+tantivy.workspace = true
 
 [dev-dependencies]
 # NOYAUX-SIMD: `criterion` (the `kernels` bench) and `proptest` (the SIMD

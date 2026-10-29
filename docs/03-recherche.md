@@ -80,26 +80,30 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 - **Un index tantivy par époque.** Chaque document tantivy est un passage, avec deux champs : `iid` (`u64`, en fast field et indexé) et `text` (analysé, non stocké).
 - **Le texte indexé est l'entrée encodeur**, c'est-à-dire exactement le texte de la branche dense. Il contient donc le gabarit, par exemple « Code civil, article 1240 ».
 - **Chaîne d'analyse**, choisie par index avec `lexical.language` :
+  - `lexical.language` prend ses valeurs dans une table figée de dix-huit codes ISO 639-1, en **minuscules**, sans normalisation : `ar`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`, `ta`, `tr` (table d'ADR-0086, avec le stemmer et la liste de mots vides de chaque langue). Toute autre valeur est refusée en `invalid_request` (400) à la validation de la configuration ;
   - `SimpleTokenizer`, puis `RemoveLongFilter(40)`, `LowerCaser` et `AsciiFoldingFilter` ;
-  - `StopWordFilter(langue)`, puis `Stemmer(langue)`.
+  - `StopWordFilter(langue)`, puis `Stemmer(langue)`. `StopWordFilter` est **absent** pour `ar`, `el`, `ro`, `ta` et `tr`, les cinq langues sans liste de mots vides : ces langues reçoivent les mêmes jetons qu'une chaîne sans filtre de mots vides (ADR-0086).
 
-  Le traitement des élisions (l', d', qu') et des identifiants comme `L1132-1` est à mesurer (MES-11).
+  Le traitement des élisions (l', d', qu') et des identifiants comme `L1132-1` a été mesuré par MES-11 : la chaîne reste inchangée (ADR-0094).
 - **Positions désactivées par défaut** (`lexical.positions`). Les requêtes de phrase viendront plus tard.
 - **Requête** : la requête passe par la même analyse et forme un sac de termes (OU), noté en BM25.
   - Le collecteur lit le fast field `iid` et ne garde un document que s'il est dans la bitmap du pool. Il remplit un tas de taille k.
   - Avec ce collecteur, l'élagage block-WAND ne s'applique probablement pas (à mesurer, MES-06).
 - **Suppressions** : elles sont aussi faites dans tantivy, mais la bitmap des vivants reste l'autorité.
-- **Reconstruction** depuis le texte SQLite, dans trois cas : compaction, reprise après incident, changement d'analyseur (le changement de réglage lance un job de reconstruction).
+- **Lexical à jour pour une génération `G`** (ADR-0088) : un commit tantivy de charge utile `Gt` existe et **M ≤ Gt ≤ G**, où M vaut `meta.passage_change_generation`, la dernière génération qui a créé ou fait mourir un passage (`0` sinon). La charge utile seule ne suffit pas : `Gt < G` est légitime dès que le texte n'a pas bougé depuis `Gt`, et le lecteur rend alors exactement ce qu'un lecteur de `G` rendrait. **Un patch de métadonnées ne rend donc pas la branche indisponible** : après un patch, `Gt = G-1` et `M ≤ Gt`, le lecteur reste présent.
+- **Reconstruction** depuis le texte SQLite : compaction, reprise après incident, changement d'analyseur (le changement de réglage lance un job de reconstruction), et, à l'ouverture en **écriture**, **charge utile ou dossier `lexical/` illisible** (charge utile non décimale, `meta.json` ou segment que tantivy n'ouvre pas, `M > G`) : l'état est indécidable et se reconstruit comme un dossier absent, avec une ligne de journal (ADR-0088). La reprise d'un retard (`M > Gt`) n'a lieu qu'à l'ouverture en écriture : une ouverture en lecture seule n'écrit rien dans l'époque, n'élargit jamais le critère quand la colonne M manque, et refuse la branche lexicale en `overloaded` quand le critère n'est pas tenu (ADR-0087, ADR-0088).
+- **États sans commit tantivy** (ADR-0089). Deux états de `LexicalStatus` n'ont aucun `Gt` à citer et reçoivent donc un message propre, toujours en `overloaded` (503) : `Behind` sans commit, c'est-à-dire des passages sans aucun index lexical commité dans l'époque, refuse par « no lexical index is committed in this epoch although passages exist (generation G); open the index for writing to rebuild it » — l'ouverture en écriture reconstruit, elle ne rattrape pas ; `NotCertified` sans commit, c'est-à-dire une colonne `M` absente dans une époque sans index, refuse par « lexical index state is not certified for generation G; open the index for writing to repair it ». Aucun `iid` ne figure dans ces messages (INV-01). `Missing` (`M = 0`, aucune génération de l'époque n'a créé ni fait mourir un passage) n'est pas un refus : le pool est vide, et `lexical` comme `hybrid` rendent une réponse vide.
+- **Branche désactivée** (`lexical.enabled: false`, ADR-0089). Une recherche `lexical` ou `hybrid` est refusée en `invalid_request` (400), message « lexical branch is disabled for this index » : la propriété est permanente et connue à la validation, et non une indisponibilité temporaire qu'on réessaie. Le mode `dense` reste servi. Le défaut de `mode` ne change pas : `hybrid` si le lexical est activé, sinon `dense`. Dans une recherche multi-index, une cible sans lexical fait refuser la requête entière, le message nommant l'index fautif, sans servir cette cible en dense.
 
 ## Fusion (mode `hybrid`)
 
 - **Les deux branches utilisent le même pool** (INV-05). Chacune sort ses `candidates_per_branch` meilleurs résultats, calculés par la même règle partagée (ADR-0075).
 - **`rrf`** : score = Σ 1 / (60 + rang), avec un rang qui commence à 1.
 - **`relative_score`** :
-  - chaque branche est normalisée min-max sur ses propres candidats ;
-  - score fusionné = α·dense + (1−α)·lexical ;
+  - chaque branche est normalisée min-max sur ses propres candidats, et **une branche constante** — tous ses candidats au même score, y compris une branche à un seul candidat — donne la valeur normalisée **1** à chacun d'eux ; une branche sans candidat ne contribue rien (ADR-0090). Une branche constante à 0 rendrait indiscernable « présent » de « absent » ;
+  - score fusionné = α·dense + (1−α)·lexical, avec `alpha ∈ [0, 1]`, bornes comprises, et une valeur finie ; toute autre valeur est refusée en `invalid_request` (400), à la création de l'index, au `PATCH` et par requête (ADR-0090). α = 0 sert le lexical seul, α = 1 le dense seul ;
   - un document absent d'une branche y vaut 0.
-- **Défaut par index** : `rrf`, qui n'a rien à régler. On peut le changer par requête, et choisir le réglage par défaut avec MES-10.
+- **Défaut par index** : `rrf`, qui n'a rien à régler ; ce défaut est confirmé par MES-10 (ADR-0093). On peut le changer par requête, et choisir le réglage par défaut.
 - **Pour le debug**, on conserve le rang et le score de chaque résultat dans chaque branche.
 - **`score_type`** vaut `cosine`, `bm25`, `rrf` ou `relative`. Un score ne se compare pas d'une requête à l'autre.
 
@@ -118,6 +122,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 - **Modèle commun** : tous les index d'une recherche dense ou hybride doivent partager la même empreinte de modèle. Sinon, erreur `incompatible_model`.
 - **Encodage unique** : la requête n'est encodée qu'une fois.
 - **Par index** : pool, branches, fusion et regroupement s'exécutent séparément, puis on garde le top-k de chaque index.
+- **Branche lexicale désactivée** : si une cible d'une recherche `lexical` ou `hybrid` a `lexical.enabled` à `false`, la requête entière est refusée en `invalid_request` (400), le message nommant l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089).
 - **Fusion entre index** :
   - **mode `dense`** : par cosinus. C'est exact, car les scores sont comparables (déjà validé dans Legifacile, `serveur_mcp/perimetres.py`) ;
   - **modes `lexical` et `hybrid`** : RRF sur les rangs de chaque index.

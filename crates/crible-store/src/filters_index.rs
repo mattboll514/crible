@@ -137,15 +137,21 @@ fn bitmap_bytes(bitmap: &RoaringBitmap) -> usize {
 /// One passage a committed transaction created, as the derivation of the next
 /// filter structures needs it (ADR-0066).
 ///
-/// The text and the hash are left out: they never reach a filter structure, and
-/// keeping them would double the memory the delta holds until the snapshot is
-/// published.
+/// The hash is left out: it never reaches a filter structure. The text stays,
+/// because step 4 of `docs/02-architecture.md` hands it to tantivy as the
+/// encoder input of the lexical branch (`docs/03-recherche.md`): keeping it here
+/// spares a second read and a second zstd decompression of `passages.text`
+/// after the commit point, at the cost of holding one text per created passage
+/// until the snapshot is published, next to the `fields` the delta already
+/// carries.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CreatedPassage {
     /// Internal identifier the transaction assigned, never exposed (INV-01).
     pub iid: Iid,
     /// External identifier of the document the passage belongs to.
     pub doc_id: String,
+    /// Encoder input of the passage, which the lexical index analyses.
+    pub text: String,
     /// Passage fields, with the values the transaction wrote.
     pub fields: Value,
     /// Whether the transaction marked the passage dead as well.
@@ -157,6 +163,7 @@ impl From<PassageRecord> for CreatedPassage {
         Self {
             iid: record.iid,
             doc_id: record.doc_id,
+            text: record.text,
             fields: record.fields,
             dead: record.dead_since_gen.is_some(),
         }

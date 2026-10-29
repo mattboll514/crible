@@ -64,6 +64,10 @@
 /// included here so every binary of this crate can share them.
 pub mod dense;
 
+/// Fixtures of the lexical branch tests (`INV-05`,
+/// `RECHERCHER-BM25-DANS-LE-POOL`, phase P5).
+pub mod lexical;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -117,12 +121,28 @@ pub fn test_config_with_precision(
     schema: &Schema,
     precision: ReferencePrecision,
 ) -> String {
+    test_config_with_precision_and_lexical(name, schema, precision, false)
+}
+
+/// Index configuration declaring `schema`, a reference precision and the state
+/// of the lexical branch.
+///
+/// The `INV-05` fixtures (`RECHERCHER-BM25-DANS-LE-POOL`, phase P5) enable the
+/// branch here: the store reads `lexical.enabled` from `index.json` and runs
+/// step 4 of `docs/02-architecture.md` at every commit, so the tantivy index a
+/// test searches is the one a real attach builds.
+pub fn test_config_with_precision_and_lexical(
+    name: &str,
+    schema: &Schema,
+    precision: ReferencePrecision,
+    lexical: bool,
+) -> String {
     let precision = match precision {
         ReferencePrecision::Fp16 => "fp16",
         ReferencePrecision::Fp32 => "fp32",
     };
     format!(
-        r#"{{"name":"{name}","model":"m","reference_precision":"{precision}","schema":{},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        r#"{{"name":"{name}","model":"m","reference_precision":"{precision}","schema":{},"cluster_by":[],"lexical":{{"enabled":{lexical},"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
         schema.to_json_string()
     )
 }

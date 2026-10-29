@@ -1,0 +1,544 @@
+{
+  "articles": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "$or": [
+          {
+            "code": "Arrêté du 16 novembre 2023 définissant les modalités de calcul des doses efficaces et des doses équivalentes résultant de l'exposition des personnes aux rayonnements ionisants"
+          },
+          {
+            "code": "Arrêté du 19 juin 2024 constatant le classement de communes en zone France ruralités revitalisation"
+          },
+          {
+            "code": "Arrêté du 10 juillet 2013 constatant le classement de communes en zone de revitalisation rurale"
+          },
+          {
+            "code": "Arrêté du 8 avril 2013 relatif au régime des études en vue du premier et du deuxième cycle des études médicales"
+          },
+          {
+            "code": "Décret n° 84-577 du 6 juillet 1984 rendant applicable dans les territoires d'outre-mer la troisième partie du code de procédure pénale"
+          }
+        ]
+      },
+      "probe_pool_size": 1027
+    },
+    {
+      "label": "target-10000",
+      "target": 10000,
+      "filter": {
+        "$or": [
+          {
+            "num": "2"
+          },
+          {
+            "num": "1"
+          }
+        ]
+      },
+      "probe_pool_size": 12247
+    },
+    {
+      "label": "target-50000",
+      "target": 50000,
+      "filter": {
+        "$or": [
+          {
+            "fonds": "LEGI"
+          },
+          {
+            "fonds": "KALI"
+          }
+        ]
+      },
+      "probe_pool_size": 50000
+    }
+  ],
+  "decisions": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "$or": [
+          {
+            "numero": "-"
+          },
+          {
+            "numero": "2025-885"
+          },
+          {
+            "numero": "3"
+          },
+          {
+            "numero": "C0804495"
+          },
+          {
+            "numero": "2"
+          },
+          {
+            "numero": "18"
+          },
+          {
+            "numero": "2023-863"
+          },
+          {
+            "numero": "2017-299"
+          },
+          {
+            "numero": "64"
+          },
+          {
+            "numero": "5"
+          },
+          {
+            "numero": "C1800418"
+          },
+          {
+            "numero": "7"
+          },
+          {
+            "numero": "8"
+          },
+          {
+            "numero": "2026-904"
+          },
+          {
+            "numero": "2004-492"
+          },
+          {
+            "numero": "22TL00636"
+          },
+          {
+            "numero": "13"
+          },
+          {
+            "numero": "645"
+          },
+          {
+            "numero": "20"
+          },
+          {
+            "numero": "91"
+          },
+          {
+            "numero": "57"
+          },
+          {
+            "numero": "55"
+          },
+          {
+            "numero": "557"
+          },
+          {
+            "numero": "69"
+          },
+          {
+            "numero": "C1801233"
+          },
+          {
+            "numero": "22BX01524"
+          },
+          {
+            "numero": "132"
+          },
+          {
+            "numero": "245"
+          },
+          {
+            "numero": "79"
+          },
+          {
+            "numero": "97-389"
+          },
+          {
+            "numero": "24"
+          },
+          {
+            "numero": "C1501274"
+          }
+        ]
+      },
+      "probe_pool_size": 997
+    },
+    {
+      "label": "target-10000",
+      "target": 10000,
+      "filter": {
+        "$or": [
+          {
+            "juridiction": "Cour de cassation"
+          },
+          {
+            "juridiction": "Conseil constitutionnel"
+          },
+          {
+            "juridiction": "Conseil d'Etat"
+          },
+          {
+            "juridiction": "Tribunal de grande instance de Paris"
+          },
+          {
+            "juridiction": "Cour d'appel de Versailles"
+          },
+          {
+            "juridiction": "Conseil d'État"
+          },
+          {
+            "juridiction": "Cour d'appel d'Orléans"
+          }
+        ]
+      },
+      "probe_pool_size": 9690
+    },
+    {
+      "label": "target-50000",
+      "target": 50000,
+      "filter": {
+        "$or": [
+          {
+            "section": "CAPP"
+          },
+          {
+            "section": "JADE"
+          },
+          {
+            "section": "CASS"
+          },
+          {
+            "section": "INCA"
+          },
+          {
+            "section": "CONSTIT"
+          },
+          {
+            "section": "CNIL"
+          }
+        ]
+      },
+      "probe_pool_size": 49998
+    }
+  ],
+  "dole": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "type": "LOI_PUBLIEE"
+      },
+      "probe_pool_size": 4428
+    },
+    {
+      "label": "target-10000",
+      "target": 10000,
+      "filter": {
+        "$or": [
+          {
+            "type": "LOI_PUBLIEE"
+          },
+          {
+            "type": "PROJET_LOI"
+          },
+          {
+            "type": "ORDONNANCE_PUBLIEE"
+          },
+          {
+            "type": "PROPOSITION_LOI"
+          },
+          {
+            "type": "PROJET_ORDONNANCE"
+          }
+        ]
+      },
+      "probe_pool_size": 7623
+    }
+  ],
+  "jorf": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "texte_cid": "JORFTEXT000000466139"
+      },
+      "probe_pool_size": 1905
+    },
+    {
+      "label": "target-10000",
+      "target": 10000,
+      "filter": {
+        "$or": [
+          {
+            "num": "1"
+          },
+          {
+            "num": "2"
+          },
+          {
+            "num": "3"
+          },
+          {
+            "num": "4"
+          },
+          {
+            "num": "unique"
+          }
+        ]
+      },
+      "probe_pool_size": 9877
+    },
+    {
+      "label": "target-50000",
+      "target": 50000,
+      "filter": {
+        "fonds": "JORF"
+      },
+      "probe_pool_size": 50000
+    }
+  ],
+  "sarde": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "$or": [
+          {
+            "theme": "ARRETES ET AVIS RELATIFS AUX PRIX DE SPECIALITES PHARMACEUTIQUES"
+          },
+          {
+            "theme": "DECISIONS ET AVIS DE L'AUTORITÉ DE CONTRÔLE PRUDENTIEL PORTANT APPROBATION DU TRANSFERT DE PORTEFEUILLES DE CONTRATS D'ASSURANCE"
+          },
+          {
+            "theme": "AMBASSADEUR"
+          },
+          {
+            "theme": "AVIS RELATIFS AUX TARIFS DE RESPONSABILITE DES SPECIALITES PHARMACEUTIQUES ET AUX PRIX DE VENTE HORS TAXE AUX ETABLISSEMENTS DE SANTE DECLARES PAR LES LABORATOIRES EXPLOITANTS (ART. L. 162-16-6 ET L. 162-16-5 DU CODE DE LA SECURITE SOCIALE)"
+          },
+          {
+            "theme": "BIEN CULTUREL ETRANGER"
+          },
+          {
+            "theme": "CODE DE L'ENVIRONNEMENT (CE) (MISE A JOUR A COMPTER DE 2006)"
+          },
+          {
+            "theme": "RECENSEMENT DES ARRETES PORTANT APPROBATION DE LA FUSION DE MUTUELLES"
+          },
+          {
+            "theme": "PHARMACIE VETERINAIRE"
+          },
+          {
+            "theme": "DECLARATION D'UTILITE PUBLIQUE (DUP)"
+          },
+          {
+            "theme": "ARRETES ET DECISIONS INTERDISANT EN APPLICATION DES ART. L. 5122-15, L. 5422-12, L. 5422-14 ET R. 5122-23 A R. 5122-26 DU CODE DE LA SANTE PUBLIQUE, DES PUBLICITES POUR DES OBJETS, APPAREILS OU METHODES (OAM)"
+          },
+          {
+            "theme": "RECENSEMENT DES AVIS RELATIFS A L'HOMOLOGATION ET A L'ANNULATION DE NORMES NF PAR LE CONSEIL D'ADMINISTRATION DE L'ASSOCIATION FRANCAISE DE NORMALISATION"
+          },
+          {
+            "theme": "PREFET DE DEPARTEMENT"
+          },
+          {
+            "theme": "LISTE DES IMMEUBLES PROTEGES AU TITRE DE LA LEGISLATION SUR LES MONUMENTS HISTORIQUES (CLASSEMENT ALPHABETIQUE PAR COMMUNE - LETTRE \" M \" : DE MAAST-ET-VIOLAINE [AISNE] A MYON [DOUBS])"
+          },
+          {
+            "theme": "CODE DES TRANSPORTS (APPLICABLE À COMPTER DU 1ER DÉCEMBRE 2010)"
+          },
+          {
+            "theme": "DISPOSITIONS COMMUNES AUX ENSEIGNEMENTS DES PREMIER ET SECOND DEGRES ET A L'ENSEIGNEMENT SUPERIEUR (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "CODE DE LA LEGION D'HONNEUR ET DE LA MEDAILLE MILITAIRE (MISE A JOUR A COMPTER DE 1962)"
+          },
+          {
+            "theme": "ECOLE NATIONALE SUPERIEURE DES MINES DE SAINT-ETIENNE (ENSM SAINT-ETIENNE)"
+          },
+          {
+            "theme": "LISTE DES IMMEUBLES PROTEGES AU TITRE DE LA LEGISLATION SUR LES MONUMENTS HISTORIQUES (CLASSEMENT ALPHABETIQUE PAR COMMUNE - LETTRE \" L \" : DE LAAS [GERS] A LYS-SAINT-GEORGES [INDRE])"
+          },
+          {
+            "theme": "ACADEMIE NATIONALE DE MEDECINE"
+          },
+          {
+            "theme": "LISTE DES IMMEUBLES PROTEGES AU TITRE DE LA LEGISLATION SUR LES MONUMENTS HISTORIQUES (CLASSEMENT ALPHABETIQUE PAR COMMUNE - LETTRE \" Q \" : DE QUAEDYPRE [NORD] A QUISTINIC [MORBIHAN])"
+          },
+          {
+            "theme": "CODE DE LA SANTE PUBLIQUE (CSP) (MISE A JOUR A COMPTER DE 2000)"
+          },
+          {
+            "theme": "COMMISSARIAT DES ARMEES"
+          },
+          {
+            "theme": "CODE DE PROCEDURE PENALE (CPP) (MISE A JOUR A COMPTER DE 1995)"
+          },
+          {
+            "theme": "TRANSPORT DES MARCHANDISES DANGEREUSES"
+          },
+          {
+            "theme": "COMPTES SPECIAUX DU TRESOR (CST)"
+          },
+          {
+            "theme": "LUTTE CONTRE LES MALADIES DES ANIMAUX : DISPOSITIONS COMMUNES A DIVERSES MALADIES AFFECTANT DES ESPECES DIFFERENTES - CONTROLE SANITAIRE DES ANIMAUX (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "CODE DES PENSIONS MILITAIRES D'INVALIDITE ET DES VICTIMES DE LA GUERRE  (CPMIVG) (MISE A JOUR A COMPTER DE 1995)"
+          },
+          {
+            "theme": "LISTE DES IMMEUBLES PROTEGES AU TITRE DE LA LEGISLATION SUR LES MONUMENTS HISTORIQUES (CLASSEMENT ALPHABETIQUE PAR COMMUNE - LETTRE \" A \" : D' ABBANS-DESSOUS [DOUBS] A AZY [AISNE])"
+          },
+          {
+            "theme": "MOYENS DE PAIEMENT (TEXTES NON CODIFIES DANS LE CODE MONETAIRE ET FINANCIER)"
+          },
+          {
+            "theme": "ORGANISATION DES SERVICES ACADEMIQUES ET DEPARTEMENTAUX DE L'EDUCATION NATIONALE (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "INGENIEUR DES TRAVAUX DE LA METEOROLOGIE"
+          },
+          {
+            "theme": "ECOLE NATIONALE SUPERIEURE DES MINES DE NANTES"
+          },
+          {
+            "theme": "AGENCE DE MANNEQUINS"
+          },
+          {
+            "theme": "ORGANISMES DE MUTUALITE SOCIALE AGRICOLE (MSA) (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "ETABLISSEMENTS D'ENSEIGNEMENT PRIVES (HORS ETABLISSEMENTS AGRICOLES - TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "CODE DE LA SÉCURITÉ INTÉRIEURE (CSI) (APPLICABLE À COMPTER DU 1ER MAI 2012)"
+          },
+          {
+            "theme": "CONCESSIONS DE MINES"
+          },
+          {
+            "theme": "ASSURANCE DES NON-SALARIES AGRICOLES CONTRE LES ACCIDENTS DU TRAVAIL ET LES MALADIES PROFESSIONNELLES (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "CODE ELECTORAL (MISE A JOUR A COMPTER DE 1997)"
+          },
+          {
+            "theme": "REGIME DES MATERIELS DE GUERRE, ARMES ET MUNITIONS (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "DISPOSITIONS DE DROIT NATIONAL PRISES POUR L'APPLICATION DES TEXTES COMMUNAUTAIRES RELATIFS A L'ORGANISATION ET AU FONCTIONNEMENT DE LA COMMUNAUTE EUROPEENNE (CE) ET DE L'UNION EUROPEENNE (UE)"
+          },
+          {
+            "theme": "AIDE JURIDIQUE"
+          },
+          {
+            "theme": "PROTECTION DES ESPACES NATURELS (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "AGREMENT (ACCORD, RETRAIT, CADUCITÉ) DES SOCIETES D'ASSURANCE"
+          },
+          {
+            "theme": "MUTUALITE SOCIALE AGRICOLE (MSA)"
+          },
+          {
+            "theme": "REGLEMENTATION COMPTABLE"
+          },
+          {
+            "theme": "CODE RURAL ET DE LA PÊCHE MARITIME (CRPM) (MISE A JOUR A COMPTER DE 1998)"
+          },
+          {
+            "theme": "ALSACE-MOSELLE  (DISPOSITIONS PARTICULIERES AUX DEPARTEMENTS DU HAUT-RHIN, DU BAS-RHIN ET DE LA MOSELLE)"
+          },
+          {
+            "theme": "MATIERE NUCLEAIRE"
+          },
+          {
+            "theme": "PROTECTION DE L'ENVIRONNEMENT (TEXTES NON CODIFIES)"
+          },
+          {
+            "theme": "CODE FORESTIER (CF) (APPLICABLE AU 1ER JUILLET 2012)"
+          },
+          {
+            "theme": "ECOLE NATIONALE SUPERIEURE DES MINES D'ALES"
+          },
+          {
+            "theme": "LISTE DES IMMEUBLES PROTEGES AU TITRE DE LA LEGISLATION SUR LES MONUMENTS HISTORIQUES (CLASSEMENT ALPHABETIQUE PAR COMMUNE - LETTRE \" O \" : D'OBENHEIM [BAS-RHIN] A OZOUER-LE-REPOS [SEINE-ET-MARNE])"
+          },
+          {
+            "theme": "PHARMACIEN"
+          },
+          {
+            "theme": "CONSERVATEUR DU PATRIMOINE"
+          },
+          {
+            "theme": "ECOLE NATIONALE SUPERIEURE D'INGENIEURS DE CONSTRUCTIONS AERONAUTIQUES (ENSICA)"
+          },
+          {
+            "theme": "CODE DES POSTES ET DES COMMUNICATIONS ELECTRONIQUES (CPCE) (MISE A JOUR A COMPTER DE 1996)"
+          },
+          {
+            "theme": "SERVICE DE SANTE DES ARMEES (SSA)"
+          },
+          {
+            "theme": "ECOLE NATIONALE SUPERIEURE DE L'AERONAUTIQUE ET DE L'ESPACE (ENSAE SUPAERO)"
+          },
+          {
+            "theme": "ECOLE DU SERVICE DE SANTE DES ARMEES (ESSA)"
+          },
+          {
+            "theme": "MUSEE DE FRANCE"
+          },
+          {
+            "theme": "ACADEMIE DE MARINE"
+          },
+          {
+            "theme": "CODE GENERAL DES IMPOTS (CGI) ET SES ANNEXES - LIVRE DES PROCEDURES FISCALES (LPF) (MISE A JOUR A COMPTER DE 1995)"
+          },
+          {
+            "theme": "CODE DES DOUANES (CD) (MISE A JOUR A COMPTER DE 1994)"
+          }
+        ]
+      },
+      "probe_pool_size": 863
+    }
+  ],
+  "titres": [
+    {
+      "label": "target-1000",
+      "target": 1000,
+      "filter": {
+        "nature": "DECRET"
+      },
+      "probe_pool_size": 6499
+    },
+    {
+      "label": "target-10000",
+      "target": 10000,
+      "filter": {
+        "$or": [
+          {
+            "etat": "VIGUEUR"
+          },
+          {
+            "etat": "ABROGE"
+          }
+        ]
+      },
+      "probe_pool_size": 11946
+    },
+    {
+      "label": "target-50000",
+      "target": 50000,
+      "filter": {
+        "$or": [
+          {
+            "fonds": "JORF"
+          },
+          {
+            "fonds": "KALI"
+          },
+          {
+            "fonds": "LEGI"
+          }
+        ]
+      },
+      "probe_pool_size": 50000
+    }
+  ]
+}

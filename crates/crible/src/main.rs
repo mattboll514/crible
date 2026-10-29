@@ -79,6 +79,17 @@ enum Command {
         #[arg(long)]
         index: String,
     },
+    /// Rebuild the lexical index of the committed epoch from the stored texts
+    /// (`RECONSTRUIRE-LEXICAL`): the job to run when the analysis chain of
+    /// `lexical.language` or `lexical.positions` changes.
+    RebuildLexical {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+    },
     /// Take a coherent snapshot of an epoch into the exchange root (ADR-0064,
     /// ADR-0065). Offline: stop the server first.
     Snapshot {
@@ -177,6 +188,24 @@ enum Command {
         /// (`dedup` of `docs/05-api.md`).
         #[arg(long, value_name = "content")]
         dedup: Option<String>,
+        /// Branches to run: `dense`, `lexical` or `hybrid` (`mode` of
+        /// `docs/05-api.md`); defaults to the mode of the index, `hybrid` when
+        /// the lexical branch is enabled and `dense` otherwise.
+        #[arg(long, value_enum)]
+        mode: Option<commands::SearchMode>,
+        /// Fusion of the two branches of `--mode hybrid`: `rrf` or
+        /// `relative_score` (`fusion` of `docs/05-api.md`); defaults to the
+        /// fusion of the index.
+        #[arg(long, value_enum)]
+        fusion: Option<commands::SearchFusion>,
+        /// Weight of the dense branch with `--fusion relative_score`, in `[0, 1]`
+        /// bounds included, on a finite value (`docs/03-recherche.md`, "Fusion",
+        /// ADR-0090); required with that fusion. `allow_hyphen_values` lets a
+        /// negative value reach the domain control, so it is refused in
+        /// `invalid_request` like any other entry point, rather than as a clap
+        /// usage error.
+        #[arg(long, allow_hyphen_values = true)]
+        alpha: Option<f64>,
         /// Output format: `json` (the response of `docs/05-api.md`, default) or
         /// `text` (readable report with a text excerpt).
         #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
@@ -238,6 +267,7 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             documents,
         } => commands::ingest_documents(&data, &models, &index, &documents),
         Command::Compact { data, index } => commands::compact_index(&data, &index),
+        Command::RebuildLexical { data, index } => commands::rebuild_lexical(&data, &index),
         Command::Snapshot {
             data,
             exchange,
@@ -264,6 +294,9 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             group_by,
             passages_per_document,
             dedup,
+            mode,
+            fusion,
+            alpha,
             format,
         } => commands::search(&commands::SearchRequest {
             data: &data,
@@ -278,6 +311,9 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             group_by: group_by.as_deref(),
             passages_per_document,
             dedup: dedup.as_deref(),
+            mode,
+            fusion,
+            alpha,
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),

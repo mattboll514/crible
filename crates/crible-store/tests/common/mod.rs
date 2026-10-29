@@ -14,6 +14,7 @@
 //! <index>/CURRENT_EPOCH
 //! <index>/epochs/<epoch>/records.sqlite
 //! <index>/epochs/<epoch>/segments/<segment_id>/{segment.json,vectors.f16}
+//! <index>/epochs/<epoch>/lexical/
 //! <index>/epochs/<epoch>/manifests/<generation>.json
 //! ```
 
@@ -25,14 +26,19 @@
 // fixtures, and it never hides a lint in the code under test.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use arrow::array::{FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot, write_index_config};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
+use half::f16;
 use serde_json::{Value, json};
 
 /// Writes one Parquet file holding `columns`, with the fixture writer settings.
@@ -147,7 +153,20 @@ pub fn create_store(index: &Path) -> GenerationStore {
 /// `GenerationStore::create` refuses an index without `index.json`, so the
 /// fixture writes the configuration the way `crible index create` does.
 pub fn create_store_with(index: &Path, schema: &Schema) -> GenerationStore {
-    write_index_config(index, &test_config("test", schema)).unwrap_or_else(|error| {
+    create_store_with_config(index, schema, &test_config("test", schema))
+}
+
+/// Creates a generation store whose `index.json` is `config_json`.
+///
+/// The configuration is the authority on the settings the store does not take
+/// as a parameter, `lexical` included: a fixture that enables the lexical
+/// branch passes its configuration here.
+pub fn create_store_with_config(
+    index: &Path,
+    schema: &Schema,
+    config_json: &str,
+) -> GenerationStore {
+    write_index_config(index, config_json).unwrap_or_else(|error| {
         panic!(
             "the index configuration must be written under {}: {error}",
             index.display()
@@ -163,7 +182,7 @@ pub fn create_store_with(index: &Path, schema: &Schema) -> GenerationStore {
 
 /// Index configuration declaring `schema`, with the settings the store ignores.
 pub fn test_config(name: &str, schema: &Schema) -> String {
-    test_config_with_cluster_by(name, schema, &[])
+    test_config_full(name, schema, &[], false)
 }
 
 /// Index configuration of [`test_config`], with `cluster_by` set to `fields`.
@@ -171,13 +190,28 @@ pub fn test_config(name: &str, schema: &Schema) -> String {
 /// A test that pins the order of the compaction passes the clustered fields
 /// here: the identifier order is `(cluster_by, doc_id, ord)` (`docs/02`).
 pub fn test_config_with_cluster_by(name: &str, schema: &Schema, fields: &[&str]) -> String {
+    test_config_full(name, schema, fields, false)
+}
+
+/// Index configuration of [`test_config`], with `lexical.enabled` set to
+/// `enabled`.
+///
+/// `lexical.language` stays `fr`, the language of the fixture text; a test that
+/// needs another language rewrites the field after parsing.
+pub fn test_config_with_lexical(name: &str, schema: &Schema, enabled: bool) -> String {
+    test_config_full(name, schema, &[], enabled)
+}
+
+/// Body of the three configurations above: the only varying settings are
+/// `cluster_by` and `lexical.enabled`.
+fn test_config_full(name: &str, schema: &Schema, fields: &[&str], lexical: bool) -> String {
     let cluster_by = fields
         .iter()
         .map(|field| format!("\"{field}\""))
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[{cluster_by}],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
+        r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{},"cluster_by":[{cluster_by}],"lexical":{{"enabled":{lexical},"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#,
         schema.to_json_string()
     )
 }
@@ -246,6 +280,161 @@ pub fn write_segment(
     writer
         .finish()
         .unwrap_or_else(|error| panic!("segment {segment_id} must be finished: {error}"))
+}
+
+// --- Batches (4 dimensions, schema of `fixture_schema`) ---
+
+/// One document of a fixture batch: its external id, the text of its single
+/// passage and the vector of that passage.
+///
+/// The text is the encoder input of both branches (`docs/03`), so a lexical
+/// test looks for exactly that text once the lexical branch exists.
+#[derive(Debug, Clone, Copy)]
+pub struct FixtureDocument {
+    /// External id of the document.
+    pub doc_id: &'static str,
+    /// Text of the single passage of the document.
+    pub text: &'static str,
+    /// Vector of that passage: [`DIMS`] components.
+    pub vector: [f32; 4],
+}
+
+/// Two documents, one passage each, with orthogonal vectors: the fixture batch
+/// of the `INV-03` / `INV-04` tests.
+pub const TWO_DOCUMENTS: [FixtureDocument; 2] = [
+    FixtureDocument {
+        doc_id: "doc-a",
+        text: "doc-a#0",
+        vector: [1.0, 0.0, 0.0, 0.0],
+    },
+    FixtureDocument {
+        doc_id: "doc-b",
+        text: "doc-b#0",
+        vector: [0.0, 1.0, 0.0, 0.0],
+    },
+];
+
+/// One further document, for a batch that adds to an index already holding
+/// [`TWO_DOCUMENTS`].
+pub const ONE_FURTHER_DOCUMENT: [FixtureDocument; 1] = [FixtureDocument {
+    doc_id: "doc-c",
+    text: "doc-c#0",
+    vector: [0.0, 0.0, 1.0, 0.0],
+}];
+
+fn document_schema() -> SchemaRef {
+    Arc::new(ArrowSchema::new(vec![
+        Field::new("doc_id", DataType::Utf8, false),
+        Field::new("doc_hash", DataType::Utf8, false),
+        Field::new("title", DataType::Utf8, true),
+    ]))
+}
+
+fn passage_schema() -> SchemaRef {
+    Arc::new(ArrowSchema::new(vec![
+        Field::new("doc_id", DataType::Utf8, false),
+        Field::new("ord", DataType::UInt32, false),
+        Field::new("text", DataType::Utf8, false),
+        Field::new("part", DataType::Int64, true),
+        Field::new("vector", DataType::FixedSizeBinary(DIMS as i32 * 2), false),
+    ]))
+}
+
+fn fp16(vector: &[f32]) -> Vec<u8> {
+    vector
+        .iter()
+        .flat_map(|value| f16::from_f32(*value).to_bits().to_le_bytes())
+        .collect()
+}
+
+/// Writes a batch of `documents`, one passage each, and its manifest, under
+/// `<root>/<batch_id>/`, which it returns.
+pub fn write_batch(root: &Path, batch_id: &str, documents: &[FixtureDocument]) -> PathBuf {
+    let dir = root.join(batch_id);
+    fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("the batch directory: {error}"));
+
+    let ids: StringArray = documents.iter().map(|doc| Some(doc.doc_id)).collect();
+    let hashes: Vec<String> = documents
+        .iter()
+        .map(|doc| format!("blake3:{}", doc.doc_id))
+        .collect();
+    let hashes: StringArray = hashes.iter().map(|hash| Some(hash.as_str())).collect();
+    let titles: StringArray = documents.iter().map(|doc| Some(doc.doc_id)).collect();
+    write_parquet(
+        &dir.join("documents.parquet"),
+        &document_schema(),
+        vec![Arc::new(ids), Arc::new(hashes), Arc::new(titles)],
+    );
+
+    let passage_ids: StringArray = documents.iter().map(|doc| Some(doc.doc_id)).collect();
+    let ords = UInt32Array::from(vec![0_u32; documents.len()]);
+    let texts: StringArray = documents.iter().map(|doc| Some(doc.text)).collect();
+    let parts = Int64Array::from(
+        (0..documents.len())
+            .map(|position| Some(position as i64))
+            .collect::<Vec<_>>(),
+    );
+    let vectors =
+        FixedSizeBinaryArray::try_from_iter(documents.iter().map(|doc| fp16(&doc.vector)))
+            .unwrap_or_else(|error| panic!("the fixture vectors must share one width: {error}"));
+    write_parquet(
+        &dir.join("passages.parquet"),
+        &passage_schema(),
+        vec![
+            Arc::new(passage_ids),
+            Arc::new(ords),
+            Arc::new(texts),
+            Arc::new(parts),
+            Arc::new(vectors),
+        ],
+    );
+
+    write_manifest(&dir, batch_id, documents.len());
+    dir
+}
+
+/// Writes `manifest.json` of a batch of `passages` documents, one passage each.
+fn write_manifest(dir: &Path, batch_id: &str, passages: usize) {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("the batch directory must be readable: {error}"))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("a batch entry must be readable: {error}"))
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.ends_with(".parquet"))
+        .collect();
+    names.sort();
+
+    let mut files = BTreeMap::new();
+    for name in names {
+        let bytes = fs::read(dir.join(&name))
+            .unwrap_or_else(|error| panic!("the batch file {name} must be readable: {error}"));
+        files.insert(name, format!("blake3:{}", blake3::hash(&bytes).to_hex()));
+    }
+
+    let manifest = json!({
+        "format": "crible-batch",
+        "format_version": 1,
+        "batch_id": batch_id,
+        "index": "test",
+        "mode": "upsert",
+        "created_at": "2026-01-01T00:00:00Z",
+        "producer": { "name": "test", "version": "1", "host": "test" },
+        "model": { "dims": DIMS, "normalize": true, "vector_dtype": "fp16" },
+        "chunker": { "name": "test", "version": "1", "params": {} },
+        "template": { "name": "test", "version": "1" },
+        "counts": { "documents": passages, "passages": passages, "deletions": 0 },
+        "files": files,
+    });
+    fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)
+            .unwrap_or_else(|error| panic!("the manifest must be serializable: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("manifest.json must be written: {error}"));
 }
 
 /// Builds one `documents` row at the given generation.

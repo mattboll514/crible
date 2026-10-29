@@ -20,22 +20,34 @@
 //! # Commit protocol
 //!
 //! [`GenerationStore::commit`] applies one generation change in the order of
-//! `docs/02-architecture.md`:
+//! `docs/02-architecture.md` ("Générations et point de commit"). Steps 1 and 2 —
+//! validate the batch, write the segment — belong to the attach, which runs them
+//! before this call. The store then runs:
 //!
-//! 1. one SQLite transaction writes the segments, the documents, the passages,
-//!    the tombstones, the batch row, `meta.generation = G+1` and
-//!    `meta.next_iid`;
-//! 2. **`COMMIT` — the commit point (ADR-0016)**;
-//! 3. `manifests/<G+1>.json` is written, fsynced and renamed;
-//! 4. a new [`Snapshot`] is built and published through an [`ArcSwap`].
+//! 3. one SQLite transaction writes the segments, the documents, the passages,
+//!    the tombstones, the batch row, `meta.generation = G+1`,
+//!    `meta.next_iid` and — when the transaction creates a live passage or
+//!    tombstones one — `meta.passage_change_generation = G+1`, then
+//!    **`COMMIT` — the commit point (ADR-0016)**;
+//! 4. the lexical branch receives the passages the transaction created, loses
+//!    the ones it tombstoned, commits with `G+1` as its payload and reloads its
+//!    reader ([`crate::lexical`]);
+//! 5. `manifests/<G+1>.json` is written, fsynced and renamed;
+//! 6. a new [`Snapshot`] is built and published through an [`ArcSwap`].
+//!
+//! Step 4 only runs when the transaction created or tombstoned a passage and the
+//! configuration enables the lexical branch: a metadata patch, and an attach
+//! that only rewrites document rows, leave tantivy untouched (`docs/02`), and
+//! the snapshot keeps the reader of the previous generation, which the marker
+//! says is still up to date (`ADR-0088`, decision 2).
 //!
 //! The segments themselves are written before the call, by the attach that
-//! prepares them: a segment stays invisible until step 1 references it, which
-//! is what makes an abandoned one an orphan that recovery removes.
+//! prepares them: a segment stays invisible until step 3 references it, which is
+//! what makes an abandoned one an orphan that recovery removes.
 //!
 //! `GenerationStore::commit_with_rows` runs the same protocol and lets the
 //! caller append its own rows (the attach writes the `batches` row there) to
-//! step 1, still inside the single commit point. It also returns the time spent
+//! step 3, still inside the single commit point. It also returns the time spent
 //! in each of its post-write steps, which the attach reports (`docs/04`).
 //!
 //! # Recovery
@@ -44,15 +56,24 @@
 //! else (INV-04): it reads `CURRENT_EPOCH`, opens SQLite, reads `meta`, removes
 //! every `tmp-*` entry and every segment directory absent from the `segments`
 //! table, rebuilds the `codes.bin` a segment is missing (`ADR-0069`, decision 1),
-//! rewrites the manifest of the current generation when it is missing, then
-//! publishes the snapshot.
+//! completes `meta.passage_change_generation` when the epoch predates it
+//! (`ADR-0088`, decision 4), repairs the lexical index against the committed
+//! generation (`docs/02`, "Reprise au démarrage"; ADR-0087, ADR-0088), rewrites
+//! the manifest of the current generation when it is missing, then publishes the
+//! snapshot. The schema completion, the lexical repair and the `codes.bin`
+//! rebuild are the **write**-open steps: a read-only open writes nothing under
+//! the epoch, opens no `IndexWriter` and takes a lexical reader only when the
+//! state is up to date (`M ≤ Gt ≤ G`); otherwise the snapshot names the state
+//! found and the lexical branch of a query refuses (`ADR-0087`, `ADR-0088`).
 //!
 //! # Fault injection
 //!
 //! With the `failpoints` cargo feature, and only with it, `commit` stops at the
 //! step named by the `CRIBLE_FAILPOINT` environment variable
-//! (`before_sqlite_commit`, `after_sqlite_commit`, `after_manifest`,
-//! `after_publish`). Stopping means panicking with a message containing
+//! (`before_sqlite_commit`, `after_sqlite_commit`, `after_lexical_commit`,
+//! `after_manifest`, `after_publish`). `after_lexical_commit` is reached only
+//! when step 4 runs, so a configuration that disables the lexical branch never
+//! stops there. Stopping means panicking with a message containing
 //! `CRIBLE_FAILPOINT`: unwinding through the transaction rolls it back exactly
 //! as a process death would. That panic is the expected outcome of the
 //! `INV-03` / `INV-04` tests; nothing else in this module panics.
@@ -85,7 +106,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
-use crible_core::config::{IndexConfig, Schema};
+use crible_core::config::{IndexConfig, LexicalConfig, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Epoch, Generation, Iid};
 use rusqlite::{Connection, Transaction};
@@ -93,6 +114,7 @@ use serde_json::{Value, json};
 
 use crate::codes;
 use crate::filters_index::{CommitDelta, CreatedPassage, FilterIndex, FilterMemory};
+use crate::lexical::{self, LexicalIndex, LexicalObservation, LexicalStatus};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
 use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
 
@@ -272,6 +294,14 @@ pub struct Snapshot {
     /// Binary codes of `segments`, in the same order.
     codes: Vec<Arc<Vec<u64>>>,
     filters: FilterIndex,
+    /// Reader of the lexical branch of the epoch, reloaded after the commit that
+    /// published this generation (`docs/02`, step 4), or `None` when the index
+    /// disables the branch, holds no lexical index yet, or was opened on a
+    /// lexical state that is not up to date (ADR-0087, ADR-0088).
+    lexical: Option<Arc<LexicalIndex>>,
+    /// State the lexical index of the epoch was observed in when the snapshot
+    /// was built (`ADR-0088`, decision 5).
+    lexical_status: LexicalStatus,
     /// Keep-alive of the epoch the snapshot reads: its strong count is what the
     /// reclaim of [`crate::compact::reclaim_epochs`] looks at (INV-14).
     lease: Arc<EpochLease>,
@@ -287,6 +317,8 @@ impl std::fmt::Debug for Snapshot {
             .field("segments", &self.segments)
             .field("codes", &format_args!("{} bytes", self.codes_memory()))
             .field("filters", &self.filters)
+            .field("lexical", &self.lexical.is_some())
+            .field("lexical_status", &self.lexical_status)
             .field("lease", &self.lease)
             .finish()
     }
@@ -332,6 +364,41 @@ impl Snapshot {
     #[must_use]
     pub fn filters(&self) -> &FilterIndex {
         &self.filters
+    }
+
+    /// Reader of the lexical branch of the generation, or `None` when the index
+    /// has no consistent lexical index.
+    ///
+    /// The reader was reloaded after the tantivy commit of this generation, so a
+    /// request that holds the snapshot searches the state of its generation. It
+    /// is absent when the configuration disables the branch, and when the
+    /// lexical index is not up to date for the generation: an index behind, an
+    /// index ahead, an epoch whose marker is not certified, and an unreadable
+    /// `lexical/` are the states of [`Snapshot::lexical_status`] (`docs/02`,
+    /// "Reprise au démarrage"; ADR-0087, ADR-0088). The lexical branch of a
+    /// query refuses in `overloaded` naming the state it found
+    /// (`RECHERCHER-BM25-DANS-LE-POOL`); this task exposes the state only.
+    #[must_use]
+    pub fn lexical(&self) -> Option<&LexicalIndex> {
+        self.lexical.as_deref()
+    }
+
+    /// State the lexical index of the epoch was observed in when this snapshot
+    /// was built (`ADR-0088`, decision 5).
+    ///
+    /// [`LexicalStatus::Ready`] is the only state in which [`Snapshot::lexical`]
+    /// returns a reader. Every other state says why it does not, so the lexical
+    /// branch of a query can name it to the client instead of asserting a delay
+    /// that may not exist: behind, ahead, not certified, unreadable. This task
+    /// publishes the state; the refusal is `RECHERCHER-BM25-DANS-LE-POOL`.
+    #[must_use]
+    pub fn lexical_status(&self) -> LexicalStatus {
+        self.lexical_status
+    }
+
+    /// Reader of the lexical branch for the next snapshot to share, if any.
+    fn shared_lexical(&self) -> Option<&Arc<LexicalIndex>> {
+        self.lexical.as_ref()
     }
 
     /// Estimated heap size of the filter structures, which `crible inspect`
@@ -443,9 +510,14 @@ pub(crate) struct CommittedGeneration {
 pub(crate) struct CommitTimings {
     /// Filling the transaction and reaching the commit point.
     pub(crate) transaction: Duration,
+    /// Step 4: the tantivy commit of the generation and its reader reload. Zero
+    /// when the step does not run — a configuration that disables the lexical
+    /// branch, or a delta that changes no passage text.
+    pub(crate) lexical: Duration,
     /// Writing `manifests/<generation>.json`.
     pub(crate) manifest: Duration,
-    /// Building the snapshot (its publication is immediate).
+    /// Building the snapshot (step 6; its publication is immediate and not
+    /// measured).
     pub(crate) snapshot: Duration,
 }
 
@@ -474,6 +546,18 @@ pub struct GenerationStore {
     index_dir: PathBuf,
     records: RecordStore,
     snapshot: ArcSwap<Snapshot>,
+    /// Lexical settings of the index, read from its `index.json`: the
+    /// configuration is the authority on whether the branch exists
+    /// (`docs/03-recherche.md`).
+    lexical: LexicalConfig,
+    /// Whether the store was opened for writing.
+    ///
+    /// Only a write open runs the reconstructions of derived directories —
+    /// `codes.bin`, the completion of `meta.passage_change_generation` and the
+    /// repair of `lexical/` — and only a write open may take the tantivy writer
+    /// lock (`ADR-0069`, `ADR-0087`). The flag is what lets
+    /// [`rebuild_lexical`] refuse a store a read command opened.
+    writable: bool,
     lease: Arc<EpochLease>,
     retained: Mutex<Vec<Weak<EpochLease>>>,
 }
@@ -529,7 +613,8 @@ impl GenerationStore {
         if let Some(present) = occupied_index_state(index_dir) {
             return Err(existing_index_error(index_dir, &present));
         }
-        check_declared_schema(index_dir, schema)?;
+        let config = declared_config(index_dir)?;
+        check_declared_schema(&config, schema, index_dir)?;
 
         let epoch_dir = epoch_directory(index_dir, epoch);
         let segments = segments_directory(&epoch_dir);
@@ -543,7 +628,24 @@ impl GenerationStore {
         records.set_epoch(epoch)?;
 
         let lease = Arc::new(EpochLease { epoch });
-        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
+        // A fresh index is at generation 0 and holds no passage, so its lexical
+        // index has nothing to describe: `lexical/` appears with the first
+        // generation that creates a passage (`docs/02`, step 4). A configuration
+        // that disables the branch never creates it.
+        let status = if config.lexical.enabled {
+            // Generation 0 carries no passage: nothing to search, nothing to
+            // build (`ADR-0088`, decision 2).
+            LexicalStatus::Missing
+        } else {
+            LexicalStatus::Disabled
+        };
+        let snapshot = build_snapshot(
+            &records,
+            &epoch_dir,
+            schema,
+            PublishedLexical::without_reader(status),
+            Arc::clone(&lease),
+        )?;
         write_manifest(&epoch_dir, epoch, &snapshot)?;
 
         // fsync the directories bottom-up before the pointer that makes them
@@ -565,6 +667,8 @@ impl GenerationStore {
             index_dir: index_dir.to_path_buf(),
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lexical: config.lexical,
+            writable: true,
             lease,
             retained: Mutex::new(Vec::new()),
         })
@@ -616,20 +720,19 @@ impl GenerationStore {
     }
 
     /// Shared body of [`GenerationStore::open`] and
-    /// [`GenerationStore::open_read_only`]: `rebuild_codes` is the only
-    /// difference between the two.
-    fn open_index(
-        index_dir: &Path,
-        schema: &Schema,
-        rebuild_codes: bool,
-    ) -> Result<Self, CribleError> {
+    /// [`GenerationStore::open_read_only`]: `for_write` is the only difference
+    /// between the two. It governs every reconstruction of a derived file the
+    /// recovery runs — `codes.bin`, the `passage_change_generation` marker and
+    /// the lexical index — so it names the mode of the open, not one of them.
+    fn open_index(index_dir: &Path, schema: &Schema, for_write: bool) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
-        check_declared_schema(index_dir, schema)?;
+        let config = declared_config(index_dir)?;
+        check_declared_schema(&config, schema, index_dir)?;
         let epoch_dir = epoch_directory(index_dir, epoch);
-        let records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
+        let mut records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
 
-        let declared = records.meta()?.epoch;
-        if declared != epoch {
+        let mut meta = records.meta()?;
+        if meta.epoch != epoch {
             return Err(CribleError::new(
                 ErrorCode::Internal,
                 format!(
@@ -637,23 +740,50 @@ impl GenerationStore {
                     index_dir.join(CURRENT_EPOCH_FILE_NAME).display(),
                     epoch.get(),
                     epoch_dir.join(RECORDS_FILE_NAME).display(),
-                    declared.get()
+                    meta.epoch.get()
                 ),
             ));
         }
 
         recover(&records, index_dir, &epoch_dir)?;
-        if rebuild_codes {
+        let observed = if for_write {
             rebuild_missing_codes(&records, &epoch_dir)?;
-        }
+            // The marker an epoch written before P5 lacks is completed here,
+            // before the recovery compares it with the lexical index: a
+            // read-only open never writes it (ADR-0088, decision 4).
+            records.ensure_passage_change_generation()?;
+            meta = records.meta()?;
+            // The lexical branch is a derived directory like `codes.bin`: it is
+            // caught up with the committed generation on a **write** open only
+            // (`docs/02`, "Reprise au démarrage"; ADR-0069, ADR-0087). A
+            // read-only open writes nothing under `lexical/`, so it cannot take
+            // the writer lock a live server holds nor delete files under its
+            // mappings.
+            recover_lexical(&records, &epoch_dir, &config.lexical, meta)?
+        } else {
+            lexical::observe(
+                &epoch_dir,
+                &config.lexical,
+                meta.generation,
+                meta.passage_change_generation,
+            )?
+        };
         let lease = Arc::new(EpochLease { epoch });
-        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
+        let snapshot = build_snapshot(
+            &records,
+            &epoch_dir,
+            schema,
+            PublishedLexical::from_observation(observed),
+            Arc::clone(&lease),
+        )?;
         ensure_manifest(&epoch_dir, epoch, &snapshot)?;
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),
             records,
             snapshot: ArcSwap::from(Arc::new(snapshot)),
+            lexical: config.lexical,
+            writable: for_write,
             lease,
             retained: Mutex::new(Vec::new()),
         })
@@ -740,6 +870,19 @@ impl GenerationStore {
 
         let (next_iid, delta) = write(&transaction, generation, meta.next_iid)?;
         records::advance_meta(&transaction, generation, next_iid)?;
+        // ADR-0088, decision 3: a generation that creates a live passage or
+        // tombstones one moves the marker of the lexical branch in the same
+        // transaction, so the commit point and the marker are atomic. A
+        // metadata patch writes neither and leaves the marker where it was.
+        let passage_change = changes_passage_text(&delta);
+        if passage_change {
+            records::mark_passage_change(&transaction, generation)?;
+        }
+        let marker = if passage_change {
+            Some(generation)
+        } else {
+            meta.passage_change_generation
+        };
 
         failpoint!("before_sqlite_commit");
         transaction
@@ -748,14 +891,37 @@ impl GenerationStore {
         let transaction_time = transaction_started.elapsed();
         failpoint!("after_sqlite_commit");
 
-        let snapshot_started = Instant::now();
         let previous = self.snapshot.load_full();
+        // Step 4 is measured on its own: the tantivy commit and its reader
+        // reload are as expensive as the snapshot they precede, and a measure
+        // must attribute them separately (ADR-0087). The step reports zero when
+        // it does no work at all — a patch, whose delta touches no text — and
+        // its real cost when it catches up a generation this process never
+        // published (ADR-0088, review point 8).
+        let lexical_started = Instant::now();
+        let lexical = index_lexical(
+            &self.records,
+            &epoch_dir,
+            &self.lexical,
+            &previous,
+            generation,
+            marker,
+            &delta,
+        )?;
+        let lexical_time = if lexical.worked {
+            lexical_started.elapsed()
+        } else {
+            Duration::ZERO
+        };
+
+        let snapshot_started = Instant::now();
         let snapshot = build_snapshot_after_commit(
             &self.records,
             &epoch_dir,
             &previous,
             generation,
             &delta,
+            PublishedLexical::from_step(lexical),
             Arc::clone(&self.lease),
         )?;
         let snapshot_time = snapshot_started.elapsed();
@@ -771,6 +937,7 @@ impl GenerationStore {
             generation,
             timings: CommitTimings {
                 transaction: transaction_time,
+                lexical: lexical_time,
                 manifest: manifest_time,
                 snapshot: snapshot_time,
             },
@@ -873,7 +1040,23 @@ impl GenerationStore {
     ) -> Result<(), CribleError> {
         let epoch_dir = epoch_directory(&self.index_dir, epoch);
         let lease = Arc::new(EpochLease { epoch });
-        let snapshot = build_snapshot(&records, &epoch_dir, schema, Arc::clone(&lease))?;
+        // The compaction writes the lexical index of the new epoch itself
+        // (`RECONSTRUIRE-LEXICAL`); the reader is opened from what the epoch
+        // holds, so a snapshot never publishes a branch the disk contradicts.
+        let meta = records.meta()?;
+        let observed = lexical::observe(
+            &epoch_dir,
+            &self.lexical,
+            meta.generation,
+            meta.passage_change_generation,
+        )?;
+        let snapshot = build_snapshot(
+            &records,
+            &epoch_dir,
+            schema,
+            PublishedLexical::from_observation(observed),
+            Arc::clone(&lease),
+        )?;
         write_manifest(&epoch_dir, epoch, &snapshot)?;
 
         let previous = std::mem::replace(&mut self.lease, lease);
@@ -958,14 +1141,16 @@ impl IndexState {
     }
 }
 
-/// Reads the schema `index.json` declares.
+/// Reads the configuration `index.json` declares.
 ///
 /// An index always carries `index.json`: [`GenerationStore::create`] refuses an
 /// index directory without it, and [`write_index_config`] is the only way the
 /// store writes one. A directory without it is therefore not a complete index,
 /// and its caller's schema must not become the only authority, or the filter
-/// structures could be built from a schema no index declares.
-fn declared_schema(index_dir: &Path) -> Result<Schema, CribleError> {
+/// structures could be built from a schema no index declares. The lexical branch
+/// is derived from the same file: the store takes `lexical.enabled`, `language`
+/// and `positions` from it, not from a caller.
+fn declared_config(index_dir: &Path) -> Result<IndexConfig, CribleError> {
     let path = index_dir.join(INDEX_CONFIG_FILE_NAME);
     let raw = fs::read_to_string(&path).map_err(|error| {
         CribleError::new(
@@ -983,7 +1168,7 @@ fn declared_schema(index_dir: &Path) -> Result<Schema, CribleError> {
             format!("{}: {}", path.display(), error.message()),
         )
     })?;
-    Ok(config.schema)
+    Ok(config)
 }
 
 /// Refuses a `schema` that differs from the one `index.json` declares.
@@ -991,9 +1176,12 @@ fn declared_schema(index_dir: &Path) -> Result<Schema, CribleError> {
 /// The schema is frozen (INV-16) and decides which filter structures exist. A
 /// store built with another schema would silently build structures no index
 /// declares, so the two are cross-checked at creation and at every open.
-fn check_declared_schema(index_dir: &Path, schema: &Schema) -> Result<(), CribleError> {
-    let declared = declared_schema(index_dir)?;
-    if &declared == schema {
+fn check_declared_schema(
+    config: &IndexConfig,
+    schema: &Schema,
+    index_dir: &Path,
+) -> Result<(), CribleError> {
+    if &config.schema == schema {
         return Ok(());
     }
     Err(CribleError::new(
@@ -1005,6 +1193,505 @@ fn check_declared_schema(index_dir: &Path, schema: &Schema) -> Result<(), Crible
             index_dir.join(INDEX_CONFIG_FILE_NAME).display()
         ),
     ))
+}
+
+/// Runs the lexical recovery of `docs/02-architecture.md` ("Reprise au
+/// démarrage") for the generation `records.sqlite` holds, then reports the state
+/// it leaves the index in.
+///
+/// It is a **write**-open step, like every reconstruction of a derived file
+/// (ADR-0069, ADR-0087): the caller runs it only when it opened the index for
+/// writing, so no read-only command takes the tantivy writer lock or removes
+/// files under a live server's mappings.
+///
+/// `Gt` is the payload of the last tantivy commit of the epoch, `M` the
+/// `meta.passage_change_generation` marker, `G` the generation the reference
+/// state committed (ADR-0088, decision 2):
+///
+/// - `M ≤ Gt ≤ G`: the index is up to date, so nothing is replayed — the case of
+///   a metadata patch, whose generation changes no text;
+/// - `Gt < G` with `M > Gt`: the passages created after `Gt` are indexed and
+///   those tombstoned after it are removed, then one commit carries `G`;
+/// - `Gt > G`: no commit produces that state — a restored epoch without its
+///   derived directory, or a directory copied by hand — so the whole lexical
+///   index is rebuilt from `records.sqlite`;
+/// - `M > G`, a payload that is not a generation, a `meta.json`, a segment or a
+///   directory tantivy does not open: the state is undecidable, so the index is
+///   rebuilt as for `Gt > G`, with the case and the original message logged
+///   (ADR-0088, decisions 5 and 6).
+///
+/// A configuration that disables the branch does nothing at all: a `lexical/`
+/// directory an earlier configuration left behind is never read, never written
+/// and never removed. An epoch that never carried a passage is not caught up
+/// either: `lexical/` appears with the first passage (`docs/02`, step 4).
+fn recover_lexical(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    config: &LexicalConfig,
+    meta: records::Meta,
+) -> Result<LexicalObservation, CribleError> {
+    let observe = |meta: records::Meta| {
+        lexical::observe(
+            epoch_dir,
+            config,
+            meta.generation,
+            meta.passage_change_generation,
+        )
+    };
+    let observed = observe(meta)?;
+    match observed.status {
+        // Up to date, nothing to search, or no branch at all.
+        LexicalStatus::Ready { .. } | LexicalStatus::Missing | LexicalStatus::Disabled => {
+            Ok(observed)
+        }
+        LexicalStatus::Behind { committed } => {
+            let since = committed.unwrap_or_else(|| Generation::new(0));
+            catch_up_lexical(records, epoch_dir, config, meta.generation, since)?;
+            observe(meta)
+        }
+        LexicalStatus::Ahead { committed } => {
+            let case = format!(
+                "the payload {} is ahead of the committed generation {}",
+                committed.get(),
+                meta.generation.get()
+            );
+            rebuild(records, epoch_dir, config, meta.generation, &case)?;
+            observe(meta)
+        }
+        LexicalStatus::NotCertified { committed } => {
+            // Cannot happen once the marker is completed on the write open: the
+            // arm exists so a state this build does not expect is repaired
+            // rather than published.
+            let payload = committed.map_or_else(
+                || "none".to_owned(),
+                |committed| committed.get().to_string(),
+            );
+            let case = format!(
+                "the payload {payload} is not certified for the committed generation {}",
+                meta.generation.get()
+            );
+            rebuild(records, epoch_dir, config, meta.generation, &case)?;
+            observe(meta)
+        }
+        LexicalStatus::Unreadable => {
+            rebuild(
+                records,
+                epoch_dir,
+                config,
+                meta.generation,
+                "the lexical index is unreadable",
+            )?;
+            observe(meta)
+        }
+    }
+}
+
+/// Rebuilds the whole lexical index of an epoch from `records.sqlite`.
+///
+/// The directory is derived, so it is removed before the rebuild rather than
+/// appended to: a lexical index ahead of the reference state holds documents
+/// no live passage backs, and an unreadable one holds nothing this build can
+/// trust. The rebuild is the repair of the restart (`ADR-0088`, decisions 2 and
+/// 6); a rebuild decided outside it is [`rebuild_lexical`] or the compaction.
+///
+/// The commit carries `generation` as its payload, so it is at least the
+/// marker `meta.passage_change_generation` of the epoch it describes
+/// (`ADR-0088`, decision 8): the state is then [`LexicalStatus::Ready`], and a
+/// reader opened from what the epoch holds serves it.
+pub(crate) fn rebuild_lexical_index(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    config: &LexicalConfig,
+    generation: Generation,
+) -> Result<LexicalIndex, CribleError> {
+    lexical::remove_index(epoch_dir)?;
+    let mut writer = lexical::writer(epoch_dir, config)?;
+    records::for_each_live_passage(records.connection(), |iid, text| writer.add(iid, text))?;
+    writer.commit(generation)?;
+    writer.reader()
+}
+
+/// Logs the case that makes the restart rebuild the lexical index, then rebuilds
+/// it (`ADR-0088`, decisions 5 and 6).
+///
+/// The log names the epoch through its directory and the case. For an unreadable
+/// state, [`lexical::observe`] has already logged the message tantivy produced,
+/// so the two lines together say where, why and what the failure said.
+fn rebuild(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    config: &LexicalConfig,
+    generation: Generation,
+    case: &str,
+) -> Result<LexicalIndex, CribleError> {
+    tracing::warn!(
+        lexical_index = %lexical::index_directory(epoch_dir).display(),
+        case,
+        "rebuilding the lexical index from records.sqlite; no generation, no manifest and no \
+         visible state change (ADR-0088)"
+    );
+    rebuild_lexical_index(records, epoch_dir, config, generation)
+}
+
+/// Outcome of [`rebuild_lexical`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildOutcome {
+    /// Generation the reference state holds; the job publishes no new one.
+    pub generation: Generation,
+    /// Whether the job rebuilt the lexical index.
+    ///
+    /// `false` for an epoch whose `passage_change_generation` marker is `0`:
+    /// it never carried a passage, so `lexical/` stays absent (`docs/02`,
+    /// step 4).
+    pub rebuilt: bool,
+}
+
+/// The job of `RECONSTRUIRE-LEXICAL`: rebuilds the lexical index of the
+/// published epoch from the texts `records.sqlite` stores, whatever state the
+/// index was in, and leaves the generations untouched.
+///
+/// A change of `lexical.language` or `lexical.positions` changes no text, so the
+/// state stays [`LexicalStatus::Ready`] and the recovery of a write open repairs
+/// nothing (`ADR-0088`, decision 2): only an explicit rebuild applies the new
+/// analysis chain. The server runs this job when a `PATCH` changes one of those
+/// two settings (`docs/04`, "Ce qui est figé, ce qui est réglable"); `crible
+/// rebuild-lexical` runs it on demand.
+///
+/// The store must be open for **writing**: the rebuild removes `lexical/` and
+/// commits a new tantivy index, which is a write under the epoch (`ADR-0069`,
+/// `ADR-0087`). The payload of the commit is the committed generation, so the
+/// criterion `M ≤ Gt ≤ G` holds afterwards (`ADR-0088`). The snapshot the store
+/// publishes next carries a reader opened **after** the rebuild, so a query
+/// started from then on reads the new index. A snapshot taken before the call
+/// keeps reading the files it opened: the removal leaves them reachable to that
+/// reader alone, and only under POSIX.
+///
+/// It creates no generation, no epoch and no manifest: the reference state is
+/// the authority, and the rebuild only restores what derives from it
+/// (`docs/02`, "Reprise au démarrage"). An epoch that never carried a passage has
+/// nothing to rebuild, and gets no `lexical/` directory either (`docs/02`, step
+/// 4); an index that disables the branch is refused rather than served an index
+/// nothing would read. The returned [`RebuildOutcome`] also tells whether the
+/// job rebuilt the index.
+pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<RebuildOutcome, CribleError> {
+    if !store.writable {
+        return Err(CribleError::new(
+            ErrorCode::Internal,
+            "the rebuild of the lexical index removes and commits files under the epoch, so it \
+             needs a store opened for writing (`GenerationStore::open`), not one a read command \
+             opened (ADR-0069, ADR-0087)"
+                .to_owned(),
+        ));
+    }
+    let config = store.lexical.clone();
+    if !config.enabled {
+        return Err(CribleError::new(
+            ErrorCode::InvalidRequest,
+            "the index configuration disables the lexical branch (`lexical.enabled`), so there \
+             is no lexical index to rebuild; enable the branch before rebuilding it"
+                .to_owned(),
+        ));
+    }
+    let meta = store.records.meta()?;
+    // `0` is the marker of an epoch that never created or killed a passage
+    // (`ADR-0088`, decision 3): a reader of it renders nothing, and `docs/02`
+    // makes `lexical/` appear with the first passage.
+    if matches!(meta.passage_change_generation.map(Generation::get), Some(0)) {
+        return Ok(RebuildOutcome {
+            generation: meta.generation,
+            rebuilt: false,
+        });
+    }
+
+    let epoch_dir = epoch_directory(&store.index_dir, store.lease.epoch);
+    // The rebuild opens a reader over the commit it just wrote; the job
+    // re-observes the state instead of asserting it, so the snapshot publishes
+    // what the disk and the marker certify (`ADR-0088`, decision 5).
+    drop(rebuild_lexical_index(
+        &store.records,
+        &epoch_dir,
+        &config,
+        meta.generation,
+    )?);
+    let observed = lexical::observe(
+        &epoch_dir,
+        &config,
+        meta.generation,
+        meta.passage_change_generation,
+    )?;
+    publish_lexical_reader(
+        store,
+        PublishedLexical::from_observation(observed),
+        meta.generation,
+    );
+    Ok(RebuildOutcome {
+        generation: meta.generation,
+        rebuilt: true,
+    })
+}
+
+/// Replaces the lexical branch of the published snapshot by `published`, keeping
+/// every other structure of the snapshot.
+///
+/// The rebuild of [`rebuild_lexical`] changes the derived index alone: the
+/// segments, the codes and the filter structures describe the same epoch and the
+/// same `generation`, so the snapshot is rebuilt by sharing them rather than by
+/// reading them again (`docs/02`, "Concurrence"; `ADR-0043`).
+fn publish_lexical_reader(
+    store: &GenerationStore,
+    published: PublishedLexical,
+    generation: Generation,
+) {
+    let previous = store.snapshot();
+    let snapshot = Snapshot {
+        generation,
+        segments: previous.segments.clone(),
+        codes: previous.codes.clone(),
+        filters: previous.filters.clone(),
+        lexical: published.reader,
+        lexical_status: published.status,
+        lease: Arc::clone(&previous.lease),
+    };
+    store.snapshot.store(Arc::new(snapshot));
+}
+
+/// Replays into the lexical index of `epoch_dir` the generations after `since`,
+/// then commits `generation` and returns a reader over it.
+/// `since` must be behind `generation`: the caller either saw a payload behind
+/// the reference state, or holds no lexical commit at all. Only the passages
+/// SQLite still holds alive are indexed, and the tombstones applied after
+/// `since` remove what the index may already carry.
+fn catch_up_lexical(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    config: &LexicalConfig,
+    generation: Generation,
+    since: Generation,
+) -> Result<LexicalIndex, CribleError> {
+    let mut writer = lexical::writer(epoch_dir, config)?;
+    records::for_each_passage_created_after(records.connection(), since, |iid, text| {
+        writer.add(iid, text)
+    })?;
+    for iid in records::iids_dead_after(records.connection(), since)? {
+        writer.delete(iid);
+    }
+    writer.commit(generation)?;
+    writer.reader()
+}
+
+/// The lexical branch a snapshot publishes: the reader of the generation, when
+/// the state allows one, and the state itself (`ADR-0088`, decision 5).
+///
+/// The two travel together because a reader is only ever published with the
+/// state that certifies it: a snapshot that exposed a reader under any other
+/// status would serve a lexical index of another generation (INV-02, INV-03).
+struct PublishedLexical {
+    /// Reader over the commit, absent unless `status` is
+    /// [`LexicalStatus::Ready`].
+    reader: Option<Arc<LexicalIndex>>,
+    /// State of the lexical index of the epoch.
+    status: LexicalStatus,
+}
+
+impl PublishedLexical {
+    /// Publishes the reader an observation opened, if any.
+    fn from_observation(observation: LexicalObservation) -> Self {
+        Self {
+            reader: observation.index.map(Arc::new),
+            status: observation.status,
+        }
+    }
+
+    /// Publishes no reader under `status`.
+    fn without_reader(status: LexicalStatus) -> Self {
+        Self {
+            reader: None,
+            status,
+        }
+    }
+
+    /// Publishes what step 4 returned.
+    fn from_step(step: LexicalStep) -> Self {
+        Self {
+            reader: step.index,
+            status: step.status,
+        }
+    }
+}
+
+/// The outcome of step 4 for one generation: the lexical branch the snapshot
+/// publishes, the state it was observed in, and whether the step did any work.
+struct LexicalStep {
+    /// Reader of the lexical branch, or `None` when the snapshot has none.
+    index: Option<Arc<LexicalIndex>>,
+    /// State of the lexical index once the step returned.
+    status: LexicalStatus,
+    /// Whether the step did work: a tantivy commit, a rebuild, or the catch-up
+    /// of a generation this process never published. The attach measures the
+    /// duration of the step only when it is true, so the `lexical` field of
+    /// `AttachDurations` reports zero for a metadata patch, which does no work
+    /// at all (`ADR-0087`, `ADR-0088`).
+    worked: bool,
+}
+
+impl LexicalStep {
+    /// A step that did no work and publishes `index` with `status`.
+    fn reused(index: Option<Arc<LexicalIndex>>, status: LexicalStatus) -> Self {
+        Self {
+            index,
+            status,
+            worked: false,
+        }
+    }
+}
+
+/// Step 4 of `docs/02-architecture.md`: the passages a generation created and
+/// the ones it tombstoned reach tantivy, then a reader over the commit becomes
+/// the lexical branch of the snapshot (`docs/03`, "Branche lexicale").
+///
+/// The step does nothing when the configuration disables the branch, and when
+/// the generation changes no passage text: a metadata patch, and an attach that
+/// only rewrites document rows, walk steps 3, 5 and 6, and `docs/02` excludes
+/// step 4 for both. The snapshot then keeps the reader and the state of the
+/// previous generation: the lexical index is still up to date for the new
+/// generation, because `M ≤ Gt` and nothing after `Gt` changed a text
+/// (ADR-0088, decision 2).
+///
+/// The commit of the new generation has already happened in SQLite, so an error
+/// here leaves the reference state one generation ahead of the lexical index:
+/// the next [`GenerationStore::open`] catches the lexical index up
+/// ([`recover_lexical`]), which is the `M > Gt` branch of the restart.
+fn index_lexical(
+    records: &RecordStore,
+    epoch_dir: &Path,
+    config: &LexicalConfig,
+    previous: &Snapshot,
+    generation: Generation,
+    marker: Option<Generation>,
+    delta: &CommitDelta,
+) -> Result<LexicalStep, CribleError> {
+    if !config.enabled {
+        return Ok(LexicalStep::reused(None, LexicalStatus::Disabled));
+    }
+    // The incremental branch replays `delta` alone, so it is sound only when the
+    // published snapshot was itself certified: `Ready` means the epoch's lexical
+    // index was up to date at the previous generation, and `Missing` that the
+    // epoch never carried a passage, so an empty index plus `delta` is complete.
+    // Any other state — an index behind, ahead, not certified or unreadable, as
+    // a read-only open or the epoch a compaction adopted publishes — must go
+    // through `observe` and its replay: adding `delta` to an index that already
+    // missed generations, then committing `G+1`, would certify an incomplete
+    // index as up to date (ADR-0088, decisions 2 and 6; INV-04, INV-05).
+    let certified = matches!(
+        previous.lexical_status(),
+        LexicalStatus::Ready { .. } | LexicalStatus::Missing
+    );
+    let consecutive =
+        certified && previous.generation().get().checked_add(1) == Some(generation.get());
+    if consecutive && !changes_passage_text(delta) {
+        return Ok(LexicalStep::reused(
+            previous.shared_lexical().cloned(),
+            previous.lexical_status(),
+        ));
+    }
+    if consecutive {
+        let mut writer = lexical::writer(epoch_dir, config)?;
+        for passage in delta.created.iter().filter(|passage| !passage.dead) {
+            writer.add(passage.iid, &passage.text)?;
+        }
+        for iid in &delta.tombstones {
+            writer.delete(*iid);
+        }
+        writer.commit(generation)?;
+        let reader = writer.reader()?;
+        // Step 4 is complete: tantivy committed `generation` and a reader
+        // reloaded the committed state. The snapshot is not published yet
+        // (`after_publish` is step 6).
+        failpoint!("after_lexical_commit");
+        return Ok(LexicalStep {
+            index: Some(Arc::new(reader)),
+            status: LexicalStatus::Ready {
+                committed: generation,
+            },
+            worked: true,
+        });
+    }
+
+    // A generation this process committed but never published (a manifest that
+    // could not be written, a crash at a later step): `delta` leaves its rows
+    // out, as it does for the filter structures, so the state of the epoch is
+    // observed and the missing generations are replayed from `records.sqlite`
+    // instead.
+    let observed = lexical::observe(epoch_dir, config, generation, marker)?;
+    match observed.status {
+        // Nothing was missed: the lexical index already describes this
+        // generation, and only the publication of the snapshot is missing. The
+        // catch-up this step used to run committed an empty generation for
+        // nothing (ADR-0088, decision 2).
+        LexicalStatus::Ready { .. } => Ok(LexicalStep {
+            index: observed.index.map(Arc::new),
+            status: observed.status,
+            worked: true,
+        }),
+        LexicalStatus::Behind { committed } => {
+            let since = committed.unwrap_or_else(|| Generation::new(0));
+            let reader = catch_up_lexical(records, epoch_dir, config, generation, since)?;
+            failpoint!("after_lexical_commit");
+            Ok(LexicalStep {
+                index: Some(Arc::new(reader)),
+                status: LexicalStatus::Ready {
+                    committed: generation,
+                },
+                worked: true,
+            })
+        }
+        LexicalStatus::Ahead { committed } => {
+            let case = format!(
+                "the payload {} is ahead of the committed generation {}",
+                committed.get(),
+                generation.get()
+            );
+            let reader = rebuild(records, epoch_dir, config, generation, &case)?;
+            failpoint!("after_lexical_commit");
+            Ok(LexicalStep {
+                index: Some(Arc::new(reader)),
+                status: LexicalStatus::Ready {
+                    committed: generation,
+                },
+                worked: true,
+            })
+        }
+        LexicalStatus::Missing | LexicalStatus::NotCertified { .. } | LexicalStatus::Unreadable => {
+            let reader = rebuild(
+                records,
+                epoch_dir,
+                config,
+                generation,
+                "the lexical index is missing, unreadable or not certified",
+            )?;
+            failpoint!("after_lexical_commit");
+            Ok(LexicalStep {
+                index: Some(Arc::new(reader)),
+                status: LexicalStatus::Ready {
+                    committed: generation,
+                },
+                worked: true,
+            })
+        }
+        LexicalStatus::Disabled => Ok(LexicalStep::reused(None, LexicalStatus::Disabled)),
+    }
+}
+
+/// Whether `delta` writes a passage text the lexical index must follow: a
+/// created passage still alive, or a tombstone.
+///
+/// A metadata patch changes neither, so it neither runs step 4 nor moves
+/// `meta.passage_change_generation`; an attach that only rewrites `documents`
+/// rows is in the same case. The predicate drives both writes, so the marker and
+/// the tantivy commit can never disagree about whether a generation changed the
+/// text (`docs/02`, step 3 and step 4; ADR-0088, decisions 1 and 3).
+fn changes_passage_text(delta: &CommitDelta) -> bool {
+    !delta.tombstones.is_empty() || delta.created.iter().any(|passage| !passage.dead)
 }
 
 /// Writes one [`GenerationChange`] inside the transaction of its generation,
@@ -1351,6 +2038,7 @@ fn build_snapshot(
     records: &RecordStore,
     epoch_dir: &Path,
     schema: &Schema,
+    lexical: PublishedLexical,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     let segments = segments_of(records, epoch_dir)?;
@@ -1360,6 +2048,8 @@ fn build_snapshot(
         segments,
         codes,
         filters: FilterIndex::from_records(records.connection(), schema)?,
+        lexical: lexical.reader,
+        lexical_status: lexical.status,
         lease,
     })
 }
@@ -1383,6 +2073,7 @@ fn build_snapshot_after_commit(
     previous: &Snapshot,
     generation: Generation,
     delta: &CommitDelta,
+    lexical: PublishedLexical,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
     let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
@@ -1401,6 +2092,8 @@ fn build_snapshot_after_commit(
         segments,
         codes,
         filters,
+        lexical: lexical.reader,
+        lexical_status: lexical.status,
         lease,
     })
 }
@@ -1534,6 +2227,7 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::sync::Mutex;
+    use tantivy::schema::IndexRecordOption;
 
     use crate::records::{DocumentRecord, PassageRecord};
 
@@ -1570,6 +2264,15 @@ mod tests {
         format!(
             r#"{{"name":"{name}","model":"m","reference_precision":"fp16","schema":{schema},"cluster_by":[],"lexical":{{"enabled":false,"language":"fr","positions":false}},"search":{{"scan":"none","rescore_candidates":10,"exact_threshold":10,"candidates_per_branch":10,"fusion":{{"method":"rrf"}}}},"ingest":{{"acceptance_sample":1,"acceptance_min_cosine":0.9}},"compaction":{{"dead_ratio":0.1}}}}"#
         )
+    }
+
+    /// Writes an index configuration of the empty schema that enables the
+    /// lexical branch, French, without positions.
+    fn write_lexical_config(index: &std::path::Path) {
+        let raw = test_config("test", EMPTY_SCHEMA_JSON)
+            .replace(r#""enabled":false"#, r#""enabled":true"#);
+        super::write_index_config(index, &raw)
+            .unwrap_or_else(|error| panic!("the index configuration: {error}"));
     }
 
     /// Creation writes the pointer file, readable as a plain decimal number, and
@@ -1916,6 +2619,157 @@ mod tests {
         let reopened = GenerationStore::open(&index, &schema_with_year())
             .expect("the declared schema still opens the index");
         assert_eq!(reopened.epoch(), Epoch::new(1));
+    }
+
+    #[test]
+    fn rebuild_lexical_refuses_a_store_opened_read_only() {
+        // The job removes and commits files under the epoch, so a store a read
+        // command opened must refuse it instead of taking the tantivy writer
+        // lock a live server holds (ADR-0087, decision 1).
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_lexical_config(&index);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+
+        let mut store = GenerationStore::open_read_only(&index, &empty_schema())
+            .expect("the index opens for reading");
+        let error = super::rebuild_lexical(&mut store)
+            .expect_err("a read-only store must not rebuild the lexical index");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+        assert!(
+            !index
+                .join(EPOCHS_DIR_NAME)
+                .join("1")
+                .join("lexical")
+                .exists(),
+            "a refused rebuild must write nothing under the epoch"
+        );
+    }
+
+    /// An epoch that never carried a passage has nothing to rebuild, and gets no
+    /// `lexical/` directory: the branch appears with the first passage
+    /// (`docs/02`, step 4).
+    #[test]
+    fn rebuild_lexical_leaves_an_epoch_without_passage_without_a_lexical_directory() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_lexical_config(&index);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+
+        let mut store =
+            GenerationStore::open(&index, &empty_schema()).expect("the index opens for writing");
+        let outcome = super::rebuild_lexical(&mut store)
+            .expect("rebuilding an epoch without passage is a no-op, not an error");
+        assert_eq!(outcome.generation, Generation::new(0));
+        assert!(
+            !outcome.rebuilt,
+            "an epoch without passage has nothing to rebuild"
+        );
+        assert!(
+            !index
+                .join(EPOCHS_DIR_NAME)
+                .join("1")
+                .join("lexical")
+                .exists(),
+            "an epoch without passage must not gain a lexical directory"
+        );
+        assert_eq!(
+            store.snapshot().lexical_status(),
+            super::LexicalStatus::Missing,
+            "the branch still has nothing to serve"
+        );
+    }
+
+    /// The reason of the job: a change of `lexical.positions` changes no text, so
+    /// the state stays `Ready` and the recovery of a write open repairs nothing
+    /// (`ADR-0088`, decision 2). Only [`super::rebuild_lexical`] applies the new
+    /// analysis chain, rebuilds the index with it, and publishes a snapshot whose
+    /// reader is the one it just opened.
+    #[test]
+    fn rebuild_lexical_applies_the_analysis_chain_and_publishes_its_reader() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_lexical_config(&index);
+        let mut store = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .expect("the index is created");
+        plan_test_first_generation(&mut store);
+
+        let committed = super::LexicalStatus::Ready {
+            committed: Generation::new(1),
+        };
+        assert_eq!(
+            store.snapshot().lexical_status(),
+            committed,
+            "the commit of a generation with passages builds the lexical index"
+        );
+        // The fixture discriminates: the commit built the index with the chain
+        // `index.json` declares, without positions.
+        assert_eq!(
+            published_text_record(&store),
+            IndexRecordOption::WithFreqs,
+            "the fixture index must start without term positions"
+        );
+
+        // What a `PATCH` of `lexical.positions` will do to the live store (P6):
+        // the setting changes, no text does, and the state stays `Ready`.
+        store.lexical.positions = true;
+        let outcome = super::rebuild_lexical(&mut store)
+            .expect("the job rebuilds the lexical index of an epoch with passages");
+        assert_eq!(
+            outcome.generation,
+            Generation::new(1),
+            "the job creates no generation and returns the committed one"
+        );
+        assert!(outcome.rebuilt, "the job must report the rebuild it ran");
+
+        let snapshot = store.snapshot();
+        assert_eq!(
+            snapshot.lexical_status(),
+            committed,
+            "the rebuilt index commits the reference generation as its payload"
+        );
+        assert!(
+            snapshot.lexical().is_some(),
+            "the published snapshot must carry the reader the job opened"
+        );
+        assert_eq!(
+            published_text_record(&store),
+            IndexRecordOption::WithFreqsAndPositions,
+            "the job must rebuild the index with the analysis chain of the store"
+        );
+    }
+
+    /// The index option the published lexical index records for its text field,
+    /// which is the observable of `lexical.positions` in the rebuilt index.
+    fn published_text_record(store: &GenerationStore) -> IndexRecordOption {
+        let snapshot = store.snapshot();
+        let lexical = snapshot
+            .lexical()
+            .unwrap_or_else(|| panic!("the snapshot must publish a lexical reader"));
+        let searcher = lexical.searcher();
+        let schema = searcher.index().schema();
+        let field = schema
+            .get_field("text")
+            .unwrap_or_else(|_| panic!("the lexical schema must declare the text field"));
+        let entry = schema.get_field_entry(field);
+        let tantivy::schema::FieldType::Str(options) = entry.field_type() else {
+            panic!("the text field of the lexical schema must be a text field");
+        };
+        options
+            .get_indexing_options()
+            .unwrap_or_else(|| panic!("the text field of the lexical schema must be indexed"))
+            .index_option()
     }
 
     /// Opening an index whose `index.json` disappeared is refused: the store
@@ -2493,6 +3347,8 @@ mod tests {
             segments: vec![meta.clone()],
             codes: vec![std::sync::Arc::new(vec![0_u64])],
             filters: base.filters().clone(),
+            lexical: None,
+            lexical_status: super::LexicalStatus::Disabled,
             lease: std::sync::Arc::new(super::EpochLease {
                 epoch: Epoch::new(2),
             }),

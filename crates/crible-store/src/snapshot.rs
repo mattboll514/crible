@@ -111,7 +111,7 @@ pub(crate) const SNAPSHOTS_DIRECTORY: &str = "snapshots";
 ///
 /// Absent in P3: tantivy arrives in P5, and the snapshot copies it only when the
 /// epoch carries it (ADR-0064, decision 4).
-pub(crate) const LEXICAL_DIR_NAME: &str = "lexical";
+pub(crate) const LEXICAL_DIR_NAME: &str = crate::lexical::LEXICAL_DIR_NAME;
 
 /// Prefix of the staging directory of a snapshot, inside `snapshots/`.
 const STAGING_PREFIX: &str = ".tmp-";

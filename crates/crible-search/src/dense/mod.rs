@@ -36,7 +36,10 @@ pub mod exact;
 mod planner;
 pub mod rescore;
 
+pub(crate) use planner::grouped_candidates;
 pub use planner::{DenseQuery, Plan, Strategy, candidates, plan, search, search_grouped};
+
+use std::collections::HashMap;
 
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};
@@ -128,10 +131,61 @@ impl Ord for Scored {
         // Greater is better: a higher score wins, and at equal score the
         // smaller key wins. A window wraps its heap in `Reverse`, so the top of
         // the heap is the candidate that `pop` removes first.
-        self.score
-            .total_cmp(&other.score)
-            .then_with(|| other.key.cmp(&self.key))
+        compare_ranked(self.score, &self.key, other.score, &other.key)
     }
+}
+
+impl crate::group::Candidate for Scored {
+    fn iid(&self) -> Iid {
+        self.iid
+    }
+
+    fn key(&self) -> &str {
+        &self.key
+    }
+}
+
+/// Rank and score of every candidate of a branch, by internal identifier.
+///
+/// The grouping reorders the candidates (a grouped answer gathers the passages
+/// of a document, ADR-0075), so the rank of a result in its branch cannot be
+/// read from the answer: it is read here, from the branch ranking, before the
+/// grouping touches it. It lives in this module so the dense branch of the
+/// pipeline and [`search_grouped`] share the one calculation.
+pub(crate) fn ranks(branch: &[Scored]) -> HashMap<Iid, crate::fusion::BranchScore> {
+    branch
+        .iter()
+        .enumerate()
+        .map(|(position, candidate)| {
+            let rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
+            (
+                candidate.iid,
+                crate::fusion::BranchScore {
+                    rank,
+                    score: candidate.score,
+                },
+            )
+        })
+        .collect()
+}
+
+/// The order of the answer: descending score, then ascending **textual** key
+/// `doc_id#ord` (ADR-0045, ADR-0079).
+///
+/// Three lists share it: the dense branch ([`Scored`]), the lexical branch,
+/// which returns the same type, and the fusion of the two
+/// ([`crate::fusion::Fused`]). It lives in one function so the three cannot
+/// drift apart on a tie, which is what ADR-0072, decision 3, requires of the two
+/// branches and what `FUSIONNER-HYBRIDE` extends to the fused ranking.
+pub(crate) fn compare_ranked(
+    score: f32,
+    key: &str,
+    other_score: f32,
+    other_key: &str,
+) -> std::cmp::Ordering {
+    score
+        .total_cmp(&other_score)
+        .then_with(|| other_key.cmp(key))
 }
 
 /// Cosine between the normalised `query` and the reference vector of `iid`.

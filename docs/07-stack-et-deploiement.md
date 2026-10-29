@@ -12,7 +12,7 @@ crible/
     crible-encode/           # ONNX Runtime (ort) + tokenizers : chargement des modèles, pooling, prompts, cache LRU des requêtes
     crible-search/           # pool, stratégies dense (exact, binaire + rescoring), noyaux SIMD, BM25 limité au pool, fusion, regroupement, multi-index, explain
     crible-server/           # axum : routes, auth, limites, erreurs, écrivain et jobs, analytics, journal de debug, OpenAPI
-    crible/                  # binaire `crible` (CLI) : serve, index, attach, ingest, patch, search, compact, export, snapshot, restore, inspect, eval, stats, key
+    crible/                  # binaire `crible` (CLI) : serve, index, attach, ingest, patch, search, compact, rebuild-lexical, export, snapshot, restore, inspect, eval, stats, key
   clients/python/            # paquet `crible` : BatchWriter (pyarrow) + client HTTP (uv)
   tools/                     # scripts Python : export ONNX, jeux synthétiques, référence numpy
   docker/                    # Dockerfile, compose d'exemple, crible.example.toml

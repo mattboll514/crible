@@ -30,6 +30,12 @@ parquet.workspace = true
 rayon.workspace = true
 roaring.workspace = true
 rusqlite.workspace = true
+# MES-06: the `lexical_latency` harness replicates the collector of
+# `crible-search` to count the candidates a segment hands over (block-WAND
+# finding of ADR-0091); `tantivy` 0.27 is already the lexical entry of
+# `docs/07-stack-et-deploiement.md` and a dependency of `crible-store` and
+# `crible-search`, so this adds no crate outside the stack.
+tantivy.workspace = true
 tempfile.workspace = true
 zstd.workspace = true
 

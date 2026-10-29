@@ -1,0 +1,105 @@
+{
+  "synth-large": [
+    {
+      "label": "target-537000",
+      "target": 537000,
+      "filter": {
+        "categorie": "cat-01"
+      },
+      "probe_pool_size": 537500
+    },
+    {
+      "label": "target-1000000",
+      "target": 1000000,
+      "filter": {
+        "$or": [
+          {
+            "categorie": "cat-01"
+          },
+          {
+            "categorie": "cat-09"
+          }
+        ]
+      },
+      "probe_pool_size": 1075000
+    },
+    {
+      "label": "target-2150000",
+      "target": 2150000,
+      "filter": {
+        "$or": [
+          {
+            "categorie": "cat-01"
+          },
+          {
+            "categorie": "cat-09"
+          },
+          {
+            "categorie": "cat-03"
+          },
+          {
+            "categorie": "cat-11"
+          }
+        ]
+      },
+      "probe_pool_size": 2150000
+    },
+    {
+      "label": "target-7740000",
+      "target": 7740000,
+      "filter": {
+        "$or": [
+          {
+            "categorie": "cat-01"
+          },
+          {
+            "categorie": "cat-09"
+          },
+          {
+            "categorie": "cat-03"
+          },
+          {
+            "categorie": "cat-11"
+          },
+          {
+            "categorie": "cat-13"
+          },
+          {
+            "categorie": "cat-07"
+          },
+          {
+            "categorie": "cat-15"
+          },
+          {
+            "categorie": "cat-05"
+          },
+          {
+            "categorie": "cat-14"
+          },
+          {
+            "categorie": "cat-08"
+          },
+          {
+            "categorie": "cat-10"
+          },
+          {
+            "categorie": "cat-04"
+          },
+          {
+            "categorie": "cat-02"
+          },
+          {
+            "categorie": "cat-06"
+          },
+          {
+            "categorie": "cat-12"
+          },
+          {
+            "categorie": "cat-00"
+          }
+        ]
+      },
+      "probe_pool_size": 7740000
+    }
+  ]
+}
