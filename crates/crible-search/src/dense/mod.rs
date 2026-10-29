@@ -36,7 +36,10 @@ pub mod exact;
 mod planner;
 pub mod rescore;
 
+pub(crate) use planner::grouped_candidates;
 pub use planner::{DenseQuery, Plan, Strategy, candidates, plan, search, search_grouped};
+
+use std::collections::HashMap;
 
 use crible_core::config::ReferencePrecision;
 use crible_core::error::{CribleError, ErrorCode};
@@ -140,6 +143,30 @@ impl crate::group::Candidate for Scored {
     fn key(&self) -> &str {
         &self.key
     }
+}
+
+/// Rank and score of every candidate of a branch, by internal identifier.
+///
+/// The grouping reorders the candidates (a grouped answer gathers the passages
+/// of a document, ADR-0075), so the rank of a result in its branch cannot be
+/// read from the answer: it is read here, from the branch ranking, before the
+/// grouping touches it. It lives in this module so the dense branch of the
+/// pipeline and [`search_grouped`] share the one calculation.
+pub(crate) fn ranks(branch: &[Scored]) -> HashMap<Iid, crate::fusion::BranchScore> {
+    branch
+        .iter()
+        .enumerate()
+        .map(|(position, candidate)| {
+            let rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
+            (
+                candidate.iid,
+                crate::fusion::BranchScore {
+                    rank,
+                    score: candidate.score,
+                },
+            )
+        })
+        .collect()
 }
 
 /// The order of the answer: descending score, then ascending **textual** key

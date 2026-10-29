@@ -34,9 +34,10 @@
 //! from its single non-zero component: the fixture orders the candidates and
 //! the tests can state the expected answer in one line.
 //!
-//! `dense::search_grouped` is the pipeline entry point under test: candidates,
-//! regrouping, then payload. The over-sampling rule itself is pinned by the unit
-//! tests of `crible_search::group::candidates_per_branch`.
+//! `dense::search_grouped` composes `dense::grouped_candidates`, the entry point
+//! the pipeline reads: candidates, regrouping, then payload. The over-sampling
+//! rule itself is pinned by the unit tests of
+//! `crible_search::group::candidates_per_branch`.
 
 mod common;
 

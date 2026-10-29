@@ -552,14 +552,14 @@ cité de son rapport, avec sa ligne.
 | Encodage fp32, p95 | 55,763 ms | `docs/mesures/MES-05-latence-encodage.md:85` (passe 1 ; passe 2 : 56,361 ms) |
 | Filtre bitmap `keyword`, p95 (`partie=corps`) | 0,0522 ms | `docs/mesures/MES-14-cout-filtres-intervalles.md:182` (p50 50,9 µs, p95 52,2 µs) |
 | Scan binaire, pool entier, p95 | 44,132 ms | `docs/mesures/MES-02-latence-scan-binaire.md:124` |
-| Rescoring livré, groupe, N = 1000, p95 | 16,05 ms | `docs/mesures/MES-03-latence-rescoring.md:1414` (14,65 à 16,05 ms) |
+| Rescoring livré, groupe, N = 5000, p95 | 31,24 ms | `docs/mesures/MES-03-latence-rescoring.md:1418` (20,03 à 31,24 ms) |
 | Payload, k = 10 | 1,0 ms | `docs/03-recherche.md:155` |
-| **Somme soustraite** | **116,997 ms** | |
-| **Reste pour la branche lexicale** | **581,003 ms** | |
+| **Somme soustraite** | **132,187 ms** | |
+| **Reste pour la branche lexicale** | **565,813 ms** | |
 
 Le terme « filtre » est le filtre **bitmap `keyword`**, au **p95** : c'est le cas
 que le moteur paie sur une clause de pool, et non un filtre d'intervalle, dont le
-coût dépend du domaine. Le reste vaut **581,003 ms**, contre les « environ
+coût dépend du domaine. Le reste vaut **565,813 ms**, contre les « environ
 560 ms » attendus par ADR-0091 : la différence vient des valeurs réellement
 publiées par MES-02, MES-03 et MES-05, légèrement supérieures aux estimations du
 tableau de `docs/03`. Ce reste **n'est valable que pour les rapports de cette
@@ -568,24 +568,24 @@ date** : toute nouvelle mesure d'un des cinq termes le déplace.
 **Ligne de sensibilité.** Si le filtre de la requête était le pire cas
 d'intervalle de MES-14 — `integer`, `annee 2000..2010`, domaine plein, p95
 **216,9 ms** (`docs/mesures/MES-14-cout-filtres-intervalles.md:183`) — la somme
-soustraite passerait à **333,845 ms** et le reste à **364,155 ms**. Les verdicts
+soustraite passerait à **349,035 ms** et le reste à **348,965 ms**. Les verdicts
 du § 7.2 ne changent pas : sur les **51 points** mesurés (42 points de
 l'échantillon, 8 points chauds et 1 point froid de `synth-large`), **aucun** ne
 passe de « sous le reste » à « ALERTE », ni l'inverse. L'alerte est donc
-insensible à ce choix de terme, et le chiffre principal reste 581,003 ms.
+insensible à ce choix de terme, et le chiffre principal reste 565,813 ms.
 
 ### 7.2 Verdicts
 
-| Campagne | p95 retenue | Contre 581,003 ms | Verdict |
+| Campagne | p95 retenue | Contre 565,813 ms | Verdict |
 |---|---:|---:|---|
 | Échantillon, `k = 10`, tous pools | 0,859 ms (`jorf`, pool 1 905) | 0,15 % | **sous le reste** |
-| Échantillon, `k = 100`, tous pools | 1,163 ms (`articles`, pool 1 027) | 0,20 % | **sous le reste** |
-| Échantillon, points regroupés, `k = 10` | 0,839 ms (pool 1 000) | 0,14 % | **sous le reste** |
-| `synth-large`, 537 500 passages | 2 104,003 ms | 3,6 fois | **ALERTE (pire cas synthétique, à confirmer en P9)** |
-| `synth-large`, 7 740 000 passages | 21 617,472 ms | 37,2 fois | **ALERTE (pire cas synthétique, à confirmer en P9)** |
+| Échantillon, `k = 100`, tous pools | 1,163 ms (`articles`, pool 1 027) | 0,21 % | **sous le reste** |
+| Échantillon, points regroupés, `k = 10` | 0,839 ms (pool 1 000) | 0,15 % | **sous le reste** |
+| `synth-large`, 537 500 passages | 2 104,003 ms | 3,7 fois | **ALERTE (pire cas synthétique, à confirmer en P9)** |
+| `synth-large`, 7 740 000 passages | 21 617,472 ms | 38,2 fois | **ALERTE (pire cas synthétique, à confirmer en P9)** |
 
-Sur l'échantillon réel, **aucune alerte** : la branche lexicale consomme moins de
-0,2 % du budget restant. L'alerte ne se déclenche que sur la campagne de
+Sur l'échantillon réel, **aucune alerte** : la branche lexicale consomme au plus
+0,21 % du budget restant. L'alerte ne se déclenche que sur la campagne de
 plomberie, dont le `df` de 100 % est un pire cas qui n'a pas de contrepartie en
 production.
 
@@ -604,8 +604,9 @@ production.
    composition. Les positions ajoutent 3,3 %.
 3. **Latence** : la branche BM25 filtrée coûte **moins de 1,2 ms p95** sur
    l'échantillon, à tous les pools jusqu'à 50 000 passages, pour `k` = 10 et
-   `k` = 100. Elle est **indépendante de la taille du pool** et **croît avec la
-   longueur des listes d'inversion**.
+   `k` = 100. Sur l'échantillon, le parcours est **indépendant de la taille du
+   pool** ; le coût total **croît avec le pool** (§ 5.2) et avec la longueur des
+   listes d'inversion.
 4. **Block-WAND** : l'élagage **ne s'applique pas**. Le collecteur visite tous les
    documents correspondants (7 740 000 sur `synth-large` pour `k` = 10), quel que
    soit le pool.
@@ -638,7 +639,7 @@ production.
    rédiger — la mesure ne tranche pas entre relever la cible et paralléliser
    l'écriture (`WRITER_THREADS` vaut 1 par ADR-0087).
 2. **Alerte sur le pire cas synthétique.** À `df` = 100 %, la branche coûte
-   21,6 s à 7,74 M passages, soit 37 fois le reste du budget ; dès 537 500
+   21,6 s à 7,74 M passages, soit 38 fois le reste du budget ; dès 537 500
    passages elle dépasse déjà le reste. **Proposition, à ne pas coder** : si P9
    confirme qu'un terme courant dépasse le reste du budget à l'échelle de
    Legifacile, le repli d'ADR-0007 (index inversé maison par segment) devient
@@ -661,7 +662,7 @@ production.
 - Scripts : `tools/bench/mes06/run.sh` (les huit étapes, dans l'ordre de la
   campagne), `tools/bench/mes06/filters*.json` (filtres gelés depuis `probe`),
   `tools/bench/mes06/mes06_analyze.py` (agrégation et artefact),
-  `tools/bench/mes06/tests/test_mes06_analyze.py` (18 tests).
+  `tools/bench/mes06/tests/test_mes06_analyze.py` (19 tests).
 - Données brutes : `data/mes06/raw/` (gitignoré) — `attach-*.txt`,
   `tokens-*.json`, `size-*.json`, `probe-*.json`, `latency-*.json`,
   `rebuild-*.json`, `wand-*.json`, `copy-nocache.txt`, `analyze.txt`.
@@ -679,3 +680,30 @@ Reproduction : `sh tools/bench/mes06/run.sh prepare` puis les étapes du § 1.2,
 dans l'ordre. Un second passage exige de supprimer `data/mes06/indexes/` :
 `index create` refuse une cible existante, et la série `true` édite
 `index.json` en place.
+
+## Corrections du 2026-10-29 (NETTOYER-P5)
+
+Texte et agrégation seulement : aucune latence n'a été rejouée, les chiffres
+mesurés restent ceux de la campagne du 2026-10-28.
+
+- **§ 7.1, terme de rescoring** : avant « N = 1000, 16,05 ms » ; après
+  « N = 5000, 31,24 ms », le défaut d'ADR-0078 déjà employé par le terme de scan
+  voisin. La valeur est la p95 la plus haute des deux rondes de MES-03
+  (`docs/mesures/MES-03-latence-rescoring.md:1418` : 20,03 ms à r1, 31,24 ms à
+  r2). La somme soustraite passe de 116,997 à **132,187 ms**, et le reste de
+  581,003 à **565,813 ms**. Aucun verdict ne change.
+- **§ 7.1, ligne de sensibilité** : la somme soustraite passe de 333,845 à
+  **349,035 ms** et le reste de 364,155 à **348,965 ms**. Le nombre de points
+  dont le verdict change reste **0** sur les 51 points mesurés.
+- **§ 7.2, ratios au reste** : 0,20 % devient **0,21 %** (`k = 100`) et 0,14 %
+  devient **0,15 %** (points regroupés) ; 0,15 % (`k = 10`) est inchangé. Les
+  facteurs du pire cas synthétique passent de 3,6 à **3,7 fois** et de 37,2 à
+  **38,2 fois**. Le § 8.3, point 2, suit : 37 fois devient **38 fois**.
+- **Artefact** : `docs/mesures/MES-06-lexical-bm25-filtre.2026-10-28.json` est
+  régénéré par `sh tools/bench/mes06/run.sh analyze` ; seuls `budget.main`,
+  `budget.sensitivity`, le `remaining_ms` des 51 `verdicts` et le commit
+  enregistré changent. Les 51 verdicts eux-mêmes restent identiques, et
+  `points_that_change` reste à 0.
+- **§ 8.1, point 3** : « Elle est indépendante de la taille du pool » devient
+  « sur l'échantillon, le parcours est indépendant de la taille du pool ; le coût
+  total croît avec le pool (§ 5.2) », ce que disent les § 5.1 et 5.2.

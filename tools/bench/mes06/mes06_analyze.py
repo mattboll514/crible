@@ -85,9 +85,12 @@ BUDGET_TERMS = (
         "source": "docs/mesures/MES-02-latence-scan-binaire.md (pool entier)",
     },
     {
-        "term": "rescoring p95 livré, N = 1000",
-        "ms": 16.05,
-        "source": "docs/mesures/MES-03-latence-rescoring.md (groupe, N = 1000)",
+        "term": "rescoring p95 livré, N = 5000",
+        "ms": 31.24,
+        "source": (
+            "docs/mesures/MES-03-latence-rescoring.md:1418 "
+            "(groupe, N = 5000 ; 20,03 à 31,24 ms)"
+        ),
     },
     {
         "term": "payload, groupement et sérialisation",
@@ -447,7 +450,6 @@ def sensitivity() -> dict:
         BUDGET_SENSITIVITY if term["term"].startswith("filtre bitmap") else term
         for term in BUDGET_TERMS
     )
-    main = budget()
     alternative = budget(replaced)
     return {
         "term": dict(BUDGET_SENSITIVITY),

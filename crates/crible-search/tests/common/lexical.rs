@@ -85,6 +85,11 @@ pub struct Doc {
     pub vector: [f32; DIMS as usize],
     /// Value of the document field `fonds`, the filter of the `INV-05` tests.
     pub fonds: String,
+    /// Value of `passage_hash`, the content digest `dedup: "content"` compares.
+    ///
+    /// [`doc`] derives it from the document identifier; a test that needs two
+    /// passages of the same content sets the same value on both.
+    pub passage_hash: String,
 }
 
 /// A document of the fixture, with `fonds` set to `doc_id`.
@@ -94,6 +99,7 @@ pub fn doc(doc_id: &str, text: &str, vector: [f32; DIMS as usize]) -> Doc {
         text: text.to_owned(),
         vector,
         fonds: doc_id.to_owned(),
+        passage_hash: format!("blake3:passage-{doc_id}"),
     }
 }
 
@@ -210,7 +216,7 @@ impl LexicalFixture {
                 doc_id: document.doc_id.clone(),
                 ord: 0,
                 text: document.text.clone(),
-                passage_hash: format!("blake3:passage-{}", document.doc_id),
+                passage_hash: document.passage_hash.clone(),
                 fields: json!({ "rang": position }),
                 segment_id: segment_id.clone(),
                 created_generation: generation,

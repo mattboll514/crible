@@ -28,6 +28,8 @@ Le harnais est `crates/crible/examples/hybrid_eval.rs` (mode `eval`). Il appelle
 
 **Métriques.** Recall@10 au document : moyenne, sur les 56 questions satisfiables, de |attendus ∩ top-10| / |attendus|. MRR@10 : moyenne de 1/rang du premier attendu, 0 s'il est absent du top 10. Rang médian des questions trouvées en ligne secondaire. `Q30` est comptée à part et n'entre dans aucune moyenne. La différence rapportée est **méthode − `rrf`**, dans la convention d'ADR-0092, décision 6 : une valeur positive signifie que la méthode fait mieux que `rrf`, et une recommandation exige une borne basse supérieure à zéro.
 
+**Mise en forme.** Les tableaux publiés reprennent les valeurs de `tools/bench/mes10/run.sh aggregate`, avec une mise en forme française (virgule décimale, signes, espaces de milliers) ; aucune valeur n'est changée.
+
 ### Résultats
 
 Campagne principale, 56 questions satisfiables, recall@10 au document :

@@ -1333,6 +1333,19 @@ fn rebuild(
     rebuild_lexical_index(records, epoch_dir, config, generation)
 }
 
+/// Outcome of [`rebuild_lexical`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebuildOutcome {
+    /// Generation the reference state holds; the job publishes no new one.
+    pub generation: Generation,
+    /// Whether the job rebuilt the lexical index.
+    ///
+    /// `false` for an epoch whose `passage_change_generation` marker is `0`:
+    /// it never carried a passage, so `lexical/` stays absent (`docs/02`,
+    /// step 4).
+    pub rebuilt: bool,
+}
+
 /// The job of `RECONSTRUIRE-LEXICAL`: rebuilds the lexical index of the
 /// published epoch from the texts `records.sqlite` stores, whatever state the
 /// index was in, and leaves the generations untouched.
@@ -1358,8 +1371,9 @@ fn rebuild(
 /// (`docs/02`, "Reprise au démarrage"). An epoch that never carried a passage has
 /// nothing to rebuild, and gets no `lexical/` directory either (`docs/02`, step
 /// 4); an index that disables the branch is refused rather than served an index
-/// nothing would read.
-pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<Generation, CribleError> {
+/// nothing would read. The returned [`RebuildOutcome`] also tells whether the
+/// job rebuilt the index.
+pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<RebuildOutcome, CribleError> {
     if !store.writable {
         return Err(CribleError::new(
             ErrorCode::Internal,
@@ -1383,7 +1397,10 @@ pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<Generation, Crible
     // (`ADR-0088`, decision 3): a reader of it renders nothing, and `docs/02`
     // makes `lexical/` appear with the first passage.
     if matches!(meta.passage_change_generation.map(Generation::get), Some(0)) {
-        return Ok(meta.generation);
+        return Ok(RebuildOutcome {
+            generation: meta.generation,
+            rebuilt: false,
+        });
     }
 
     let epoch_dir = epoch_directory(&store.index_dir, store.lease.epoch);
@@ -1407,7 +1424,10 @@ pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<Generation, Crible
         PublishedLexical::from_observation(observed),
         meta.generation,
     );
-    Ok(meta.generation)
+    Ok(RebuildOutcome {
+        generation: meta.generation,
+        rebuilt: true,
+    })
 }
 
 /// Replaces the lexical branch of the published snapshot by `published`, keeping
@@ -2649,9 +2669,13 @@ mod tests {
 
         let mut store =
             GenerationStore::open(&index, &empty_schema()).expect("the index opens for writing");
-        let generation = super::rebuild_lexical(&mut store)
+        let outcome = super::rebuild_lexical(&mut store)
             .expect("rebuilding an epoch without passage is a no-op, not an error");
-        assert_eq!(generation, Generation::new(0));
+        assert_eq!(outcome.generation, Generation::new(0));
+        assert!(
+            !outcome.rebuilt,
+            "an epoch without passage has nothing to rebuild"
+        );
         assert!(
             !index
                 .join(EPOCHS_DIR_NAME)
@@ -2700,13 +2724,14 @@ mod tests {
         // What a `PATCH` of `lexical.positions` will do to the live store (P6):
         // the setting changes, no text does, and the state stays `Ready`.
         store.lexical.positions = true;
-        let generation = super::rebuild_lexical(&mut store)
+        let outcome = super::rebuild_lexical(&mut store)
             .expect("the job rebuilds the lexical index of an epoch with passages");
         assert_eq!(
-            generation,
+            outcome.generation,
             Generation::new(1),
             "the job creates no generation and returns the committed one"
         );
+        assert!(outcome.rebuilt, "the job must report the rebuild it ran");
 
         let snapshot = store.snapshot();
         assert_eq!(

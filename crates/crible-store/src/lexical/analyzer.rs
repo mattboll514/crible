@@ -13,7 +13,8 @@
 //!
 //! 1. `SimpleTokenizer`, which splits on every character that is not
 //!    alphanumeric;
-//! 2. `RemoveLongFilter(40)`, which drops the tokens longer than 40 characters;
+//! 2. `RemoveLongFilter(40)`, which drops the tokens of 40 UTF-8 bytes or more
+//!    (the limit counts bytes, not characters);
 //! 3. `LowerCaser`, then `AsciiFoldingFilter`, so that `é` and `e` meet;
 //! 4. `StopWordFilter`, absent for the five languages tantivy has no list for
 //!    (`ar`, `el`, `ro`, `ta`, `tr`);
@@ -33,7 +34,8 @@ use tantivy::tokenizer::{
     StopWordFilter, TextAnalyzer,
 };
 
-/// Longest token kept by the chain, in characters (`RemoveLongFilter(40)`).
+/// Longest token kept by the chain, in UTF-8 bytes (`RemoveLongFilter(40)`): a
+/// token of `MAX_TOKEN_LENGTH` bytes or more is dropped.
 const MAX_TOKEN_LENGTH: usize = 40;
 
 /// Builds the analysis chain of the index whose `lexical.language` is `code`.
@@ -147,25 +149,47 @@ mod tests {
     }
 
     /// ADR-0086: `ar`, `el`, `ro`, `ta` and `tr` have no stop-word list, so
-    /// their tokens are those of a chain without that filter. `el` is used
-    /// here: `de` and `la` are French stop words, and they survive.
+    /// their tokens are those of a chain without that filter: French stop words
+    /// survive in every one of them.
     #[test]
     fn a_language_without_a_stop_word_list_keeps_every_token() {
-        assert_eq!(tokens("el", "de la"), ["de", "la"]);
+        for code in ["ar", "el", "ro", "ta", "tr"] {
+            assert_eq!(
+                tokens(code, "de la"),
+                ["de", "la"],
+                "{code} has no stop-word list, so the French stop words must survive"
+            );
+        }
         assert_eq!(tokens("tr", "qu'il"), ["qu", "il"]);
     }
 
-    /// Every code of the table of ADR-0086 has a tantivy language, and no other
-    /// code has one: the two lists cannot drift apart in silence.
+    /// Every code of the table of ADR-0086 has a tantivy language, no other code
+    /// has one, and the eighteen code-language pairs are two to two distinct: a
+    /// duplicated entry of `LEXICAL_LANGUAGES`, or an entry that is not one of
+    /// the six codes sampled below, cannot pass in silence.
     #[test]
     fn every_code_of_the_table_maps_to_a_tantivy_language() {
+        use std::collections::HashSet;
+
         assert_eq!(LEXICAL_LANGUAGES.len(), 18);
+        let mut languages = HashSet::with_capacity(LEXICAL_LANGUAGES.len());
         for code in LEXICAL_LANGUAGES {
+            let language = match tantivy_language(code) {
+                Some(language) => language,
+                None => panic!("{code} is in the table but has no tantivy language"),
+            };
             assert!(
-                tantivy_language(code).is_some(),
-                "{code} is in the table but has no tantivy language"
+                languages.insert(language),
+                "{code} maps to a tantivy language another code already maps to"
             );
         }
+        assert_eq!(
+            languages.len(),
+            LEXICAL_LANGUAGES.len(),
+            "the {} codes must map to {} distinct languages",
+            LEXICAL_LANGUAGES.len(),
+            LEXICAL_LANGUAGES.len()
+        );
         for code in ["", "FR", "French", "nb", "gr", "xx"] {
             assert_eq!(
                 tantivy_language(code),

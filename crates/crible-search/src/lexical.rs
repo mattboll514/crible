@@ -208,7 +208,7 @@ fn reader_of(snapshot: &Snapshot) -> Result<Option<&LexicalIndex>, CribleError> 
 /// they name the generations and the state observed, never a passage, an
 /// identifier or a text (INV-01).
 fn refusal(status: LexicalStatus, generation: Generation) -> Option<CribleError> {
-    let committed = generation.get();
+    let generation = generation.get();
     match status {
         // A property of the index, known when its configuration was validated:
         // retrying cannot succeed, so the code is not `overloaded` (ADR-0089,
@@ -222,7 +222,7 @@ fn refusal(status: LexicalStatus, generation: Generation) -> Option<CribleError>
         LexicalStatus::Behind {
             committed: Some(behind),
         } => Some(overloaded(format!(
-            "lexical index behind generation {} of {committed}; open the index for writing to \
+            "lexical index behind generation {} of {generation}; open the index for writing to \
              repair it",
             behind.get()
         ))),
@@ -230,26 +230,26 @@ fn refusal(status: LexicalStatus, generation: Generation) -> Option<CribleError>
         // it does not catch it up (ADR-0089, decision 1).
         LexicalStatus::Behind { committed: None } => Some(overloaded(format!(
             "no lexical index is committed in this epoch although passages exist (generation \
-             {committed}); open the index for writing to rebuild it"
+             {generation}); open the index for writing to rebuild it"
         ))),
         LexicalStatus::Ahead { committed: ahead } => Some(overloaded(format!(
-            "lexical index ahead of generation {} of {committed}; open the index for writing to \
+            "lexical index ahead of generation {} of {generation}; open the index for writing to \
              repair it",
             ahead.get()
         ))),
         LexicalStatus::NotCertified {
             committed: Some(uncertified),
         } => Some(overloaded(format!(
-            "lexical index state at generation {} is not certified for generation {committed}; \
+            "lexical index state at generation {} is not certified for generation {generation}; \
              open the index for writing to repair it",
             uncertified.get()
         ))),
         LexicalStatus::NotCertified { committed: None } => Some(overloaded(format!(
-            "lexical index state is not certified for generation {committed}; open the index for \
+            "lexical index state is not certified for generation {generation}; open the index for \
              writing to repair it"
         ))),
         LexicalStatus::Unreadable => Some(overloaded(format!(
-            "lexical index is unreadable at generation {committed}; open the index for writing to \
+            "lexical index is unreadable at generation {generation}; open the index for writing to \
              repair it"
         ))),
     }

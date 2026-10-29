@@ -379,7 +379,7 @@ impl FusionConfig {
 /// silence, so a caller never believes a weight took effect: a negative value, a
 /// value above 1, `NaN` and an infinity are all refused (ADR-0090, decision 2).
 ///
-/// The control lives here alone: [`FusionConfig::from_value`] applies it at the
+/// The control lives here alone: `FusionConfig::from_value` applies it at the
 /// creation of the index and at a `PATCH`, and a request that names an `alpha`
 /// reuses it instead of duplicating the bounds (ADR-0090, decision 2).
 pub fn check_alpha(alpha: f64, path: &str) -> Result<(), CribleError> {
@@ -413,6 +413,17 @@ fn check_lexical_language(language: &str, path: &str) -> Result<(), CribleError>
     )))
 }
 
+/// Reads a `lexical.language` value and applies [`check_lexical_language`].
+///
+/// `path` already names the member (`$.lexical.language`), so the creation of an
+/// index and a `PATCH` report the same location and apply the one control
+/// (ADR-0086).
+fn lexical_language(value: &Value, path: &str) -> Result<String, CribleError> {
+    let language = json::string(value, path)?;
+    check_lexical_language(&language, path)?;
+    Ok(language)
+}
+
 /// Lexical branch settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexicalConfig {
@@ -428,8 +439,10 @@ impl LexicalConfig {
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
         json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
-        let language = json::string_member(object, path, "language")?;
-        check_lexical_language(&language, &format!("{path}.language"))?;
+        let language = lexical_language(
+            json::member(object, path, "language")?,
+            &format!("{path}.language"),
+        )?;
         Ok(Self {
             enabled: json::boolean_member(object, path, "enabled")?,
             language,
@@ -1094,14 +1107,12 @@ impl LexicalPatch {
                 Some(value) => Some(json::boolean(value, &format!("{path}.enabled"))?),
                 None => None,
             },
-            language: match object.get("language") {
-                Some(value) => {
-                    let language = json::string(value, &format!("{path}.language"))?;
-                    check_lexical_language(&language, &format!("{path}.language"))?;
-                    Some(language)
-                }
-                None => None,
-            },
+            language: optional_patch(
+                object,
+                "language",
+                &format!("{path}.language"),
+                lexical_language,
+            )?,
             positions: match object.get("positions") {
                 Some(value) => Some(json::boolean(value, &format!("{path}.positions"))?),
                 None => None,

@@ -25,6 +25,8 @@ sh tools/bench/mes10/run.sh aggregate  # recall, MRR, intervalles, artefact
 
 **Répétitions.** Les métriques sont déterministes : une seule passe, pas de préchauffage, aucune latence rapportée. Le bootstrap emploie 10 000 rééchantillonnages avec la graine `20261028`.
 
+**Mise en forme.** Les tableaux publiés reprennent les valeurs de `tools/bench/mes10/run.sh aggregate`, avec une mise en forme française (virgule décimale, signes, espaces de milliers) ; aucune valeur n'est changée.
+
 **Durée observée du mode `analyze`** (construction des quatre index tantivy et mesure, une passe) : articles 27,1 s ; decisions 37,6 s ; jorf 30,3 s ; sarde 9,7 s ; dole 8,6 s ; titres 4,2 s. Ces durées servent de repère de reproductibilité, pas de mesure de performance.
 
 **Ancrage au moteur.** La réplique V0 doit reproduire le top-10 document du moteur (`lexical::search`) question par question : **57/57** questions reproduites sur les six index. Sans cet ancrage, un écart entre variantes pourrait venir de la réplique et non de l'analyse.

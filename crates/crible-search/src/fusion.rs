@@ -44,7 +44,7 @@
 //!   candidate is worse than another, none of them is worst. The alternative, 0,
 //!   would make a passage found by that branch indistinguishable from one it
 //!   never matched, while `rrf` and the "absent = 0" rule of `docs/03` both give
-//!   presence an advantage. The rule is written once, in [`Bounds::normalise`],
+//!   presence an advantage. The rule is written once, in `Bounds::normalise`,
 //!   and covered by `a_branch_of_equal_scores_normalises_its_candidates_to_one`.
 //!
 //! `alpha` itself is in `[0, 1]`, bounds included, on a finite value; the
@@ -98,9 +98,9 @@ pub struct BranchScore {
 ///
 /// The order of the answer is that of the dense branch and of the lexical one
 /// (ADR-0079): descending fused score, then ascending key `doc_id#ord`, which is
-/// why [`Fused`] implements [`Ord`] on [`crate::dense::compare_ranked`] and not
+/// why [`Fused`] implements [`Ord`] on `crate::dense::compare_ranked` and not
 /// on the internal identifier.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Fused {
     /// Internal identifier of the passage, kept until the payload step.
     pub iid: Iid,
@@ -129,6 +129,15 @@ impl Ord for Fused {
         // smaller key. The internal identifier never decides (INV-01,
         // ADR-0079).
         compare_ranked(self.score, &self.key, other.score, &other.key)
+    }
+}
+
+/// The equality follows [`Ord`]: two entries are equal when the answer's order
+/// sees them as equal, that is on the fused score and the key alone, as
+/// [`Scored`] does (ADR-0079).
+impl PartialEq for Fused {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -182,7 +191,7 @@ pub fn rrf(dense: &[Scored], lexical: &[Scored]) -> Vec<Fused> {
 /// `[0, 1]`, bounds included, on a finite value (ADR-0090, decision 2); the
 /// branch it does not weight keeps the rest. A passage absent from a branch
 /// counts 0 there, and a branch whose scores are all equal normalises its
-/// candidates to 1, without dividing by zero ([`Bounds::normalise`], ADR-0090,
+/// candidates to 1, without dividing by zero (`Bounds::normalise`, ADR-0090,
 /// decision 1). The result is ordered by the order of the answer.
 #[must_use]
 pub fn relative_score(dense: &[Scored], lexical: &[Scored], alpha: f64) -> Vec<Fused> {

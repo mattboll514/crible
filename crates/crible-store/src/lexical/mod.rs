@@ -25,7 +25,7 @@
 //! | Field | Type | Options |
 //! |---|---|---|
 //! | `iid` | `u64` | indexed and fast |
-//! | `text` | text | analysed by [`analyzer`] under the tokenizer name [`TOKENIZER_NAME`], not stored |
+//! | `text` | text | analysed by [`analyzer`] under the tokenizer name `TOKENIZER_NAME`, not stored |
 //!
 //! The indexed text is the encoder input, exactly the text of the dense branch:
 //! it is the `passages.text` of `records.sqlite`, which the commit hands over as
@@ -45,16 +45,16 @@
 //! index is up to date for the committed generation `G` when `M ≤ Gt ≤ G`, where
 //! `Gt` is the payload of its last commit and `M` is
 //! `meta.passage_change_generation`, the last generation that created or killed
-//! a passage (`ADR-0088`, decision 2). [`observe`] is the one place that reads
+//! a passage (`ADR-0088`, decision 2). `observe` is the one place that reads
 //! that state; the restart turns it into a repair on a **write** open, and a
 //! read-only open only publishes what it observes (ADR-0087).
 //!
 //! # Writer
 //!
-//! [`writer`] opens the index of the epoch, or creates it, and returns a
-//! [`LexicalWriter`] whose [`LexicalWriter::commit`] ends one tantivy commit. The
+//! `writer` opens the index of the epoch, or creates it, and returns a
+//! `LexicalWriter` whose `LexicalWriter::commit` ends one tantivy commit. The
 //! step 4 of `docs/02` builds one writer per generation: one writer thread and a
-//! fixed memory budget ([`WRITER_MEMORY_BUDGET_IN_BYTES`]), which is a constant
+//! fixed memory budget (`WRITER_MEMORY_BUDGET_IN_BYTES`), which is a constant
 //! of the code, not a setting (`AGENTS.md` rule 12).
 //!
 //! # Configuration changes
@@ -240,7 +240,7 @@ impl LexicalIndex {
     /// Terms the analysis chain of the index makes of `query`, in order and
     /// without repetition: the bag of terms `docs/03` scores in BM25.
     ///
-    /// The chain is the one [`register_analyzer`] put under [`TOKENIZER_NAME`]
+    /// The chain is the one `register_analyzer` put under `TOKENIZER_NAME`
     /// when the index was opened (ADR-0086), so the branch of a query never
     /// rebuilds it and never names the language: the index is the authority on
     /// how its text was analysed.
@@ -304,8 +304,9 @@ fn records_path_of(directory: &Path) -> PathBuf {
 /// What the lexical index of an epoch is, relative to the generation the
 /// reference state committed (`ADR-0088`, decision 5).
 ///
-/// [`observe`] classifies the state once per open. The lexical branch of a query
-/// reads it to choose what it does when [`Snapshot::lexical`] is absent
+/// `observe` classifies the state once per open. The lexical branch of a query
+/// reads it to choose what it does when
+/// [`Snapshot::lexical`](crate::generation::Snapshot::lexical) is absent
 /// (`RECHERCHER-BM25-DANS-LE-POOL`):
 /// [`Behind`](LexicalStatus::Behind), [`Ahead`](LexicalStatus::Ahead),
 /// [`NotCertified`](LexicalStatus::NotCertified) and
