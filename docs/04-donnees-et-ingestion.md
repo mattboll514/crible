@@ -52,7 +52,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 | | Ajout d'un champ (nullable) |
 | | `ingest.*`, `compaction.*` |
 
-Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**).
+Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**). Un `PATCH` accepté n'est pas appliqué au moment de la réponse : l'écrivain de l'index l'exécute comme un job (`rebuild_lexical` ou `patch_config`), et la valeur en vigueur ne change qu'à la fin du job (ADR-0105).
 
 Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0054) :
 
