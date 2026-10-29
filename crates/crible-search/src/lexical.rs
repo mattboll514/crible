@@ -252,6 +252,11 @@ fn refusal(status: LexicalStatus, generation: Generation) -> Option<CribleError>
             "lexical index is unreadable at generation {generation}; open the index for writing to \
              repair it"
         ))),
+        // ADR-0106, decision 4: the exact message the ADR fixes.
+        LexicalStatus::OtherChain => Some(overloaded(
+            "the lexical index was built with another analysis chain; open the index for writing \
+             to rebuild it",
+        )),
     }
 }
 

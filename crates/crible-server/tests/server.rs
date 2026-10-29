@@ -295,7 +295,7 @@ fn ready_stays_503_until_the_indexes_are_published() {
     assert!(
         state
             .loaded()
-            .is_some_and(|loaded| loaded.indexes().len() == 1),
+            .is_some_and(|loaded| loaded.indexes().is_ok_and(|indexes| indexes.len() == 1)),
         "the index of the fixture is open"
     );
     state.mark_ready();
@@ -396,7 +396,7 @@ async fn an_instance_without_index_is_ready() {
     assert!(
         state
             .loaded()
-            .is_some_and(|loaded| loaded.indexes().is_empty()),
+            .is_some_and(|loaded| loaded.indexes().is_ok_and(|indexes| indexes.is_empty())),
         "no index is opened"
     );
 }

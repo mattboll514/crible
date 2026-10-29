@@ -46,7 +46,7 @@ Toute réponse d'erreur du serveur suit ce format et porte `x-request-id` (ADR-0
 | `payload_too_large` | 413 | Corps au-delà des limites |
 | `incompatible_model` | 422 | Modèle du lot ou des index d'une recherche incompatible |
 | `acceptance_failed` | 422 | Recette refusée |
-| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) ; index lexical non certifié, en retard ou illisible, ouvert en lecture seule : la branche lexicale est refusée, le mode `dense` reste servi, et la prochaine ouverture en écriture répare (ADR-0087, ADR-0088, ADR-0089) — le message nomme l'état constaté : « behind » (`M > Gt`), « no lexical index is committed in this epoch although passages exist (generation G); open the index for writing to rebuild it » (aucun commit tantivy alors que des passages existent : l'ouverture en écriture reconstruit, elle ne rattrape pas), « ahead » (`Gt > G`), « not certified » (colonne M absente, avec ou sans commit tantivy) ou « unreadable » (lexical illisible, `M > G`) (`Retry-After: 1`, ADR-0103). Une époque qui n'a jamais porté de passage (`M = 0`, aucun commit tantivy) n'est pas refusée : `lexical` et `hybrid` rendent une réponse vide (ADR-0089) |
+| `overloaded` | 503 | File d'écriture ou limite de recherches concurrentes atteinte, verrou SQLite non obtenu dans le délai de 1 000 ms (ADR-0038), verrou de présence d'un lot en ligne déjà tenu par une autre ingestion du même `batch_id` (ADR-0056), course de génération pendant un export : l'index a commité entre l'instantané et la première lecture, après trois tentatives (ADR-0061) ; index lexical non certifié, en retard ou illisible, ouvert en lecture seule : la branche lexicale est refusée, le mode `dense` reste servi, et la prochaine ouverture en écriture répare (ADR-0087, ADR-0088, ADR-0089) — le message nomme l'état constaté : « behind » (`M > Gt`), « no lexical index is committed in this epoch although passages exist (generation G); open the index for writing to rebuild it » (aucun commit tantivy alors que des passages existent : l'ouverture en écriture reconstruit, elle ne rattrape pas), « ahead » (`Gt > G`), « not certified » (colonne M absente, avec ou sans commit tantivy) ou « unreadable » (lexical illisible, `M > G`) (`Retry-After: 1`, ADR-0103). Une chaîne d'analyse enregistrée différente de celle d'`index.json`, à l'ouverture en lecture seule : « the lexical index was built with another analysis chain; open the index for writing to rebuild it » (ADR-0106). Une époque qui n'a jamais porté de passage (`M = 0`, aucun commit tantivy) n'est pas refusée : `lexical` et `hybrid` rendent une réponse vide (ADR-0089) |
 | `timeout` | 504 | Requête trop longue |
 | `internal` | 500 | Erreur inattendue (journalisée avec le `request_id`) ; panne disque pendant un instantané ou une restauration (ADR-0065) |
 
@@ -56,11 +56,11 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 
 | Méthode et chemin | Rôle | Description |
 |---|---|---|
-| `POST /v1/indexes` | admin | Créer un index (config complète) → `201` |
-| `GET /v1/indexes` | read | Lister les index : nom, modèle, comptes, génération |
-| `GET /v1/indexes/{index}` | read | Config + état : époque, génération, documents, passages vivants et morts, ratio de morts, segments, tailles, dernier lot |
-| `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables ; un réglage figé → `409` ; une clé inconnue → `400` |
-| `DELETE /v1/indexes/{index}?confirm={index}` | admin | Supprimer l'index (job) |
+| `POST /v1/indexes` | admin | Créer un index à chaud (config complète) → `201` avec le corps de `GET /v1/indexes/{index}` ; nom déjà pris → `400` (ADR-0105) |
+| `GET /v1/indexes` | read | Lister les index : nom, modèle, génération, documents, passages vivants, triés par nom (ADR-0105) |
+| `GET /v1/indexes/{index}` | read | Config + état : époque, génération, documents, passages vivants et morts, ratio de morts, nombre de segments, tailles, dernier lot (ADR-0105) |
+| `PATCH /v1/indexes/{index}` | admin | Modifier les réglages modifiables → `202` avec un job `rebuild_lexical` ou `patch_config` ; un réglage figé → `409` ; une clé inconnue → `400` (ADR-0105) |
+| `DELETE /v1/indexes/{index}?confirm={index}` | admin | Supprimer l'index → `202` avec un job `delete_index` ; `confirm` absent ou différent du nom → `400` (ADR-0105) |
 | `POST /v1/indexes/{index}/documents` | write | Lot en ligne : documents et passages (texte, ou vecteurs fournis), suppressions → job |
 | `PATCH /v1/indexes/{index}/documents` | write | Mettre à jour des métadonnées de documents → job |
 | `GET /v1/indexes/{index}/documents/{doc_id}` | read | Document, ses passages et son état (`?text=true` pour inclure le texte) |
@@ -77,6 +77,43 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
 
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
+
+### Administration des index
+
+Un index se crée, se règle et se supprime par l'API **sans redémarrer l'instance** (ADR-0105). Les trois routes de mutation sont réservées à `admin`, les deux `GET` sont ouverts à `read` (`:11-13`).
+
+**`POST /v1/indexes`** prend la configuration complète d'un index, dans la forme d'`index.json` (`docs/04`), et rend `201` avec le **corps de `GET /v1/indexes/{index}`**. La validation est celle de la création d'index de la CLI. Un nom déjà présent, dans le registre ou sur disque, rend `400 invalid_request` avec le message « index already exists » : il n'y a pas de code dédié. Le modèle nommé par `model` est lu sous `<data>/models/<nom>/model.json` avant toute écriture ; un modèle absent ou illisible rend `400 invalid_request`, et le message nomme le modèle. La session du modèle est chargée si elle ne l'est pas déjà, et reste chargée jusqu'au redémarrage. Une seule création a lieu à la fois par instance.
+
+**`GET /v1/indexes`** rend l'enveloppe d'ADR-0103 :
+
+```json
+{ "indexes": [ { "name": "decisions", "model": "mDenseOn-fr", "generation": 1288,
+                 "documents": 412000, "live_passages": 8580000 } ] }
+```
+
+- triés par nom.
+
+**`GET /v1/indexes/{index}`** rend la configuration matérialisée et l'état de la **génération publiée** :
+
+```json
+{ "name": "decisions",
+  "config": { "name": "decisions", "model": "mDenseOn-fr", "reference_precision": "fp16" },
+  "state": { "epoch": 4, "generation": 1288,
+             "documents": 412000, "live_passages": 8580000,
+             "dead_passages": 12400, "dead_ratio": 0.00144,
+             "segments": 37,
+             "sizes": { "disk_bytes": 21474836480, "filter_memory_bytes": 41943040, "codes_memory_bytes": 1287000000 },
+             "last_batch": { "batch_id": "legifacile-2026-10-19", "applied_at": "2026-10-19T08:12:03Z", "generation": 1288 } } }
+```
+
+- les comptes sont ceux de l'instantané publié, jamais le résultat d'une lecture de SQLite ;
+- `segments` est un **nombre** ; la liste des segments n'est pas exposée, parce que leurs bornes d'iid sortiraient du moteur (**INV-01**) ;
+- `sizes.disk_bytes` est la taille du dossier de l'index sur disque, `sizes.filter_memory_bytes` et `sizes.codes_memory_bytes` sont les estimations mémoire de l'état ;
+- `last_batch` est la dernière ligne de `batches`, et vaut `null` quand aucun lot n'a été attaché.
+
+**`PATCH /v1/indexes/{index}`** valide le patch **avant de le mettre en file** : clé inconnue → `400` (ADR-0031), réglage figé → `409 immutable_setting` nommant le champ (INV-16), valeur hors domaine → `400`. Le changement est ensuite exécuté par l'écrivain de l'index, dans l'ordre d'arrivée de sa file, comme un job : `202` avec le job, `?wait=true` honoré. Le `kind` du job vaut `rebuild_lexical` quand le job reconstruit l'index lexical (`lexical.enabled` vaut `true` après le patch et l'une de `lexical.enabled`, `lexical.language`, `lexical.positions` a changé), et `patch_config` sinon. Le job écrit `index.json`, reconstruit ce qui en dérive, puis publie ensemble la nouvelle configuration et le nouvel instantané : une requête voit l'ancienne configuration avec l'ancien instantané, ou la nouvelle avec le nouveau. `search.*` vaut pour les requêtes qui suivent la fin du job ; `ingest.*`, `compaction.*` et `cluster_by` valent pour le prochain job ou la prochaine compaction. Passer `lexical.enabled` à `false` ne reconstruit rien (les recherches `lexical` et `hybrid` sont refusées, ADR-0089) ; le repasser à `true` reconstruit. Le résultat du job vaut `null`.
+
+**`DELETE /v1/indexes/{index}?confirm={index}`** exige un `confirm` égal au nom ; sinon la réponse est `400 invalid_request`, et le message nomme le paramètre `confirm`. La mutation rend `202` avec un job `delete_index` mis dans la file de l'index : les jobs acceptés avant lui se terminent d'abord. Le job retire l'index du registre — les nouvelles requêtes reçoivent `404 unknown_index`, les requêtes en vol finissent sur l'instantané qu'elles tiennent —, renomme le dossier en `<data>/tmp/deleted-<nom>-<job_id>` puis le supprime. Les jobs restés derrière lui échouent en `unknown_index`, et l'historique des jobs de l'index reste dans `jobs.sqlite` (ADR-0103). Un `POST` du même nom est refusé tant que l'index est au registre, accepté après le renommage.
 
 ### Lot en ligne
 
@@ -258,7 +295,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
 - `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport.
 - `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel, rendues au seul appelant d'origine de l'attache (ADR-0042) ; un job relu plus tard n'en donne aucune. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
-- `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`.
+- `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `patch_config`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`. `patch_config` est le patch d'un réglage de l'index qui ne reconstruit pas le lexical, et `rebuild_lexical` celui qui le reconstruit (ADR-0105).
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
 - **Redémarrage** : un job resté `queued` ou `running` quand le serveur s'arrête passe à `failed` au démarrage suivant, avec `finished_at` à l'heure du démarrage, `error.code` à `internal` et le message fixe « the job was interrupted by a server restart ». Aucun job n'est rejoué : le client resoumet, et une attache est idempotente par `batch_id` (ADR-0103).
 - **Erreur d'un job** : `{ "code", "message", "details" }`, sans `request_id` — un job n'est pas une requête —, avec les règles du corps d'erreur d'ADR-0101 : message générique et fixe pour `internal`, cause journalisée avec le `job_id` (ADR-0103).

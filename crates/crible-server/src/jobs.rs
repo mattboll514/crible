@@ -20,12 +20,13 @@
 //! between.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
-use crible_store::generation::GenerationStore;
+use crible_store::generation::{GenerationStore, LastBatch, Snapshot};
 use crible_store::jobs::{JobKind, JobRecord, JobState, JobStore};
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, watch};
@@ -127,18 +128,28 @@ fn parse_optional(
 
 /// Progression a job publishes while it runs, in memory only between two
 /// transitions (ADR-0103, decision 3).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct JobProgress {
+    /// Identifier of the job this handle belongs to, so a work can name files
+    /// after it (ADR-0105, decision 6).
+    id: String,
     value: Arc<Mutex<Value>>,
 }
 
 impl JobProgress {
-    /// Creates the empty progression of a fresh job.
+    /// Creates the empty progression of the job `id`.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(id: impl Into<String>) -> Self {
         Self {
+            id: id.into(),
             value: Arc::new(Mutex::new(Value::Null)),
         }
+    }
+
+    /// Identifier of the job.
+    #[must_use]
+    pub fn job_id(&self) -> &str {
+        &self.id
     }
 
     /// Publishes the progression of the job.
@@ -175,12 +186,14 @@ pub struct JobOutcome {
 }
 
 /// Work of a job, run on the writer of its index with the exclusive access to
-/// the store and the progression handle.
+/// the store, the progression handle and the publication of the index.
 ///
-/// The routes that create a write job build this closure; no route of this task
-/// exists yet (`ROUTES-INDEX`, `ROUTES-DOCUMENTS-ET-LOTS`).
+/// The third argument is the writer itself: a job that changes the configuration
+/// publishes the triplet `(config, snapshot, summary)` through it, so a request
+/// never reads a mixture (ADR-0105, decision 4). A job that only commits a new
+/// generation lets the writer refresh the triplet after it returns.
 pub type JobWork = Box<
-    dyn FnOnce(&mut GenerationStore, &JobProgress) -> Result<JobOutcome, CribleError>
+    dyn FnOnce(&mut GenerationStore, &JobProgress, &IndexWriter) -> Result<JobOutcome, CribleError>
         + Send
         + 'static,
 >;
@@ -263,7 +276,7 @@ impl JobBoard {
             }
         };
         let id = new_job_id();
-        let progress = JobProgress::new();
+        let progress = JobProgress::new(id.clone());
         let created_at = self.store.insert(&id, kind, index)?;
         let view = JobView {
             id: id.clone(),
@@ -505,6 +518,106 @@ impl JobBoard {
     }
 }
 
+/// Everything a request reads from one index, published as **one** value.
+///
+/// ADR-0105, decision 4, requires the configuration and the snapshot to be
+/// published together: a request sees the old triplet or the new one, never a
+/// configuration with a snapshot of another generation. The three parts live
+/// under one `RwLock`, and a reader takes a single read guard
+/// ([`IndexWriter::published`]).
+#[derive(Debug, Clone)]
+pub struct Published {
+    /// Configuration of the index, replaced only at the end of a `PATCH` job.
+    pub config: IndexConfig,
+    /// Snapshot of the published generation.
+    pub snapshot: Arc<Snapshot>,
+    /// Counts of that generation, for the two `GET` routes.
+    pub summary: IndexSummary,
+}
+
+/// Summary of the published state of an index, as the two `GET` routes of
+/// `/v1/indexes` render it (ADR-0105, decision 3).
+///
+/// The writer refreshes it from the store after every job, on the blocking
+/// thread that owns the store, so the HTTP routes never read `records.sqlite` of
+/// a live index. `segments` is a **count**: the [`SegmentMeta`](crible_store::segment::SegmentMeta)
+/// values carry iid bounds and never leave the engine (INV-01).
+#[derive(Debug, Clone, Default)]
+pub struct IndexSummary {
+    /// Epoch directory holding the reference state.
+    pub epoch: u64,
+    /// Published generation.
+    pub generation: u64,
+    /// Documents the reference state holds.
+    pub documents: u64,
+    /// Passages alive at this generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at this generation or an earlier one.
+    pub dead_passages: u64,
+    /// Number of segments the generation references.
+    pub segments: usize,
+    /// Estimated heap size of the filter structures, in bytes.
+    pub filter_memory_bytes: u64,
+    /// Bytes of RAM the binary codes hold.
+    pub codes_memory_bytes: u64,
+    /// Last applied batch, or `None` when the epoch holds none.
+    pub last_batch: Option<LastBatch>,
+}
+
+impl IndexSummary {
+    /// Reads the summary of the generation `store` publishes.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`GenerationStore::state`] and of the `batches` query.
+    pub fn of(store: &GenerationStore) -> Result<Self, CribleError> {
+        Self::of_snapshot(store, &store.snapshot())
+    }
+
+    /// Reads the summary of `snapshot`, a generation `store` already holds.
+    ///
+    /// A `PATCH` job builds its snapshot with
+    /// [`GenerationStore::reconfigure`](crible_store::generation::GenerationStore::reconfigure)
+    /// and computes the summary from that snapshot **before** publishing the
+    /// triplet, so the counts and the configuration describe the same state.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the `batches` query and of the reference state of
+    /// `snapshot`.
+    pub fn of_snapshot(
+        store: &GenerationStore,
+        snapshot: &Arc<Snapshot>,
+    ) -> Result<Self, CribleError> {
+        let state = store.state()?;
+        Ok(Self {
+            epoch: u64::from(state.epoch.get()),
+            generation: snapshot.generation().get(),
+            documents: state.documents,
+            live_passages: state.live_passages,
+            dead_passages: state.dead_passages,
+            segments: state.segments.len(),
+            filter_memory_bytes: u64::try_from(snapshot.filter_memory().total())
+                .unwrap_or(u64::MAX),
+            codes_memory_bytes: snapshot.codes_memory(),
+            last_batch: store.last_batch()?,
+        })
+    }
+
+    /// Ratio of dead passages among all the passages, or `0` when the epoch
+    /// holds none.
+    #[must_use]
+    pub fn dead_ratio(&self) -> f64 {
+        let total = self.live_passages.saturating_add(self.dead_passages);
+        if total == 0 {
+            return 0.0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let ratio = self.dead_passages as f64 / total as f64;
+        ratio
+    }
+}
+
 /// One writer task per index, owning the writable store of that index.
 pub struct IndexWriter {
     index: String,
@@ -512,6 +625,8 @@ pub struct IndexWriter {
     receiver: Mutex<Option<mpsc::Receiver<Command>>>,
     store: Mutex<Option<GenerationStore>>,
     board: Arc<JobBoard>,
+    published: RwLock<Published>,
+    deleted: AtomicBool,
 }
 
 impl IndexWriter {
@@ -520,21 +635,97 @@ impl IndexWriter {
     ///
     /// A declared depth of zero is read as one: a job must be acceptable at
     /// all, and `docs/07` fixes the default at 16.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// The errors of the first summary of the store.
     pub fn new(
         index: String,
         store: GenerationStore,
+        config: IndexConfig,
         writer_queue: usize,
         board: Arc<JobBoard>,
-    ) -> Self {
+    ) -> Result<Self, CribleError> {
+        let snapshot = store.snapshot();
+        let summary = IndexSummary::of_snapshot(&store, &snapshot)?;
         let (queue, receiver) = mpsc::channel(writer_queue.max(1));
-        Self {
+        Ok(Self {
             index,
             queue,
             receiver: Mutex::new(Some(receiver)),
             store: Mutex::new(Some(store)),
             board,
-        }
+            published: RwLock::new(Published {
+                config,
+                snapshot,
+                summary,
+            }),
+            deleted: AtomicBool::new(false),
+        })
+    }
+
+    /// The triplet `(config, snapshot, summary)` of the index, read under one
+    /// guard so the three parts always describe the same state (ADR-0105,
+    /// decision 4).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the lock is poisoned.
+    pub fn published(&self) -> Result<Published, CribleError> {
+        self.published
+            .read()
+            .map(|published| published.clone())
+            .map_err(|_| error::internal("the published state of an index is poisoned"))
+    }
+
+    /// Configuration currently published for the index.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the lock is poisoned.
+    pub fn configuration(&self) -> Result<IndexConfig, CribleError> {
+        self.published().map(|published| published.config)
+    }
+
+    /// Publishes a new triplet, atomically for every reader.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the lock is poisoned.
+    pub fn publish(
+        &self,
+        config: IndexConfig,
+        snapshot: Arc<Snapshot>,
+        summary: IndexSummary,
+    ) -> Result<(), CribleError> {
+        let mut published = self
+            .published
+            .write()
+            .map_err(|_| error::internal("the published state of an index is poisoned"))?;
+        *published = Published {
+            config,
+            snapshot,
+            summary,
+        };
+        Ok(())
+    }
+
+    /// Refreshes the snapshot and the summary after a job that committed, keeping
+    /// the configuration: the three parts still change under one write lock.
+    fn refresh(&self, snapshot: Arc<Snapshot>, summary: IndexSummary) -> Result<(), CribleError> {
+        let mut published = self
+            .published
+            .write()
+            .map_err(|_| error::internal("the published state of an index is poisoned"))?;
+        published.snapshot = snapshot;
+        published.summary = summary;
+        Ok(())
+    }
+
+    /// Marks the index as deleted, so the writer fails the jobs queued behind
+    /// `delete_index` in `unknown_index` and stops (ADR-0105, decision 6).
+    pub fn mark_deleted(&self) {
+        self.deleted.store(true, Ordering::Release);
     }
 
     /// Name of the index this writer serves.
@@ -599,8 +790,19 @@ impl IndexWriter {
             let progress = command.progress.clone();
             let work = command.work;
             let id = command.id.clone();
+            let writer = Arc::clone(&self);
             let joined = tokio::task::spawn_blocking(move || {
-                let outcome = work(&mut store, &progress);
+                let outcome = work(&mut store, &progress, &writer);
+                let snapshot = store.snapshot();
+                if let Ok(summary) = IndexSummary::of_snapshot(&store, &snapshot)
+                    && let Err(failure) = writer.refresh(snapshot, summary)
+                {
+                    error!(
+                        index = %writer.index,
+                        cause = failure.message(),
+                        "the published state of the index could not be refreshed"
+                    );
+                }
                 (store, outcome)
             })
             .await;
@@ -608,6 +810,10 @@ impl IndexWriter {
                 Ok((returned, outcome)) => {
                     store = returned;
                     self.board.mark_finished(&id, outcome, &command.progress);
+                    if self.deleted.load(Ordering::Acquire) {
+                        fail_queued(&mut receiver, &self.board, &self.index).await;
+                        return;
+                    }
                 }
                 Err(join) => {
                     // The store is lost with a panicking job. The job is failed,
@@ -634,6 +840,22 @@ impl IndexWriter {
                 }
             }
         }
+    }
+}
+
+/// Fails every job still queued behind a `delete_index`, in `unknown_index`
+/// (ADR-0105, decision 6).
+async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, index: &str) {
+    while let Some(command) = receiver.recv().await {
+        board.mark_running(&command.id, &command.progress);
+        board.mark_finished(
+            &command.id,
+            Err(CribleError::new(
+                ErrorCode::UnknownIndex,
+                format!("unknown index '{index}'"),
+            )),
+            &command.progress,
+        );
     }
 }
 

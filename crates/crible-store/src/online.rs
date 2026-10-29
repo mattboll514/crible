@@ -100,6 +100,11 @@ const BATCH_PREFIX: &str = "online-";
 /// Suffix of the presence lock of one online batch (ADR-0056).
 const LOCK_SUFFIX: &str = ".lock";
 
+/// Prefix of an index directory a `delete_index` job renamed before removing it
+/// (ADR-0105, decision 6). The startup purges those leftovers like the
+/// `online-*` ones.
+const DELETED_PREFIX: &str = "deleted-";
+
 /// Highest number of passages accepted by one online request
 /// (`docs/05-api.md`, "Lot en ligne": 10 000).
 const MAX_ONLINE_PASSAGES: u64 = 10_000;
@@ -402,6 +407,39 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
         let Some(name) = name.to_str() else {
             continue;
         };
+        if name.starts_with(DELETED_PREFIX) {
+            // ADR-0105, decision 6: a `delete_index` job that stopped between the
+            // rename and the removal leaves `deleted-<name>-<job_id>` in `tmp`.
+            // No writer holds it: the job renamed the index it owned, so the
+            // startup removes it without a presence lock.
+            let path = entry.path();
+            if path.is_dir() {
+                match fs::remove_dir_all(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(io_error(
+                            "remove the quarantined index of a deletion",
+                            &path,
+                            &error,
+                        ));
+                    }
+                }
+            } else {
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(io_error(
+                            "remove the quarantined entry of a deletion",
+                            &path,
+                            &error,
+                        ));
+                    }
+                }
+            }
+            continue;
+        }
         if !name.starts_with(BATCH_PREFIX) {
             continue;
         }

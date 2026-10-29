@@ -39,7 +39,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 - Chaque champ a deux options : `filterable` et `returned`, toutes deux à `true` par défaut.
 - Tous les champs acceptent null.
 - Les champs multivalués sont hors v1 (Q-03).
-- Un même nom de champ ne peut pas être déclaré à la fois dans `document_fields` et dans `passage_fields` (ADR-0030). La validation le refuse avec `invalid_request` (400), et le message nomme le champ et les deux niveaux. La règle s'applique à la création de l'index et à tout ajout de champ par `PATCH`.
+- Un même nom de champ ne peut pas être déclaré à la fois dans `document_fields` et dans `passage_fields` (ADR-0030). La validation le refuse avec `invalid_request` (400), et le message nomme le champ et les deux niveaux. La règle s'applique à la création de l'index et à l'ajout par `PATCH` d'un champ **nouveau** ; déclarer un champ existant à l'autre niveau est un changement de niveau, réglage figé, refusé en `409 immutable_setting` (ADR-0105).
 
 ### Ce qui est figé, ce qui est réglable
 
@@ -52,7 +52,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 | | Ajout d'un champ (nullable) |
 | | `ingest.*`, `compaction.*` |
 
-Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**).
+Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**). Un `PATCH` accepté n'est pas appliqué au moment de la réponse : l'écrivain de l'index l'exécute comme un job (`rebuild_lexical` ou `patch_config`), et la valeur en vigueur ne change qu'à la fin du job (ADR-0105).
 
 Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0054) :
 

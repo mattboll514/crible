@@ -320,12 +320,22 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         loaded = &mut loading => {
             match loaded {
                 Ok(Ok(())) => {
-                    state.start_writers();
+                    if let Err(failure) = state.start_writers() {
+                        error!(
+                            code = failure.code().as_str(),
+                            message = failure.message(),
+                            "the startup failed; the instance exits"
+                        );
+                        shutdown.force();
+                        let _ = server.await;
+                        return Err(failure);
+                    }
                     state.mark_ready();
-                    info!(
-                        indexes = state.loaded().map_or(0, |loaded| loaded.indexes().len()),
-                        "the instance is ready"
-                    );
+                    let indexes = state
+                        .loaded()
+                        .and_then(|loaded| loaded.indexes().ok())
+                        .map_or(0, |indexes| indexes.len());
+                    info!(indexes, "the instance is ready");
                 }
                 Ok(Err(failure)) => {
                     error!(

@@ -21,6 +21,7 @@ pub mod auth;
 pub mod config;
 mod error;
 pub mod http;
+mod indexes;
 pub mod jobs;
 pub mod lifecycle;
 pub mod limits;

@@ -26,7 +26,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, patch, post};
 use axum::{Extension, Json, Router};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_store::jobs::JobState;
@@ -41,6 +41,7 @@ use crate::AppState;
 use crate::auth::{Auth, protect};
 use crate::config::Role;
 use crate::error;
+use crate::indexes;
 use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
 
@@ -68,14 +69,36 @@ pub struct RequestId(pub String);
 /// request with `401`, as an empty `[[auth.keys]]` does (ADR-0100).
 pub fn build_router(state: Arc<AppState>) -> Router {
     let auth = state.auth().unwrap_or_else(|| Arc::new(Auth::closed()));
-    let jobs = protect(jobs_routes(), auth, Role::Write);
+    let jobs = protect(jobs_routes(), Arc::clone(&auth), Role::Write);
+    let admin = protect(indexes_admin_routes(), Arc::clone(&auth), Role::Admin);
+    let read = protect(indexes_read_routes(), auth, Role::Read);
     with_common_layers(
         Router::new()
             .route("/health", get(health))
             .route("/ready", get(ready))
-            .merge(jobs),
+            .merge(jobs)
+            .merge(admin)
+            .merge(read),
     )
     .with_state(state)
+}
+
+/// The administration routes of `/v1/indexes`, `admin` only (ADR-0105,
+/// decision 7).
+fn indexes_admin_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/indexes", post(indexes::create_index))
+        .route(
+            "/v1/indexes/{index}",
+            patch(indexes::patch_index).delete(indexes::delete_index),
+        )
+}
+
+/// The two reads of `/v1/indexes`, open to `read` (ADR-0105, decision 7).
+fn indexes_read_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/v1/indexes", get(indexes::list_indexes))
+        .route("/v1/indexes/{index}", get(indexes::get_index))
 }
 
 /// The job routes of the instance: the list and the detail, `write` only.

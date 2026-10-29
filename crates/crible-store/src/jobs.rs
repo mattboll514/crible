@@ -111,13 +111,15 @@ pub enum JobKind {
     Snapshot,
     /// Rebuild the lexical branch.
     RebuildLexical,
+    /// Apply a configuration patch (ADR-0105).
+    PatchConfig,
     /// Delete an index.
     DeleteIndex,
 }
 
 impl JobKind {
     /// Every kind of the closed list.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::AttachBatch,
         Self::OnlineBatch,
         Self::PatchDocuments,
@@ -125,6 +127,7 @@ impl JobKind {
         Self::Export,
         Self::Snapshot,
         Self::RebuildLexical,
+        Self::PatchConfig,
         Self::DeleteIndex,
     ];
 
@@ -139,6 +142,7 @@ impl JobKind {
             Self::Export => "export",
             Self::Snapshot => "snapshot",
             Self::RebuildLexical => "rebuild_lexical",
+            Self::PatchConfig => "patch_config",
             Self::DeleteIndex => "delete_index",
         }
     }
@@ -154,6 +158,7 @@ impl JobKind {
             "export" => Some(Self::Export),
             "snapshot" => Some(Self::Snapshot),
             "rebuild_lexical" => Some(Self::RebuildLexical),
+            "patch_config" => Some(Self::PatchConfig),
             "delete_index" => Some(Self::DeleteIndex),
             _ => None,
         }

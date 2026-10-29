@@ -19,7 +19,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use crible_core::config::IndexConfig;
@@ -27,47 +27,189 @@ use crible_core::error::CribleError;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_core::path::path_component;
 use crible_encode::ModelRegistry;
-use crible_store::generation::GenerationStore;
+use crible_store::generation::{GenerationStore, INITIAL_EPOCH, write_index_config};
 use crible_store::jobs::{JOBS_FILE_NAME, JobKind, JobState};
 use crible_store::online;
 use tracing::{info, warn};
+use uuid::Uuid;
 
 use crate::auth::Auth;
 use crate::config::Config;
 use crate::error::{internal, invalid};
-use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, SHUTTING_DOWN_MESSAGE};
+use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
 
-/// One index opened by the server.
+/// One index opened or created by the server.
 pub struct IndexHandle {
-    /// Configuration of the index, as its `index.json` declares it.
-    pub config: IndexConfig,
+    /// Name of the index, frozen at its creation.
+    pub name: String,
     /// Single writer task of the index, with its bounded queue and its job
     /// board (ADR-0103). It owns the writable store, so every write of the index
-    /// is serialised and no request holds that store.
+    /// is serialised and no request holds that store. It also owns the published
+    /// triplet `(config, snapshot, summary)`, so a `PATCH` job replaces the
+    /// configuration and the snapshot together (ADR-0105, decision 4).
     pub writer: Arc<IndexWriter>,
 }
 
-/// Everything the startup of an instance loads.
+impl IndexHandle {
+    /// The triplet `(config, snapshot, summary)` of the index, read under one
+    /// guard so a request never sees a mixture (ADR-0105, decision 4).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// lock is poisoned.
+    pub fn published(&self) -> Result<Published, CribleError> {
+        self.writer.published()
+    }
+
+    /// Configuration currently published for the index.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// lock is poisoned.
+    pub fn configuration(&self) -> Result<IndexConfig, CribleError> {
+        self.writer.configuration()
+    }
+}
+
+/// Everything the startup of an instance loads, and the registry the
+/// administration routes mutate (ADR-0105, decision 1).
 pub struct Loaded {
-    /// Encoders loaded at startup, one session per referenced fingerprint.
-    pub models: ModelRegistry,
-    indexes: Vec<IndexHandle>,
+    /// Encoders loaded at startup or at a creation, one session per referenced
+    /// fingerprint. Never unloaded before the restart (ADR-0105, decision 2).
+    pub models: Mutex<ModelRegistry>,
+    indexes: RwLock<Vec<Arc<IndexHandle>>>,
+    /// Root of `<data>`, for the creation and the deletion of an index.
+    data: PathBuf,
+    /// Root of `[paths].models`.
+    models_root: PathBuf,
+    /// Depth of the write queue of a new index.
+    writer_queue: usize,
+    /// Serialises the creations, so two of them never write the same name nor
+    /// load the same model twice (ADR-0105, decision 1).
+    creation: Mutex<()>,
 }
 
 impl Loaded {
-    /// Indexes opened at startup, in the order of their directory names.
-    #[must_use]
-    pub fn indexes(&self) -> &[IndexHandle] {
-        &self.indexes
+    /// Indexes in the order of their names.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned: an empty list
+    /// would answer `200` with no index while the instance still serves them.
+    pub fn indexes(&self) -> Result<Vec<Arc<IndexHandle>>, CribleError> {
+        self.indexes
+            .read()
+            .map(|indexes| indexes.clone())
+            .map_err(|_| internal("the index registry is poisoned"))
+    }
+
+    /// The index named `name`, when it is served.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned: `None` would
+    /// render `404` for an index the instance still serves.
+    pub fn index(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
+        let indexes = self
+            .indexes
+            .read()
+            .map_err(|_| internal("the index registry is poisoned"))?;
+        Ok(indexes.iter().find(|handle| handle.name == name).cloned())
+    }
+
+    /// Inserts `handle` and keeps the registry sorted by name.
+    fn insert(&self, handle: Arc<IndexHandle>) -> Result<(), CribleError> {
+        let mut indexes = self
+            .indexes
+            .write()
+            .map_err(|_| internal("the index registry is poisoned"))?;
+        indexes.push(handle);
+        indexes.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(())
+    }
+
+    /// Removes the index named `name`, for `delete_index`.
+    fn remove(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
+        let mut indexes = self
+            .indexes
+            .write()
+            .map_err(|_| internal("the index registry is poisoned"))?;
+        let position = indexes.iter().position(|handle| handle.name == name);
+        Ok(position.map(|position| indexes.remove(position)))
+    }
+}
+
+/// Removes the directory of a creation that failed after its first write.
+///
+/// ADR-0105, decision 2, asks for the same quarantine as the deletion of
+/// decision 6: the half-created directory is renamed to
+/// `<data>/tmp/deleted-<name>-<id>`, in the same file system, then removed. A
+/// failure to do so is logged and never turned into a second error: the caller
+/// is already reporting the failure that armed the guard.
+///
+/// The guard is armed only once the creation has established that the directory
+/// does not exist, so it never removes an index it did not create.
+struct CreationQuarantine<'a> {
+    data: &'a Path,
+    name: &'a str,
+    armed: bool,
+}
+
+impl<'a> CreationQuarantine<'a> {
+    /// Arms the guard for the creation of `name` under `<data>/indexes`.
+    fn new(data: &'a Path, name: &'a str) -> Self {
+        Self {
+            data,
+            name,
+            armed: true,
+        }
+    }
+
+    /// Disarms the guard: the index is fully created and registered.
+    fn complete(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CreationQuarantine<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let directory = self.data.join("indexes").join(self.name);
+        if !directory.exists() {
+            return;
+        }
+        let tmp = self.data.join("tmp");
+        let quarantine = tmp.join(format!("deleted-{}-{}", self.name, Uuid::new_v4().simple()));
+        if let Err(error) =
+            fs::create_dir_all(&tmp).and_then(|()| fs::rename(&directory, &quarantine))
+        {
+            warn!(
+                index = %self.name,
+                cause = %error,
+                "a failed creation left its directory in place"
+            );
+            return;
+        }
+        if let Err(error) = fs::remove_dir_all(&quarantine) {
+            warn!(
+                index = %self.name,
+                cause = %error,
+                "a quarantined creation could not be removed"
+            );
+        }
     }
 }
 
 /// State shared by every request.
 ///
 /// It is created at the bind, before any index is opened, so `/health` can
-/// answer while the loader runs. `loaded` is filled once; the state never
-/// reloads its indexes in P6.
+/// answer while the loader runs. `loaded` is filled once; its registry then
+/// changes at runtime, when an index is created or deleted (ADR-0105).
 #[derive(Default)]
 pub struct AppState {
     ready: AtomicBool,
@@ -157,12 +299,17 @@ impl AppState {
     /// The writers are tokio tasks; a caller outside a runtime leaves them
     /// dormant, and a submission starts its own writer. Called by
     /// `serve_bound` once the startup has succeeded.
-    pub fn start_writers(&self) {
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    pub fn start_writers(&self) -> Result<(), CribleError> {
         if let Some(loaded) = self.loaded.get() {
-            for index in loaded.indexes() {
+            for index in loaded.indexes()? {
                 index.writer.ensure_started();
             }
         }
+        Ok(())
     }
 
     /// Job board of the instance, once the startup has opened it.
@@ -218,9 +365,7 @@ impl AppState {
             .get()
             .ok_or_else(|| internal("the instance has not loaded its indexes"))?;
         let writer = loaded
-            .indexes()
-            .iter()
-            .find(|handle| handle.config.name == index)
+            .index(index)?
             .map(|handle| Arc::clone(&handle.writer))
             .ok_or_else(|| {
                 CribleError::new(
@@ -230,6 +375,114 @@ impl AppState {
             })?;
         writer.ensure_started();
         writer.submit(kind, work)
+    }
+
+    /// One served index, for the administration routes.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    pub fn index(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
+        match self.loaded.get() {
+            Some(loaded) => loaded.index(name),
+            None => Ok(None),
+        }
+    }
+
+    /// Every served index, sorted by name.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    pub fn indexes(&self) -> Result<Vec<Arc<IndexHandle>>, CribleError> {
+        match self.loaded.get() {
+            Some(loaded) => loaded.indexes(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Root of `<data>`, once the startup has published its configuration.
+    #[must_use]
+    pub fn data_root(&self) -> Option<&Path> {
+        self.loaded.get().map(|loaded| loaded.data.as_path())
+    }
+
+    /// Removes `name` from the registry, for the execution of `delete_index`
+    /// (ADR-0105, decision 6).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    pub fn remove_index(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
+        let loaded = self
+            .loaded
+            .get()
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))?;
+        loaded.remove(name)
+    }
+
+    /// Creates an index and registers it, without a restart (ADR-0105,
+    /// decisions 1 and 2).
+    ///
+    /// Blocking: the caller runs it off the async threads, because it hashes a
+    /// model, loads its session and writes the index. The order is the one of
+    /// ADR-0105: name, model, configuration write, store creation, writer
+    /// construction, registry insertion. A failure after the beginning of the
+    /// write quarantines the directory, so a name is never left half created.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] for a refused name, a name already taken, an
+    /// absent or unreadable model and a configuration the store refuses, and the
+    /// errors of the store and of the job table otherwise.
+    pub fn create_index(&self, config: IndexConfig) -> Result<Arc<IndexHandle>, CribleError> {
+        let loaded = self
+            .loaded
+            .get()
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))?;
+        let _creation = loaded
+            .creation
+            .lock()
+            .map_err(|_| internal("the creation lock of the instance is poisoned"))?;
+        let name = path_component(&config.name, "index name")?.to_owned();
+        if loaded.index(&name)?.is_some() {
+            return Err(invalid(format!("index already exists: '{name}'")));
+        }
+        let directory = loaded.data.join("indexes").join(&name);
+        if directory.exists() {
+            return Err(invalid(format!("index already exists: '{name}'")));
+        }
+        // ADR-0105, decision 2: the model is read before any write.
+        {
+            let mut models = loaded
+                .models
+                .lock()
+                .map_err(|_| internal("the model registry of the instance is poisoned"))?;
+            load_model(&config, &loaded.models_root, &mut models)?;
+        }
+        let quarantine = CreationQuarantine::new(&loaded.data, &name);
+        let text = config.to_json_string();
+        write_index_config(&directory, &text)?;
+        let store = GenerationStore::create(&directory, INITIAL_EPOCH, &config.schema)
+            .map_err(|error| named(error, &format!("index '{name}'")))?;
+        let jobs = self
+            .jobs
+            .get()
+            .ok_or_else(|| internal("the job board of the instance is not open"))?;
+        let writer = Arc::new(IndexWriter::new(
+            name.clone(),
+            store,
+            config,
+            loaded.writer_queue,
+            Arc::clone(jobs),
+        )?);
+        let handle = Arc::new(IndexHandle {
+            name: name.clone(),
+            writer,
+        });
+        loaded.insert(Arc::clone(&handle))?;
+        quarantine.complete();
+        Ok(handle)
     }
 
     /// Waits for `id` under `?wait=true`: until it is terminal, the deadline of
@@ -290,31 +543,42 @@ impl AppState {
         let mut indexes = Vec::new();
         for directory in index_directories(&config.paths.data.join("indexes"))? {
             let index = read_index_config(&directory)?;
-            let store = open_index(&directory, &index, config, &mut models)?;
+            let store = open_index(&directory, &index, &config.paths.models, &mut models)?;
             info!(
                 index = %index.name,
                 epoch = store.epoch().get(),
                 generation = store.generation().get(),
                 "index opened for writing"
             );
+            let name = index.name.clone();
             let writer = Arc::new(IndexWriter::new(
-                index.name.clone(),
+                name.clone(),
                 store,
+                index,
                 config.limits.writer_queue,
                 Arc::clone(&jobs),
-            ));
-            indexes.push(IndexHandle {
-                config: index,
-                writer,
-            });
+            )?);
+            indexes.push(Arc::new(IndexHandle { name, writer }));
         }
-        let loaded = Loaded { models, indexes };
-        if loaded.indexes.is_empty() {
+        let loaded = Loaded {
+            models: Mutex::new(models),
+            indexes: RwLock::new(indexes),
+            data: config.paths.data.clone(),
+            models_root: config.paths.models.clone(),
+            writer_queue: config.limits.writer_queue,
+            creation: Mutex::new(()),
+        };
+        let opened = loaded.indexes()?;
+        if opened.is_empty() {
             warn!("the instance serves no index");
         }
         info!(
-            indexes = loaded.indexes.len(),
-            encoders = loaded.models.len(),
+            indexes = opened.len(),
+            encoders = loaded
+                .models
+                .lock()
+                .map_err(|_| internal("the model registry of the instance is poisoned"))?
+                .len(),
             "models and indexes loaded"
         );
         self.jobs
@@ -383,15 +647,19 @@ fn read_index_config(directory: &Path) -> Result<IndexConfig, CribleError> {
 /// An `onnx` index loads the fp32 graph, the precision of the acceptance check,
 /// of the online encoding and the query default (ADR-0052); the INT8 graph
 /// stays loaded on its first use (ADR-0051).
+///
+/// The models root is passed instead of the whole [`Config`], so the creation of
+/// an index (`POST /v1/indexes`) uses the same reading as the startup (ADR-0105,
+/// decision 2).
 fn load_model(
     index: &IndexConfig,
-    config: &Config,
+    models_root: &Path,
     models: &mut ModelRegistry,
 ) -> Result<(), CribleError> {
     // `index.json` is a file of the index, not a trusted input: a `model` of
     // `..` or an absolute path would read outside `[paths].models`.
     let model = path_component(&index.model, &format!("model of index '{}'", index.name))?;
-    let directory = config.paths.models.join(model);
+    let directory = models_root.join(model);
     let path = directory.join("model.json");
     let raw = fs::read_to_string(&path).map_err(|error| {
         invalid(format!(
@@ -426,10 +694,10 @@ fn load_model(
 fn open_index(
     directory: &Path,
     index: &IndexConfig,
-    config: &Config,
+    models_root: &Path,
     models: &mut ModelRegistry,
 ) -> Result<GenerationStore, CribleError> {
-    load_model(index, config, models)?;
+    load_model(index, models_root, models)?;
     GenerationStore::open(directory, &index.schema)
         .map_err(|error| named(error, &format!("index '{}'", index.name)))
 }
@@ -437,4 +705,67 @@ fn open_index(
 /// Prefixes the message of `error` with `context`, keeping its code.
 fn named(error: CribleError, context: &str) -> CribleError {
     CribleError::new(error.code(), format!("{context}: {}", error.message()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CreationQuarantine;
+    use std::fs;
+    use std::path::Path;
+
+    /// Names left under `<data>/tmp`.
+    fn quarantined(data: &Path) -> Vec<String> {
+        fs::read_dir(data.join("tmp"))
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_failed_creation_quarantines_then_removes_its_directory() {
+        // ADR-0105, decision 2: a failure after the beginning of the write
+        // removes the directory the creation made, so a name is never left half
+        // created. The guard runs when the caller drops it still armed.
+        let temp = tempfile::tempdir().expect("a temporary directory is creatable");
+        let data = temp.path();
+        let index = data.join("indexes").join("ghost");
+        fs::create_dir_all(&index).expect("the half-created directory exists");
+        fs::write(index.join("index.json"), b"{}").expect("the configuration is written");
+
+        drop(CreationQuarantine::new(data, "ghost"));
+
+        assert!(
+            !index.exists(),
+            "the half-created directory must not stay under <data>/indexes"
+        );
+        assert!(
+            quarantined(data)
+                .iter()
+                .all(|name| !name.starts_with("deleted-")),
+            "the quarantine must be removed: {:?}",
+            quarantined(data)
+        );
+    }
+
+    #[test]
+    fn a_completed_creation_keeps_its_directory() {
+        // The other half of decision 2: a creation that reaches its insertion
+        // into the registry disarms the guard.
+        let temp = tempfile::tempdir().expect("a temporary directory is creatable");
+        let data = temp.path();
+        let index = data.join("indexes").join("kept");
+        fs::create_dir_all(&index).expect("the created directory exists");
+        fs::write(index.join("index.json"), b"{}").expect("the configuration is written");
+
+        CreationQuarantine::new(data, "kept").complete();
+
+        assert!(
+            index.join("index.json").is_file(),
+            "a completed creation keeps its directory"
+        );
+    }
 }

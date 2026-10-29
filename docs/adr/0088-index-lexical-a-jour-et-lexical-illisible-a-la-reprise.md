@@ -192,6 +192,16 @@ Le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONS
 | Dégrader `hybrid` en `dense` quand le lexical est illisible, sans le dire | Rend un `score_type` et un classement que le client n'a pas demandés (ADR-0087, alternative (e)) |
 | Considérer une charge utile illisible comme une corruption à signaler, et non comme un dérivé manquant | Vaut pour `codes.bin`, dont la longueur attendue est vérifiable et le format le nôtre (ADR-0069, décision 3) ; ici l'état est indécidable et le format appartient à tantivy : la seule réponse possible au moment de l'ouverture est la reconstruction |
 
+## Complément du 2026-10-29
+
+Une précision sur le contenu de la charge utile. Elle ne change ni le statut ni les décisions ci-dessus.
+
+**Constat.** La charge utile d'un commit tantivy porte `Gt`, et le critère `M ≤ Gt ≤ G` dit si le lecteur est à jour. Elle ne dit pas avec quelle **chaîne d'analyse** l'index a été construit, alors que `lexical.language` et `lexical.positions` sont modifiables par `PATCH` et que l'écriture d'`index.json` et la reconstruction ne sont pas atomiques.
+
+**Décision.** ADR-0106 ajoute la chaîne d'analyse à la charge utile, dont le format passe à une version qui reste lisible pour une charge utile de la version précédente. Il en tire trois conséquences : reconstruction à l'ouverture en écriture sur chaîne différente, lecture d'une charge utile ancienne comme construite avec la chaîne courante, refus de la branche lexicale en lecture seule sur chaîne différente.
+
+**Raison.** Sans cette information, un arrêt entre l'écriture d'`index.json` et la fin du job `rebuild_lexical` laisse un index lexical construit avec l'ancienne chaîne qu'aucune reprise ne détecte (risque de `RECONSTRUIRE-LEXICAL`, `docs/suivi.md`, 2026-10-28).
+
 ## Références
 
 - `docs/02-architecture.md:73,80` — `lexical/` dérivé, reconstruction à l'ouverture en écriture ; `:95,101` — tables `meta` et `passages`, index SQLite ; `:117-131` — étapes de l'attache, patch de métadonnées ; `:133-148` — reprise au démarrage ; `:151-158` — concurrence, immuabilité des textes pour un iid.
