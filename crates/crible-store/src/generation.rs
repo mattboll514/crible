@@ -1994,6 +1994,16 @@ pub(crate) fn epochs_directory(index_dir: &Path) -> PathBuf {
     index_dir.join(EPOCHS_DIR_NAME)
 }
 
+/// Directory of the segments of one epoch of an index.
+///
+/// The search route opens its searcher on the epoch of the snapshot it holds,
+/// not on the epoch the store currently publishes, so it needs the path for an
+/// explicit epoch (ADR-0107, decision 6; ADR-0109).
+#[must_use]
+pub fn epoch_segments_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    segments_directory(&epoch_directory(index_dir, epoch))
+}
+
 /// Directory of the segments of an epoch.
 pub(crate) fn segments_directory(epoch_dir: &Path) -> PathBuf {
     epoch_dir.join(SEGMENTS_DIR_NAME)

@@ -15,6 +15,7 @@
 //! cleans `segments/tmp-*`, repairs the lexical branch and rebuilds a missing
 //! `codes.bin`. No read-only open exists in the server path in P6.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,8 @@ use crible_core::config::IndexConfig;
 use crible_core::error::CribleError;
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_core::path::path_component;
-use crible_encode::ModelRegistry;
+use crible_encode::{ModelRegistry, Precision, QueryEncoder};
+use crible_search::scan_pool::ScanPool;
 use crible_store::generation::{GenerationStore, INITIAL_EPOCH, write_index_config};
 use crible_store::jobs::{JOBS_FILE_NAME, JobKind, JobState};
 use crible_store::online;
@@ -38,6 +40,7 @@ use crate::config::Config;
 use crate::error::{internal, invalid};
 use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
+use crate::limits::SearchLimit;
 
 /// One index opened or created by the server.
 pub struct IndexHandle {
@@ -81,7 +84,7 @@ pub struct Loaded {
     /// fingerprint. Never unloaded before the restart (ADR-0105, decision 2).
     /// Shared as an [`Arc`] so a write job can load the fp32 graph of an `onnx`
     /// model in its blocking task (ADR-0054, ADR-0107).
-    pub models: Arc<Mutex<ModelRegistry>>,
+    pub models: Arc<ModelRegistry>,
     indexes: RwLock<Vec<Arc<IndexHandle>>>,
     /// Root of `<data>`, for the creation and the deletion of an index.
     data: PathBuf,
@@ -94,6 +97,20 @@ pub struct Loaded {
     /// Serialises the creations, so two of them never write the same name nor
     /// load the same model twice (ADR-0105, decision 1).
     creation: Mutex<()>,
+    /// Semaphore of the searches, one per instance (ADR-0102, ADR-0109).
+    search_limit: Arc<SearchLimit>,
+    /// Dedicated rayon pool of the scans, never the tokio threads
+    /// (`docs/02-architecture.md`, ADR-0109).
+    scan_pool: Arc<ScanPool>,
+    /// Default `timeout_ms` of a search (`[limits].default_timeout_ms`).
+    default_timeout_ms: u64,
+    /// Entries of the query cache (`[limits].query_cache_entries`, ADR-0051).
+    query_cache_entries: usize,
+    /// Precision of the query encoding (`[encoder].query_precision`, ADR-0052).
+    query_precision: Precision,
+    /// One query encoder per model directory, shared by every request so the
+    /// cache of ADR-0051 is the one of the instance and not of a request.
+    query_encoders: Mutex<HashMap<PathBuf, Arc<QueryEncoder>>>,
 }
 
 /// One model of the instance, as a write job reads it.
@@ -107,7 +124,7 @@ pub struct ModelAccess {
     pub config: ModelConfig,
     /// Directory holding `model.json` and the graph files.
     pub directory: PathBuf,
-    registry: Arc<Mutex<ModelRegistry>>,
+    registry: Arc<ModelRegistry>,
 }
 
 impl ModelAccess {
@@ -118,11 +135,7 @@ impl ModelAccess {
     /// The errors of [`ModelRegistry::get_or_load`], plus
     /// [`ErrorCode::Internal`] when the registry is poisoned.
     pub fn encoder(&self) -> Result<Arc<crible_encode::Model>, CribleError> {
-        let registry = self
-            .registry
-            .lock()
-            .map_err(|_| internal("the model registry of the instance is poisoned"))?;
-        registry.get_or_load(&self.directory)
+        self.registry.get_or_load(&self.directory)
     }
 
     /// Loads the token counter of an `onnx` model.
@@ -195,6 +208,53 @@ impl Loaded {
     #[must_use]
     pub fn index_directory(&self, name: &str) -> PathBuf {
         self.data.join("indexes").join(name)
+    }
+
+    /// Semaphore of the concurrent searches of the instance.
+    #[must_use]
+    pub fn search_limit(&self) -> Arc<SearchLimit> {
+        Arc::clone(&self.search_limit)
+    }
+
+    /// Dedicated rayon pool of the scans.
+    #[must_use]
+    pub fn scan_pool(&self) -> Arc<ScanPool> {
+        Arc::clone(&self.scan_pool)
+    }
+
+    /// Default `timeout_ms` of a search.
+    #[must_use]
+    pub fn default_timeout_ms(&self) -> u64 {
+        self.default_timeout_ms
+    }
+
+    /// Precision of the query encoding.
+    #[must_use]
+    pub fn query_precision(&self) -> Precision {
+        self.query_precision
+    }
+
+    /// Query encoder of the model directory of `access`, built once per
+    /// directory and reused by every request.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the cache is poisoned.
+    pub fn query_encoder(&self, access: &ModelAccess) -> Result<Arc<QueryEncoder>, CribleError> {
+        let mut encoders = self
+            .query_encoders
+            .lock()
+            .map_err(|_| internal("the query encoder cache of the instance is poisoned"))?;
+        if let Some(encoder) = encoders.get(&access.directory) {
+            return Ok(Arc::clone(encoder));
+        }
+        let encoder = Arc::new(QueryEncoder::new(
+            &access.directory,
+            Arc::clone(&self.models),
+            self.query_cache_entries,
+        ));
+        encoders.insert(access.directory.clone(), Arc::clone(&encoder));
+        Ok(encoder)
     }
 
     /// Configuration and encoder directory of the model `name`.
@@ -347,6 +407,58 @@ impl AppState {
     #[must_use]
     pub fn loaded(&self) -> Option<&Loaded> {
         self.loaded.get()
+    }
+
+    /// Semaphore of the concurrent searches.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the instance has not loaded its
+    /// configuration.
+    pub fn search_limit(&self) -> Result<Arc<SearchLimit>, CribleError> {
+        self.loaded
+            .get()
+            .map(Loaded::search_limit)
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))
+    }
+
+    /// Dedicated rayon pool of the scans.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the instance has not loaded its
+    /// configuration.
+    pub fn scan_pool(&self) -> Result<Arc<ScanPool>, CribleError> {
+        self.loaded
+            .get()
+            .map(Loaded::scan_pool)
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))
+    }
+
+    /// Default `timeout_ms` of a search.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the instance has not loaded its
+    /// configuration.
+    pub fn default_timeout_ms(&self) -> Result<u64, CribleError> {
+        self.loaded
+            .get()
+            .map(Loaded::default_timeout_ms)
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))
+    }
+
+    /// Query encoder of a model, shared by every request.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Loaded::query_encoder`], and [`ErrorCode::Internal`] when
+    /// the instance has not loaded its configuration.
+    pub fn query_encoder(&self, access: &ModelAccess) -> Result<Arc<QueryEncoder>, CribleError> {
+        self.loaded
+            .get()
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))?
+            .query_encoder(access)
     }
 
     /// Publishes the authenticator of the instance.
@@ -583,13 +695,7 @@ impl AppState {
             return Err(invalid(format!("index already exists: '{name}'")));
         }
         // ADR-0105, decision 2: the model is read before any write.
-        {
-            let mut models = loaded
-                .models
-                .lock()
-                .map_err(|_| internal("the model registry of the instance is poisoned"))?;
-            load_model(&config, &loaded.models_root, &mut models)?;
-        }
+        load_model(&config, &loaded.models_root, &loaded.models)?;
         let quarantine = CreationQuarantine::new(&loaded.data, &name);
         let text = config.to_json_string();
         write_index_config(&directory, &text)?;
@@ -669,11 +775,11 @@ impl AppState {
         online::remove_stale_batches(&config.paths.data)?;
         self.wait_timeout
             .get_or_init(|| Duration::from_millis(config.limits.wait_timeout_ms));
-        let mut models = ModelRegistry::new();
+        let models = ModelRegistry::new();
         let mut indexes = Vec::new();
         for directory in index_directories(&config.paths.data.join("indexes"))? {
             let index = read_index_config(&directory)?;
-            let store = open_index(&directory, &index, &config.paths.models, &mut models)?;
+            let store = open_index(&directory, &index, &config.paths.models, &models)?;
             info!(
                 index = %index.name,
                 epoch = store.epoch().get(),
@@ -691,13 +797,19 @@ impl AppState {
             indexes.push(Arc::new(IndexHandle { name, writer }));
         }
         let loaded = Loaded {
-            models: Arc::new(Mutex::new(models)),
+            models: Arc::new(models),
             indexes: RwLock::new(indexes),
             data: config.paths.data.clone(),
             models_root: config.paths.models.clone(),
             exchange: config.paths.exchange.clone(),
             writer_queue: config.limits.writer_queue,
             creation: Mutex::new(()),
+            search_limit: Arc::new(SearchLimit::new(config.server.max_concurrent_searches)),
+            scan_pool: Arc::new(ScanPool::new(config.server.search_threads)?),
+            default_timeout_ms: config.limits.default_timeout_ms,
+            query_cache_entries: config.limits.query_cache_entries,
+            query_precision: config.encoder.query_precision,
+            query_encoders: Mutex::new(HashMap::new()),
         };
         let opened = loaded.indexes()?;
         if opened.is_empty() {
@@ -705,11 +817,7 @@ impl AppState {
         }
         info!(
             indexes = opened.len(),
-            encoders = loaded
-                .models
-                .lock()
-                .map_err(|_| internal("the model registry of the instance is poisoned"))?
-                .len(),
+            encoders = loaded.models.len(),
             "models and indexes loaded"
         );
         self.jobs
@@ -785,7 +893,7 @@ fn read_index_config(directory: &Path) -> Result<IndexConfig, CribleError> {
 fn load_model(
     index: &IndexConfig,
     models_root: &Path,
-    models: &mut ModelRegistry,
+    models: &ModelRegistry,
 ) -> Result<(), CribleError> {
     // `index.json` is a file of the index, not a trusted input: a `model` of
     // `..` or an absolute path would read outside `[paths].models`.
@@ -826,7 +934,7 @@ fn open_index(
     directory: &Path,
     index: &IndexConfig,
     models_root: &Path,
-    models: &mut ModelRegistry,
+    models: &ModelRegistry,
 ) -> Result<GenerationStore, CribleError> {
     load_model(index, models_root, models)?;
     GenerationStore::open(directory, &index.schema)

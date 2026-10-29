@@ -11,6 +11,9 @@ description = "HTTP server of the Crible engine"
 axum.workspace = true
 crible-core = { path = "../crible-core" }
 crible-encode = { path = "../crible-encode" }
+# The search route runs the same pipeline, the same regroupment and the same
+# answer shape as `crible search` (ADR-0109, `ROUTE-RECHERCHE`).
+crible-search = { path = "../crible-search" }
 crible-store = { path = "../crible-store" }
 getrandom.workspace = true
 # The bodies of the write routes are decoded into the types of `crible-store`,

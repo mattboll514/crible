@@ -33,6 +33,7 @@ pub mod lifecycle;
 pub mod limits;
 pub mod logging;
 mod maintenance;
+mod search;
 pub mod state;
 
 pub use auth::{Auth, Client, protect};

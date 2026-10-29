@@ -43,6 +43,7 @@ use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
+use crible_search::api::{self, ReturnSelection};
 use crible_search::dense::exact::DenseSearcher;
 use crible_search::fusion::BranchScore;
 use crible_search::group::Grouping;
@@ -61,9 +62,6 @@ use crible_store::patch::{self, PatchSource};
 use serde_json::{Value, json};
 
 use crate::vector;
-
-/// Highest `k` accepted by a search (`docs/05-api.md`, "Recherche : requête").
-const MAX_K: usize = 1_000;
 
 /// Number of characters of a passage shown by the readable output of `search`.
 ///
@@ -606,33 +604,9 @@ impl std::fmt::Debug for SearchRequest<'_> {
 /// its own domain is checked either way, so a request that leaves it is refused
 /// even when nothing is grouped.
 fn grouping_of(request: &SearchRequest<'_>) -> Result<Grouping, CribleError> {
-    let by_document = match request.group_by {
-        None => false,
-        Some("document") => true,
-        Some(other) => {
-            return Err(CribleError::new(
-                ErrorCode::InvalidRequest,
-                format!("group_by must be \"document\" or absent, got {other:?}"),
-            ));
-        }
-    };
-    let dedup_content = match request.dedup {
-        None => false,
-        Some("content") => true,
-        Some(other) => {
-            return Err(CribleError::new(
-                ErrorCode::InvalidRequest,
-                format!("dedup must be \"content\" or absent, got {other:?}"),
-            ));
-        }
-    };
-    let grouping = Grouping {
-        by_document,
-        passages_per_document: request.passages_per_document,
-        dedup_content,
-    };
-    grouping.validate()?;
-    Ok(grouping)
+    let by_document = api::group_by(request.group_by)?;
+    let dedup_content = api::dedup(request.dedup)?;
+    api::grouping(by_document, request.passages_per_document, dedup_content)
 }
 
 /// Mode of one `crible search`, from the flag or the index.
@@ -763,12 +737,7 @@ fn required_text<'a>(request: &SearchRequest<'a>, mode: Mode) -> Result<&'a str,
 /// the readable report of [`print_search_text`] instead, for the J2 demo.
 pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let started = Instant::now();
-    if request.k == 0 || request.k > MAX_K {
-        return Err(invalid_request(format!(
-            "k must be between 1 and {MAX_K}, got {}",
-            request.k
-        )));
-    }
+    api::check_k(request.k)?;
     // The regrouping options are validated before the index is opened, the
     // model loaded and the pool evaluated: a request the command can refuse
     // pays for none of that.
@@ -844,21 +813,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     match request.format {
         SearchFormat::Json => {
-            let results: Vec<Value> = answer
-                .results
-                .iter()
-                .map(|result| {
-                    json!({
-                        "doc_id": result.hit.doc_id,
-                        "passage": result.hit.ord,
-                        "key": result.hit.key,
-                        "score": result.hit.score,
-                        "score_type": answer.score_type.as_str(),
-                        "fields": result.hit.fields,
-                        "text": result.hit.text,
-                    })
-                })
-                .collect();
+            let results = api::results_json(&answer, &config.schema, &ReturnSelection::all());
             let response = json!({
                 "results": results,
                 "pool_size": pool.len(),
