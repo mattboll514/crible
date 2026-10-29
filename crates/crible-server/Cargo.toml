@@ -12,7 +12,10 @@ axum.workspace = true
 crible-core = { path = "../crible-core" }
 crible-encode = { path = "../crible-encode" }
 crible-store = { path = "../crible-store" }
+getrandom.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tower-http.workspace = true

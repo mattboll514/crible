@@ -52,9 +52,25 @@ pub struct RequestId(pub String);
 /// The state is the one created at the bind: the router answers `503` on
 /// `/ready` until [`AppState::mark_ready`] is called.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .route("/ready", get(ready))
+    with_common_layers(
+        Router::new()
+            .route("/health", get(health))
+            .route("/ready", get(ready)),
+    )
+    .with_state(state)
+}
+
+/// Applies the layers every router of the server shares.
+///
+/// The trace layer and the request identifier are mounted here so a route
+/// added by another task, or a test router of the middleware, carries them the
+/// same way: a `401` rendered before a route still names its request (ADR-0098),
+/// and no log line records the path with its query string (ADR-0096).
+pub fn with_common_layers<S>(router: Router<S>) -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    router
         .layer(
             TraceLayer::new_for_http()
                 // The path only: `docs/06` forbids a query text and a filter
@@ -71,7 +87,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .layer(middleware::from_fn(assign_request_id))
-        .with_state(state)
 }
 
 /// `/health`: the process is alive.

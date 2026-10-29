@@ -155,6 +155,23 @@ pub fn create_index(data: &Path, config_path: &Path) -> Result<(), CribleError> 
     Ok(())
 }
 
+/// `crible key generate`: prints a key and its SHA-256 digest (ADR-0100).
+///
+/// Exactly two lines on stdout, `key: <key>` then `sha256: <digest>`, and nothing
+/// else: the digest is the SHA-256 of the 64 characters of the key, the form
+/// `[[auth.keys]]` expects. The command reads and writes no file, and the key
+/// is never journalised.
+///
+/// # Errors
+///
+/// [`ErrorCode::Internal`] when the system random source fails.
+pub fn generate_key() -> Result<(), CribleError> {
+    let (key, digest) = crible_server::auth::generate()?;
+    println!("key: {key}");
+    println!("sha256: {digest}");
+    Ok(())
+}
+
 /// `crible attach --data <dir> --models <dir> --index <i> <batch-dir>`.
 pub fn attach_batch(
     data: &Path,

@@ -19,7 +19,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crible_core::config::IndexConfig;
 use crible_core::error::CribleError;
@@ -30,6 +30,7 @@ use crible_store::generation::GenerationStore;
 use crible_store::online;
 use tracing::{info, warn};
 
+use crate::auth::Auth;
 use crate::config::Config;
 use crate::error::{internal, invalid};
 
@@ -71,6 +72,7 @@ impl Loaded {
 pub struct AppState {
     ready: AtomicBool,
     loaded: OnceLock<Loaded>,
+    auth: OnceLock<Arc<Auth>>,
 }
 
 impl AppState {
@@ -103,6 +105,29 @@ impl AppState {
     #[must_use]
     pub fn loaded(&self) -> Option<&Loaded> {
         self.loaded.get()
+    }
+
+    /// Publishes the authenticator of the instance.
+    ///
+    /// The keys come from `[[auth.keys]]` and never change during the life of
+    /// the process (ADR-0100): the routes read this one, and no request can
+    /// widen it. It is shared as an [`Arc`] because [`protect`](crate::auth::protect)
+    /// moves it into a `'static` layer.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when an authenticator is already published: the
+    /// startup sets it once, before the router is served.
+    pub fn set_auth(&self, auth: Arc<Auth>) -> Result<(), CribleError> {
+        self.auth
+            .set(auth)
+            .map_err(|_| internal("the authenticator of the instance is already published"))
+    }
+
+    /// Authenticator of the instance, once the startup has published it.
+    #[must_use]
+    pub fn auth(&self) -> Option<Arc<Auth>> {
+        self.auth.get().cloned()
     }
 
     /// Loads the models and opens the indexes of `config`.

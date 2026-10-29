@@ -33,7 +33,7 @@
 //! `docs/07` that no variable could override, against the first sentence of
 //! ADR-0097 ("chaque clé peut être surchargée").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -98,6 +98,24 @@ impl Role {
             Self::Read => "read",
             Self::Write => "write",
             Self::Admin => "admin",
+        }
+    }
+
+    /// Whether a key of this role reaches a route that requires `required`.
+    ///
+    /// `admin` contains `write`, which contains `read` (`docs/05-api.md`,
+    /// ADR-0100 decision 5).
+    #[must_use]
+    pub const fn grants(self, required: Self) -> bool {
+        self.rank() >= required.rank()
+    }
+
+    /// Level of the role: `admin` above `write`, `write` above `read`.
+    const fn rank(self) -> u8 {
+        match self {
+            Self::Read => 0,
+            Self::Write => 1,
+            Self::Admin => 2,
         }
     }
 
@@ -539,6 +557,11 @@ fn apply_override(
 }
 
 /// Reads the `[[auth.keys]]` array of tables.
+///
+/// The format and the uniqueness of ADR-0100 are checked here, at startup: a
+/// digest of 64 lowercase hexadecimal characters, a unique name and a unique
+/// digest, and the role parsed by [`Role::parse`]. An empty list is accepted:
+/// the instance starts and every authenticated route answers `401`.
 fn keys(value: &Value, overrides: &Overrides) -> Result<Vec<ApiKey>, CribleError> {
     let Value::Array(entries) = value else {
         return Err(invalid(
@@ -560,22 +583,47 @@ fn keys(value: &Value, overrides: &Overrides) -> Result<Vec<ApiKey>, CribleError
             )));
         }
         let sha256 = text(entry, &path, "sha256", overrides)?;
-        if sha256.trim().is_empty() {
+        if crate::auth::parse_digest(&sha256).is_none() {
             return Err(invalid(format!(
-                "setting 'sha256' must not be empty at {}",
+                "key '{name}': 'sha256' must be 64 lowercase hexadecimal characters at {} \
+                 (ADR-0100)",
                 origin(overrides, &format!("{path}.sha256"))
             )));
         }
-        keys.push(ApiKey {
-            name,
-            role: Role::parse(
-                &text(entry, &path, "role", overrides)?,
-                &format!("{path}.role"),
-            )?,
-            sha256,
-        });
+        let role = Role::parse(
+            &text(entry, &path, "role", overrides)?,
+            &format!("{path}.role"),
+        )
+        // ADR-0100, decision 4: the message names the faulty key by its `name`,
+        // as the three other cases of the startup validation do.
+        .map_err(|error| invalid(format!("key '{name}': {}", error.message())))?;
+        keys.push(ApiKey { name, role, sha256 });
     }
+    refuse_duplicates(&keys)?;
     Ok(keys)
+}
+
+/// Refuses two keys with the same `name` or the same `sha256` (ADR-0100).
+///
+/// The message names the key, as ADR-0097 does for every configuration fault.
+fn refuse_duplicates(keys: &[ApiKey]) -> Result<(), CribleError> {
+    let mut names = BTreeSet::new();
+    let mut digests = BTreeSet::new();
+    for key in keys {
+        if !names.insert(key.name.as_str()) {
+            return Err(invalid(format!(
+                "key '{}': 'name' is declared twice in [[auth.keys]] (ADR-0100)",
+                key.name
+            )));
+        }
+        if !digests.insert(key.sha256.as_str()) {
+            return Err(invalid(format!(
+                "key '{}': its 'sha256' is declared twice in [[auth.keys]] (ADR-0100)",
+                key.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parses `[encoder].query_precision`.
@@ -1039,9 +1087,88 @@ query_cache_entries = 1024
     }
 
     #[test]
-    fn an_unknown_role_is_refused() {
+    fn an_unknown_role_is_refused_naming_the_key() {
+        // ADR-0100, decision 4: the refusal names the key by its `name`, as
+        // `a_digest_outside_the_format_is_refused_naming_the_key` does.
         let raw = EXAMPLE.replace("role = \"read\"", "role = \"reader\"");
         let error = load(&raw, &[]).expect_err("an unknown role is refused");
-        assert!(message(error).contains("reader"));
+        let message = message(error);
+        assert!(message.contains("reader"), "got {message}");
+        assert!(
+            message.contains("legifacile-mcp"),
+            "names the key: {message}"
+        );
+    }
+
+    #[test]
+    fn a_digest_outside_the_format_is_refused_naming_the_key() {
+        // ADR-0100, decision 4: 64 characters of `[0-9a-f]`, and the message
+        // names the faulty key.
+        let bad = [
+            "abc".to_owned(),
+            "1".repeat(63),
+            "1".repeat(65),
+            "A".repeat(64),
+            format!("{}g", "1".repeat(63)),
+            format!("0x{}", "1".repeat(62)),
+            String::new(),
+        ];
+        for digest in bad {
+            let raw = EXAMPLE.replace(
+                "sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"",
+                &format!("sha256 = \"{digest}\""),
+            );
+            let error = load(&raw, &[]).expect_err("a digest outside the format is refused");
+            assert_eq!(error.code(), crible_core::error::ErrorCode::InvalidRequest);
+            let message = message(error);
+            assert!(
+                message.contains("legifacile-mcp"),
+                "the message names the key: {message}"
+            );
+            assert!(message.contains("sha256"), "got {message}");
+        }
+    }
+
+    #[test]
+    fn a_digest_declared_twice_is_refused() {
+        // ADR-0100, decision 4: two keys cannot share a digest.
+        let raw = EXAMPLE.replace(
+            "sha256 = \"2222222222222222222222222222222222222222222222222222222222222222\"",
+            "sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\"",
+        );
+        let error = load(&raw, &[]).expect_err("a digest declared twice is refused");
+        let message = message(error);
+        assert!(message.contains("legifacile-sync"), "got {message}");
+        assert!(message.contains("twice"), "got {message}");
+    }
+
+    #[test]
+    fn a_name_declared_twice_is_refused() {
+        // ADR-0100, decision 4: the name identifies a key in the analytics, so
+        // two keys cannot share it.
+        let raw = EXAMPLE.replace("name = \"legifacile-sync\"", "name = \"legifacile-mcp\"");
+        let error = load(&raw, &[]).expect_err("a name declared twice is refused");
+        let message = message(error);
+        assert!(message.contains("legifacile-mcp"), "got {message}");
+        assert!(message.contains("name"), "got {message}");
+    }
+
+    #[test]
+    fn an_empty_key_list_is_accepted() {
+        // ADR-0100, decision 4: `[[auth.keys]]` empty (`keys = []`) is the
+        // closed-by-default instance; the startup warns and every authenticated
+        // route answers `401`.
+        let raw = EXAMPLE.replace(
+            "[[auth.keys]]\nname = \"legifacile-mcp\"\nrole = \"read\"\nsha256 = \
+             \"1111111111111111111111111111111111111111111111111111111111111111\"\n",
+            "",
+        );
+        let raw = raw.replace(
+            "[[auth.keys]]\nname = \"legifacile-sync\"\nrole = \"write\"\nsha256 = \
+             \"2222222222222222222222222222222222222222222222222222222222222222\"\n",
+            "[auth]\nkeys = []\n",
+        );
+        let config = load(&raw, &[]).expect("an empty key list is accepted");
+        assert!(config.auth.keys.is_empty());
     }
 }

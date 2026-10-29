@@ -226,6 +226,12 @@ enum Command {
         #[arg(long, default_value = "/etc/crible/crible.toml")]
         config: PathBuf,
     },
+    /// Manage the API keys of an instance (ADR-0100).
+    Key {
+        /// Key operation to run.
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
 }
 
 /// Operations on indexes.
@@ -240,6 +246,16 @@ enum IndexCommand {
         #[arg(long)]
         config: PathBuf,
     },
+}
+
+/// Operations on API keys.
+#[derive(Debug, Subcommand)]
+enum KeyCommand {
+    /// Draw a key and print it with its SHA-256 digest, for `[[auth.keys]]`.
+    ///
+    /// No option: the command writes `key: <key>` then `sha256: <digest>` on
+    /// stdout, and reads and writes no file (ADR-0100).
+    Generate,
 }
 
 fn main() -> ExitCode {
@@ -331,6 +347,9 @@ fn run(cli: Cli) -> Result<(), CribleError> {
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
         Command::Serve { config } => crible_server::serve_blocking(&config),
+        Command::Key { command } => match command {
+            KeyCommand::Generate => commands::generate_key(),
+        },
     }
 }
 

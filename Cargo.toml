@@ -61,6 +61,12 @@ parquet = { version = "=60.0.0" }
 
 # Hashing, errors, logs, configuration and CLI
 blake3 = { version = "=1.8.7" }
+
+# API keys (ADR-0100): SHA-256 of the received token, constant-time comparison
+# of the digests, randomness of `crible key generate`.
+sha2 = { version = "=0.11.1" }
+subtle = { version = "=2.6.1" }
+getrandom = { version = "=0.4.3" }
 thiserror = { version = "=2.0.21" }
 anyhow = { version = "=1.0.104" }
 tracing = { version = "=0.1.44" }
