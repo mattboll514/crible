@@ -26,8 +26,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::HeaderValue;
-use axum::http::header::RETRY_AFTER;
 use axum::response::Response;
 use crible_core::error::{CribleError, ErrorCode};
 use tokio::sync::Semaphore;
@@ -156,18 +154,11 @@ impl SearchLimit {
 /// Renders the refusal of a search, in the format of `docs/05-api.md`.
 ///
 /// The `503 overloaded` of the concurrency limit carries `Retry-After: 1`
-/// (ADR-0102, decision 2). No other code gets the header here: the value of
-/// `Retry-After` for the write queue, a SQLite lock or the lexical branch is
-/// left to the tasks that produce them (ADR-0102).
+/// through [`error::response`], the single place that adds it to every
+/// producer of `overloaded` (ADR-0103, decision 9).
 #[must_use]
 pub fn refusal(failure: &CribleError, request_id: &str) -> Response {
-    let mut answer = error::rendered(failure, request_id);
-    if failure.code() == ErrorCode::Overloaded {
-        answer
-            .headers_mut()
-            .insert(RETRY_AFTER, HeaderValue::from(RETRY_AFTER_SECONDS));
-    }
-    answer
+    error::rendered(failure, request_id)
 }
 
 /// Count of tokens of a limit: the setting, or twice the cores for zero.

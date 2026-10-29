@@ -59,6 +59,7 @@ data/                                   # volume Docker nommé (mmap rapide)
   instance.json                         # format_version, created_at
   analytics.sqlite                      # analytics agrégées (toute l'instance)
   debug.sqlite                          # journal de debug (opt-in)
+  jobs.sqlite                           # jobs d'écriture de l'instance, consultables après un redémarrage (ADR-0103)
   tmp/online-<batch_id>/                # lot interne du mode en ligne, protégé par un verrou de présence, supprimé par un garde (ADR-0055, ADR-0056)
   tmp/online-<batch_id>.lock            # verrou de présence du lot en ligne ; un lot est vivant tant qu'il est tenu (ADR-0056)
   indexes/<index>/
@@ -76,6 +77,8 @@ data/                                   # volume Docker nommé (mmap rapide)
 models/<model_name>/                    # volume : model.json, model.onnx, model.int8.onnx, tokenizer.json
 exchange/                               # dossier monté : inbox/ (lots), outbox/ (exports), snapshots/ (instantanés, ADR-0064)
 ```
+
+`jobs.sqlite` n'appartient à aucune époque : c'est la table des jobs d'écriture de l'instance, versionnée par sa propre table `meta` (`format_version = 1`), ouverte et écrite par `crible-store` avec les réglages de connexion de `records.sqlite` (ADR-0103). Elle survit à la suppression d'un index.
 
 Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien dans l'époque et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087). La phrase vaut pour `lexical/` sans exception. Pour `lexical/`, « absent » et « illisible » ont la même conséquence : un état indécidable est reconstruit à l'ouverture en écriture, et la lecture seule publie l'instantané sans lecteur lexical (ADR-0088).
 

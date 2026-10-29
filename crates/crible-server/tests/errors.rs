@@ -525,6 +525,11 @@ async fn a_bare_503_of_a_layer_is_an_overloaded() {
     // keeps its own body (ADR-0099).
     let router = router(Arc::new(TestState::new(2)));
     let response = send(&router, Method::GET, "/unavailable", None).await;
+    assert_eq!(
+        response.headers().get(RETRY_AFTER),
+        Some(&"1".parse().expect("a static header value")),
+        "every overloaded carries Retry-After: 1, whatever produced it (ADR-0103)"
+    );
     let error = error_body(response, StatusCode::SERVICE_UNAVAILABLE, "overloaded").await;
     assert_eq!(error["details"], json!({}), "the default details");
 }

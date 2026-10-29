@@ -21,6 +21,7 @@ pub mod auth;
 pub mod config;
 mod error;
 pub mod http;
+pub mod jobs;
 pub mod lifecycle;
 pub mod limits;
 pub mod logging;
@@ -28,7 +29,7 @@ pub mod state;
 
 pub use auth::{Auth, Client, protect};
 pub use config::Config;
-pub use http::{REQUEST_ID_HEADER, RequestId, build_router};
+pub use http::{REQUEST_ID_HEADER, RequestId, accepted, build_router};
 pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};
 pub use logging::{DEFAULT_FILTER, effective_filter, init_logging, log_subscriber};
 pub use state::{AppState, IndexHandle, Loaded};

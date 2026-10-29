@@ -95,9 +95,9 @@ ttl_days = 7
 query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-0052)
 
 [limits]
-writer_queue = 16
+writer_queue = 16             # jobs en attente par index, le job en cours exclu ; au-delà, 503 overloaded (ADR-0103)
 default_timeout_ms = 2000
-wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067)
+wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067) ; borne aussi l'attente des jobs à l'arrêt (ADR-0104)
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
 
@@ -118,7 +118,7 @@ Les variables `CRIBLE_*` documentées **hors configuration** sont exclues de ce 
 - utilisateur non-root ;
 - port 8080 ;
 - `HEALTHCHECK` sur `/health` ;
-- arrêt propre sur SIGTERM et SIGINT (ADR-0099) : `/ready` passe à `503`, le serveur arrête d'accepter, il draine les requêtes en vol pendant au plus `[limits].default_timeout_ms` + 1 000 ms, il vide les analytics quand elles existent (P7), puis il sort en journalisant les requêtes coupées ; l'attente des jobs d'écriture est fixée par `FILE-D-ECRITURE-ET-JOBS` (ADR-0095). Un second signal pendant le drainage fait sortir immédiatement avec un code non nul.
+- arrêt propre sur SIGTERM et SIGINT (ADR-0099) : `/ready` passe à `503`, le serveur arrête d'accepter, il draine les requêtes en vol pendant au plus `[limits].default_timeout_ms` + 1 000 ms, il vide les analytics quand elles existent (P7), puis il sort en journalisant les requêtes coupées ; l'attente des jobs d'écriture est bornée par `[limits].wait_timeout_ms` (60 000 ms par défaut), comptée depuis le signal et en parallèle du drainage des requêtes : toute nouvelle soumission de job rend `503 overloaded` (« the server is shutting down », `Retry-After: 1`), les jobs acceptés avant le signal se terminent, et à l'échéance le processus sort en journalisant les jobs abandonnés, qui passent à `failed` au démarrage suivant (ADR-0104). Un second signal pendant le drainage fait sortir immédiatement avec un code non nul. Conséquence : le délai d'arrêt du conteneur (`stop_grace_period`, réglé en P8) doit être **au-dessus** de `wait_timeout_ms`, faute de quoi l'orchestrateur tue le processus avant la fin de l'attente.
 
 Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 

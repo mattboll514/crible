@@ -28,34 +28,20 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{DocId, Epoch, Generation, Iid, PassageKey};
-use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, Transaction, params};
 use serde_json::{Map, Value};
 
 use crate::segment::SegmentMeta;
+use crate::sqlite::{check_format_version, configure_busy_timeout, enable_wal};
 
 /// Version of the `records.sqlite` on-disk format (INV-15).
 pub const FORMAT_VERSION: u32 = 1;
 
 /// Compression level used for `passages.text`.
 const TEXT_COMPRESSION_LEVEL: i32 = zstd::DEFAULT_COMPRESSION_LEVEL;
-
-/// Time a connection waits on a SQLite lock before it fails (ADR-0038).
-///
-/// One second because a legitimate lock never lasts that long: an attach
-/// commits a few thousand rows and a checkpoint takes milliseconds. Waiting
-/// longer means two writers compete for the database, which contradicts the
-/// "one writer per index" rule and must fail fast. The value stays below
-/// `limits.default_timeout_ms = 2000`, so a read never waits past its own
-/// deadline.
-///
-/// This is a constant of the code, not a configuration key: no instance should
-/// have to tune it (ADR-0038, rule 12 of `AGENTS.md`).
-const BUSY_TIMEOUT_MS: u64 = 1000;
 
 /// Statements building the schema of a new epoch database.
 ///
@@ -232,10 +218,10 @@ impl RecordStore {
             let connection = open_writable(path)?;
             // Refuse before the DDL: a foreign database must not be extended
             // with our tables on the way out.
-            check_format_version(&connection)?;
+            check_format_version(&connection, FORMAT_VERSION, "records")?;
             connection
         };
-        enable_wal(&connection)?;
+        enable_wal(&connection, "records")?;
         for statement in SCHEMA {
             connection
                 .execute(statement, [])
@@ -249,7 +235,7 @@ impl RecordStore {
                 params![i64::from(FORMAT_VERSION)],
             )
             .map_err(|error| database_error("record the format version", &error))?;
-        let format_version = check_format_version(&connection)?;
+        let format_version = check_format_version(&connection, FORMAT_VERSION, "records")?;
         Ok(Self {
             connection,
             format_version,
@@ -265,8 +251,8 @@ impl RecordStore {
     /// contention is transient and the caller may retry.
     pub fn open(path: &Path) -> Result<Self, CribleError> {
         let connection = open_writable(path)?;
-        let format_version = check_format_version(&connection)?;
-        enable_wal(&connection)?;
+        let format_version = check_format_version(&connection, FORMAT_VERSION, "records")?;
+        enable_wal(&connection, "records")?;
         Ok(Self {
             connection,
             format_version,
@@ -1280,87 +1266,6 @@ fn open_or_create(path: &Path) -> Result<Connection, CribleError> {
     Ok(connection)
 }
 
-/// Applies the lock wait of ADR-0038 to `connection`.
-///
-/// Every connection of `records.sqlite` goes through here: the writer of
-/// [`RecordStore`] and the readers of [`ReadPool`]. The setting is per
-/// connection, so it must be applied each time one is opened.
-fn configure_busy_timeout(connection: &Connection) -> Result<(), CribleError> {
-    connection
-        .busy_timeout(Duration::from_millis(BUSY_TIMEOUT_MS))
-        .map_err(|error| database_error("set the SQLite busy timeout", &error))
-}
-
-/// Switches the database to WAL, so readers never block the writer (INV-02).
-fn enable_wal(connection: &Connection) -> Result<(), CribleError> {
-    let mode: String = connection
-        .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
-        .map_err(|error| database_error("enable WAL mode", &error))?;
-    if !mode.eq_ignore_ascii_case("wal") {
-        return Err(CribleError::new(
-            ErrorCode::Internal,
-            format!("the records database refuses WAL mode, journal_mode is '{mode}'"),
-        ));
-    }
-    Ok(())
-}
-
-/// Reads `meta.format_version` and refuses anything but [`FORMAT_VERSION`].
-///
-/// A missing `meta` table, a missing row, a non-integer value and an unknown
-/// version are all `invalid_request` errors naming `format_version` (INV-15).
-fn check_format_version(connection: &Connection) -> Result<u32, CribleError> {
-    if !has_meta_table(connection)? {
-        return Err(CribleError::new(
-            ErrorCode::InvalidRequest,
-            "the database has no meta table, so no format_version: \
-             it is not a records database of this build",
-        ));
-    }
-    let stored = connection
-        .query_row("SELECT format_version FROM meta", [], |row| {
-            row.get::<_, SqlValue>(0)
-        })
-        .optional()
-        .map_err(|error| database_error("read meta.format_version", &error))?;
-
-    let Some(stored) = stored else {
-        return Err(CribleError::new(
-            ErrorCode::InvalidRequest,
-            "meta is empty: the records database has no format_version row",
-        ));
-    };
-    let SqlValue::Integer(stored) = stored else {
-        return Err(CribleError::new(
-            ErrorCode::InvalidRequest,
-            format!(
-                "meta.format_version is not an integer, found {0:?}; \
-                 this build reads format_version {FORMAT_VERSION}",
-                stored
-            ),
-        ));
-    };
-    let version = u32::try_from(stored).map_err(|_| {
-        CribleError::new(
-            ErrorCode::InvalidRequest,
-            format!(
-                "meta.format_version {stored} is out of range; \
-                 this build reads format_version {FORMAT_VERSION}"
-            ),
-        )
-    })?;
-    if version != FORMAT_VERSION {
-        return Err(CribleError::new(
-            ErrorCode::InvalidRequest,
-            format!(
-                "unsupported records format_version {version}; \
-                 this build reads format_version {FORMAT_VERSION}"
-            ),
-        ));
-    }
-    Ok(version)
-}
-
 /// Wraps a SQLite failure, which is an internal error from the caller's point of
 /// view.
 ///
@@ -1387,21 +1292,6 @@ fn is_new_database(path: &Path) -> bool {
         Ok(metadata) => metadata.len() == 0,
         Err(_) => true,
     }
-}
-
-/// True when the database has a `meta` table.
-///
-/// Checked before reading `meta`, so a foreign SQLite file is reported as an
-/// `invalid_request` instead of a raw SQLite error.
-fn has_meta_table(connection: &Connection) -> Result<bool, CribleError> {
-    let count: i64 = connection
-        .query_row(
-            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'meta'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| database_error("inspect the records schema", &error))?;
-    Ok(count > 0)
 }
 
 /// Converts a counter to the signed integer SQLite stores.
