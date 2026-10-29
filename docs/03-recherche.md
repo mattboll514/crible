@@ -84,7 +84,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
   - `SimpleTokenizer`, puis `RemoveLongFilter(40)`, `LowerCaser` et `AsciiFoldingFilter` ;
   - `StopWordFilter(langue)`, puis `Stemmer(langue)`. `StopWordFilter` est **absent** pour `ar`, `el`, `ro`, `ta` et `tr`, les cinq langues sans liste de mots vides : ces langues reçoivent les mêmes jetons qu'une chaîne sans filtre de mots vides (ADR-0086).
 
-  Le traitement des élisions (l', d', qu') et des identifiants comme `L1132-1` est à mesurer (MES-11).
+  Le traitement des élisions (l', d', qu') et des identifiants comme `L1132-1` a été mesuré par MES-11 : la chaîne reste inchangée (ADR-0094).
 - **Positions désactivées par défaut** (`lexical.positions`). Les requêtes de phrase viendront plus tard.
 - **Requête** : la requête passe par la même analyse et forme un sac de termes (OU), noté en BM25.
   - Le collecteur lit le fast field `iid` et ne garde un document que s'il est dans la bitmap du pool. Il remplit un tas de taille k.
@@ -103,7 +103,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
   - chaque branche est normalisée min-max sur ses propres candidats, et **une branche constante** — tous ses candidats au même score, y compris une branche à un seul candidat — donne la valeur normalisée **1** à chacun d'eux ; une branche sans candidat ne contribue rien (ADR-0090). Une branche constante à 0 rendrait indiscernable « présent » de « absent » ;
   - score fusionné = α·dense + (1−α)·lexical, avec `alpha ∈ [0, 1]`, bornes comprises, et une valeur finie ; toute autre valeur est refusée en `invalid_request` (400), à la création de l'index, au `PATCH` et par requête (ADR-0090). α = 0 sert le lexical seul, α = 1 le dense seul ;
   - un document absent d'une branche y vaut 0.
-- **Défaut par index** : `rrf`, qui n'a rien à régler. On peut le changer par requête, et choisir le réglage par défaut avec MES-10.
+- **Défaut par index** : `rrf`, qui n'a rien à régler ; ce défaut est confirmé par MES-10 (ADR-0093). On peut le changer par requête, et choisir le réglage par défaut.
 - **Pour le debug**, on conserve le rang et le score de chaque résultat dans chaque branche.
 - **`score_type`** vaut `cosine`, `bm25`, `rrf` ou `relative`. Un score ne se compare pas d'une requête à l'autre.
 
