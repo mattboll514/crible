@@ -319,7 +319,7 @@ fn grouping_runs_after_the_fusion() {
 
 /// `dedup: "content"` also runs **after** the fusion (step 7 after step 6,
 /// ADR-0075): the copy it keeps is the first of the fused ranking, which here is
-/// the one only the lexical branch found.
+/// `dup-lexical`.
 ///
 /// The two passages share the same `passage_hash`, so a deduplication applied
 /// before the fusion, branch by branch, would keep both: `dup-dense` is the only

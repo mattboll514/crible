@@ -450,7 +450,6 @@ def sensitivity() -> dict:
         BUDGET_SENSITIVITY if term["term"].startswith("filtre bitmap") else term
         for term in BUDGET_TERMS
     )
-    main = budget()
     alternative = budget(replaced)
     return {
         "term": dict(BUDGET_SENSITIVITY),
