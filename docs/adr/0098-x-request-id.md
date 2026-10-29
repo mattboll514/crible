@@ -1,6 +1,6 @@
 # ADR-0098 — `x-request-id`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la fin de la série DEMARRER-SERVEUR-AXUM, AUTHENTIFIER-CLES, FORMAT-ERREURS-ET-LIMITES)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé)
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEMARRER-SERVEUR-AXUM (phase P6), sur la demande du propriétaire

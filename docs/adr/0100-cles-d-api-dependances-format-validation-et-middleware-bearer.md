@@ -1,6 +1,6 @@
 # ADR-0100 — Clés d'API : dépendances, format, validation et middleware `Bearer`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la fin de la série DEMARRER-SERVEUR-AXUM, AUTHENTIFIER-CLES, FORMAT-ERREURS-ET-LIMITES)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé)
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche AUTHENTIFIER-CLES (phase P6), sur demande du propriétaire et le verdict de `@architecte` du 2026-10-29
