@@ -141,6 +141,8 @@ passages.parquet       (ou passages-0001.parquet, …)
 deletions.parquet      (optionnel)
 ```
 
+Un lot **déposé** est lu dans `<exchange>/inbox/<nom>/`, et non à un chemin quelconque. `<nom>` est un seul composant de chemin (`path_component` : ni vide, ni `.`, ni `..`, ni `/`, ni `\`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox ; `<nom>` n'est pas un lien symbolique, et aucun lien symbolique n'est admis dans le dossier du lot, à quelque profondeur, pas plus qu'une entrée qui n'est ni un fichier ni un dossier. Un refus rend `400 invalid_request`, avec un message qui nomme le champ `directory` et jamais un chemin absolu du serveur ; un dossier absent rend `404 not_found`. Le job relit le lot dans le même dossier : la course entre la validation et la lecture est assumée, l'inbox étant sous le contrôle de l'exploitant et le serveur seul à la lire (ADR-0101, ADR-0107).
+
 `manifest.json` :
 
 ```json
@@ -271,6 +273,8 @@ Le serveur construit ensuite un lot interne et suit exactement le même chemin q
 **Mode.** Le lot en ligne n'accepte que **`upsert`**, pour la CLI comme pour la route. `replace_all` est refusé en `invalid_request`, avec un message qui nomme le mode : 10 000 passages au plus par requête (`docs/05-api.md`) le rendent inutilisable, et `replace_all` reste le mode du lot déposé.
 
 **`doc_hash`.** Le `doc_hash` du lot interne est **toujours** rempli : le document le fournit, ou il vaut le blake3 du JSON canonique de ses passages (règle et forme dans `docs/05-api.md`, ADR-0055).
+
+**Suppressions.** Le corps de `POST /v1/indexes/{index}/documents` porte aussi des `deletions` (`docs/05-api.md`). Le lot interne les écrit dans un `deletions.parquet` conforme au format, avec `counts.deletions` et son checksum, et l'attache les applique comme pour tout lot : les passages reçoivent des pierres tombales, et la ligne `documents` tombe dans la transaction du commit (ADR-0041). Il n'y a **pas de second chemin** de suppression : la route ne fait pas écrire de suppression par `GenerationStore::commit` (ADR-0107). Les `doc_id` de `deletions` comptent dans la limite de 10 000 entrées du corps, et un `doc_id` présent à la fois dans `documents` et dans `deletions` fait refuser la requête en `400 invalid_request` (ADR-0040). Un corps qui ne porte que des `deletions` est un lot **sans passage** : son rapport porte `acceptance: null` (voir « Contrôles et recette »), et ses fichiers `documents` et `passages` sont vides, le format exigeant au moins un fichier de chaque rôle.
 
 ## Patch de métadonnées
 
