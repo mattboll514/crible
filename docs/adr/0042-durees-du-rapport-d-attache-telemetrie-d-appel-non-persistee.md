@@ -79,6 +79,8 @@ ATTACHER-LOT reste bloquée jusqu'à la décision.
 
 Un renvoi, sans changement de la décision ci-dessus.
 
+**Statut du complément** : confirmé par le propriétaire le 2026-10-30, sans changement de la décision ci-dessus.
+
 **Constat.** La décision laisse ouverte « la forme exacte sous laquelle un appelant reçoit ses durées » (`:31`), en la qualifiant de point d'API.
 
 **Décision.** ADR-0107, décision 4, la tranche pour le serveur : aucune réponse de l'API ne rend les durées, `?wait=true` compris ; le job les journalise une fois, à sa fin, au niveau `info`, avec `job_id`, `kind` et `index`, sans texte client ; elles ne sont ni persistées ni portées par le job. La CLI continue de les afficher à son appelant.

@@ -1,6 +1,6 @@
 # ADR-0104 — Arrêt du serveur et jobs d'écriture
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30)
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche FILE-D-ECRITURE-ET-JOBS (phase P6), sur demande de l'orchestrateur et le verdict de `@architecte` du 2026-10-29

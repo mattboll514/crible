@@ -118,6 +118,8 @@ Le nom du test est un contrat, comme les trois déjà exclus : le renommer sans 
 
 Un renvoi, sans changement des décisions ci-dessus.
 
+**Statut du complément** : confirmé par le propriétaire le 2026-10-30, sans changement des décisions ci-dessus.
+
 **Constat.** L'« À surveiller » ci-dessus (`:103`) prévoit le cas d'un cinquième test de l'échantillon : « ne pas improviser : rouvrir cet ADR plutôt que d'ajouter une exclusion sans décision ». La fiche `ROUTE-RECHERCHE` demande que « les résultats de l'API sont identiques à ceux de la CLI sur les requêtes de l'échantillon » (`docs/phases/P6-serveur-et-api.md:108`), ce qui demande un tel test.
 
 **Décision.** ADR-0109 admet ce cinquième test, `api_and_cli_return_the_same_results_on_the_legifacile_sample`, avec un cinquième `--skip` explicite dans la commande du job `rust-onnx`. Il compare la réponse de `POST /v1/indexes/{index}/search` et la sortie JSON de `crible search` sur `data/legifacile-sample`, pour chaque question étiquetée et pour les modes `dense`, `lexical` et `hybrid` à `k = 10`. La règle du point 1 reste entière : exclusion nommée, aucun motif commun, aucun autre test exclu.

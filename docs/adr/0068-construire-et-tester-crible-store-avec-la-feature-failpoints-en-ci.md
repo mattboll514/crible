@@ -84,7 +84,7 @@ Rien d'autre dans `docs/07` n'est modifié.
 
 ## Complément du 2026-10-29 (relecture de ROUTES-DOCUMENTS-ET-LOTS)
 
-**Statut du complément** : accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série. Il ne change ni le statut ni les décisions ci-dessus.
+**Statut du complément** : accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30. Il ne change ni le statut ni les décisions ci-dessus.
 
 **Constat.** `crates/crible-server/Cargo.toml:40` déclare une **dev-dependency** `crible-store` avec `features = ["failpoints"]`, pour prouver la reprise d'ADR-0108 au niveau du serveur par le point de panne `after_epoch_switch` de la compaction. Avec le résolveur 2, une feature activée par une dev-dependency est unifiée pour tout le graphe de test du workspace : un simple `cargo test` construit donc `crible-store` avec `failpoints`, alors que la décision 2 dit qu'« aucune autre crate ne la reçoit ». Le défaut est silencieux : aucun test ne casse, la CI fait seulement tourner la feature partout.
 

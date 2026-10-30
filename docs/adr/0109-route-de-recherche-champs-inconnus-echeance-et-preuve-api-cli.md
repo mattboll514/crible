@@ -1,6 +1,6 @@
 # ADR-0109 — Route de recherche : champs inconnus, périmètre de l'échéance et preuve « API = CLI »
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30)
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche ROUTE-RECHERCHE (phase P6), sur délégation du propriétaire pour la série des ADR-0103 à ADR-0109 et les verdicts de `@architecte` du 2026-10-29

@@ -68,7 +68,7 @@ Aucune de ces features n'ajoute de crate à l'arbre de dépendances, et aucune n
 
 ### Suite du complément : relecture de ROUTES-DOCUMENTS-ET-LOTS
 
-**Statut de cette suite** : acceptée par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série. Elle ne change aucune décision ci-dessus, ni le statut de l'ADR.
+**Statut de cette suite** : acceptée par anticipation par le propriétaire le 2026-10-29, confirmée par le propriétaire le 2026-10-30. Elle ne change aucune décision ci-dessus, ni le statut de l'ADR.
 
 La relecture de `ROUTES-DOCUMENTS-ET-LOTS` ajoute **deux entrées** de même nature : une dépendance déjà nommée par `docs/07`, et une feature du paquet serveur.
 

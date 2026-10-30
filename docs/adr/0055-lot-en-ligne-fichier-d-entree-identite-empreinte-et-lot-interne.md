@@ -112,6 +112,8 @@ Pour que la route P6 n'ait pas à rouvrir cet ADR :
 
 Un renvoi, sans changement des décisions ci-dessus.
 
+**Statut du complément** : confirmé par le propriétaire le 2026-10-30, sans changement des décisions ci-dessus.
+
 **Constat.** L'« À surveiller » ci-dessus (`:89`) dit qu'un besoin de suppression en ligne demanderait un nouvel ADR. La route `POST /v1/indexes/{index}/documents` porte `deletions` (`docs/05-api.md:128`).
 
 **Décision.** ADR-0107 accepte les `deletions` sur la route : le lot interne écrit un `deletions.parquet` conforme au format de lot v1, et l'attache les applique comme pour tout lot. Le fichier d'entrée de `crible ingest` (décision 1) reste sans `deletions` : une suppression en CLI passe par un lot déposé. ADR-0107 confirme aussi que la route prend son `batch_id` dans le corps (« Cohérence avec P6 »), le constructeur de lot interne restant le même pour la CLI et la route.

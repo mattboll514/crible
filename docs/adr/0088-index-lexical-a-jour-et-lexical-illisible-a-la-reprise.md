@@ -196,6 +196,8 @@ Le sort de `lexical/` pendant la compaction et le job de reconstruction (`RECONS
 
 Une précision sur le contenu de la charge utile. Elle ne change ni le statut ni les décisions ci-dessus.
 
+**Statut du complément** : confirmé par le propriétaire le 2026-10-30, sans changement du statut ni des décisions ci-dessus.
+
 **Constat.** La charge utile d'un commit tantivy porte `Gt`, et le critère `M ≤ Gt ≤ G` dit si le lecteur est à jour. Elle ne dit pas avec quelle **chaîne d'analyse** l'index a été construit, alors que `lexical.language` et `lexical.positions` sont modifiables par `PATCH` et que l'écriture d'`index.json` et la reconstruction ne sont pas atomiques.
 
 **Décision.** ADR-0106 ajoute la chaîne d'analyse à la charge utile, dont le format passe à une version qui reste lisible pour une charge utile de la version précédente. Il en tire trois conséquences : reconstruction à l'ouverture en écriture sur chaîne différente, lecture d'une charge utile ancienne comme construite avec la chaîne courante, refus de la branche lexicale en lecture seule sur chaîne différente.

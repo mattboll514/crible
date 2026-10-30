@@ -1,6 +1,6 @@
 # ADR-0105 — Administration des index par l'API : création à chaud, `PATCH`, suppression et corps des réponses
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30 ; complément du 2026-10-29 compris dans cette confirmation)
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche ROUTES-INDEX (phase P6), sur demande de l'orchestrateur et les verdicts de `@architecte` du 2026-10-29
@@ -81,7 +81,7 @@ Ce qui n'est pas décidé ici : la forme exacte de `config` au-delà de « `inde
 
 ## Complément du 2026-10-29 — ordre des contrôles d'un `PATCH` sur le niveau d'un champ
 
-- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-29, à confirmer à la revue de fin de série). Les décisions 1 à 7 ci-dessus restent inchangées ; ce complément lève une ambiguïté entre deux règles déjà écrites.
+- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30). Les décisions 1 à 7 ci-dessus restent inchangées ; ce complément lève une ambiguïté entre deux règles déjà écrites.
 - **Origine** : relecture de `ROUTES-INDEX` et rapport de `@testeur`, même jour.
 
 ### Contexte du complément
