@@ -223,9 +223,75 @@ Sont **non modifiés** : `docs/suivi.md` (tenu par l'orchestrateur), tout fichie
 | Laisser les schémas ouverts (`additionalProperties` par défaut) | Le serveur refuse les clés inconnues (`ADR-0031`, `ADR-0109`, `ADR-0110`) : la spécification décrirait un corps accepté que le serveur rejette. |
 | Un `oneOf` statique pour `filter`, `return.fields` et la configuration d'index | Leurs formes dépendent du schéma de chaque index, connu à l'exécution seulement. Un `oneOf` figé à la compilation serait faux dès qu'un index déclare un champ de plus. |
 
+## Complément du 2026-10-30 (routes des phases ultérieures dans le test des routes)
+
+- **Statut** : inchangé — Accepté (accepté par anticipation, décision déléguée par le propriétaire pour la troisième série de P6, revue à la fin de la série). Les huit décisions ci-dessus restent écrites telles qu'elles ont été acceptées ; ce complément **remplace la seule clause d'exception** de la décision 5, et rien d'autre.
+- **Origine** : `QUESTION-CONCEPTION` de `@dev` sur `PUBLIER-OPENAPI`, et verdict `@architecte` du 2026-10-30 concluant à un **`ECART`** au texte de la décision 5, aucune option couverte par l'ADR.
+
+### Contexte du complément
+
+**Constat — deux lignes du tableau sans route en P6.** La décision 5 exige l'égalité, **dans les deux sens**, entre les couples (méthode, chemin) de la spécification et ceux du tableau des routes de `docs/05`, avec **deux seules exceptions nommées** : `/openapi.json` et `/docs`. Or le tableau (`docs/05-api.md:74-75`) porte `GET /v1/stats` et `GET /v1/debug/queries`, qui ne sont montées qu'en P7, par les tâches `ROUTE-STATS` et `JOURNAL-DE-DEBUG` (`docs/phases/P7-observabilite.md:36-49` et `:74-83`). Pris à la lettre, le test de la décision 5 échoue dès `PUBLIER-OPENAPI`, sans qu'aucune des huit décisions ne dise comment traiter une ligne dont la route appartient à une phase ultérieure.
+
+Le texte de la décision 5 reste lisible : `docs/05` fait foi pour le contenu, et une route ajoutée au code est documentée dans `docs/05` dans le même changement. Ce qui manquait est le cas **inverse** : une ligne de `docs/05` dont la route n'existe pas encore.
+
+### Décision du complément
+
+**Décision 9 — les exceptions de la décision 5.** La clause d'exception de la décision 5 est remplacée par :
+
+> Sont exceptées par leur nom : `/openapi.json` et `/docs` (ressources statiques, hors spécification), et toute ligne du tableau de `docs/05` affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite ; chaque exception de ce second type est écrite dans le test avec la tâche qui la livre, citée en commentaire. En P6, ce sont `GET /v1/stats` (`ROUTE-STATS`) et `GET /v1/debug/queries` (`JOURNAL-DE-DEBUG`). La tâche qui monte la route la déclare dans la spécification et retire son exception du test dans le même changement.
+
+Précisions :
+
+- le reste de la décision 5 est inchangé : comparaison **dans les deux sens**, sur des ensembles de couples (méthode, chemin), chemin **sans paramètre de requête**, une ligne à deux routes séparées par `·` comptant pour deux routes ;
+- une exception de ce second type est **nommée** : son chemin est écrit dans le test, avec la tâche qui la livre en commentaire. Une exception muette, ou calculée depuis le tableau, n'est pas couverte ;
+- une exception disparaît **dans le changement qui monte la route** : c'est la règle « toute route ajoutée au code est documentée dans `docs/05` dans le même changement » (décision 5), appliquée dans l'autre sens ;
+- hors de ce cas, aucune ligne du tableau n'est exceptée : une route du code absente de `docs/05`, ou une ligne de `docs/05` sans route **et sans tâche de phase ultérieure**, fait toujours échouer le test.
+
+### Raison
+
+**Raison 1.** La décision 5 visait une divergence entre le code et la documentation ; elle n'avait pas prévu un tableau qui **annonce** des routes à venir. `docs/05` décrit l'API cible de la version 1, pas seulement la part livrée : le tableau est la référence, et il se remplit au rythme des phases.
+
+**Raison 2.** Le test doit rester un test : sans exception nommée, il serait rouge de la fin de P6 au début de P7, donc désactivé ou commenté, ce qui est exactement ce que la décision 5 veut empêcher.
+
+**Raison 3.** Nommer l'exception avec sa tâche rend l'oubli visible. Une exception qui survit à la tâche qui livre la route se voit à la relecture : le commentaire cite une tâche faite.
+
+### Application
+
+| Document | Modification |
+|---|---|
+| `docs/adr/README.md:167` | ligne d'index de cet ADR : mention du complément |
+| `docs/phases/P7-observabilite.md` | critère d'acceptation ajouté à `JOURNAL-DE-DEBUG` et à `ROUTE-STATS` : la route figure dans la spécification et son exception nommée quitte le test de `PUBLIER-OPENAPI` dans le même changement |
+| `docs/05-api.md:79` | la phrase d'ADR-0111 dit quelles lignes sont exceptées et pourquoi |
+
+Le **code et les tests** ne sont pas modifiés par ce complément : la spécification et le test des routes appartiennent à `PUBLIER-OPENAPI`, et les deux routes à P7.
+
+### Conséquences du complément
+
+- **Positives** :
+  - le test des routes est vert à la fin de chaque phase, sans être désactivé ;
+  - l'écart entre le tableau et le code est tracé par une tâche nommée, pas par une tolérance ;
+  - la règle vaut pour toute phase suivante : P8 et P9 n'auront pas à rouvrir la décision 5.
+- **Négatives / coûts** :
+  - le test porte une liste d'exceptions qui doit diminuer à chaque phase, et une exception oubliée est un défaut que seul un humain voit ;
+  - une ligne du tableau dont la tâche est **renommée ou supprimée** laisse une exception qui cite une tâche inexistante : le commentaire devient faux sans faire échouer aucun test.
+- **À surveiller** :
+  - `JOURNAL-DE-DEBUG` et `ROUTE-STATS` : l'exception doit disparaître dans le même changement que la route, sinon la décision 5 est contournée ;
+  - toute nouvelle ligne de `docs/05` affectée à une phase ultérieure : elle demande son exception nommée, faute de quoi le test échoue au changement suivant ;
+  - le tableau de `docs/05` reformaté : les exceptions sont écrites par chemin, pas par numéro de ligne.
+
+### Alternative écartée pour ce complément
+
+| Alternative | Pourquoi écartée |
+|---|---|
+| Déclarer les deux chemins dans la spécification sans handler | La spécification décrirait des `404` avec des schémas inventés avant P7, contre ADR-0015 (générée depuis le code) et la décision 7 (aucun artefact qui ne corresponde au code servi). |
+| Retirer les deux lignes de `docs/05` jusqu'en P7 | `docs/05` fait foi, et les livrables de `JOURNAL-DE-DEBUG` et de `ROUTE-STATS` les y attendent : retirer une ligne puis la remettre ferait du tableau une vue datée du code, pas la référence. |
+| Faire échouer le test tant que toutes les routes ne sont pas montées, avec `#[ignore]` | Un test ignoré pour une raison de calendrier masquerait aussi les vraies divergences, et `docs/08:43` réserve `#[ignore]` à un prérequis absent (modèle, échantillon), pas à une phase pas encore livrée. |
+| Comparer seulement les routes du code présentes dans `docs/05`, sans le sens inverse | C'est l'abandon de la décision 5 : une route du code oubliée dans `docs/05` ne ferait plus échouer personne. |
+
 ## Références
 
 - `docs/phases/P6-serveur-et-api.md:129-135` — fiche `PUBLIER-OPENAPI` : objectif (`:130`), dépendances (`:131`), livrables (`:132`), critères d'acceptation (`:134-135`) ; `:99-111` — `ROUTE-RECHERCHE` ; `:113-127` — `RECHERCHE-MULTI-INDEX` ; `:137-150` — `CLIENT-PYTHON-HTTP`.
+- `docs/phases/P7-observabilite.md:36-49` — fiche `JOURNAL-DE-DEBUG` ; `:74-83` — fiche `ROUTE-STATS` ; complément du 2026-10-30.
 - `docs/07-stack-et-deploiement.md:25-50` — tableau des dépendances ; `:31` (features d'`axum`, `tokio`, `tower`, `tower-http`), `:32` (ligne OpenAPI), `:50` (row « Tests »), `:52` (`httpx` côté Python), `:54` (refus de `download-binaries` d'`ort`), `:112-125` (Docker), `:144` (job `rust-onnx`, CI sans ONNX Runtime).
 - `docs/05-api.md` : `:11-13` (rôles), `:25-53` (format d'erreur, tableau des codes), `:55-77` (tableau des routes ; `:68` deux routes sur une ligne, `:76` `/health` et `/ready`, `:77` `/openapi.json` et `/docs`), `:192-226` (grammaire de `filter`), `:228-253` (« Recherche : requête »), `:255-306` (« Recherche : réponse »), `:308-346` (« Recherche multi-index »).
 - `Cargo.toml:20` (`axum = 0.8.9`), `:42-44` (`utoipa = 6.0.0`, `utoipa-swagger-ui = 10.0.1`, sans feature).
