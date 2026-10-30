@@ -33,7 +33,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 | Intégration | `cargo test` (`tests/`), `tempfile` | Index réel dans un dossier temporaire : attache, recherche, compaction, export |
 | Référence | `tools/reference_topk.py` (numpy) | Top-k exact calculé en Python sur le jeu synthétique ; Crible doit le reproduire |
 | Pannes | Points d'injection `CRIBLE_FAILPOINT=<étape>` (en build de test uniquement) | INV-03, INV-04 |
-| Charge | Script de charge (Rust ou Python), recherches concurrentes | INV-02, INV-17 |
+| Charge | Script de charge (Rust ou Python), recherches concurrentes | INV-02, INV-17 (INV-17 sera prouvé en P7, avec le même harnais, quand les analytics et le journal existeront ; ADR-0113) |
 | Micro-benchmarks | `criterion` | Noyaux SIMD, scans, fusion |
 | Éval | `crible eval` | Rappel et latence sur des jeux de requêtes |
 | Python | `pytest` | `BatchWriter`, client HTTP |
@@ -78,6 +78,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
 | MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
+| MES-16 | Charge concurrente pendant les écritures : recherches denses et hybrides pendant des attaches puis une compaction. Protocole fixé par ADR-0113 : critère d'INV-02 par requête (chaque recherche sous 3 × le p99 de la phase de repos), N = 4 clients en boucle fermée, latence à l'horloge murale côté client, trois campagnes sur données neuves, rapport `docs/mesures/MES-16-charge-concurrente.md` | P6 |
 
 ## Cibles chiffrées
 

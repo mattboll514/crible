@@ -154,4 +154,5 @@
   - le p99 de recherche pendant les écritures reste sous 3 fois le p99 au repos ;
   - aucune erreur `5xx` autre que les `503` attendus ;
   - `docs/jalons/J6-demo.md` est écrit.
+- **Précisions** : ADR-0113 (critère d'INV-02 par requête, MES-16, protocole, `503` attendus : aucun).
 - **Invariants** : INV-02.
