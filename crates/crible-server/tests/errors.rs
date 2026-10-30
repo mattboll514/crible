@@ -16,7 +16,7 @@
 //! call the same [`SearchLimit`] and [`limits::refusal`].
 
 use std::io;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use axum::Json;
@@ -66,7 +66,7 @@ const INTERNAL_CAUSE: &str = "the blocking task of a search did not finish norma
 /// assertions need, whatever the load of the machine (ADR-0102, decision 3).
 struct TestState {
     limit: SearchLimit,
-    gate: Barrier,
+    gate: Rendezvous,
 }
 
 impl TestState {
@@ -74,25 +74,74 @@ impl TestState {
     fn new(max_concurrent_searches: usize) -> Self {
         Self {
             limit: SearchLimit::new(max_concurrent_searches),
-            gate: Barrier::new(2),
+            gate: Rendezvous::new(),
         }
+    }
+
+    /// Blocks the search that waits for the rendezvous.
+    ///
+    /// Called by the work of a request that asks `wait: true`; the work returns
+    /// when the test releases the rendezvous.
+    fn wait(&self) {
+        self.gate.wait();
     }
 
     /// Releases the search that waits for the rendezvous.
     ///
-    /// Called exactly once, after a request whose work waits: both parties then
-    /// pass, the work returns, and its token comes back with it.
+    /// Called exactly once, after a request whose work waits: the work then
+    /// returns, and its token comes back with it. The release never blocks, so it
+    /// holds even when no work ever waits.
     fn release(&self) {
-        self.gate.wait();
+        self.gate.release();
+    }
+}
+
+/// Rendezvous between the work of a search and the test.
+///
+/// The work blocks until the test releases it. Releasing never blocks, so a
+/// guard can release work that never started without hanging the test; a
+/// `Barrier` would wait for a partner that does not exist when the route answers
+/// before the work runs, which is the other half of the defect
+/// (`@relecteur`, second pass of NETTOYER-P6).
+struct Rendezvous {
+    release: mpsc::Sender<()>,
+    wait: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Rendezvous {
+    /// Builds a rendezvous no work waits on yet.
+    fn new() -> Self {
+        let (release, wait) = mpsc::channel();
+        Self {
+            release,
+            wait: Mutex::new(Some(wait)),
+        }
+    }
+
+    /// Blocks the work of a search until the test releases the rendezvous.
+    ///
+    /// The first caller takes the receiver; a later one returns at once.
+    fn wait(&self) {
+        let receiver = self.wait.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(receiver) = receiver {
+            let _ = receiver.recv();
+        }
+    }
+
+    /// Releases the waiting work, at once and even when none waits.
+    fn release(&self) {
+        let _ = self.release.send(());
     }
 }
 
 /// Releases the rendezvous of a search when the test leaves, even by a panic.
 ///
-/// The work of a search waits on the barrier of [`TestState`] from a blocking
+/// The work of a search waits on the rendezvous of [`TestState`] from a blocking
 /// thread. Without this guard, a failing assertion would leave it there and the
 /// runtime would wait for it at its drop instead of reporting the failure: the
-/// test would hang instead of failing (`@relecteur`, FORMAT-ERREURS-ET-LIMITES).
+/// test would hang instead of failing. The release itself never blocks, so the
+/// guard cannot hang either when the route answers before the work runs
+/// (`@relecteur`, FORMAT-ERREURS-ET-LIMITES, then NETTOYER-P6).
 struct ReleaseOnDrop(Option<Arc<TestState>>);
 
 impl ReleaseOnDrop {
@@ -244,7 +293,7 @@ async fn search(
     let waits = body.get("wait").and_then(Value::as_bool).unwrap_or(false);
     let work = move || {
         if waits {
-            waiting.release();
+            waiting.wait();
         }
     };
     match state.limit.run_blocking(deadline, work).await {

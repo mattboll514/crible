@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -322,12 +323,15 @@ pub async fn delete_index(
             let source = data.join("indexes").join(&name);
             let tmp = data.join("tmp");
             let target = tmp.join(format!("deleted-{name}-{}", progress.job_id()));
-            // ADR-0105, decision 6: the rename comes first. A failure leaves the
+            // ADR-0105, decision 6: the rename comes first, then the index
+            // leaves the registry, then the writer is marked deleted and the
+            // quarantined directory is purged. A failure of the rename leaves the
             // index both registered and on disk, so the job fails and the index
             // stays intact; deregistering first would hide a served directory
             // from the registry until the next restart. Between the rename and
             // the removal of the registry entry, a search that already holds its
-            // snapshot finishes on it: the files it mapped stay valid.
+            // snapshot finishes on it (the files it mapped stay valid), and a
+            // read of the detail answers `404` because the directory is gone.
             rename_to_quarantine(&source, &target)?;
             if holder.remove_index(&name)?.is_none() {
                 return Err(CribleError::new(
@@ -412,9 +416,17 @@ fn index_directory(state: &AppState, name: &str) -> Result<PathBuf, CribleError>
 /// Symbolic links are skipped: following one would count a file outside
 /// `<data>`, and a loop would never end. The value is the disk space the index
 /// itself occupies, never a link target (ADR-0105, "À surveiller").
+///
+/// A directory that vanished between the read of the registry and this walk is
+/// an unknown index, never an internal failure: `delete_index` renames the
+/// directory before the index leaves the registry, so a `GET` that interleaves
+/// answers `404 unknown_index` (ADR-0105, decision 6).
 fn directory_size(directory: &Path) -> Result<u64, CribleError> {
     let mut total = 0_u64;
     let entries = fs::read_dir(directory).map_err(|error| {
+        if error.kind() == ErrorKind::NotFound {
+            return vanished_index();
+        }
         error::internal(format!(
             "cannot measure the index directory {}: {error}",
             directory.display()
@@ -422,6 +434,9 @@ fn directory_size(directory: &Path) -> Result<u64, CribleError> {
     })?;
     for entry in entries {
         let entry = entry.map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                return vanished_index();
+            }
             error::internal(format!(
                 "cannot read an entry of {}: {error}",
                 directory.display()
@@ -430,6 +445,9 @@ fn directory_size(directory: &Path) -> Result<u64, CribleError> {
         // `symlink_metadata` describes the link itself, so the walk never
         // descends into one nor counts its target.
         let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+            if error.kind() == ErrorKind::NotFound {
+                return vanished_index();
+            }
             error::internal(format!(
                 "cannot read the metadata of {}: {error}",
                 entry.path().display()
@@ -445,6 +463,17 @@ fn directory_size(directory: &Path) -> Result<u64, CribleError> {
         }
     }
     Ok(total)
+}
+
+/// The index directory went away under the reader.
+///
+/// The message names no path: an `unknown_index` reaches the client, and
+/// ADR-0101 keeps the server layout out of a body (ADR-0096).
+fn vanished_index() -> CribleError {
+    CribleError::new(
+        ErrorCode::UnknownIndex,
+        "the directory of the index no longer exists",
+    )
 }
 
 /// Renames `source` to `target`, before the index leaves the registry

@@ -177,22 +177,59 @@ mod tests {
         TIMEOUT_MESSAGE, resolved, timeout,
     };
     use crible_core::error::ErrorCode;
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::time::Duration;
+
+    /// Rendezvous between the work of a search and the test.
+    ///
+    /// The work blocks until the test releases it. Releasing never blocks, so a
+    /// guard can release work that never started without hanging the test; a
+    /// `Barrier` would wait for a partner that does not exist when the route
+    /// answers before the work runs (`@relecteur`, second pass of NETTOYER-P6).
+    struct Rendezvous {
+        release: mpsc::Sender<()>,
+        wait: Mutex<Option<mpsc::Receiver<()>>>,
+    }
+
+    impl Rendezvous {
+        fn new() -> Self {
+            let (release, wait) = mpsc::channel();
+            Self {
+                release,
+                wait: Mutex::new(Some(wait)),
+            }
+        }
+
+        /// Blocks the work of a search until the test releases the rendezvous.
+        ///
+        /// The first caller takes the receiver; a later one returns at once.
+        fn wait(&self) {
+            let receiver = self.wait.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(receiver) = receiver {
+                let _ = receiver.recv();
+            }
+        }
+
+        /// Releases the waiting work, at once and even when none waits.
+        fn release(&self) {
+            let _ = self.release.send(());
+        }
+    }
 
     /// Releases the rendezvous of a worker when the test leaves, by a panic too.
     ///
-    /// The work of a search waits on the barrier from a blocking thread. Without
-    /// this guard, a failing assertion would leave it there and the runtime would
-    /// wait for it at its drop instead of reporting the failure: the test would
-    /// hang instead of failing (`@relecteur`, FORMAT-ERREURS-ET-LIMITES).
+    /// The work of a search waits on the rendezvous from a blocking thread.
+    /// Without this guard, a failing assertion would leave it there and the
+    /// runtime would wait for it at its drop instead of reporting the failure:
+    /// the test would hang instead of failing (`@relecteur`,
+    /// FORMAT-ERREURS-ET-LIMITES).
     struct ReleaseOnDrop {
-        gate: Arc<Barrier>,
+        gate: Arc<Rendezvous>,
         released: bool,
     }
 
     impl ReleaseOnDrop {
-        fn new(gate: Arc<Barrier>) -> Self {
+        fn new(gate: Arc<Rendezvous>) -> Self {
             Self {
                 gate,
                 released: false,
@@ -200,7 +237,7 @@ mod tests {
         }
 
         /// The gate the worker awaits.
-        fn gate(&self) -> Arc<Barrier> {
+        fn gate(&self) -> Arc<Rendezvous> {
             Arc::clone(&self.gate)
         }
 
@@ -208,7 +245,7 @@ mod tests {
         fn release(&mut self) {
             if !self.released {
                 self.released = true;
-                self.gate.wait();
+                self.gate.release();
             }
         }
     }
@@ -296,9 +333,9 @@ mod tests {
         //
         // The rendezvous is released by a guard, so a failing assertion ends the
         // test instead of leaving the work blocked and the runtime waiting for
-        // it at its drop.
+        // it at its drop; the release itself never blocks.
         let limit = SearchLimit::new(1);
-        let mut gate = ReleaseOnDrop::new(Arc::new(Barrier::new(2)));
+        let mut gate = ReleaseOnDrop::new(Arc::new(Rendezvous::new()));
         let worker = gate.gate();
         let failure = limit
             .run_blocking(Duration::from_millis(1), move || {
