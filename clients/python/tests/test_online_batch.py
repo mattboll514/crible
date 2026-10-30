@@ -10,14 +10,16 @@ This is the literal form of the criterion: the reference batch is produced by
 the Python client, not by a hand-written test fixture. Both indexes use an
 ``external`` model of ``DIMS`` dimensions, so the test needs no ONNX Runtime.
 
-The test drives the ``crible`` binary named by ``CRIBLE_BIN``, and skips
-without it: the Python job of CI has no Rust toolchain, and a test never builds
-one. The Rust job runs this file once ``cargo test`` has produced
-``target/debug/crible``, with ``CRIBLE_BIN`` pointing at it. Run it the same way
-from ``clients/python``:
+The test drives the ``crible`` binary named by ``CRIBLE_BIN``. It carries the
+``server`` marker and fails without that variable, with the command that
+produces the binary: a test without its prerequisite is red, not green
+(ADR-0112, decision 6). The Rust job of the CI runs it once ``cargo test`` has
+produced ``target/debug/crible``, with ``CRIBLE_BIN`` pointing at it, and
+``addopts`` keeps it out of the Python job. Run it the same way from
+``clients/python``:
 
 ```text
-CRIBLE_BIN=../../target/debug/crible uv run pytest tests/test_online_batch.py
+CRIBLE_BIN=../../target/debug/crible uv run pytest -m server
 ```
 """
 
@@ -25,7 +27,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import struct
 import subprocess
 from pathlib import Path
@@ -34,9 +35,9 @@ import numpy as np
 import pytest
 
 from crible import BatchWriter
+from helpers import REPO_ROOT, crible_binary
 
 DIMS = 8
-REPO_ROOT = Path(__file__).resolve().parents[3]
 ONLINE_INDEX = "en-ligne"
 REFERENCE_INDEX = "reference"
 EXTERNAL_MODEL = "external"
@@ -82,14 +83,7 @@ def index_config(name: str) -> dict:
 
 
 def crible_command() -> list[str]:
-    binary = os.environ.get("CRIBLE_BIN")
-    if not binary:
-        pytest.skip(
-            "CRIBLE_BIN must name the crible binary; the Rust CI job sets it to "
-            "target/debug/crible, built by cargo test"
-        )
-    # Resolved against the caller's directory, not against `REPO_ROOT`.
-    return [str(Path(binary).resolve())]
+    return [str(crible_binary())]
 
 
 def crible(*arguments: object) -> str:
@@ -163,6 +157,7 @@ def search(data: Path, index: str, query: Path) -> dict:
     return response
 
 
+@pytest.mark.server
 def test_an_online_lot_matches_a_batch_written_by_the_client(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
