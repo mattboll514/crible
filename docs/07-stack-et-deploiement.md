@@ -29,7 +29,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Rôle | Crate | Remarque |
 |---|---|---|
 | HTTP | `axum` 0.8, `tokio`, `tower`, `tower-http` | Comme NextPlaid. Features : `tokio` (`rt-multi-thread`, `macros`, `signal`, `net`, `time`, `sync`) et `tower-http` (`trace`, `limit` pour la taille de corps, `catch-panic` pour une panique rattrapée : ADR-0102) ; `tokio` (`io-util`) et `tower` (`util`) sont des dépendances de développement seulement (complément du 2026-10-29 à ADR-0096) ; la feature `load-shed` de `tower` n'est pas activée et l'échéance de `timeout_ms` passe par `tokio::time::timeout`, pas par la couche `timeout` de `tower-http` (ADR-0102) ; les threads tokio restent aux défauts de la bibliothèque (ADR-0096) |
-| OpenAPI | `utoipa`, `utoipa-swagger-ui` | Spécification générée depuis le code |
+| OpenAPI | `utoipa` (`=6.0.0`, feature `axum_extras`), `utoipa-swagger-ui` (`=10.0.1`, feature `vendored` avec l'intégration `axum`) | Spécification générée depuis le code, en OpenAPI 3.1.0, servie par `/openapi.json` ; `docs/05` reste la référence de la liste des routes (ADR-0015, ADR-0111). `vendored` embarque Swagger UI : le build ne télécharge rien (ADR-0111) |
 | Instantanés sans verrou | `arc-swap` | |
 | Calcul parallèle | `rayon` | Pool dédié, séparé de tokio |
 | Encodage | `ort` (2.x, `load-dynamic`), `tokenizers` | ONNX Runtime chargé dynamiquement, comme NextPlaid |
@@ -47,7 +47,7 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 | Identifiant de requête | `uuid` (feature `v4`) | Génère `x-request-id` quand l'en-tête entrant est absent ou hors bornes (ADR-0098) |
 | Config | `serde`, `serde_json`, `toml` | Plus les surcharges par variables d'environnement `CRIBLE_*` (ADR-0097) |
 | CLI | `clap` | |
-| Tests | `proptest`, `criterion`, `tempfile` | |
+| Tests | `proptest`, `criterion`, `tempfile`, `jsonschema` (`=0.60.2`, `default-features = false`) | `jsonschema` est une dépendance de développement de `crible-server` seulement, absente du binaire : elle valide les exemples de `docs/05` contre la spécification générée, sans résolution réseau ni fichier de `$ref` distant (ADR-0111) |
 
 **Côté Python** : `uv`, `pyarrow`, `numpy`, `httpx`, `pytest`, `blake3` (ADR-0034). Les outils d'export ONNX restent dans `tools/` et ne sont pas des dépendances du paquet : ils forment le groupe `uv` séparé `export` de `tools/pyproject.toml` — `onnx`, `onnxruntime`, `torch`, `transformers`, `tokenizers`, `huggingface-hub`, plus `onnxscript` si l'exportateur l'exige (ADR-0050). `optimum` n'en fait plus partie : aucune version publiée ne permet `transformers` 5 (ADR-0050). Ce groupe n'est pas installé par un `uv sync` par défaut, donc la CI ne l'installe pas ; il s'installe avec `uv sync --group export`. `torch` vient de l'index CPU `pytorch-cpu`, ce qui évite la pile CUDA sous Linux (plusieurs Go). Les bornes de version font foi dans `tools/pyproject.toml`.
 

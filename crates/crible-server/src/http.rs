@@ -35,6 +35,7 @@ use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::trace::{DefaultOnResponse, TraceLayer};
 use tracing::{Instrument, Level, error, info_span};
+use utoipa::OpenApi as _;
 use uuid::Uuid;
 
 use crate::AppState;
@@ -74,10 +75,19 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let jobs = protect(jobs_routes(), Arc::clone(&auth), Role::Write);
     let admin = protect(indexes_admin_routes(), Arc::clone(&auth), Role::Admin);
     let read = protect(indexes_read_routes(), auth, Role::Read);
+    // The specification and Swagger UI are served by the instance, without a
+    // key: their paths are the two exceptions of `docs/05-api.md` and never ask
+    // for authentication (ADR-0111, decision 4). The UI reads the specification
+    // from `/openapi.json`, mounted here as well.
+    let documentation = Router::from(
+        utoipa_swagger_ui::SwaggerUi::new("/docs")
+            .url("/openapi.json", crate::openapi::ApiDoc::openapi()),
+    );
     with_common_layers(
         Router::new()
             .route("/health", get(health))
             .route("/ready", get(ready))
+            .merge(documentation)
             .merge(write)
             .merge(jobs)
             .merge(admin)
@@ -147,6 +157,24 @@ fn jobs_routes() -> Router<Arc<AppState>> {
 /// The order is `created_at` descending then `id`, without pagination, and a
 /// `state` outside the four of `docs/05-api.md` is `400 invalid_request`
 /// (ADR-0103, decision 7).
+#[utoipa::path(
+    get,
+    path = "/v1/jobs",
+    tag = "jobs",
+    description = "The retained jobs, `created_at` descending then `id`, without pagination. \
+                   Role: `write`; `admin` includes it (ADR-0095).",
+    params(
+        ("index" = Option<String>, Query, description = "Only the jobs of that index"),
+        ("state" = Option<String>, Query, description = "Only the jobs in that state: `queued`, `running`, `succeeded` or `failed`")
+    ),
+    responses(
+        (status = 200, description = "The retained jobs", body = crate::openapi::JobList),
+        (status = 400, description = "`state` outside the four states", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 async fn list_jobs(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -171,6 +199,21 @@ async fn list_jobs(
 }
 
 /// `GET /v1/jobs/{job_id}`: one retained job, or `404 not_found`.
+#[utoipa::path(
+    get,
+    path = "/v1/jobs/{job_id}",
+    tag = "jobs",
+    description = "One retained job. An unknown or purged job is `404 not_found`. Role: `write`; \
+                   `admin` includes it (ADR-0095).",
+    params(("job_id" = String, Path, description = "Identifier of the job")),
+    responses(
+        (status = 200, description = "The job", body = crate::openapi::Job),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown or purged job", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 async fn get_job(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -272,6 +315,16 @@ where
 /// Fixed body, independent of the indexes and of the models: it answers during
 /// a long recovery, which is the reason the server binds before loading
 /// (ADR-0099).
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "probes",
+    description = "The process is alive. The body is fixed and independent of the indexes and \
+                   of the models, so the probe answers during a long recovery. Role: none; the \
+                   route needs no API key (ADR-0099).",
+    responses((status = 200, description = "The process is alive", body = crate::openapi::Health)),
+    security(())
+)]
 async fn health() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
@@ -282,6 +335,20 @@ async fn health() -> (StatusCode, Json<Value>) {
 /// `{"status":"ready"}` after. The two bodies tell "alive" from "ready" and
 /// reveal nothing else (ADR-0099). They are the one body the error format of
 /// ADR-0101 leaves alone, which [`error::preserved`] marks.
+#[utoipa::path(
+    get,
+    path = "/ready",
+    tag = "probes",
+    description = "Ready: the models are loaded, every index has published its snapshot and no \
+                   recovery is in progress. `503` until then, `200` after; a not-ready instance \
+                   answers its state, not an error of ADR-0101. Role: none; the route needs no \
+                   API key (ADR-0099).",
+    responses(
+        (status = 200, description = "Every index has published its snapshot", body = crate::openapi::Ready),
+        (status = 503, description = "Not ready yet; the body is the one of ADR-0099, not the error format", body = crate::openapi::NotReady)
+    ),
+    security(())
+)]
 async fn ready(State(state): State<Arc<AppState>>) -> Response {
     let (status, body) = if state.is_ready() {
         (StatusCode::OK, json!({ "status": "ready" }))

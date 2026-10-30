@@ -73,6 +73,28 @@ const RRF_CONSTANT: f32 = 60.0;
 ///
 /// The route is mounted under the `read` role: `write` and `admin` include it,
 /// so the three roles reach it (ADR-0095).
+#[utoipa::path(
+    post,
+    path = "/v1/search",
+    tag = "search",
+    description = "Search several indexes in one request, with one encoding and one deadline, \
+                   then fuse their rankings. `targets` is mandatory and holds no duplicate; an \
+                   unknown target is `404 not_found`; a common model mismatch is `422 \
+                   incompatible_model`; a saturated concurrency limit `503`; the deadline `504 \
+                   timeout`. Role: `read`; `write` and `admin` include it (ADR-0095).",
+    request_body = crate::openapi::SearchMultiRequest,
+    responses(
+        (status = 200, description = "The fused answer of every target", body = crate::openapi::SearchMultiResponse),
+        (status = 400, description = "Unknown field, bounds, inputs of the mode, empty or duplicate targets, lexical branch disabled or filter against a schema", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown target index", body = crate::openapi::Error),
+        (status = 422, description = "Targets with different model fingerprints", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable", body = crate::openapi::Error),
+        (status = 504, description = "`timeout_ms` reached", body = crate::openapi::Error)
+    )
+)]
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,

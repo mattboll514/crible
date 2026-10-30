@@ -44,6 +44,23 @@ use crate::state::IndexHandle;
 /// as the CLI (`docs/04`, ADR-0105 decision 2). A name already taken, an absent
 /// model and a refused configuration render `400 invalid_request`; the body of
 /// the `201` is the one of `GET /v1/indexes/{index}`.
+#[utoipa::path(
+    post,
+    path = "/v1/indexes",
+    tag = "indexes",
+    description = "Create an index at runtime, with its complete configuration, in the form of \
+                   `index.json`. The `201` carries the body of `GET /v1/indexes/{index}`. A name \
+                   already taken and an absent or unreadable model are `400 invalid_request`. \
+                   Role: `admin` only (ADR-0095).",
+    request_body = crate::openapi::IndexConfig,
+    responses(
+        (status = 201, description = "The index was created and is served", body = crate::openapi::IndexDetail),
+        (status = 400, description = "Refused configuration, name already taken or absent model", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 pub async fn create_index(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -70,6 +87,20 @@ pub async fn create_index(
 /// The envelope is the one of ADR-0103: one key, the plural name of the
 /// resource. The counts come from the summary the writer refreshed after its
 /// last job, never from a read of `records.sqlite` (ADR-0105, decision 3).
+#[utoipa::path(
+    get,
+    path = "/v1/indexes",
+    tag = "indexes",
+    description = "The served indexes, sorted by name, with their model, their published \
+                   generation and their counts. Role: `read`; `write` and `admin` include it \
+                   (ADR-0095).",
+    responses(
+        (status = 200, description = "The served indexes, sorted by name", body = crate::openapi::IndexList),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 pub async fn list_indexes(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -99,6 +130,22 @@ pub async fn list_indexes(
 /// `segments` is a **count**, never the list of `SegmentMeta`, whose bounds are
 /// iid and never leave the engine (INV-01). `sizes.disk_bytes` walks the index
 /// directory, so the call runs off the async threads.
+#[utoipa::path(
+    get,
+    path = "/v1/indexes/{index}",
+    tag = "indexes",
+    description = "The materialised configuration and the state of the published generation: \
+                   epoch, generation, counts, dead ratio, number of segments and sizes. \
+                   Role: `read`; `write` and `admin` include it (ADR-0095).",
+    params(("index" = String, Path, description = "Name of the index")),
+    responses(
+        (status = 200, description = "The configuration and the state of the index", body = crate::openapi::IndexDetail),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 pub async fn get_index(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -123,6 +170,31 @@ pub async fn get_index(
 /// (INV-16), a value outside its domain is `400`. The job kind is
 /// `rebuild_lexical` when the analysis settings changed and the branch stays
 /// enabled, `patch_config` otherwise.
+#[utoipa::path(
+    patch,
+    path = "/v1/indexes/{index}",
+    tag = "indexes",
+    description = "Validate a configuration patch before queueing it, then apply it as a job \
+                   (`rebuild_lexical` or `patch_config`). An unknown key is `400 \
+                   invalid_request`; a frozen setting is `409 immutable_setting`. \
+                   Role: `admin` only (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("wait" = Option<bool>, Query, description = "Wait for the job under `wait_timeout_ms` (ADR-0067)")
+    ),
+    request_body = crate::openapi::IndexPatch,
+    responses(
+        (status = 200, description = "The job finished within `wait_timeout_ms`", body = crate::openapi::Job),
+        (status = 202, description = "The job was accepted", body = crate::openapi::Job),
+        (status = 400, description = "Unknown key or value outside its domain", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 409, description = "Frozen setting", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+    )
+)]
 pub async fn patch_index(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -195,6 +267,30 @@ pub async fn patch_index(
 /// removes the index from the registry, marks the writer deleted, renames the
 /// directory to `<data>/tmp/deleted-<index>-<job_id>` and removes it
 /// (decision 6). The jobs still queued behind it fail in `unknown_index`.
+#[utoipa::path(
+    delete,
+    path = "/v1/indexes/{index}",
+    tag = "indexes",
+    description = "Delete an index: a `delete_index` job in the queue of the index, so the jobs \
+                   accepted before it finish first. `confirm` is mandatory and must repeat the \
+                   name of the index, otherwise `400 invalid_request`. Role: `admin` only \
+                   (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("confirm" = String, Query, description = "Must repeat the name of the index"),
+        ("wait" = Option<bool>, Query, description = "Wait for the job under `wait_timeout_ms` (ADR-0067)")
+    ),
+    responses(
+        (status = 200, description = "The job finished within `wait_timeout_ms`", body = crate::openapi::Job),
+        (status = 202, description = "The job was accepted", body = crate::openapi::Job),
+        (status = 400, description = "`confirm` absent or different from the name", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+    )
+)]
 pub async fn delete_index(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,

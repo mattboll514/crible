@@ -26,6 +26,10 @@ tokio.workspace = true
 toml.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
+# The specification is generated from the code and served with Swagger UI
+# (ADR-0015, ADR-0111).
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
@@ -42,6 +46,11 @@ tempfile.workspace = true
 # compiles them and `crible-store` keeps its feature off by default
 # (complement of 2026-10-29 to ADR-0068, decision 2).
 crible-store = { path = "../crible-store" }
+
+# The tests validate the examples of `docs/05-api.md` against the generated
+# specification, with every default feature off so no test resolves a remote
+# `$ref` nor reads a file (ADR-0111, decision 8).
+jsonschema = { version = "=0.60.2", default-features = false }
 
 [features]
 # Off by default: it turns on the failpoints of `crible-store` for the test

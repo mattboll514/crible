@@ -46,7 +46,8 @@
 - **Critères d'acceptation** :
   - désactivé par défaut : aucun fichier écrit ;
   - la purge supprime bien les entrées expirées ;
-  - un rôle `read` reçoit `403` (ADR-0095).
+  - un rôle `read` reçoit `403` (ADR-0095) ;
+  - `GET /v1/debug/queries` figure dans la spécification OpenAPI, et son exception nommée est retirée du test des routes de PUBLIER-OPENAPI dans le même changement (ADR-0111, complément du 2026-10-30).
 
 ### REPONSE-DEBUG
 - **Objectif** : `debug: true` dans la réponse.
@@ -80,7 +81,8 @@
   - la commande `crible stats`, qui affiche des tableaux.
 - **Critères d'acceptation** :
   - les chiffres affichés pour un trafic de test connu sont exacts ;
-  - une clé `read` ou `write` reçoit `403` sur `/v1/stats`, réservé au rôle `admin` (ADR-0095).
+  - une clé `read` ou `write` reçoit `403` sur `/v1/stats`, réservé au rôle `admin` (ADR-0095) ;
+  - `GET /v1/stats` figure dans la spécification OpenAPI, et son exception nommée est retirée du test des routes de PUBLIER-OPENAPI dans le même changement (ADR-0111, complément du 2026-10-30).
 
 ### COMMANDE-EVAL
 - **Objectif** : l'instrument de validation du propriétaire.
