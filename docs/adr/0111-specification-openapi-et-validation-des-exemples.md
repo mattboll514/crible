@@ -1,6 +1,6 @@
 # ADR-0111 — Spécification OpenAPI : Swagger UI embarqué, sécurité, référence des routes et validation des exemples
 
-- **Statut** : Accepté (par anticipation, décision déléguée par le propriétaire le 2026-10-30 ; revue avec le propriétaire à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-30 ; complément du 2026-10-30, décision 9, et précision du 2026-10-30 sur la forme `security: [{}]` compris dans cette confirmation)
 - **Date** : 2026-10-30
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche PUBLIER-OPENAPI (phase P6), sur délégation du propriétaire pour la troisième série de P6 et sur les verdicts de `@architecte` du 2026-10-30
@@ -225,7 +225,7 @@ Sont **non modifiés** : `docs/suivi.md` (tenu par l'orchestrateur), tout fichie
 
 ## Complément du 2026-10-30 (routes des phases ultérieures dans le test des routes ; forme de la neutralisation de la sécurité)
 
-- **Statut** : inchangé — Accepté (accepté par anticipation, décision déléguée par le propriétaire pour la troisième série de P6, revue à la fin de la série). Les huit décisions ci-dessus restent écrites telles qu'elles ont été acceptées ; ce complément **remplace la seule clause d'exception** de la décision 5, et rien d'autre.
+- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-30). Les huit décisions ci-dessus restent écrites telles qu'elles ont été acceptées ; ce complément **remplace la seule clause d'exception** de la décision 5, et rien d'autre.
 - **Origine** : `QUESTION-CONCEPTION` de `@dev` sur `PUBLIER-OPENAPI`, et verdict `@architecte` du 2026-10-30 concluant à un **`ECART`** au texte de la décision 5, aucune option couverte par l'ADR.
 
 ### Contexte du complément
@@ -290,7 +290,7 @@ Le **code et les tests** ne sont pas modifiés par ce complément : la spécific
 
 ### Précision du 2026-10-30 — la forme `security: [{}]` (décision 4)
 
-- **Statut** : inchangé — Accepté (accepté par anticipation, décision déléguée par le propriétaire pour la troisième série de P6, revue à la fin de la série). Cette précision **ne remplace aucune clause** : elle consigne ce que le code génère et lève une ambiguïté de forme dans la décision 4, dont le texte reste écrit tel qu'il a été accepté.
+- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-30). Cette précision **ne remplace aucune clause** : elle consigne ce que le code génère et lève une ambiguïté de forme dans la décision 4, dont le texte reste écrit tel qu'il a été accepté.
 - **Origine** : relecture de `PUBLIER-OPENAPI`, tour 1, point 6, et remarque de `@dev`.
 
 **Constat et précision.** `utoipa` 6 écrit l'absence d'authentification d'une opération `security: [{}]` — une exigence vide —, et non `security: []` comme le dit la décision 4. Les deux formes signifient la même chose en OpenAPI 3.1, aucune clé n'étant exigée ; la forme `[{}]` est retenue telle que générée. Dans la spécification, cette neutralisation ne porte que sur `/health` et `/ready` : `/openapi.json` et `/docs` n'y figurent pas (décision 5) et restent servis sans clé, ce que testent les tests de service. `/docs` répond par une redirection `303` vers `/docs/`, montage d'`utoipa-swagger-ui`, qui sert la page.

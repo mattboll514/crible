@@ -1,6 +1,6 @@
 # ADR-0113 — Charge concurrente : critère d'INV-02, mesure MES-16, protocole et démonstration J6
 
-- **Statut** : Accepté (par anticipation, décision déléguée par le propriétaire le 2026-10-30 ; revue avec le propriétaire à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-30)
 - **Date** : 2026-10-30
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche TESTER-CHARGE-CONCURRENTE (phase P6), sur délégation du propriétaire pour la troisième série de P6 et sur les verdicts de `@architecte` du 2026-10-30

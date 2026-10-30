@@ -1,6 +1,6 @@
 # ADR-0112 — Client Python HTTP : méthodes, exceptions typées, attente des jobs et tests contre le binaire
 
-- **Statut** : Accepté (par anticipation, décision déléguée par le propriétaire le 2026-10-30 ; revue avec le propriétaire à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-30)
 - **Date** : 2026-10-30
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche CLIENT-PYTHON-HTTP (phase P6), sur délégation du propriétaire pour la troisième série de P6 et sur les verdicts de `@architecte` du 2026-10-30
