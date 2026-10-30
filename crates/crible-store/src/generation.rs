@@ -523,6 +523,28 @@ pub(crate) struct CommittedGeneration {
     pub(crate) timings: CommitTimings,
 }
 
+/// Step of the commit protocol of [`GenerationStore::commit_with_rows`] that an
+/// observer is called at.
+///
+/// The two steps sit around the SQLite `COMMIT`, which is the only commit point
+/// of a generation (ADR-0016). A job held at the first step has written no
+/// visible state; a job held at the second one has committed a generation that
+/// no reader sees until the snapshot is published (INV-02, INV-03).
+///
+/// The type is compiled in every build, like
+/// [`CompactStep`](crate::compact::CompactStep): a production caller hands
+/// [`GenerationStore::commit_with_rows`] a no-op observer, which the compiler
+/// removes, and only the attach of the `failpoints` build
+/// (`attach_with_observer`) hands a real one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitStep {
+    /// Just before the `COMMIT` of the generation, no state visible yet.
+    BeforeSqliteCommit,
+    /// Just after the `COMMIT`, before the lexical index, the snapshot and the
+    /// manifest are written: the generation is committed but not published.
+    AfterSqliteCommit,
+}
+
 /// Time spent in the steps of [`GenerationStore::commit_with_rows`], measured
 /// around the work this module owns.
 #[derive(Debug, Clone, Copy, Default)]
@@ -880,6 +902,28 @@ impl GenerationStore {
     where
         F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
     {
+        self.commit_with_rows_observed(write, &mut |_step| {})
+    }
+
+    /// Same as [`GenerationStore::commit_with_rows`], and calls `observer` at
+    /// each [`CommitStep`] of the protocol.
+    ///
+    /// Only the attach of the `failpoints` build hands a real observer
+    /// (`attach_with_observer`, `ingest_documents_with_observer`): it holds the
+    /// job at a step while a test reads the index (INV-02). The observer runs on
+    /// the caller's thread, so a test that blocks in it holds the commit
+    /// protocol at that exact step. A production caller goes through
+    /// [`GenerationStore::commit_with_rows`], which passes a no-op closure the
+    /// compiler removes.
+    pub(crate) fn commit_with_rows_observed<F, O>(
+        &mut self,
+        write: F,
+        observer: &mut O,
+    ) -> Result<CommittedGeneration, CribleError>
+    where
+        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
+        O: FnMut(CommitStep) + ?Sized,
+    {
         // ADR-0108, decision 1: before any commit, the pointer is the authority
         // on which epoch is current. A store left on E while `CURRENT_EPOCH`
         // names E+1 (a failed `adopt_epoch`) would write generations no reader
@@ -935,11 +979,13 @@ impl GenerationStore {
         };
 
         failpoint!("before_sqlite_commit");
+        observer(CommitStep::BeforeSqliteCommit);
         transaction
             .commit()
             .map_err(|error| records::database_error("commit the generation", &error))?;
         let transaction_time = transaction_started.elapsed();
         failpoint!("after_sqlite_commit");
+        observer(CommitStep::AfterSqliteCommit);
 
         let previous = self.snapshot.load_full();
         // Step 4 is measured on its own: the tantivy commit and its reader

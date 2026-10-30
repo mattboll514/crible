@@ -34,7 +34,7 @@ use crible_core::model::ModelKind;
 use crible_core::path::path_component;
 use crible_store::generation::epoch_records_path;
 use crible_store::jobs::JobKind;
-use crible_store::online::{self, MAX_ONLINE_ENTRIES, OnlineDocument, OnlineDocuments};
+use crible_store::online::{MAX_ONLINE_ENTRIES, OnlineDocument, OnlineDocuments};
 use crible_store::patch::{self, DocumentPatch, PatchSource};
 use crible_store::records::ReadPool;
 use serde::Deserialize;
@@ -394,7 +394,7 @@ fn ingest(
         ModelKind::External => None,
     };
     let encoder = || model.encoder();
-    online::ingest_documents(
+    crate::attach_job::ingest_documents(
         store,
         &OnlineDocuments {
             batch_id,

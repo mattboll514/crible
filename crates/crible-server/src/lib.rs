@@ -22,6 +22,9 @@ pub mod auth;
 // point while a test reads the instance (ADR-0107, decisions 5 and 6).
 #[cfg(feature = "failpoints")]
 mod barriers;
+// The attach of a write job, holding it at the test barriers when they are
+// armed (ADR-0113, decision 3).
+mod attach_job;
 mod batches;
 pub mod config;
 mod documents;

@@ -34,7 +34,6 @@ use axum::extract::{Extension, Path as AxumPath, Query, State};
 use axum::response::Response;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::path::path_component;
-use crible_store::attach::attach;
 use crible_store::jobs::JobKind;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -143,7 +142,7 @@ pub async fn post_batch(
             crible_core::model::ModelKind::External => None,
         };
         let encoder = || model.encoder();
-        let report = attach(
+        let report = crate::attach_job::attach_batch(
             store,
             &directory,
             &index_config,
