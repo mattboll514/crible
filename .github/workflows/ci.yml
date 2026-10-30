@@ -25,6 +25,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
+      # ADR-0114, decision 1: a broken intra-doc link fails at the push that
+      # writes it. `RUSTDOCFLAGS` is set on this step only, and the step runs
+      # with the default features, without `--document-private-items`.
+      - name: Check the documentation links
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --workspace --locked
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Generate the synthetic dataset

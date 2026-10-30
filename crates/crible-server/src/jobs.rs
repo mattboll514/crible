@@ -506,7 +506,8 @@ impl JobBoard {
 
     /// Waits until every accepted job is terminal.
     ///
-    /// The future is pinned and registered with [`Notified::enable`] before the
+    /// The future is pinned and registered with
+    /// [`Notified::enable`](tokio::sync::futures::Notified::enable) before the
     /// second count, so the last notification, emitted between the two counts,
     /// is never lost: `notify_waiters` keeps no permit and only wakes a waiter
     /// already registered (ADR-0104).

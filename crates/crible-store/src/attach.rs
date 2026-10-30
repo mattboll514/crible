@@ -92,11 +92,12 @@
 //! does, so the transaction rolls back (INV-03).
 //!
 //! A crash cannot *hold* an attach, so the `failpoints` build also offers
-//! [`attach_with_observer`], the hold counterpart of
-//! [`compact_with_observer`](crate::compact::compact_with_observer): the
-//! observer is called just before the SQLite `COMMIT` and just after it, before
-//! the publication of the snapshot, and a test that blocks in it holds the
-//! write while a search reads the published generation (INV-02).
+//! `attach_with_observer`, the hold counterpart of
+//! `compact_with_observer`: the observer is called just before the SQLite
+//! `COMMIT` and just after it, before the publication of the snapshot, and a
+//! test that blocks in it holds the write while a search reads the published
+//! generation (INV-02). Both exist only behind the `failpoints` feature, so
+//! their names are not links.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};

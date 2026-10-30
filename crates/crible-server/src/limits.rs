@@ -154,7 +154,7 @@ impl SearchLimit {
 /// Renders the refusal of a search, in the format of `docs/05-api.md`.
 ///
 /// The `503 overloaded` of the concurrency limit carries `Retry-After: 1`
-/// through [`error::response`], the single place that adds it to every
+/// through `error::response`, the single place that adds it to every
 /// producer of `overloaded` (ADR-0103, decision 9).
 #[must_use]
 pub fn refusal(failure: &CribleError, request_id: &str) -> Response {
@@ -179,6 +179,45 @@ mod tests {
     use crible_core::error::ErrorCode;
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
+
+    /// Releases the rendezvous of a worker when the test leaves, by a panic too.
+    ///
+    /// The work of a search waits on the barrier from a blocking thread. Without
+    /// this guard, a failing assertion would leave it there and the runtime would
+    /// wait for it at its drop instead of reporting the failure: the test would
+    /// hang instead of failing (`@relecteur`, FORMAT-ERREURS-ET-LIMITES).
+    struct ReleaseOnDrop {
+        gate: Arc<Barrier>,
+        released: bool,
+    }
+
+    impl ReleaseOnDrop {
+        fn new(gate: Arc<Barrier>) -> Self {
+            Self {
+                gate,
+                released: false,
+            }
+        }
+
+        /// The gate the worker awaits.
+        fn gate(&self) -> Arc<Barrier> {
+            Arc::clone(&self.gate)
+        }
+
+        /// Releases the work, once: a second call does nothing.
+        fn release(&mut self) {
+            if !self.released {
+                self.released = true;
+                self.gate.wait();
+            }
+        }
+    }
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.release();
+        }
+    }
 
     #[test]
     fn the_body_bound_is_the_fixed_32_mib_of_adr_0102() {
@@ -254,9 +293,13 @@ mod tests {
         // test rather than for a duration: no scheduling delay can make it end
         // early, so the deadline is the only possible outcome of the first
         // call and the token can only come back when the test releases it.
+        //
+        // The rendezvous is released by a guard, so a failing assertion ends the
+        // test instead of leaving the work blocked and the runtime waiting for
+        // it at its drop.
         let limit = SearchLimit::new(1);
-        let gate = Arc::new(Barrier::new(2));
-        let worker = Arc::clone(&gate);
+        let mut gate = ReleaseOnDrop::new(Arc::new(Barrier::new(2)));
+        let worker = gate.gate();
         let failure = limit
             .run_blocking(Duration::from_millis(1), move || {
                 worker.wait();
@@ -273,7 +316,7 @@ mod tests {
 
         // The work ends, and the token comes back: awaiting one proves it, with
         // no sleep and no margin.
-        gate.wait();
+        gate.release();
         let token = limit
             .permits
             .clone()

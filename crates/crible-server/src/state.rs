@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use crible_core::config::IndexConfig;
-use crible_core::error::CribleError;
+use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_core::path::path_component;
 use crible_encode::{ModelRegistry, Precision, QueryEncoder};
@@ -60,7 +60,7 @@ impl IndexHandle {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// [`ErrorCode::Internal`] when the
     /// lock is poisoned.
     pub fn published(&self) -> Result<Published, CribleError> {
         self.writer.published()
@@ -70,7 +70,7 @@ impl IndexHandle {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// [`ErrorCode::Internal`] when the
     /// lock is poisoned.
     pub fn configuration(&self) -> Result<IndexConfig, CribleError> {
         self.writer.configuration()
@@ -565,7 +565,7 @@ impl AppState {
             && shutdown.is_draining()
         {
             return Err(CribleError::new(
-                crible_core::error::ErrorCode::Overloaded,
+                ErrorCode::Overloaded,
                 SHUTTING_DOWN_MESSAGE,
             ));
         }
@@ -577,10 +577,7 @@ impl AppState {
             .index(index)?
             .map(|handle| Arc::clone(&handle.writer))
             .ok_or_else(|| {
-                CribleError::new(
-                    crible_core::error::ErrorCode::UnknownIndex,
-                    format!("unknown index '{index}'"),
-                )
+                CribleError::new(ErrorCode::UnknownIndex, format!("unknown index '{index}'"))
             })?;
         writer.ensure_started();
         writer.submit(kind, work)

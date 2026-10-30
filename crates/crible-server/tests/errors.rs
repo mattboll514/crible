@@ -87,6 +87,33 @@ impl TestState {
     }
 }
 
+/// Releases the rendezvous of a search when the test leaves, even by a panic.
+///
+/// The work of a search waits on the barrier of [`TestState`] from a blocking
+/// thread. Without this guard, a failing assertion would leave it there and the
+/// runtime would wait for it at its drop instead of reporting the failure: the
+/// test would hang instead of failing (`@relecteur`, FORMAT-ERREURS-ET-LIMITES).
+struct ReleaseOnDrop(Option<Arc<TestState>>);
+
+impl ReleaseOnDrop {
+    fn new(state: &Arc<TestState>) -> Self {
+        Self(Some(Arc::clone(state)))
+    }
+
+    /// Releases the work, once: a second call does nothing.
+    fn release(&mut self) {
+        if let Some(state) = self.0.take() {
+            state.release();
+        }
+    }
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 /// In-memory writer that captures the journal of a test.
 #[derive(Clone, Default)]
 struct Sink(Arc<Mutex<Vec<u8>>>);
@@ -410,7 +437,7 @@ async fn a_timeout_ms_outside_the_bounds_is_an_invalid_request() {
     // ADR-0102, decision 3, through the mechanism the search routes call.
     let router = router(Arc::new(TestState::new(2)));
     for refused in [0, 30_001] {
-        let body = json!({ "timeout_ms": refused, "work_ms": 0 }).to_string();
+        let body = json!({ "timeout_ms": refused }).to_string();
         let response = send_json(
             &router,
             "/search",
@@ -458,8 +485,10 @@ async fn a_search_over_its_deadline_is_a_timeout_and_keeps_its_token() {
     //
     // The work waits for a rendezvous of the test, which is only given after
     // the assertions below: no duration is compared, so the outcome does not
-    // depend on the load of the machine.
+    // depend on the load of the machine. A guard gives it even when an assertion
+    // fails, so the test fails instead of hanging at the drop of the runtime.
     let state = Arc::new(TestState::new(1));
+    let mut gate = ReleaseOnDrop::new(&state);
     let router = router(Arc::clone(&state));
     let response = send_json(
         &router,
@@ -503,7 +532,7 @@ async fn a_search_over_its_deadline_is_a_timeout_and_keeps_its_token() {
 
     // The work ends, and the token comes back with it. `limits.rs` proves the
     // return of the token itself, without a sleep.
-    state.release();
+    gate.release();
 }
 
 #[tokio::test]

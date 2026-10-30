@@ -11,16 +11,19 @@
 //! no log call of the server carries a query text or a filter value: no such
 //! field is ever journalised, at any level (INV-13, ADR-0096). The filter only
 //! decides which lines are printed. The dependency is held to the same rule:
-//! the rejection journal of axum, which quotes the body it refused, is
-//! silenced by a directive forced after the one of `RUST_LOG`
-//! (ADR-0101, decision 4).
+//! the rejection journal of axum, which quotes the body it refused, never
+//! reaches the writer, because a second filter refuses that target before the
+//! one of `RUST_LOG` is consulted (ADR-0101, decision 4).
 
 use std::io;
 
 use crible_core::error::{CribleError, ErrorCode};
+use tracing::Metadata;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::Directive;
+use tracing_subscriber::Layer;
+use tracing_subscriber::filter::FilterFn;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 /// Filter used when `RUST_LOG` is absent or empty (ADR-0096).
@@ -29,10 +32,6 @@ pub const DEFAULT_FILTER: &str = "info";
 /// Target on which axum journals the rejection of an extractor, body text
 /// included.
 pub const REJECTION_TARGET: &str = "axum::rejection";
-
-/// Directive that silences [`REJECTION_TARGET`], forced after the one of
-/// `RUST_LOG`.
-pub const SILENCED_REJECTION_DIRECTIVE: &str = "axum::rejection=off";
 
 /// Installs the journal of the server on stdout.
 ///
@@ -68,14 +67,15 @@ pub fn effective_filter(raw: Option<&str>) -> String {
 /// The writer is a parameter so a test captures a line; the server passes
 /// stdout.
 ///
-/// The filter of `RUST_LOG` is applied, then [`SILENCED_REJECTION_DIRECTIVE`]
-/// is added after it: a directive on a target wins over a bare level, and a
-/// later directive on the same target replaces the earlier one, so no operator
-/// can turn the rejection journal back on. axum journals the body text of an
-/// extractor rejection on that target at `TRACE`, and that text quotes the
-/// value the client sent (`invalid type: string "<value>"`): a filter of
-/// `trace` or `axum::rejection=trace` would print a request field, which
-/// `docs/06` and ADR-0096 forbid at any level (ADR-0101, decision 4).
+/// Two filters decide together: the one of `RUST_LOG`, then a fixed one that
+/// refuses [`REJECTION_TARGET`] and its sub-targets. The second filter is not a
+/// directive, so no value of `RUST_LOG` can outrank it: `axum::rejection=trace`
+/// as much as `axum::rejection[body]=trace`, which is more specific than a mere
+/// directive on the target, leave it in place. axum journals the body text of an
+/// extractor rejection on that target at `TRACE`, and that text quotes the value
+/// the client sent (`invalid type: string "<value>"`): printing it would put a
+/// request field in the journal, which `docs/06` and ADR-0096 forbid at any
+/// level (ADR-0101, decision 4).
 ///
 /// # Errors
 ///
@@ -96,25 +96,27 @@ where
             format!("RUST_LOG does not hold a valid filter: {error}"),
         )
     })?;
-    let filter = filter.add_directive(silenced_directive()?);
-    Ok(tracing_subscriber::fmt()
+    let layer = tracing_subscriber::fmt::layer()
         .json()
         .with_writer(writer)
-        .with_env_filter(filter)
-        .finish())
+        .with_filter(filter)
+        .with_filter(FilterFn::new(|metadata: &Metadata<'_>| {
+            !is_rejection_target(metadata.target())
+        }));
+    Ok(tracing_subscriber::registry().with(layer))
 }
 
-/// Parses the directive that silences the rejection journal of axum.
+/// Whether a line of `target` comes from the rejection journal of axum.
 ///
-/// The text is a constant of the code: a failure to parse it is a bug of the
-/// server, not a fault of the configuration, hence [`ErrorCode::Internal`].
-fn silenced_directive() -> Result<Directive, CribleError> {
-    SILENCED_REJECTION_DIRECTIVE.parse().map_err(|error| {
-        CribleError::new(
-            ErrorCode::Internal,
-            format!("the fixed log directive of the server is malformed: {error}"),
-        )
-    })
+/// The target of axum today is exactly [`REJECTION_TARGET`]; a sub-target is
+/// refused as well, so a later version of the crate cannot slip a body through
+/// a deeper module.
+#[must_use]
+fn is_rejection_target(target: &str) -> bool {
+    target == REJECTION_TARGET
+        || target
+            .strip_prefix(REJECTION_TARGET)
+            .is_some_and(|rest| rest.starts_with("::"))
 }
 
 #[cfg(test)]
@@ -208,14 +210,17 @@ mod tests {
     fn the_rejection_journal_of_axum_is_silenced_whatever_rust_log_says() {
         // ADR-0096, ADR-0101 decision 4: axum journals the body text of an
         // extractor rejection on the target `axum::rejection` at `TRACE`, and
-        // that text quotes the value the client sent. The forced directive cuts
-        // the target under a bare `trace` and under a directive that names it,
-        // and the later directive replaces the earlier one.
+        // that text quotes the value the client sent. The fixed filter refuses
+        // the target under a bare `trace`, under a directive that names it, and
+        // under a directive that filters a field of it — the most specific
+        // directive of the grammar, which a directive added afterwards would
+        // not have outranked.
         for filter in [
             "trace",
             "debug",
             "axum::rejection=trace",
             "info,axum::rejection=trace",
+            "axum::rejection[body]=trace",
             "trace,axum=trace",
         ] {
             let sink = Sink::default();
@@ -238,8 +243,8 @@ mod tests {
     }
 
     #[test]
-    fn the_forced_directive_does_not_silence_the_server() {
-        // The directive names one target: the lines of the server keep coming
+    fn the_fixed_filter_does_not_silence_the_server() {
+        // The filter names one target: the lines of the server keep coming
         // under the same filters (ADR-0096).
         let sink = Sink::default();
         let subscriber =
@@ -251,6 +256,17 @@ mod tests {
             !sink.contents().is_empty(),
             "the lines of the server are still printed"
         );
+    }
+
+    #[test]
+    fn only_the_rejection_target_of_axum_is_refused() {
+        // The guard names the rejection journal of axum, its sub-targets
+        // included, and leaves every other target of the dependency alone.
+        assert!(super::is_rejection_target("axum::rejection"));
+        assert!(super::is_rejection_target("axum::rejection::json"));
+        assert!(!super::is_rejection_target("axum::rejection_body"));
+        assert!(!super::is_rejection_target("axum::routing"));
+        assert!(!super::is_rejection_target("crible_server"));
     }
 
     #[test]

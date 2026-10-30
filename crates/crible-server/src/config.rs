@@ -243,7 +243,8 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::InvalidRequest`] when the file is absent, unreadable or
+    /// [`ErrorCode::InvalidRequest`](crible_core::error::ErrorCode::InvalidRequest)
+    /// when the file is absent, unreadable or
     /// malformed, when a key or a section is missing or unknown, and in the
     /// three cases of ADR-0097.
     pub fn load(path: &Path) -> Result<Self, CribleError> {

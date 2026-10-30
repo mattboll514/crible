@@ -289,7 +289,7 @@ impl JobStore {
     ///
     /// # Errors
     ///
-    /// The SQLite failure, through [`database_error`](crate::records::database_error).
+    /// The SQLite failure, through `crate::records::database_error`.
     pub fn insert(&self, id: &str, kind: JobKind, index: &str) -> Result<String, CribleError> {
         self.with(|connection| {
             connection
