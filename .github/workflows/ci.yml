@@ -54,7 +54,7 @@ jobs:
           CRIBLE_BIN: ${{ github.workspace }}/target/debug/crible
         run: |
           uv sync
-          uv run pytest tests/test_online_batch.py
+          uv run pytest -m server
 
   python:
     name: Python
