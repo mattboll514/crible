@@ -89,10 +89,14 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::attach::{AttachReport, attach};
+use crate::attach::AttachReport;
+#[cfg(not(feature = "failpoints"))]
+use crate::attach::attach;
+#[cfg(feature = "failpoints")]
+use crate::attach::attach_with_observer;
 use crate::batch_reader::{parquet_type, vector_width};
 use crate::filters_index::date_days;
-use crate::generation::GenerationStore;
+use crate::generation::{CommitStep, GenerationStore};
 use crate::records;
 
 /// Prefix of the batch identifier, and of its temporary directory.
@@ -282,6 +286,7 @@ pub fn ingest(
         token_counter,
         document_encoder,
         mode,
+        &mut |_step| {},
     )
 }
 
@@ -340,6 +345,36 @@ pub fn ingest_documents(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
 ) -> Result<AttachReport, CribleError> {
+    ingest_documents_observed(store, request, &mut |_step| {})
+}
+
+/// Same as [`ingest_documents`], and reports the commit protocol of the attach
+/// to `observer`.
+///
+/// Test hook: like
+/// [`attach_with_observer`](crate::attach::attach_with_observer), it only
+/// exists with the `failpoints` cargo feature. A test that blocks in `observer`
+/// holds the online attach exactly before or exactly after the SQLite `COMMIT`
+/// while a search reads the published generation (INV-02).
+#[cfg(feature = "failpoints")]
+pub fn ingest_documents_with_observer<F>(
+    store: &mut GenerationStore,
+    request: &OnlineDocuments<'_>,
+    observer: F,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep),
+{
+    let mut observer = observer;
+    ingest_documents_observed(store, request, &mut observer)
+}
+
+/// The single body of the two online entry points.
+fn ingest_documents_observed(
+    store: &mut GenerationStore,
+    request: &OnlineDocuments<'_>,
+    observer: &mut dyn FnMut(CommitStep),
+) -> Result<AttachReport, CribleError> {
     let OnlineDocuments {
         batch_id,
         documents,
@@ -363,6 +398,7 @@ pub fn ingest_documents(
         token_counter,
         document_encoder,
         BatchMode::Upsert,
+        observer,
     )
 }
 
@@ -390,6 +426,7 @@ fn run(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     mode: BatchMode,
+    observer: &mut dyn FnMut(CommitStep),
 ) -> Result<AttachReport, CribleError> {
     if mode != BatchMode::Upsert {
         return Err(invalid(format!(
@@ -510,13 +547,61 @@ fn run(
     };
     // The guard removes the directory and its presence lock when this function
     // returns, on success as on failure.
-    attach(
+    attached(
         store,
         directory.path(),
         index_config,
         model_config,
         token_counter,
         loader,
+        observer,
+    )
+}
+
+/// Attaches the internal lot of an online batch, reporting the commit protocol
+/// to `observer` when the `failpoints` build offers the hold.
+#[cfg(feature = "failpoints")]
+#[allow(clippy::too_many_arguments)]
+fn attached(
+    store: &mut GenerationStore,
+    batch_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    observer: &mut dyn FnMut(CommitStep),
+) -> Result<AttachReport, CribleError> {
+    attach_with_observer(
+        store,
+        batch_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        observer,
+    )
+}
+
+/// Attaches the internal lot of an online batch; the observer is not used by a
+/// normal build.
+#[cfg(not(feature = "failpoints"))]
+#[allow(clippy::too_many_arguments)]
+fn attached(
+    store: &mut GenerationStore,
+    batch_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    _observer: &mut dyn FnMut(CommitStep),
+) -> Result<AttachReport, CribleError> {
+    attach(
+        store,
+        batch_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
     )
 }
 
