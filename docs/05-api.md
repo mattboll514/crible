@@ -316,9 +316,34 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
   "group_by": "document" }
 ```
 
-- Chaque résultat porte `index`. En debug, il porte aussi `target_rank`, son rang dans son index.
-- Les `explain_ids` prennent la forme `{ "index": "...", "id": "..." }`.
-- Si une cible d'une recherche `lexical` ou `hybrid` a `lexical.enabled` à `false`, la requête entière est refusée en `invalid_request` (400), avec le message « lexical branch is disabled for this index » et le nom de l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089). Le mode `dense` reste disponible sur les mêmes cibles.
+- **Corps** (ADR-0110). Tous les champs de « Recherche : requête » sont **communs, au premier niveau**, avec la même sémantique et les mêmes bornes : `query`, `vector`, `mode`, `k`, `fusion`, `group_by`, `passages_per_document`, `dedup`, `return`, `exact`, `timeout_ms`. `debug` et `explain_ids` sont refusés en P6, comme sur la route simple (ADR-0109). Seul `filter` est propre à une cible : `targets: [{ "index": "...", "filter": {...} }]`, `index` obligatoire, `filter` facultatif (absent = aucun filtre).
+- **Champ inconnu** (ADR-0110). La règle de la route simple s'étend à ce corps, **à tous les niveaux**, objets de `targets[i]` compris : `400 invalid_request`, message nommant le **chemin JSON** du champ (`$.targets[0].filtre`). Dans un filtre, une clause hors grammaire reste `invalid_filter`, avec `details.path` préfixé par `$.targets[i].filter`.
+- **`fusion`** (ADR-0110). Absent, chaque index applique sa fusion configurée. Présent, la valeur s'applique à **toutes** les cibles.
+- **`mode` par défaut** (ADR-0110). `hybrid` si **toutes** les cibles ont le lexical activé, sinon `dense`. Un `mode` explicite `lexical` ou `hybrid` avec une cible sans lexical reste refusé en entier, avec le message « lexical branch is disabled for this index » et le nom de l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089). Le mode `dense` reste disponible sur les mêmes cibles.
+- **Modèle commun** (ADR-0110). En `dense` et en `hybrid`, toutes les cibles doivent avoir la même empreinte de modèle (ADR-0028), modèles `external` compris. Un `external` et un `onnx`, ou deux modèles différents, rendent `422 incompatible_model`, et le message nomme **deux index d'empreintes différentes** : la première cible et la première qui diffère. En `lexical`, le modèle n'est pas comparé. Les règles d'entrée d'ADR-0109 s'appliquent au modèle commun : sur des cibles `external`, `dense` exige `vector`, `hybrid` exige `query` **et** `vector`.
+- **`targets`** (ADR-0110). Absent ou vide : `400 invalid_request`. Un même index deux fois : `400 invalid_request`, message nommant `$.targets[i].index` ; il compterait deux fois dans le RRF. Un index inconnu : `404 not_found` nommant l'index, **aucun résultat partiel**. Aucune borne propre sur le nombre de cibles : les doublons et les inconnus étant refusés, il est borné par le nombre d'index enregistrés et la taille de corps (ADR-0102).
+- **`return.fields`** (ADR-0110). Sur des schémas hétérogènes, une liste de noms est acceptée si chaque nom est déclaré par au moins une cible ; un nom déclaré par aucune cible est refusé en `400 invalid_request`, avec `$.return.fields[i]`. Un nom déclaré `returned: false` dans une cible est refusé en `400`, et le message nomme le champ, `$.return.fields[i]`, l'index et `returned: false` (ADR-0109). Chaque résultat porte ceux des champs demandés que son index déclare et qui sont disponibles pour lui (ADR-0043) ; `"all"` rend tous les champs `returned` de l'index du résultat.
+- **Ordre des validations** (ADR-0110, première faute rendue) : (a) forme du corps, champs inconnus, bornes, entrées selon le mode, `targets` vide et doublons, en `400` ; (b) existence de chaque index, dans l'ordre de `targets`, en `404` ; (c) pour chaque cible, dans l'ordre, lexical désactivé (`400`), filtre contre son schéma (`invalid_filter`), puis `return.fields` contre l'ensemble des cibles (`400`) ; (d) modèle commun, en `422` ; (e) prise du jeton de concurrence, en `503 overloaded` ; (f) disponibilité lexicale d'une cible pendant l'exécution, en `503 overloaded` (ADR-0088, ADR-0089).
+- **Exécution** (ADR-0110). **Un seul** jeton de concurrence pour toute la requête, même sémaphore et même `[server].max_concurrent_searches` que la route simple, et **une seule** échéance `timeout_ms`, encodage compris (ADR-0102, ADR-0109) ; au-delà, `504 timeout`, le jeton restant tenu jusqu'à la fin réelle du calcul. La requête est encodée **une fois**, par le même chemin et le même cache d'instance que la route simple (ADR-0051), et le vecteur sert toutes les cibles. Les cibles s'exécutent **l'une après l'autre**, dans l'ordre de `targets` : par cible, pool, branches, fusion, `dedup` puis `group_by` (ADR-0075), puis top-`k` de l'index, comme sur la route simple. Jamais de `dedup` ni de regroupement entre index : un même `passage_hash` présent dans deux index reste deux entrées.
+- **Fusion entre index** (ADR-0110). L'unité est le passage, ou le document sous `group_by: "document"`, ses entrées restant consécutives dans leur ordre de l'index. En `dense`, les unités sont triées par `score` cosinus décroissant (score du meilleur passage pour un document), puis par nom d'`index` croissant, puis par clé croissante, et `score_type` vaut `cosine` ; le résultat égale le tri global des top-k de chaque index. En `lexical` et en `hybrid`, le score est un RRF sur les rangs de chaque index, `1 / (60 + rang)`, où `rang` est le rang de l'unité dans la liste finale de son index, à partir de 1 ; le tri est par ce score décroissant, puis `index` croissant, puis clé croissante, et `score_type` vaut `rrf`, y compris avec une seule cible. Toutes les entrées d'un document regroupé portent le score de son document. La troncature finale porte sur `k` unités : `k` résultats, ou `k` documents distincts (paires `index`, `doc_id`) et au plus `k × passages_per_document` entrées.
+
+La réponse garde la forme plate de la route simple, et chaque entrée porte `index` en plus de `doc_id`, `passage`, `key`, `score`, `score_type`, `fields` et `text`. Au lieu de `pool_size` et `generation` scalaires, elle porte `targets: [{ "index", "generation", "pool_size" }]`, dans l'ordre de la requête (ADR-0110) :
+
+```json
+{
+  "results": [
+    { "index": "articles", "doc_id": "LEGIARTI…", "passage": 0, "key": "LEGIARTI…#0",
+      "score": 0.0312, "score_type": "rrf", "fields": { "num": "1240" }, "text": "…" }
+  ],
+  "targets": [ { "index": "articles", "generation": 1287, "pool_size": 412337 },
+               { "index": "decisions", "generation": 88, "pool_size": 51204 } ],
+  "took_ms": 41.7,
+  "truncated_query": false,
+  "request_id": "…"
+}
+```
+
+`took_ms` couvre la requête entière, **de la prise du jeton à la fin du calcul**, encodage compris (ADR-0109). `truncated_query` a la même définition que sur la route simple et n'a qu'une valeur, puisque l'encodage est unique ; il vaut `false` si rien n'est encodé. En debug, un résultat portera aussi `target_rank`, son rang dans son index, et les `explain_ids` prendront la forme `{ "index": "...", "id": "..." }` (P7, ADR-0110).
 
 ## Jobs
 

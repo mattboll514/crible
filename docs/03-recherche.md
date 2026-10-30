@@ -118,15 +118,18 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
 
 ## Recherche multi-index
 
-- **Requête** : une liste `targets: [{index, filter}]`, avec un filtre par index, puisque chaque index a son propre schéma.
-- **Modèle commun** : tous les index d'une recherche dense ou hybride doivent partager la même empreinte de modèle. Sinon, erreur `incompatible_model`.
-- **Encodage unique** : la requête n'est encodée qu'une fois.
-- **Par index** : pool, branches, fusion et regroupement s'exécutent séparément, puis on garde le top-k de chaque index.
+- **Requête** : une liste `targets: [{index, filter}]`, avec un filtre par index, puisque chaque index a son propre schéma. Tous les autres champs du corps sont ceux de la recherche simple, au premier niveau et avec les mêmes bornes ; seul `filter` est propre à une cible (ADR-0110).
+- **Modèle commun** : tous les index d'une recherche dense ou hybride doivent partager la même empreinte de modèle, modèles `external` compris. Sinon, erreur `incompatible_model`. En `lexical`, le modèle n'est pas comparé : aucune cible n'encode ni ne compare de vecteur (ADR-0110).
+- **Encodage unique** : la requête n'est encodée qu'une fois, par le même chemin et le même cache d'instance que la recherche simple (ADR-0051), et le vecteur sert toutes les cibles (ADR-0110).
+- **Par index** : pool, branches, fusion et regroupement s'exécutent séparément, puis on garde le top-k de l'index. Les cibles s'exécutent **l'une après l'autre**, dans l'ordre de `targets`, sous un seul jeton de concurrence et une seule échéance `timeout_ms` (ADR-0110). Il n'y a jamais de `dedup` ni de regroupement entre index : un même `passage_hash` présent dans deux index reste deux entrées.
+- **`return.fields`** : sur des schémas hétérogènes, un nom est accepté s'il est déclaré par au moins une cible ; un nom déclaré par aucune, ou déclaré `returned: false` dans une cible, est refusé en `invalid_request` (400). Chaque résultat porte ceux des champs demandés que son index déclare et qui sont disponibles pour lui (ADR-0043, ADR-0110).
 - **Branche lexicale désactivée** : si une cible d'une recherche `lexical` ou `hybrid` a `lexical.enabled` à `false`, la requête entière est refusée en `invalid_request` (400), le message nommant l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089).
 - **Fusion entre index** :
-  - **mode `dense`** : par cosinus. C'est exact, car les scores sont comparables (déjà validé dans Legifacile, `serveur_mcp/perimetres.py`) ;
-  - **modes `lexical` et `hybrid`** : RRF sur les rangs de chaque index.
-- **Résultat** : chaque résultat porte son `index`, et le debug donne son rang dans son index.
+  - **unité** : le passage, ou le document sous `group_by: "document"`, ses entrées restant consécutives dans leur ordre de l'index ;
+  - **mode `dense`** : par cosinus. C'est exact, car les scores sont comparables (déjà validé dans Legifacile, `serveur_mcp/perimetres.py`) ; les unités sont triées par score décroissant, puis par nom d'`index` croissant, puis par clé croissante, et le résultat égale le tri global des top-k de chaque index (`score_type` `cosine`) ;
+  - **modes `lexical` et `hybrid`** : RRF sur les rangs de chaque index, score = 1 / (60 + rang), le rang étant celui de l'unité dans la liste finale de son index, à partir de 1 ; tri par score décroissant, puis `index` croissant, puis clé croissante ; toutes les entrées d'un document regroupé portent le score de son document, et `score_type` vaut `rrf`, même avec une seule cible (ADR-0110) ;
+  - **troncature** : `k` unités, soit `k` résultats, ou `k` documents distincts (paires `index`, `doc_id`) et au plus `k × passages_per_document` entrées.
+- **Résultat** : chaque résultat porte son `index`, et le debug donne son rang dans son index. La réponse porte, par cible, sa `generation` et son `pool_size`, dans l'ordre de la requête (ADR-0110).
 
 ## Rerank (hors v1, à garder en tête)
 
