@@ -196,10 +196,20 @@ impl Filter {
     /// Structural rules (object shape, operators, limits) are checked here;
     /// fields and value types are checked by [`Filter::validate`].
     pub fn from_json_str(raw: &str) -> Result<Self, CribleError> {
+        Self::from_json_str_at(raw, "$")
+    }
+
+    /// Parses a filter from its JSON form, naming its faults under `root`.
+    ///
+    /// `root` is the JSON path of the filter in the body of the request. The
+    /// route `POST /v1/search` passes `$.targets[i].filter`, so a clause outside
+    /// the grammar names its full path (ADR-0110, decision 2). The simple search
+    /// route uses `$`, through [`Filter::from_json_str`].
+    pub fn from_json_str_at(raw: &str, root: &str) -> Result<Self, CribleError> {
         let value: Value = serde_json::from_str(raw)
             .map_err(|error| invalid(format!("invalid filter JSON: {error}")))?;
         let mut clauses = 0;
-        Self::parse(&value, "$", 1, &mut clauses)
+        Self::parse(&value, root, 1, &mut clauses)
     }
 
     /// Validates the filter against the schema of an index.

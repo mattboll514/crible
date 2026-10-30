@@ -34,7 +34,12 @@ pub mod limits;
 pub mod logging;
 mod maintenance;
 mod search;
+mod search_multi;
 pub mod state;
+// Test double of the query encoder, `failpoints` build only: it proves that a
+// multi-index request encodes once (ADR-0110, decision 11).
+#[cfg(feature = "failpoints")]
+mod test_encoding;
 
 pub use auth::{Auth, Client, protect};
 pub use config::Config;
