@@ -49,7 +49,9 @@ use crible_core::model::ModelKind;
 use crible_search::api::{self, ReturnSelection};
 use crible_search::dense::exact::DenseSearcher;
 use crible_search::group::Grouping;
-use crible_search::pipeline::{self, Mode, Request as PipelineRequest};
+use crible_search::pipeline::{
+    self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType,
+};
 use crible_search::pool::Pool;
 use crible_store::generation::{epoch_records_path, epoch_segments_directory};
 use serde_json::{Map, Value, json};
@@ -57,10 +59,11 @@ use serde_json::{Map, Value, json};
 use crate::AppState;
 use crate::error;
 use crate::http::RequestId;
+use crate::jobs::Published;
 use crate::limits;
 
 /// Fields of the search body of `docs/05-api.md`.
-const BODY_FIELDS: [&str; 14] = [
+pub(crate) const BODY_FIELDS: [&str; 14] = [
     "query",
     "vector",
     "mode",
@@ -77,8 +80,29 @@ const BODY_FIELDS: [&str; 14] = [
     "timeout_ms",
 ];
 
+/// Fields of the multi-index body of `docs/05-api.md`, "Recherche multi-index".
+///
+/// It is the set of the simple route with `targets` in place of `filter`
+/// (ADR-0110, decision 1): every other field is common, at the first level.
+pub(crate) const MULTI_BODY_FIELDS: [&str; 14] = [
+    "query",
+    "vector",
+    "mode",
+    "k",
+    "fusion",
+    "group_by",
+    "passages_per_document",
+    "dedup",
+    "return",
+    "exact",
+    "debug",
+    "explain_ids",
+    "timeout_ms",
+    "targets",
+];
+
 /// Default `k` of a search (`docs/05-api.md`).
-const DEFAULT_K: usize = 10;
+pub(crate) const DEFAULT_K: usize = 10;
 
 /// `POST /v1/indexes/{index}/search`: one search over one index.
 ///
@@ -94,7 +118,7 @@ pub async fn search(
 ) -> Response {
     let handle = match state.index(&index) {
         Ok(Some(handle)) => handle,
-        Ok(None) => return unknown(&index, &identifier.0),
+        Ok(None) => return error::rendered(&unknown_index(&index), &identifier.0),
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
     let request = match SearchRequest::parse(&body) {
@@ -198,7 +222,7 @@ pub async fn search(
 fn run(
     state: &AppState,
     index: &str,
-    published: &crate::jobs::Published,
+    published: &Published,
     mode: Mode,
     inputs: Inputs,
     filter: &Filter,
@@ -208,31 +232,95 @@ fn run(
     k: usize,
     exact: bool,
 ) -> Result<SearchOutcome, CribleError> {
+    // The encoding point of the server: the closure below runs at most once,
+    // even though the pipeline has two branches (ADR-0109, ADR-0051).
+    let prepared = inputs.prepare(|query| encode_query(state, published, query))?;
+    let vector = match &prepared.vector {
+        Some(vector) => Some(check_vector(state, published, vector.clone())?),
+        None => None,
+    };
+    let outcome = search_index(
+        state,
+        index,
+        published,
+        &IndexParams {
+            mode,
+            vector: vector.as_deref(),
+            text: prepared.text.as_deref(),
+            filter,
+            grouping,
+            fusion,
+            k,
+            exact,
+        },
+    )?;
+    let results = api::results_json(
+        &Answer {
+            score_type: outcome.score_type,
+            results: outcome.hits,
+        },
+        &published.config.schema,
+        selection,
+    );
+    Ok(SearchOutcome {
+        results,
+        pool_size: outcome.pool_size,
+        generation: outcome.generation,
+        truncated_query: prepared.truncated_query,
+        took_ms: 0.0,
+    })
+}
+
+/// One search over one index, with its inputs already prepared.
+///
+/// Both search routes of P6 call this function: the simple route of
+/// `ROUTE-RECHERCHE` and each target of `POST /v1/search` (ADR-0110,
+/// decision 8). The caller owns the pool inputs, the token and the deadline; the
+/// per-index pipeline — pool, branches, fusion, `dedup` then `group_by`, top-`k`
+/// — is the one of `docs/03-recherche.md`.
+pub(crate) struct IndexParams<'a> {
+    /// Branches to run.
+    pub(crate) mode: Mode,
+    /// Query vector, checked against the model by the caller.
+    pub(crate) vector: Option<&'a [f32]>,
+    /// Query text for the lexical branch.
+    pub(crate) text: Option<&'a str>,
+    /// Filter of this index, validated against its schema.
+    pub(crate) filter: &'a Filter,
+    /// Regrouping options.
+    pub(crate) grouping: &'a Grouping,
+    /// Fusion of the two branches in `hybrid`.
+    pub(crate) fusion: FusionConfig,
+    /// Results, or documents under `group_by`.
+    pub(crate) k: usize,
+    /// `exact: true` forces the exact dense calculation.
+    pub(crate) exact: bool,
+}
+
+/// Answer of one index, before the envelope of a search route.
+pub(crate) struct IndexOutcome {
+    /// Results, best first, regrouping applied.
+    pub(crate) hits: Vec<RankedHit>,
+    /// Type of the score every result carries.
+    pub(crate) score_type: ScoreType,
+    /// Size of the pool this index evaluated.
+    pub(crate) pool_size: u32,
+    /// Generation of the snapshot the search read.
+    pub(crate) generation: u64,
+}
+
+/// Runs the pipeline of one index on the blocking thread.
+pub(crate) fn search_index(
+    state: &AppState,
+    index: &str,
+    published: &Published,
+    params: &IndexParams<'_>,
+) -> Result<IndexOutcome, CribleError> {
     let loaded = state
         .loaded()
         .ok_or_else(|| error::internal("the instance has not loaded its indexes"))?;
-    let (vector, text, truncated_query) = match inputs {
-        Inputs::Lexical { query } => (None, Some(query), false),
-        Inputs::Dense { vector } => (Some(check_vector(state, published, vector)?), None, false),
-        Inputs::DenseText { query } => {
-            let (vector, truncated) = encode_query(state, published, &query)?;
-            (Some(vector), None, truncated)
-        }
-        Inputs::Hybrid { query, vector } => match vector {
-            Some(vector) => (
-                Some(check_vector(state, published, vector)?),
-                Some(query),
-                false,
-            ),
-            None => {
-                let (vector, truncated) = encode_query(state, published, &query)?;
-                (Some(vector), Some(query), truncated)
-            }
-        },
-    };
-
     let snapshot = Arc::clone(&published.snapshot);
-    let pool = Pool::evaluate(snapshot.filters(), filter)?;
+    let pool = Pool::evaluate(snapshot.filters(), params.filter)?;
     let index_dir = loaded.index_directory(index);
     let segments_directory = epoch_segments_directory(&index_dir, snapshot.epoch());
     let records_path = epoch_records_path(&index_dir, snapshot.epoch());
@@ -246,33 +334,29 @@ fn run(
             &searcher,
             &pool,
             &PipelineRequest {
-                mode,
-                vector: vector.as_deref(),
-                text: text.as_deref(),
-                k,
-                exact,
-                grouping,
-                fusion,
+                mode: params.mode,
+                vector: params.vector,
+                text: params.text,
+                k: params.k,
+                exact: params.exact,
+                grouping: params.grouping,
+                fusion: params.fusion,
             },
             &published.config.search,
         )
     })?;
-    let pool_size = pool.len();
-    let generation = snapshot.generation().get();
-    let results = api::results_json(&answer, &published.config.schema, selection);
-    Ok(SearchOutcome {
-        results,
-        pool_size,
-        generation,
-        truncated_query,
-        took_ms: 0.0,
+    Ok(IndexOutcome {
+        hits: answer.results,
+        score_type: answer.score_type,
+        pool_size: pool.len(),
+        generation: snapshot.generation().get(),
     })
 }
 
 /// Checks a provided vector against the dimensions of the model of the index.
-fn check_vector(
+pub(crate) fn check_vector(
     state: &AppState,
-    published: &crate::jobs::Published,
+    published: &Published,
     vector: Vec<f32>,
 ) -> Result<Vec<f32>, CribleError> {
     let access = state.model(&published.config.model)?;
@@ -282,12 +366,20 @@ fn check_vector(
 
 /// Encodes the text query with the model of the index, through the instance
 /// cache.
-fn encode_query(
+///
+/// This is the single encoding point of the server. Under the `failpoints`
+/// feature a test may stand a double here, which counts the real calls and
+/// returns a fixed vector without ONNX Runtime (ADR-0110, decision 11).
+pub(crate) fn encode_query(
     state: &AppState,
-    published: &crate::jobs::Published,
+    published: &Published,
     query: &str,
 ) -> Result<(Vec<f32>, bool), CribleError> {
     let access = state.model(&published.config.model)?;
+    #[cfg(feature = "failpoints")]
+    if let Some(encoded) = crate::test_encoding::encode(access.config.dims) {
+        return encoded;
+    }
     if access.config.kind != ModelKind::Onnx {
         return Err(error::invalid(format!(
             "index '{}' uses model '{}' of kind external, which has no encoder; pass a vector \
@@ -334,7 +426,7 @@ impl SearchOutcome {
 }
 
 /// Inputs the mode runs on, already parsed from the body.
-enum Inputs {
+pub(crate) enum Inputs {
     /// Lexical branch alone, on the query text.
     Lexical { query: String },
     /// Dense branch on a provided vector.
@@ -348,26 +440,91 @@ enum Inputs {
     },
 }
 
+impl Inputs {
+    /// Prepares the inputs of a request, calling `encode` **at most once**.
+    ///
+    /// `encode` is the encoding point of the server: the real one of
+    /// [`encode_query`], or a test double that counts its calls (ADR-0110,
+    /// decision 11). A multi-index request prepares its inputs once and serves
+    /// the vector to every target (ADR-0110, decision 8), so the closure runs
+    /// once whatever the number of targets.
+    pub(crate) fn prepare<F>(self, encode: F) -> Result<Prepared, CribleError>
+    where
+        F: FnOnce(&str) -> Result<(Vec<f32>, bool), CribleError>,
+    {
+        match self {
+            Self::Lexical { query } => Ok(Prepared {
+                vector: None,
+                text: Some(query),
+                truncated_query: false,
+            }),
+            Self::Dense { vector } => Ok(Prepared {
+                vector: Some(vector),
+                text: None,
+                truncated_query: false,
+            }),
+            Self::DenseText { query } => {
+                let (vector, truncated_query) = encode(&query)?;
+                Ok(Prepared {
+                    vector: Some(vector),
+                    text: None,
+                    truncated_query,
+                })
+            }
+            Self::Hybrid { query, vector } => match vector {
+                Some(vector) => Ok(Prepared {
+                    vector: Some(vector),
+                    text: Some(query),
+                    truncated_query: false,
+                }),
+                None => {
+                    let (vector, truncated_query) = encode(&query)?;
+                    Ok(Prepared {
+                        vector: Some(vector),
+                        text: Some(query),
+                        truncated_query,
+                    })
+                }
+            },
+        }
+    }
+}
+
+/// Inputs of a request after decoding and at most one encoding.
+pub(crate) struct Prepared {
+    /// Query vector, when a dense branch runs.
+    pub(crate) vector: Option<Vec<f32>>,
+    /// Query text, when a lexical branch runs.
+    pub(crate) text: Option<String>,
+    /// Whether the encoded query lost its tail (`truncated_query`).
+    pub(crate) truncated_query: bool,
+}
+
 /// Body of a search, parsed and checked against the closed list of fields.
+///
+/// The same type serves `POST /v1/indexes/{index}/search` and the common part of
+/// `POST /v1/search`: ADR-0110, decision 1 makes the multi-index body an
+/// extension of the simple one, so the two routes share the parser and every
+/// bound. Only `filter` and `targets` are exclusive to one of them.
 #[derive(Debug)]
-struct SearchRequest {
-    query: Option<String>,
-    vector: Option<String>,
-    mode: Option<Mode>,
+pub(crate) struct SearchRequest {
+    pub(crate) query: Option<String>,
+    pub(crate) vector: Option<String>,
+    pub(crate) mode: Option<Mode>,
     filter: Option<Filter>,
-    k: usize,
-    fusion: Option<FusionConfig>,
-    by_document: bool,
-    passages_per_document: usize,
-    dedup_content: bool,
-    selection: ReturnSpec,
-    exact: bool,
-    timeout_ms: Option<u64>,
+    pub(crate) k: usize,
+    pub(crate) fusion: Option<FusionConfig>,
+    pub(crate) by_document: bool,
+    pub(crate) passages_per_document: usize,
+    pub(crate) dedup_content: bool,
+    pub(crate) selection: ReturnSpec,
+    pub(crate) exact: bool,
+    pub(crate) timeout_ms: Option<u64>,
 }
 
 /// `return` of the request.
 #[derive(Debug)]
-enum ReturnSpec {
+pub(crate) enum ReturnSpec {
     /// Every field the schema declares `returned`.
     All { text: bool },
     /// The named fields.
@@ -375,6 +532,34 @@ enum ReturnSpec {
 }
 
 impl ReturnSpec {
+    /// The requested names, or `None` for `"all"`.
+    pub(crate) fn names(&self) -> Option<&[String]> {
+        match self {
+            Self::All { .. } => None,
+            Self::Fields { names, .. } => Some(names),
+        }
+    }
+
+    /// Whether the results carry their text.
+    pub(crate) fn text(&self) -> bool {
+        match self {
+            Self::All { text } | Self::Fields { text, .. } => *text,
+        }
+    }
+
+    /// Builds the selection once the names have been checked against the
+    /// schemas of the targets (ADR-0110, decision 6).
+    ///
+    /// The selection still keeps only the fields each schema declares
+    /// `returned`, through [`api::result_json`], so one selection serves
+    /// heterogeneous schemas without a second check.
+    pub(crate) fn selection(&self) -> ReturnSelection {
+        let names = self
+            .names()
+            .map(|names| names.iter().cloned().collect::<BTreeSet<_>>());
+        ReturnSelection::new(names, self.text())
+    }
+
     /// Builds the selection, refusing a name the schema does not declare.
     fn resolve(
         &self,
@@ -401,10 +586,20 @@ impl ReturnSpec {
 }
 
 impl SearchRequest {
-    /// Parses the body, naming the JSON path of every fault.
-    fn parse(body: &Value) -> Result<Self, CribleError> {
+    /// Parses the body of the simple route, naming the JSON path of every fault.
+    pub(crate) fn parse(body: &Value) -> Result<Self, CribleError> {
+        Self::parse_with(body, &BODY_FIELDS)
+    }
+
+    /// Parses a search body whose closed list of fields is `allowed`.
+    ///
+    /// The multi-index route passes [`MULTI_BODY_FIELDS`]: `filter` is then not
+    /// a member of the first level, and its presence is an unknown field named
+    /// `$.filter` (ADR-0110, decisions 1 and 2). The rest of the body keeps the
+    /// semantics and the bounds of the simple route.
+    pub(crate) fn parse_with(body: &Value, allowed: &[&str]) -> Result<Self, CribleError> {
         let object = json_object(body, "$")?;
-        reject_unknown(object, "$", &BODY_FIELDS)?;
+        reject_unknown(object, "$", allowed)?;
         for opened in ["debug", "explain_ids"] {
             if object.contains_key(opened) {
                 return Err(error::invalid(format!(
@@ -418,13 +613,17 @@ impl SearchRequest {
             Some(name) => Some(parse_mode(&name)?),
             None => None,
         };
-        let filter = match object.get("filter") {
-            None => None,
-            Some(Value::Null) => None,
-            Some(value) => {
-                let _ = json_object(value, "$.filter")?;
-                Some(Filter::from_json_str(&value.to_string())?)
+        let filter = if allowed.contains(&"filter") {
+            match object.get("filter") {
+                None => None,
+                Some(Value::Null) => None,
+                Some(value) => {
+                    let _ = json_object(value, "$.filter")?;
+                    Some(Filter::from_json_str(&value.to_string())?)
+                }
             }
+        } else {
+            None
         };
         let k = optional_unsigned(object, "$", "k")?.map_or(DEFAULT_K, as_usize);
         api::check_k(k)?;
@@ -459,7 +658,7 @@ impl SearchRequest {
     }
 
     /// Checks which inputs `mode` needs and decodes the vector.
-    fn inputs(&self, mode: Mode) -> Result<Inputs, CribleError> {
+    pub(crate) fn inputs(&self, mode: Mode) -> Result<Inputs, CribleError> {
         match mode {
             Mode::Dense => match (&self.query, &self.vector) {
                 (Some(_), Some(_)) => Err(error::invalid(
@@ -618,14 +817,17 @@ fn check_dimensions(vector: &[f32], dims: u32) -> Result<(), CribleError> {
 }
 
 /// A JSON object at `path`, or `invalid_request`.
-fn json_object<'a>(value: &'a Value, path: &str) -> Result<&'a Map<String, Value>, CribleError> {
+pub(crate) fn json_object<'a>(
+    value: &'a Value,
+    path: &str,
+) -> Result<&'a Map<String, Value>, CribleError> {
     value
         .as_object()
         .ok_or_else(|| error::invalid(format!("expected a JSON object at {path}")))
 }
 
 /// Refuses a key outside `allowed`, naming its JSON path (ADR-0109, decision 1).
-fn reject_unknown(
+pub(crate) fn reject_unknown(
     object: &Map<String, Value>,
     path: &str,
     allowed: &[&str],
@@ -641,7 +843,7 @@ fn reject_unknown(
 }
 
 /// An optional string member.
-fn optional_string(
+pub(crate) fn optional_string(
     object: &Map<String, Value>,
     path: &str,
     name: &str,
@@ -693,9 +895,11 @@ fn as_usize(value: u64) -> usize {
 }
 
 /// The `404 unknown_index` of a name the instance does not serve.
-fn unknown(index: &str, request_id: &str) -> Response {
-    let failure = CribleError::new(ErrorCode::UnknownIndex, format!("unknown index '{index}'"));
-    error::rendered(&failure, request_id)
+///
+/// Both search routes refuse an unknown index with this error, so the two
+/// cannot spell it differently (ADR-0110, decision 5).
+pub(crate) fn unknown_index(index: &str) -> CribleError {
+    CribleError::new(ErrorCode::UnknownIndex, format!("unknown index '{index}'"))
 }
 
 #[cfg(test)]

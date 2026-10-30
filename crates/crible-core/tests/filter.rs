@@ -484,3 +484,32 @@ fn filter_accepts_every_operator_of_the_documented_table() {
         },
     );
 }
+
+#[test]
+fn a_filter_parsed_under_a_root_names_its_full_path() {
+    // ADR-0110, decision 2: the multi-index route passes the path of the filter
+    // in the body, so a clause outside the grammar names
+    // `$.targets[0].filter.…` and not `$.…`.
+    let root = "$.targets[0].filter";
+    let raw = r#"{ "$xor": [ { "fonds": "LEGI" } ] }"#;
+    let error = Filter::from_json_str_at(raw, root)
+        .err()
+        .unwrap_or_else(|| panic!("an unknown logical operator is refused"));
+    assert_eq!(error.code(), ErrorCode::InvalidFilter);
+    assert!(
+        error.message().contains(root),
+        "the message names the root path: {}",
+        error.message()
+    );
+
+    let error = Filter::from_json_str_at(r#"{ "fonds": { "lt": "LEGI" } }"#, root)
+        .unwrap_or_else(|error| panic!("the filter parses: {error}"))
+        .validate(&schema())
+        .err()
+        .unwrap_or_else(|| panic!("lt is not allowed on a keyword field"));
+    assert!(
+        error.message().contains(&format!("{root}.fonds")),
+        "the validation names the full path: {}",
+        error.message()
+    );
+}
