@@ -35,7 +35,7 @@ Toute réponse d'erreur du serveur suit ce format et porte `x-request-id` (ADR-0
 
 | Code | HTTP | Cas |
 |---|---|---|
-| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) ; `directory` d'un lot hors de l'inbox, lien symbolique ou entrée qui n'est ni un fichier ni un dossier (ADR-0107) ; `doc_id` présent à la fois dans `documents` et dans `deletions` d'un lot en ligne (ADR-0040, ADR-0107) ; corps de lot en ligne sans aucun document ni aucune suppression (ADR-0107) ; corps non vide sur `compact`, `exports` ou `snapshots` (ADR-0107) |
+| `invalid_request` | 400 | Corps invalide, paramètre hors bornes ; `fusion.alpha` hors de `[0, 1]` ou non fini, à la création de l'index, au `PATCH` de `search.fusion` et dans une requête (ADR-0090) ; destination d'export déjà occupée, c'est-à-dire un dossier `exchange/outbox/<index>-g<G>/` existant (ADR-0061) ; instantané absent, incomplet ou altéré, destination d'instantané déjà occupée, ou `index.json` de la cible divergent à la restauration (ADR-0064, ADR-0065) ; recherche `lexical` ou `hybrid` sur un index dont `lexical.enabled` vaut `false`, y compris quand cet index est une cible d'une recherche multi-index : message « lexical branch is disabled for this index » (ADR-0089) ; `directory` d'un lot hors de l'inbox, lien symbolique ou entrée qui n'est ni un fichier ni un dossier (ADR-0107) ; `doc_id` présent à la fois dans `documents` et dans `deletions` d'un lot en ligne (ADR-0040, ADR-0107) ; corps de lot en ligne sans aucun document ni aucune suppression (ADR-0107) ; corps non vide sur `compact`, `exports` ou `snapshots` (ADR-0107) ; combinaison de `query` et `vector` hors de la règle du mode demandé, ou `query` sans `vector` sur un index à modèle `external` (ADR-0109) ; nom de champ déclaré `returned: false` fourni dans `return.fields` (ADR-0109) |
 | `invalid_filter` | 400 | Champ inconnu, opérateur interdit pour ce type, valeur mal typée |
 | `unauthorized` | 401 | Clé absente, mal formée ou inconnue ; réponse avec `WWW-Authenticate: Bearer` et un corps identique dans les trois cas (ADR-0100) |
 | `forbidden` | 403 | Rôle insuffisant ; sans `WWW-Authenticate` (ADR-0100) |
@@ -231,8 +231,8 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 
 | Champ | Type | Défaut | Rôle |
 |---|---|---|---|
-| `query` | string | — | Texte de la requête, encodé par le serveur. Il faut `query` ou `vector` |
-| `vector` | base64 fp32 LE | — | Vecteur fourni (obligatoire pour un modèle `external`) |
+| `query` | string | — | Texte de la requête, encodé par le serveur ; exigé par `lexical` et `hybrid`, facultatif en `dense` (ADR-0109) |
+| `vector` | base64 fp32 LE | — | Vecteur fourni ; remplace l'encodage de `query` dans la branche dense, obligatoire pour un modèle `external` (ADR-0109) |
 | `mode` | `dense` · `lexical` · `hybrid` | `hybrid` si le lexical est activé, sinon `dense` | Branches à exécuter |
 | `filter` | objet | aucun | Voir la grammaire ci-dessus |
 | `k` | 1 à 1000 | 10 | Nombre de résultats ; sous `group_by: "document"`, nombre de documents distincts (ADR-0075) |
@@ -240,11 +240,15 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `group_by` | `"document"` ou null | null | Regroupement par document |
 | `passages_per_document` | 1 à 5 | 1 | Passages renvoyés par document regroupé ; il est validé même sans `group_by`, où il est sans effet (ADR-0075) |
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
-| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) |
+| `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) ; un nom déclaré `returned: false` est refusé (ADR-0109) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
 | `debug` | bool | false | Ajoute plan, temps et rangs ; journalise si le journal est activé |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
 | `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
+
+**Entrées selon le mode** (ADR-0109). `dense` prend **exactement un** de `query` ou `vector` : les deux ensemble, ou aucun des deux, rendent `invalid_request` (400). `lexical` exige `query` et **refuse** `vector` (400). `hybrid` exige `query` — la branche lexicale note le texte — et accepte un `vector` facultatif, qui sert alors la branche dense **à la place** de l'encodage de `query`. Sur un index à modèle `external`, qui n'encode pas, `dense` exige `vector` et `hybrid` exige `query` **et** `vector` ; un `query` sans `vector` y est refusé en `invalid_request` (400), avec un message qui nomme le modèle. La CLI suit la même règle : `--query` et `--vector-file` ensemble sont acceptés en `hybrid`.
+
+Dans `return.fields`, un nom déclaré `returned: false` dans le schéma est refusé en `invalid_request` (400) : le message nomme le champ, son chemin `$.return.fields[i]` et le fait qu'il est déclaré `returned: false` (ADR-0109). `"all"` n'est pas concerné : il ne rend que les champs `returned`.
 
 Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le cas d'un nom absent du tableau ci-dessus, d'un nom absent de `fusion` ou de `return`, et de tout objet imbriqué, et le message nomme le **chemin JSON** du champ, comme pour un `PATCH` de configuration (ADR-0031, ADR-0109). Dans `filter`, une clause hors de la grammaire reste `invalid_filter` (400), avec `details.path` : son code ne change pas. En P6, `debug` et `explain_ids` ne sont pas encore acceptés : ils sont refusés en `invalid_request`, avec un message qui dit que le champ n'est pas encore pris en charge ; P7 les ouvre (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`, ADR-0109). Aucun champ n'est ignoré en silence.
 

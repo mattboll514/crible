@@ -128,6 +128,90 @@ Sont **non modifiés** : `.github/workflows/ci.yml` (la cinquième ligne `--skip
 | Un test en CI seulement, sans le test local | Il ne prouverait l'égalité que sur un index construit par le test, pas sur les données réelles que la fiche cite ; la comparaison sur l'échantillon est ce que `@jalon` rejoue. |
 | Un motif commun d'exclusion pour les tests de l'échantillon | Déjà écarté par ADR-0062, ADR-0063 et ADR-0085 : `--skip` filtre par sous-chaîne, un tel motif exclurait aussi `inv_12_the_legifacile_sample_test_fails_without_its_prerequisites` et ferait un saut silencieux (`docs/08:43`, `:48`). |
 
+## Complément du 2026-10-30 (relecture de ROUTE-RECHERCHE)
+
+- **Statut** : inchangé — Accepté (accepté par anticipation par le propriétaire le 2026-10-29, confirmé par le propriétaire le 2026-10-30). Les décisions 1 à 3 ci-dessus restent écrites telles qu'elles ont été acceptées ; ce complément ajoute deux règles, **décidées par le propriétaire le 2026-10-30** (« je valide les deux avis »).
+- **Origine** : relecture de `ROUTE-RECHERCHE`, qui a relevé deux questions de conception que ni `docs/05` ni les décisions ci-dessus ne tranchaient.
+
+### Contexte du complément
+
+**Constat 1 — entrées de la requête selon le mode.** La route accepte `query` et `vector` ensemble en `hybrid`, et le vecteur y sert la branche dense **à la place** de l'encodage de `query`. La CLI, elle, refuse cette combinaison : `commands.rs:674-680` renvoie `invalid_request` dès qu'un `--vector-file` accompagne un mode qui exécute la branche lexicale, `hybrid` compris. `docs/05-api.md:234-235` ne dit que « Il faut `query` ou `vector` » et « `vector` obligatoire pour un modèle `external` » : le comportement attendu de chaque mode, et le cas du modèle `external` qui n'encode pas (`docs/04:119`), n'y sont pas écrits. Deux implémentations également conformes pouvaient donc différer, et la preuve « API = CLI » de la décision 3 comparait deux règles différentes.
+
+**Constat 2 — champ non retourné dans `return.fields`.** Un nom déclaré `returned: false` dans le schéma est accepté dans `return.fields`, puis n'apparaît jamais dans la réponse, sans message. C'est exactement l'ignorance silencieuse que la décision 1 refuse, et la règle n'est pas symétrique du filtre : un champ `filterable: false` est déjà refusé en `invalid_filter` (`docs/05:213`).
+
+### Décision du complément
+
+**Décision 4 — entrées de la requête selon le mode.** Le tableau vaut pour l'API comme pour la CLI ; toute combinaison hors de la règle rend `400 invalid_request`.
+
+| Mode | `query` | `vector` |
+|---|---|---|
+| `dense` | facultatif | facultatif ; exactement un des deux doit être fourni |
+| `lexical` | exigé | refusé |
+| `hybrid` | exigé (branche lexicale) | facultatif ; s'il est fourni, il sert la branche dense **à la place** de l'encodage de `query` |
+
+Précisions :
+
+- `dense` prend **exactement un** de `query` ou `vector` : les deux ensemble rendent `400 invalid_request`, aucun des deux aussi ;
+- `lexical` exige `query` et **refuse** `vector` (`400`) : la branche lexicale note le texte, un vecteur n'y a pas de sens ;
+- `hybrid` exige `query`, parce que la branche lexicale en a besoin, et accepte un `vector` facultatif ;
+- sur un index à modèle **`external`**, qui n'encode pas (`docs/04:119`) : `dense` exige `vector`, et `hybrid` exige `query` **et** `vector` ; un `query` sans `vector` y est refusé en `400`, avec un message qui **nomme le modèle** ;
+- la CLI suit la même règle : `--query` et `--vector-file` ensemble sont **acceptés** en `hybrid`.
+
+**Décision 5 — champ non retourné dans `return.fields`.** Un nom déclaré `returned: false` dans le schéma de l'index, fourni dans `return.fields`, est refusé en **`400 invalid_request`**. Le message nomme le champ, son chemin `$.return.fields[i]` et le fait qu'il est déclaré `returned: false`.
+
+Précisions :
+
+- `return.fields: "all"` n'est pas concerné : il ne rend déjà que les champs `returned` (`docs/05:243`, ADR-0107 pour `GET /documents`) ;
+- un nom **inconnu** du schéma reste la décision 1 : `400 invalid_request` nommant le chemin JSON ;
+- le code du refus est `invalid_request`, pas `invalid_filter` : le champ est déclaré, seulement non rendu, et `invalid_filter` appartient à la grammaire des filtres.
+
+### Raison
+
+**Raison 1.** `hybrid` est le mode par défaut dès que le lexical est activé (`docs/05:236`). Refuser `query` + `vector` en `hybrid` rendrait la recherche hybride **impossible** sur un index `external`, qui n'a pas d'encodeur : la seule façon d'y lancer une branche dense est d'apporter le vecteur, et la branche lexicale a besoin du texte. La règle inverse — refuser le vecteur en `hybrid` — aurait laissé cet index sans mode par défaut utilisable.
+
+**Raison 2.** La symétrie avec le filtre est ce qui rend la règle prévisible : un champ `filterable: false` est refusé, un champ `returned: false` l'est aussi. La décision 1 pose qu'« aucun champ n'est ignoré en silence » ; accepter un nom qui ne peut rien rendre serait précisément cela. Et `"all"` comme `GET /documents` (ADR-0107) rendent déjà seulement les champs `returned` : le client perd une demande impossible à satisfaire, sans perdre de contenu qu'il aurait reçu autrement.
+
+### Application
+
+Appliqué à `docs/05-api.md` :
+
+| Document | Modification |
+|---|---|
+| `docs/05-api.md:234` | ligne `query` : exigé par `lexical` et `hybrid`, facultatif en `dense` |
+| `docs/05-api.md:235` | ligne `vector` : remplace l'encodage de `query` dans la branche dense, exigé pour un modèle `external` |
+| `docs/05-api.md:243` | ligne `return` : un nom déclaré `returned: false` est refusé |
+| `docs/05-api.md:249` | phrase sous le tableau : entrées selon le mode, cas du modèle `external`, même règle pour la CLI, et refus d'un champ non retourné |
+| `docs/05-api.md:38` | ligne `invalid_request` de la table des codes : les deux cas ajoutés |
+| `docs/adr/README.md:165` | ligne d'index de cet ADR : mention du complément |
+
+Le **code et les tests** ne sont pas dans `ROUTE-RECHERCHE` : ils sont **reportés à `NETTOYER-P6`**, qui doit aligner `query_inputs` de la CLI (`crates/crible/src/commands.rs:662-688`, qui refuse encore `--vector-file` avec un mode lexical) et la validation de la route sur la décision 4, puis appliquer la décision 5 dans la validation de `return.fields`. Aucun fichier de code n'est modifié par ce complément.
+
+### Conséquences du complément
+
+- **Positives** :
+  - une seule règle pour l'API et la CLI : la preuve d'égalité de la décision 3 compare deux comportements identiques ;
+  - la recherche hybride reste possible sur un index `external`, donc le mode par défaut y fonctionne ;
+  - aucune demande de champ perdue en silence : `returned: false` est nommé, avec son chemin, comme un champ inconnu.
+- **Négatives / coûts** :
+  - la CLI et la route changent de comportement : une combinaison acceptée jusque-là par la route (`dense` avec les deux entrées) devient un `400` ;
+  - un client qui demandait un champ `returned: false` pour le tester recevra désormais un refus ;
+  - les deux règles arrivées après `ROUTE-RECHERCHE` demandent une tâche de mise en conformité, `NETTOYER-P6`, donc un écart temporaire entre `docs/05` et le code.
+- **À surveiller** :
+  - un test de `dense` avec `query` et `vector` ensemble : `400 invalid_request` ;
+  - un test de `lexical` avec `vector` : `400 invalid_request` ;
+  - un test de `hybrid` avec `query` et `vector` : accepté, la branche dense utilisant le vecteur fourni ;
+  - un test, sur un index `external`, de `dense` sans `vector` et de `hybrid` avec `query` seul : `400`, message nommant le modèle ;
+  - un test de `return.fields` citant un champ `returned: false` : `400`, message nommant le champ, `$.return.fields[i]` et `returned: false` ;
+  - la sortie de `NETTOYER-P6` : tant qu'elle n'est pas faite, la CLI refuse encore `--query` avec `--vector-file` en `hybrid`.
+
+### Alternative écartée pour ce complément
+
+| Alternative | Pourquoi écartée |
+|---|---|
+| Refuser `query` + `vector` en `hybrid`, comme la CLI le faisait | `hybrid` est le mode par défaut dès que le lexical est activé : l'interdire avec un vecteur rendrait la recherche hybride impossible sur un index `external`, qui ne peut pas encoder `query` pour sa branche dense. |
+| Accepter un champ `returned: false` dans `return.fields` en l'écrivant dans `docs/05` | Le nom serait accepté pour ne rien rendre : c'est l'ignorance silencieuse que la décision 1 refuse, et la règle cesserait d'être symétrique du filtre sur un champ `filterable: false`. |
+| Laisser la CLI et la route diverger, chacune avec sa règle | Le critère « API = CLI » de la décision 3 compare les deux sorties : deux règles d'entrée différentes rendraient la comparaison dépendante du mode, et donc la preuve ambiguë. |
+
 ## Références
 
 - `docs/phases/P6-serveur-et-api.md:99-111` — fiche `ROUTE-RECHERCHE` ; `:104` (`debug` et `explain_ids` renvoyés à P7), `:105` (réponse), `:108` (critère « API = CLI »), `:110` (`timeout_ms`), `:111` (`503 overloaded`) ; `:113-127` — fiche `RECHERCHE-MULTI-INDEX`.
@@ -136,7 +220,7 @@ Sont **non modifiés** : `.github/workflows/ci.yml` (la cinquième ligne `--skip
 - `docs/07-stack-et-deploiement.md` : `:68` (`[server].search_threads`), `:144` (job Rust sans ONNX Runtime), `:146-148` (commande du job `rust-onnx`), `:150` (les cinq exclus nommés un par un).
 - `docs/08-invariants-et-tests.md:43` (`#[ignore]` seul mécanisme de saut, échec franc sans prérequis), `:48` (exclusion nommée un par un).
 - `docs/04-donnees-et-ingestion.md:119` — modèle `kind: "external"` : pas d'encodeur, pas de recette, `vector` obligatoire par requête.
-- `crates/crible/src/commands.rs:721-732` (commentaire de `crible search`, « `took_ms` is the total, from the entry of the command »), `:843` (`started.elapsed()`), `:855-875` (forme JSON de la réponse de la CLI) ; `crates/crible/Cargo.toml` (dépendances vers `crible-server` et la CLI) ; `crates/crible-server/Cargo.toml` (pas de client HTTP en dépendance).
+- `crates/crible/src/commands.rs:662-688` (`query_inputs` : refus de `--vector-file` avec un mode qui exécute la branche lexicale, `hybrid` compris) ; `:721-732` (commentaire de `crible search`, « `took_ms` is the total, from the entry of the command »), `:843` (`started.elapsed()`), `:855-875` (forme JSON de la réponse de la CLI) ; `crates/crible/Cargo.toml` (dépendances vers `crible-server` et la CLI) ; `crates/crible-server/Cargo.toml` (pas de client HTTP en dépendance).
 - `data/legifacile-sample/queries.jsonl` — 300 questions étiquetées, jeu local (ADR-0032, ADR-0062).
 - ADR-0031 (clé inconnue d'un `PATCH`, `invalid_request` nommant le chemin) ; ADR-0051 (cache des requêtes) ; ADR-0057 (ONNX Runtime et vrai modèle en CI, modèle de test) ; ADR-0062 (second `--skip` explicite, décision 3 : aucun autre test exclu) ; ADR-0063 (troisième `--skip`) ; ADR-0074 (planification de la stratégie dense) ; ADR-0075 (regroupement) ; ADR-0085 (quatrième `--skip`, note de renvoi) ; ADR-0090 (`alpha` et fusion `relative_score`) ; ADR-0100 (clés d'API) ; ADR-0101 (corps d'erreur) ; ADR-0102 (limites, échéance, jeton) ; ADR-0108 (forme des décisions de la même série).
 - Verdicts de `@architecte` du 2026-10-29 sur la fiche `ROUTE-RECHERCHE` : deux `NON-COUVERT` (champ inconnu du corps de recherche, `debug`/`explain_ids` en P6 ; périmètre de `timeout_ms` et du jeton) et un `ECART` (critère « API = CLI » et cinquième test local).
