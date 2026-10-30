@@ -110,6 +110,29 @@ pub(crate) const DEFAULT_K: usize = 10;
 /// and `admin` include `read`, so the three reach it (ADR-0095). An unknown index
 /// is `404 unknown_index`; the body is validated before any token is taken, and
 /// `timeout_ms` before the work starts.
+#[utoipa::path(
+    post,
+    path = "/v1/indexes/{index}/search",
+    tag = "search",
+    description = "Search one index, dense, lexical or hybrid, and fuse the two rankings. An \
+                   unknown field of the body is `400 invalid_request`; an unknown index is `404 \
+                   unknown_index`; an insufficient role `403`; a saturated concurrency limit \
+                   `503` with `Retry-After: 1`; a deadline `504 timeout`. `debug` and \
+                   `explain_ids` are refused until P7. Role: `read`; `write` and `admin` include \
+                   it (ADR-0095).",
+    params(("index" = String, Path, description = "Name of the index")),
+    request_body = crate::openapi::SearchRequest,
+    responses(
+        (status = 200, description = "The fused answer", body = crate::openapi::SearchResponse),
+        (status = 400, description = "Unknown field, value outside its bounds or inputs of the mode", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable", body = crate::openapi::Error),
+        (status = 504, description = "`timeout_ms` reached", body = crate::openapi::Error)
+    )
+)]
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,

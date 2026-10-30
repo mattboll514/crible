@@ -54,6 +54,30 @@ struct BatchBody {
 
 /// `POST /v1/indexes/{index}/batches`: validates the inbox path, then queues the
 /// attach as an `attach_batch` job.
+#[utoipa::path(
+    post,
+    path = "/v1/indexes/{index}/batches",
+    tag = "batches",
+    description = "Attach a batch already written in `<exchange>/inbox/<name>`. `directory` is \
+                   one path component, without symbolic link nor special entry; a missing \
+                   directory is `404 not_found`, a refused one `400 invalid_request`. Role: \
+                   `write`; `admin` includes it (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("wait" = Option<bool>, Query, description = "Wait for the job under `wait_timeout_ms` (ADR-0067)")
+    ),
+    request_body = crate::openapi::DepositedBatchRequest,
+    responses(
+        (status = 200, description = "The job finished within `wait_timeout_ms`", body = crate::openapi::Job),
+        (status = 202, description = "The job was accepted", body = crate::openapi::Job),
+        (status = 400, description = "Refused directory: several components, symbolic link or special entry", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index, or absent directory", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+    )
+)]
 pub async fn post_batch(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,

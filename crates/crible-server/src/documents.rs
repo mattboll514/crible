@@ -80,6 +80,31 @@ struct PatchBody {
 /// deposited batch (ADR-0055, ADR-0107, decision 1). A replayed `batch_id` with
 /// the same content writes nothing and returns the original report; another
 /// content fails the job in `batch_conflict` (decision 3).
+#[utoipa::path(
+    post,
+    path = "/v1/indexes/{index}/documents",
+    tag = "documents",
+    description = "Apply an online batch as a job. `batch_id` is mandatory; a body with neither \
+                   `documents` nor `deletions` is `400 invalid_request`, an unknown key too. A \
+                   replay of the same `batch_id` with the same content writes nothing; another \
+                   content fails the job in `batch_conflict`. Role: `write`; `admin` includes it \
+                   (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("wait" = Option<bool>, Query, description = "Wait for the job under `wait_timeout_ms` (ADR-0067)")
+    ),
+    request_body = crate::openapi::OnlineBatchRequest,
+    responses(
+        (status = 200, description = "The job finished within `wait_timeout_ms`", body = crate::openapi::Job),
+        (status = 202, description = "The job was accepted", body = crate::openapi::Job),
+        (status = 400, description = "Refused body: unknown key, no document nor deletion, mode other than `upsert`", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+    )
+)]
 pub async fn post_documents(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -161,6 +186,30 @@ pub async fn post_documents(
 /// life of the job and never persisted (ADR-0060, ADR-0103). A document unknown
 /// or removed fails the whole job in `not_found`, and no document of the body is
 /// applied (ADR-0060, ADR-0107).
+#[utoipa::path(
+    patch,
+    path = "/v1/indexes/{index}/documents",
+    tag = "documents",
+    description = "Patch the document fields of the index without re-encoding. A key outside the \
+                   document fields of the schema is `400 invalid_request`; an unknown or removed \
+                   document fails the job in `not_found` and no document of the body is applied. \
+                   Role: `write`; `admin` includes it (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("wait" = Option<bool>, Query, description = "Wait for the job under `wait_timeout_ms` (ADR-0067)")
+    ),
+    request_body = crate::openapi::MetadataPatchRequest,
+    responses(
+        (status = 200, description = "The job finished within `wait_timeout_ms`", body = crate::openapi::Job),
+        (status = 202, description = "The job was accepted", body = crate::openapi::Job),
+        (status = 400, description = "Unknown key, passage field, or mistyped value", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+    )
+)]
 pub async fn patch_documents(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
@@ -226,6 +275,27 @@ pub async fn patch_documents(
 /// `?text=true` adds the text of each passage; without it, a passage carries its
 /// `ord` and its fields only (ADR-0107, decision 6). Only the fields the schema
 /// declares `returned` are rendered.
+#[utoipa::path(
+    get,
+    path = "/v1/indexes/{index}/documents/{doc_id}",
+    tag = "documents",
+    description = "One document, its fields and its live passages, read in the base of the \
+                   epoch of the published snapshot; `?text=true` adds the text of each passage. \
+                   No vector nor internal id ever appears. Role: `read`; `write` and `admin` \
+                   include it (ADR-0095).",
+    params(
+        ("index" = String, Path, description = "Name of the index"),
+        ("doc_id" = String, Path, description = "External identifier of the document"),
+        ("text" = Option<bool>, Query, description = "Include the text of each passage")
+    ),
+    responses(
+        (status = 200, description = "The document and its live passages", body = crate::openapi::DocumentDetail),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 404, description = "Unknown index, or unknown or removed document", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+    )
+)]
 pub async fn get_document(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,

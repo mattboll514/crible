@@ -26,6 +26,7 @@
 
 Format unique :
 
+<!-- openapi: Error -->
 ```json
 { "error": { "code": "invalid_filter", "message": "unknown field 'juridicton' (did you mean 'juridiction'?)",
              "details": { "path": "$.filter.juridicton" }, "request_id": "…" } }
@@ -76,7 +77,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
 
-La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health`, `/ready`, `/openapi.json` et `/docs` restent sans authentification. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite : en P6, `GET /v1/stats` (`ROUTE-STATS`) et `GET /v1/debug/queries` (`JOURNAL-DE-DEBUG`), chacun cité dans le test avec la tâche qui le livre. La tâche qui monte la route la déclare dans la spécification et retire son exception du test dans le même changement. Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
+La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite : en P6, `GET /v1/stats` (`ROUTE-STATS`) et `GET /v1/debug/queries` (`JOURNAL-DE-DEBUG`), chacun cité dans le test avec la tâche qui le livre. La tâche qui monte la route la déclare dans la spécification et retire son exception du test dans le même changement. Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
 
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
 
@@ -88,6 +89,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 **`GET /v1/indexes`** rend l'enveloppe d'ADR-0103 :
 
+<!-- openapi: IndexList -->
 ```json
 { "indexes": [ { "name": "decisions", "model": "mDenseOn-fr", "generation": 1288,
                  "documents": 412000, "live_passages": 8580000 } ] }
@@ -97,9 +99,24 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 **`GET /v1/indexes/{index}`** rend la configuration matérialisée et l'état de la **génération publiée** :
 
+<!-- openapi: IndexDetail -->
 ```json
 { "name": "decisions",
-  "config": { "name": "decisions", "model": "mDenseOn-fr", "reference_precision": "fp16" },
+  "config": {
+    "name": "decisions", "model": "mDenseOn-fr", "reference_precision": "fp16",
+    "schema": {
+      "document_fields": { "juridiction": { "type": "keyword" },
+                           "numero": { "type": "keyword" },
+                           "titre": { "type": "keyword", "filterable": false } },
+      "passage_fields": { "partie": { "type": "keyword" } }
+    },
+    "cluster_by": ["juridiction"],
+    "lexical": { "enabled": true, "language": "fr", "positions": false },
+    "search": { "scan": "binary", "rescore_candidates": 5000, "exact_threshold": 5000,
+                "candidates_per_branch": 100, "fusion": { "method": "rrf" } },
+    "ingest": { "acceptance_sample": 200, "acceptance_min_cosine": 0.999 },
+    "compaction": { "dead_ratio": 0.10 }
+  },
   "state": { "epoch": 4, "generation": 1288,
              "documents": 412000, "live_passages": 8580000,
              "dead_passages": 12400, "dead_ratio": 0.00144,
@@ -119,6 +136,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 ### Lot en ligne
 
+<!-- openapi: OnlineBatchRequest -->
 ```json
 {
   "batch_id": "manual-2026-10-19-001",
@@ -145,6 +163,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 `POST /v1/indexes/{index}/batches` attache un lot déjà écrit dans `<exchange>/inbox/<nom>/`.
 
+<!-- openapi: DepositedBatchRequest -->
 ```json
 { "directory": "legifacile-decisions-2026-10-19" }
 ```
@@ -157,6 +176,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 `PATCH /v1/indexes/{index}/documents` met à jour les **champs d'un document** sans ré-encodage (ADR-0060).
 
+<!-- openapi: MetadataPatchRequest -->
 ```json
 { "documents": [ { "doc_id": "D1", "fields": { "juridiction": "cass" } } ] }
 ```
@@ -177,6 +197,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 `GET /v1/indexes/{index}/documents/{doc_id}` rend un document, ses champs et ses passages vivants (ADR-0107). `?text=true` ajoute le texte des passages.
 
+<!-- openapi: DocumentDetail -->
 ```json
 { "doc_id": "LEGIARTI…", "generation": 1288, "doc_hash": "blake3:…",
   "fields": { "num": "1240", "fonds": "LEGI" },
@@ -216,12 +237,14 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 Exemples tirés de Legifacile :
 
+<!-- openapi: Filter -->
 ```json
 { "fonds": "LEGI", "date_debut": { "lte": "2020-01-01" },
   "$or": [ { "date_fin": { "gt": "2020-01-01" } }, { "date_fin": { "exists": false } } ] }
 ```
 Ce premier filtre sélectionne les articles du fonds LEGI en vigueur au 1er janvier 2020.
 
+<!-- openapi: Filter -->
 ```json
 { "juridiction": { "in": ["cass", "ce"] }, "partie": { "nin": ["moyens", "faits"] } }
 ```
@@ -256,6 +279,7 @@ Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le 
 
 ## Recherche : réponse
 
+<!-- openapi: SearchResponse -->
 ```json
 {
   "results": [
@@ -278,29 +302,31 @@ Un résultat dont le document a été supprimé après la prise du snapshot gard
 
 Avec `debug: true`, la réponse ajoute :
 
+<!-- openapi: none — le bloc `debug` arrive avec `REPONSE-DEBUG` (P7) ; aucun composant ne le décrit en P6. -->
 ```json
-"debug": {
+{ "debug": {
   "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 5000,
             "candidates_per_branch": 100, "fusion": "rrf", "group_by": null },
   "timings_ms": { "validate": 0.1, "encode": 23.4, "filter": 0.6, "dense": 9.8,
                   "lexical": 6.1, "fusion": 0.1, "group": 0.0, "fetch": 1.2, "total": 41.7 },
   "per_result": [ { "key": "LEGIARTI…#0", "dense_rank": 70, "dense_score": 0.61,
                     "lexical_rank": 2, "lexical_score": 14.2, "fused_rank": 1 } ]
-}
+} }
 ```
 
 `dense_strategy` vaut `"exact"` ou `"binary"` (ADR-0074) : `"exact"` pour un pool de taille inférieure ou égale à `exact_threshold`, pour `exact: true` et pour `search.scan: none` ; `"binary"` sinon. Sous `"binary"`, `rescore_candidates` est le nombre **effectif** de candidats rescorés : il vaut `max(N, candidates_per_branch)`, où `candidates_per_branch` est le nombre de résultats demandés par la branche dense — sur-échantillonné quand la requête regroupe (ADR-0075) —, donc `candidates_per_branch` quand ce nombre dépasse N.
 
 Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 
+<!-- openapi: none — le bloc `explain` arrive avec `EXPLIQUER-DOCUMENTS` (P7) ; aucun composant ne le décrit en P6. -->
 ```json
-"explain": [ {
+{ "explain": [ {
   "id": "LEGIARTI…", "exists": true, "alive": true,
   "in_pool": false, "excluded_by": ["$.filter.date_debut"],
   "dense":   { "exact_rank": 70, "score": 0.61, "in_binary_candidates": true, "binary_rank": 233 },
   "lexical": { "rank": 2, "score": 14.2, "explanation": { "…": "détail tantivy par terme" } },
   "fused_rank": null, "grouped_under": null
-} ]
+} ] }
 ```
 
 Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé au debug.
@@ -311,6 +337,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 
 `POST /v1/search`
 
+<!-- openapi: SearchMultiRequest -->
 ```json
 { "query": "responsabilité du fait des choses", "mode": "hybrid", "k": 10,
   "targets": [ { "index": "articles",  "filter": { "fonds": "LEGI" } },
@@ -331,6 +358,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
 
 La réponse garde la forme plate de la route simple, et chaque entrée porte `index` en plus de `doc_id`, `passage`, `key`, `score`, `score_type`, `fields` et `text`. Au lieu de `pool_size` et `generation` scalaires, elle porte `targets: [{ "index", "generation", "pool_size" }]`, dans l'ordre de la requête (ADR-0110) :
 
+<!-- openapi: SearchMultiResponse -->
 ```json
 {
   "results": [
@@ -349,6 +377,7 @@ La réponse garde la forme plate de la route simple, et chaque entrée porte `in
 
 ## Jobs
 
+<!-- openapi: Job -->
 ```json
 { "id": "job_…", "kind": "attach_batch", "index": "decisions", "state": "succeeded",
   "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1288,

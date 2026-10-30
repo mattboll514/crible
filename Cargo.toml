@@ -40,8 +40,11 @@ tower-http = { version = "=0.7.1", features = [
 ] }
 
 # OpenAPI
-utoipa = { version = "=6.0.0" }
-utoipa-swagger-ui = { version = "=10.0.1" }
+# `axum_extras` lets the macros read the extractors of an axum handler;
+# `vendored` embeds Swagger UI, so the build downloads nothing (ADR-0111,
+# decisions 1 and 2).
+utoipa = { version = "=6.0.0", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "=10.0.1", features = ["axum", "vendored"] }
 
 # Snapshots and parallelism
 arc-swap = { version = "=1.9.3" }

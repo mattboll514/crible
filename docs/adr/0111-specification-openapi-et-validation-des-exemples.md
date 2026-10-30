@@ -223,7 +223,7 @@ Sont **non modifiés** : `docs/suivi.md` (tenu par l'orchestrateur), tout fichie
 | Laisser les schémas ouverts (`additionalProperties` par défaut) | Le serveur refuse les clés inconnues (`ADR-0031`, `ADR-0109`, `ADR-0110`) : la spécification décrirait un corps accepté que le serveur rejette. |
 | Un `oneOf` statique pour `filter`, `return.fields` et la configuration d'index | Leurs formes dépendent du schéma de chaque index, connu à l'exécution seulement. Un `oneOf` figé à la compilation serait faux dès qu'un index déclare un champ de plus. |
 
-## Complément du 2026-10-30 (routes des phases ultérieures dans le test des routes)
+## Complément du 2026-10-30 (routes des phases ultérieures dans le test des routes ; forme de la neutralisation de la sécurité)
 
 - **Statut** : inchangé — Accepté (accepté par anticipation, décision déléguée par le propriétaire pour la troisième série de P6, revue à la fin de la série). Les huit décisions ci-dessus restent écrites telles qu'elles ont été acceptées ; ce complément **remplace la seule clause d'exception** de la décision 5, et rien d'autre.
 - **Origine** : `QUESTION-CONCEPTION` de `@dev` sur `PUBLIER-OPENAPI`, et verdict `@architecte` du 2026-10-30 concluant à un **`ECART`** au texte de la décision 5, aucune option couverte par l'ADR.
@@ -287,6 +287,15 @@ Le **code et les tests** ne sont pas modifiés par ce complément : la spécific
 | Retirer les deux lignes de `docs/05` jusqu'en P7 | `docs/05` fait foi, et les livrables de `JOURNAL-DE-DEBUG` et de `ROUTE-STATS` les y attendent : retirer une ligne puis la remettre ferait du tableau une vue datée du code, pas la référence. |
 | Faire échouer le test tant que toutes les routes ne sont pas montées, avec `#[ignore]` | Un test ignoré pour une raison de calendrier masquerait aussi les vraies divergences, et `docs/08:43` réserve `#[ignore]` à un prérequis absent (modèle, échantillon), pas à une phase pas encore livrée. |
 | Comparer seulement les routes du code présentes dans `docs/05`, sans le sens inverse | C'est l'abandon de la décision 5 : une route du code oubliée dans `docs/05` ne ferait plus échouer personne. |
+
+### Précision du 2026-10-30 — la forme `security: [{}]` (décision 4)
+
+- **Statut** : inchangé — Accepté (accepté par anticipation, décision déléguée par le propriétaire pour la troisième série de P6, revue à la fin de la série). Cette précision **ne remplace aucune clause** : elle consigne ce que le code génère et lève une ambiguïté de forme dans la décision 4, dont le texte reste écrit tel qu'il a été accepté.
+- **Origine** : relecture de `PUBLIER-OPENAPI`, tour 1, point 6, et remarque de `@dev`.
+
+**Constat et précision.** `utoipa` 6 écrit l'absence d'authentification d'une opération `security: [{}]` — une exigence vide —, et non `security: []` comme le dit la décision 4. Les deux formes signifient la même chose en OpenAPI 3.1, aucune clé n'étant exigée ; la forme `[{}]` est retenue telle que générée. Dans la spécification, cette neutralisation ne porte que sur `/health` et `/ready` : `/openapi.json` et `/docs` n'y figurent pas (décision 5) et restent servis sans clé, ce que testent les tests de service. `/docs` répond par une redirection `303` vers `/docs/`, montage d'`utoipa-swagger-ui`, qui sert la page.
+
+**Application.** `docs/05-api.md` — la phrase d'ADR-0111 est ajustée pour dire que la neutralisation ne porte, dans la spécification, que sur `/health` et `/ready`, et que `/openapi.json` et `/docs` sont hors spécification. Le code et les tests de `PUBLIER-OPENAPI` ne sont pas modifiés par cette précision.
 
 ## Références
 

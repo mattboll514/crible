@@ -33,6 +33,9 @@ pub mod lifecycle;
 pub mod limits;
 pub mod logging;
 mod maintenance;
+// The OpenAPI specification, generated from the annotations of the routes and
+// served by `GET /openapi.json` and `GET /docs` (ADR-0015, ADR-0111).
+pub mod openapi;
 mod search;
 mod search_multi;
 pub mod state;
