@@ -14,10 +14,15 @@ logic the verdict rests on, so a change of the aggregation is caught in CI:
   phase, the rest included);
 - the warm-up, kept out of the criterion and sliced by 10 s for the report;
 - `pool_size` and the mode mix, kept per phase and per sample;
-- the set-up order of a campaign: the base batch is attached before the load.
+- the set-up order of a campaign: the base batch is attached before the load;
+- the observability of a replay: the journal stays off unless an option turns it
+  on (ADR-0122, decision 12), its `sample_rate` is checked in `[0, 1]`, and the
+  size and the row count of `debug.sqlite` are read back without any content.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 
@@ -407,4 +412,143 @@ def test_campaign_attaches_the_base_before_the_load(monkeypatch, tmp_path) -> No
     assert document["criterion"]["searches"]["n"] == 12
     assert document["phases"]["rest"]["pool_size"] == {"min": 20000, "max": 20000}
     assert document["phases"]["rest"]["samples"][0]["pool_size"] == 20000
+    # The observability of the campaign is off by default: no route is read, and
+    # the file is absent, so the raw document says so instead of guessing.
+    assert document["journal"]["route"] is None
+    assert document["journal"]["file"]["exists"] is False
+    assert document["analytics"]["dropped"] is None
+    # The identification of the machine belongs in the raw JSON, so a report
+    # that cites `Mac15,12` / `Apple M3` can be checked against it. A platform
+    # without the keys renders `None` rather than failing the campaign.
+    assert "model" in document["machine"]
+    assert "cpu" in document["machine"]
+    assert document["machine"]["model"] is None or isinstance(
+        document["machine"]["model"], str
+    )
+
+
+def configuration(tmp_path, options: harness.Options) -> str:
+    """The `crible.toml` of a campaign, for its text only."""
+    keys = {"admin": "a", "read": "r", "write": "w"}
+    path = Path(harness.configuration(tmp_path, keys, options))
+    return path.read_text(encoding="utf-8")
+
+
+def test_configuration_keeps_the_journal_disabled_by_default(tmp_path) -> None:
+    # ADR-0113, decision 5: a campaign started without an option must replay the
+    # P6 campaign identically, so the journal stays off and the analytics keep
+    # the default of `docs/07`.
+    text = configuration(tmp_path, harness.Options())
+    assert "enabled = false" in text
+    assert "sample_rate = 0.0" in text
+    assert "ttl_days = 7" in text
+    assert "retention_days = 90" in text
+
+
+def test_configuration_enables_the_journal_at_its_sample_rate(tmp_path) -> None:
+    # ADR-0122, decision 12: the replay turns the journal on at `1.0`, the worst
+    # case, which records every search that does not ask `debug`.
+    text = configuration(
+        tmp_path,
+        harness.Options(debug_journal=True, debug_journal_sample_rate=1.0),
+    )
+    assert "enabled = true" in text
+    assert "sample_rate = 1.0" in text
+
+
+def test_parse_keeps_the_journal_off_by_default() -> None:
+    options = harness.parse([])
+    assert options.debug_journal is False
+    assert options.debug_journal_sample_rate == 0.0
+
+
+def test_parse_accepts_the_worst_case_sample_rate() -> None:
+    options = harness.parse(
+        ["--debug-journal", "--debug-journal-sample-rate", "1.0"]
+    )
+    assert options.debug_journal is True
+    assert options.debug_journal_sample_rate == 1.0
+
+
+def test_parse_refuses_a_sample_rate_out_of_range() -> None:
+    # The server refuses it at start-up (ADR-0097); the harness fails before
+    # writing a configuration that cannot work.
+    with pytest.raises(SystemExit):
+        harness.parse(["--debug-journal-sample-rate", "1.5"])
+    with pytest.raises(SystemExit):
+        harness.parse(["--debug-journal-sample-rate", "-0.1"])
+
+
+def test_journal_file_counts_rows_and_sizes(tmp_path) -> None:
+    import sqlite3
+
+    database = tmp_path / "debug.sqlite"
+    connection = sqlite3.connect(str(database))
+    connection.execute("CREATE TABLE queries (id INTEGER PRIMARY KEY)")
+    connection.executemany("INSERT INTO queries DEFAULT VALUES", [()] * 3)
+    connection.commit()
+    connection.close()
+    entry = harness.journal_file(tmp_path)
+    assert entry["exists"] is True
+    assert entry["rows"] == 3
+    assert entry["bytes"] == database.stat().st_size
+    assert entry["wal_bytes"] == 0
+
+
+def test_journal_file_reports_an_absent_file(tmp_path) -> None:
+    assert harness.journal_file(tmp_path) == {
+        "file": "debug.sqlite",
+        "exists": False,
+        "bytes": None,
+        "wal_bytes": None,
+        "rows": None,
+    }
+
+
+def test_journal_state_reads_enabled_and_dropped(monkeypatch) -> None:
+    # The `dropped = 0` of the three campaigns rests on this read: it must hit
+    # `GET /v1/debug/queries` with the admin key and keep the two members.
+    seen: dict[str, object] = {}
+
+    class Answer:
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self) -> Answer:
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            return None
+
+    def fake_urlopen(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["authorization"] = request.get_header("Authorization")
+        seen["timeout"] = timeout
+        return Answer(b'{"enabled": true, "dropped": 7, "queries": []}')
+
+    monkeypatch.setattr(harness.urllib.request, "urlopen", fake_urlopen)
+    state = harness.journal_state("http://127.0.0.1:9", "secret")
+    assert state == {"enabled": True, "dropped": 7}
+    assert seen["url"] == "http://127.0.0.1:9/v1/debug/queries?limit=1"
+    assert seen["authorization"] == "Bearer secret"
+
+
+def test_log_warnings_counts_the_two_drop_lines(tmp_path) -> None:
+    # Only the count is kept: the lines carry numbers and never a query
+    # (ADR-0122, decision 10).
+    path = tmp_path / "server.log"
+    path.write_text(
+        "WARN debug_journal_dropped grew: lost=2 total=2\n"
+        "WARN analytics_dropped grew: lost=1 total=1\n"
+        "INFO ready\n",
+        encoding="utf-8",
+    )
+    assert harness.log_warnings(path) == {
+        "analytics_dropped": 1,
+        "debug_journal_dropped": 1,
+    }
+    assert harness.log_warnings(tmp_path / "absent.log") is None
 

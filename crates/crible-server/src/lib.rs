@@ -29,6 +29,9 @@ mod attach_job;
 mod batches;
 pub mod config;
 mod debug;
+// The debug journal: the bounded queue of its writer and the payload of a
+// recorded request (ADR-0121, ADR-0122).
+pub mod debug_journal;
 mod documents;
 mod error;
 pub mod http;

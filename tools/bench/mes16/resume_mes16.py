@@ -153,6 +153,11 @@ def reduce_campaign(document: Mapping[str, Any]) -> dict[str, Any]:
         "base": document["base"],
         "phases": phases,
         "writes": document["writes"],
+        # The observability of the campaign: the journal counters and the file
+        # after the shutdown flush, and the analytics of ADR-0118, decision 8.
+        # A raw document of P6 has neither, and the summary says so by `None`.
+        "journal": document.get("journal"),
+        "analytics": document.get("analytics"),
         "criterion": {
             "factor": criterion["reference"]["limit_ms"] / criterion["reference"]["p99_ms"],
             "reference_p99_ms": round(criterion["reference"]["p99_ms"], 3),

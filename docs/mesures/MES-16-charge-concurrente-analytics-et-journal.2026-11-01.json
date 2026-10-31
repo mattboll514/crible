@@ -1,0 +1,1372 @@
+{
+  "campaigns": [
+    {
+      "analytics": {
+        "dropped": null,
+        "dropped_source": "no HTTP read for the counter: ROUTE-STATS is not done, so `analytics_dropped` is not exposed by the API (docs/06)",
+        "retention_days": 90
+      },
+      "base": {
+        "batch_id": "mes16-base",
+        "duration_ms": 1625.476,
+        "generation": 1
+      },
+      "campaign": 1,
+      "criterion": {
+        "factor": 3.0,
+        "limit_ms": 465.338,
+        "over_limit_samples": [],
+        "passed": true,
+        "per_request": {
+          "attach": {
+            "limit_ms": 465.33812396228313,
+            "n": 42,
+            "over": 0,
+            "p99_ms": 163.75241708010435,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 163.75241708010435
+          },
+          "compaction": {
+            "limit_ms": 465.33812396228313,
+            "n": 88,
+            "over": 0,
+            "p99_ms": 344.0017079701647,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 344.0017079701647
+          }
+        },
+        "reference_p99_ms": 155.113,
+        "searches": {
+          "by_phase": {
+            "attach": {
+              "200": 42
+            },
+            "compaction": {
+              "200": 88
+            },
+            "rest": {
+              "200": 2984
+            }
+          },
+          "failures": 0,
+          "n": 3114,
+          "statuses": {
+            "200": 3114
+          },
+          "worst_ms": null
+        },
+        "writes": {
+          "explained_503": [],
+          "failures": [],
+          "n": 6,
+          "statuses": {
+            "202": 6
+          }
+        }
+      },
+      "date": "2026-10-31T23:20:35Z",
+      "duration_s": 97.214,
+      "journal": {
+        "file": {
+          "bytes": 16232448,
+          "exists": true,
+          "file": "debug.sqlite",
+          "rows": 4591,
+          "wal_bytes": 0
+        },
+        "log_warnings": {
+          "analytics_dropped": 0,
+          "debug_journal_dropped": 0
+        },
+        "route": {
+          "dropped": 0,
+          "enabled": true
+        }
+      },
+      "machine": {
+        "cores": 8,
+        "platform": "macOS-15.7.7-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "python": "3.13.14"
+      },
+      "phases": {
+        "attach": {
+          "from_s": 90.105,
+          "modes": {
+            "dense": 22,
+            "hybrid": 20
+          },
+          "n": 42,
+          "pool_size": {
+            "max": 54000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 163.752,
+              "n": 42,
+              "p50_ms": 87.693,
+              "p95_ms": 96.844,
+              "p99_ms": 163.752,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 42
+          },
+          "to_s": 90.972,
+          "took_ms": {
+            "max": 162.216,
+            "mean": 86.934,
+            "min": 69.803,
+            "n": 42,
+            "p50": 85.603,
+            "p95": 92.983,
+            "p99": 162.216
+          },
+          "wall_minus_took_ms": {
+            "max": 6.212,
+            "mean": 2.177,
+            "min": 1.003,
+            "n": 42,
+            "p50": 1.707,
+            "p95": 5.073,
+            "p99": 6.212
+          },
+          "wall_ms": {
+            "max": 163.752,
+            "mean": 89.111,
+            "min": 71.025,
+            "n": 42,
+            "p50": 87.693,
+            "p95": 96.844,
+            "p99": 163.752
+          }
+        },
+        "compaction": {
+          "from_s": 91.061,
+          "modes": {
+            "dense": 43,
+            "hybrid": 45
+          },
+          "n": 88,
+          "pool_size": {
+            "max": 55000,
+            "min": 55000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 344.002,
+              "n": 88,
+              "p50_ms": 98.334,
+              "p95_ms": 114.663,
+              "p99_ms": 344.002,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 88
+          },
+          "to_s": 93.279,
+          "took_ms": {
+            "max": 341.783,
+            "mean": 102.173,
+            "min": 77.744,
+            "n": 88,
+            "p50": 95.303,
+            "p95": 112.932,
+            "p99": 341.783
+          },
+          "wall_minus_took_ms": {
+            "max": 4.262,
+            "mean": 1.816,
+            "min": 0.83,
+            "n": 88,
+            "p50": 1.758,
+            "p95": 3.041,
+            "p99": 4.262
+          },
+          "wall_ms": {
+            "max": 344.002,
+            "mean": 103.988,
+            "min": 78.941,
+            "n": 88,
+            "p50": 98.334,
+            "p95": 114.663,
+            "p99": 344.002
+          }
+        },
+        "rest": {
+          "from_s": 30.061,
+          "modes": {
+            "dense": 1491,
+            "hybrid": 1493
+          },
+          "n": 2984,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 30.0,
+              "max_ms": 213.534,
+              "n": 479,
+              "p50_ms": 77.823,
+              "p95_ms": 149.826,
+              "p99_ms": 156.046,
+              "to_s": 40.0
+            },
+            {
+              "from_s": 40.0,
+              "max_ms": 156.786,
+              "n": 501,
+              "p50_ms": 78.135,
+              "p95_ms": 84.49,
+              "p99_ms": 153.187,
+              "to_s": 50.0
+            },
+            {
+              "from_s": 50.0,
+              "max_ms": 286.359,
+              "n": 498,
+              "p50_ms": 77.573,
+              "p95_ms": 83.342,
+              "p99_ms": 155.815,
+              "to_s": 60.0
+            },
+            {
+              "from_s": 60.0,
+              "max_ms": 214.246,
+              "n": 502,
+              "p50_ms": 77.577,
+              "p95_ms": 82.452,
+              "p99_ms": 152.024,
+              "to_s": 70.0
+            },
+            {
+              "from_s": 70.0,
+              "max_ms": 216.926,
+              "n": 494,
+              "p50_ms": 78.021,
+              "p95_ms": 83.823,
+              "p99_ms": 156.701,
+              "to_s": 80.0
+            },
+            {
+              "from_s": 80.0,
+              "max_ms": 157.339,
+              "n": 506,
+              "p50_ms": 78.037,
+              "p95_ms": 82.378,
+              "p99_ms": 153.655,
+              "to_s": 90.0
+            },
+            {
+              "from_s": 90.0,
+              "max_ms": 159.554,
+              "n": 4,
+              "p50_ms": 85.559,
+              "p95_ms": 159.554,
+              "p99_ms": 159.554,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 2984
+          },
+          "to_s": 90.022,
+          "took_ms": {
+            "max": 285.022,
+            "mean": 78.72,
+            "min": 64.428,
+            "n": 2984,
+            "p50": 76.077,
+            "p95": 82.422,
+            "p99": 153.365
+          },
+          "wall_minus_took_ms": {
+            "max": 5.056,
+            "mean": 1.792,
+            "min": 0.748,
+            "n": 2984,
+            "p50": 1.713,
+            "p95": 2.866,
+            "p99": 3.726
+          },
+          "wall_ms": {
+            "max": 286.359,
+            "mean": 80.512,
+            "min": 66.149,
+            "n": 2984,
+            "p50": 77.854,
+            "p95": 84.061,
+            "p99": 155.113
+          }
+        },
+        "warmup": {
+          "from_s": 0.02,
+          "modes": {
+            "dense": 739,
+            "hybrid": 738
+          },
+          "n": 1477,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 0.0,
+              "max_ms": 280.465,
+              "n": 487,
+              "p50_ms": 78.099,
+              "p95_ms": 138.994,
+              "p99_ms": 154.441,
+              "to_s": 10.0
+            },
+            {
+              "from_s": 10.0,
+              "max_ms": 159.59,
+              "n": 489,
+              "p50_ms": 77.916,
+              "p95_ms": 138.511,
+              "p99_ms": 154.616,
+              "to_s": 20.0
+            },
+            {
+              "from_s": 20.0,
+              "max_ms": 164.003,
+              "n": 501,
+              "p50_ms": 77.727,
+              "p95_ms": 83.137,
+              "p99_ms": 155.053,
+              "to_s": 30.0
+            }
+          ],
+          "statuses": {
+            "200": 1477
+          },
+          "to_s": 29.985,
+          "took_ms": {
+            "max": 276.618,
+            "mean": 79.439,
+            "min": 64.073,
+            "n": 1477,
+            "p50": 75.97,
+            "p95": 134.008,
+            "p99": 152.909
+          },
+          "wall_minus_took_ms": {
+            "max": 5.377,
+            "mean": 1.914,
+            "min": 0.735,
+            "n": 1477,
+            "p50": 1.83,
+            "p95": 3.0,
+            "p99": 3.733
+          },
+          "wall_ms": {
+            "max": 280.465,
+            "mean": 81.353,
+            "min": 65.607,
+            "n": 1477,
+            "p50": 77.915,
+            "p95": 135.104,
+            "p99": 154.616
+          }
+        }
+      },
+      "protocol": {
+        "base_passages": 50000,
+        "batch_passages": 2000,
+        "batches": 5,
+        "clients": 4,
+        "dims": 1024,
+        "factor": 3.0,
+        "k": 10,
+        "passages_per_document": 2,
+        "queries": 200,
+        "rest_s": 60.0,
+        "seed": 20261030,
+        "warmup_s": 30.0
+      },
+      "raw_file": "data/mes16-journal/campaign-1/campaign-1.json",
+      "writes": [
+        {
+          "batch_id": "mes16-update-1",
+          "duration_ms": 207.197,
+          "generation": 2,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-2",
+          "duration_ms": 204.298,
+          "generation": 3,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-3",
+          "duration_ms": 205.779,
+          "generation": 4,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-4",
+          "duration_ms": 206.527,
+          "generation": 5,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-5",
+          "duration_ms": 207.686,
+          "generation": 6,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": null,
+          "duration_ms": 2247.871,
+          "generation": 7,
+          "kind": "compaction",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        }
+      ]
+    },
+    {
+      "analytics": {
+        "dropped": null,
+        "dropped_source": "no HTTP read for the counter: ROUTE-STATS is not done, so `analytics_dropped` is not exposed by the API (docs/06)",
+        "retention_days": 90
+      },
+      "base": {
+        "batch_id": "mes16-base",
+        "duration_ms": 1835.642,
+        "generation": 1
+      },
+      "campaign": 2,
+      "criterion": {
+        "factor": 3.0,
+        "limit_ms": 465.242,
+        "over_limit_samples": [],
+        "passed": true,
+        "per_request": {
+          "attach": {
+            "limit_ms": 465.2423760853708,
+            "n": 43,
+            "over": 0,
+            "p99_ms": 294.3160419818014,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 294.3160419818014
+          },
+          "compaction": {
+            "limit_ms": 465.2423760853708,
+            "n": 84,
+            "over": 0,
+            "p99_ms": 251.59054202958941,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 251.59054202958941
+          }
+        },
+        "reference_p99_ms": 155.081,
+        "searches": {
+          "by_phase": {
+            "attach": {
+              "200": 43
+            },
+            "compaction": {
+              "200": 84
+            },
+            "rest": {
+              "200": 2945
+            }
+          },
+          "failures": 0,
+          "n": 3072,
+          "statuses": {
+            "200": 3072
+          },
+          "worst_ms": null
+        },
+        "writes": {
+          "explained_503": [],
+          "failures": [],
+          "n": 6,
+          "statuses": {
+            "202": 6
+          }
+        }
+      },
+      "date": "2026-10-31T23:22:17Z",
+      "duration_s": 97.577,
+      "journal": {
+        "file": {
+          "bytes": 16031744,
+          "exists": true,
+          "file": "debug.sqlite",
+          "rows": 4561,
+          "wal_bytes": 0
+        },
+        "log_warnings": {
+          "analytics_dropped": 0,
+          "debug_journal_dropped": 0
+        },
+        "route": {
+          "dropped": 0,
+          "enabled": true
+        }
+      },
+      "machine": {
+        "cores": 8,
+        "platform": "macOS-15.7.7-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "python": "3.13.14"
+      },
+      "phases": {
+        "attach": {
+          "from_s": 90.082,
+          "modes": {
+            "dense": 23,
+            "hybrid": 20
+          },
+          "n": 43,
+          "pool_size": {
+            "max": 55000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 294.316,
+              "n": 43,
+              "p50_ms": 93.875,
+              "p95_ms": 178.827,
+              "p99_ms": 294.316,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 43
+          },
+          "to_s": 91.072,
+          "took_ms": {
+            "max": 290.013,
+            "mean": 103.453,
+            "min": 73.858,
+            "n": 43,
+            "p50": 91.556,
+            "p95": 177.462,
+            "p99": 290.013
+          },
+          "wall_minus_took_ms": {
+            "max": 4.713,
+            "mean": 2.351,
+            "min": 0.878,
+            "n": 43,
+            "p50": 2.31,
+            "p95": 4.068,
+            "p99": 4.713
+          },
+          "wall_ms": {
+            "max": 294.316,
+            "mean": 105.804,
+            "min": 74.892,
+            "n": 43,
+            "p50": 93.875,
+            "p95": 178.827,
+            "p99": 294.316
+          }
+        },
+        "compaction": {
+          "from_s": 91.171,
+          "modes": {
+            "dense": 41,
+            "hybrid": 43
+          },
+          "n": 84,
+          "pool_size": {
+            "max": 55000,
+            "min": 55000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 251.591,
+              "n": 84,
+              "p50_ms": 106.387,
+              "p95_ms": 191.787,
+              "p99_ms": 251.591,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 84
+          },
+          "to_s": 93.47,
+          "took_ms": {
+            "max": 249.309,
+            "mean": 108.282,
+            "min": 81.656,
+            "n": 84,
+            "p50": 104.655,
+            "p95": 188.616,
+            "p99": 249.309
+          },
+          "wall_minus_took_ms": {
+            "max": 4.238,
+            "mean": 1.82,
+            "min": 0.949,
+            "n": 84,
+            "p50": 1.676,
+            "p95": 3.495,
+            "p99": 4.238
+          },
+          "wall_ms": {
+            "max": 251.591,
+            "mean": 110.102,
+            "min": 82.683,
+            "n": 84,
+            "p50": 106.387,
+            "p95": 191.787,
+            "p99": 251.591
+          }
+        },
+        "rest": {
+          "from_s": 30.049,
+          "modes": {
+            "dense": 1472,
+            "hybrid": 1473
+          },
+          "n": 2945,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 30.0,
+              "max_ms": 273.059,
+              "n": 481,
+              "p50_ms": 77.769,
+              "p95_ms": 143.405,
+              "p99_ms": 207.289,
+              "to_s": 40.0
+            },
+            {
+              "from_s": 40.0,
+              "max_ms": 157.052,
+              "n": 492,
+              "p50_ms": 77.967,
+              "p95_ms": 86.492,
+              "p99_ms": 153.58,
+              "to_s": 50.0
+            },
+            {
+              "from_s": 50.0,
+              "max_ms": 164.887,
+              "n": 491,
+              "p50_ms": 78.179,
+              "p95_ms": 144.429,
+              "p99_ms": 155.229,
+              "to_s": 60.0
+            },
+            {
+              "from_s": 60.0,
+              "max_ms": 214.136,
+              "n": 499,
+              "p50_ms": 78.305,
+              "p95_ms": 83.68,
+              "p99_ms": 155.295,
+              "to_s": 70.0
+            },
+            {
+              "from_s": 70.0,
+              "max_ms": 160.12,
+              "n": 495,
+              "p50_ms": 78.212,
+              "p95_ms": 85.224,
+              "p99_ms": 154.827,
+              "to_s": 80.0
+            },
+            {
+              "from_s": 80.0,
+              "max_ms": 162.602,
+              "n": 487,
+              "p50_ms": 79.233,
+              "p95_ms": 91.127,
+              "p99_ms": 155.216,
+              "to_s": 90.0
+            }
+          ],
+          "statuses": {
+            "200": 2945
+          },
+          "to_s": 89.999,
+          "took_ms": {
+            "max": 271.661,
+            "mean": 79.612,
+            "min": 64.449,
+            "n": 2945,
+            "p50": 76.27,
+            "p95": 85.347,
+            "p99": 153.474
+          },
+          "wall_minus_took_ms": {
+            "max": 6.005,
+            "mean": 1.865,
+            "min": 0.674,
+            "n": 2945,
+            "p50": 1.796,
+            "p95": 2.926,
+            "p99": 3.812
+          },
+          "wall_ms": {
+            "max": 273.059,
+            "mean": 81.477,
+            "min": 66.076,
+            "n": 2945,
+            "p50": 78.232,
+            "p95": 86.871,
+            "p99": 155.081
+          }
+        },
+        "warmup": {
+          "from_s": 0.037,
+          "modes": {
+            "dense": 744,
+            "hybrid": 745
+          },
+          "n": 1489,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 0.0,
+              "max_ms": 155.575,
+              "n": 496,
+              "p50_ms": 78.022,
+              "p95_ms": 87.548,
+              "p99_ms": 151.921,
+              "to_s": 10.0
+            },
+            {
+              "from_s": 10.0,
+              "max_ms": 157.278,
+              "n": 493,
+              "p50_ms": 78.176,
+              "p95_ms": 85.633,
+              "p99_ms": 154.189,
+              "to_s": 20.0
+            },
+            {
+              "from_s": 20.0,
+              "max_ms": 221.783,
+              "n": 497,
+              "p50_ms": 78.244,
+              "p95_ms": 86.932,
+              "p99_ms": 157.056,
+              "to_s": 30.0
+            },
+            {
+              "from_s": 30.0,
+              "max_ms": 80.094,
+              "n": 3,
+              "p50_ms": 78.714,
+              "p95_ms": 80.094,
+              "p99_ms": 80.094,
+              "to_s": 40.0
+            }
+          ],
+          "statuses": {
+            "200": 1489
+          },
+          "to_s": 30.032,
+          "took_ms": {
+            "max": 219.014,
+            "mean": 78.824,
+            "min": 64.932,
+            "n": 1489,
+            "p50": 76.152,
+            "p95": 84.068,
+            "p99": 152.447
+          },
+          "wall_minus_took_ms": {
+            "max": 6.71,
+            "mean": 1.917,
+            "min": 0.752,
+            "n": 1489,
+            "p50": 1.857,
+            "p95": 3.04,
+            "p99": 3.888
+          },
+          "wall_ms": {
+            "max": 221.783,
+            "mean": 80.742,
+            "min": 66.714,
+            "n": 1489,
+            "p50": 78.183,
+            "p95": 86.061,
+            "p99": 154.189
+          }
+        }
+      },
+      "protocol": {
+        "base_passages": 50000,
+        "batch_passages": 2000,
+        "batches": 5,
+        "clients": 4,
+        "dims": 1024,
+        "factor": 3.0,
+        "k": 10,
+        "passages_per_document": 2,
+        "queries": 200,
+        "rest_s": 60.0,
+        "seed": 20261030,
+        "warmup_s": 30.0
+      },
+      "raw_file": "data/mes16-journal/campaign-2/campaign-1.json",
+      "writes": [
+        {
+          "batch_id": "mes16-update-1",
+          "duration_ms": 206.102,
+          "generation": 2,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-2",
+          "duration_ms": 205.669,
+          "generation": 3,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-3",
+          "duration_ms": 206.974,
+          "generation": 4,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-4",
+          "duration_ms": 206.101,
+          "generation": 5,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-5",
+          "duration_ms": 207.682,
+          "generation": 6,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": null,
+          "duration_ms": 2439.023,
+          "generation": 7,
+          "kind": "compaction",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        }
+      ]
+    },
+    {
+      "analytics": {
+        "dropped": null,
+        "dropped_source": "no HTTP read for the counter: ROUTE-STATS is not done, so `analytics_dropped` is not exposed by the API (docs/06)",
+        "retention_days": 90
+      },
+      "base": {
+        "batch_id": "mes16-base",
+        "duration_ms": 1831.408,
+        "generation": 1
+      },
+      "campaign": 3,
+      "criterion": {
+        "factor": 3.0,
+        "limit_ms": 463.714,
+        "over_limit_samples": [],
+        "passed": true,
+        "per_request": {
+          "attach": {
+            "limit_ms": 463.71375024318695,
+            "n": 43,
+            "over": 0,
+            "p99_ms": 229.7387500293553,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 229.7387500293553
+          },
+          "compaction": {
+            "limit_ms": 463.71375024318695,
+            "n": 90,
+            "over": 0,
+            "p99_ms": 198.8990829559043,
+            "p99_passed": true,
+            "passed": true,
+            "worst_ms": 198.8990829559043
+          }
+        },
+        "reference_p99_ms": 154.571,
+        "searches": {
+          "by_phase": {
+            "attach": {
+              "200": 43
+            },
+            "compaction": {
+              "200": 90
+            },
+            "rest": {
+              "200": 2959
+            }
+          },
+          "failures": 0,
+          "n": 3092,
+          "statuses": {
+            "200": 3092
+          },
+          "worst_ms": null
+        },
+        "writes": {
+          "explained_503": [],
+          "failures": [],
+          "n": 6,
+          "statuses": {
+            "202": 6
+          }
+        }
+      },
+      "date": "2026-10-31T23:23:58Z",
+      "duration_s": 97.578,
+      "journal": {
+        "file": {
+          "bytes": 15994880,
+          "exists": true,
+          "file": "debug.sqlite",
+          "rows": 4594,
+          "wal_bytes": 0
+        },
+        "log_warnings": {
+          "analytics_dropped": 0,
+          "debug_journal_dropped": 0
+        },
+        "route": {
+          "dropped": 0,
+          "enabled": true
+        }
+      },
+      "machine": {
+        "cores": 8,
+        "platform": "macOS-15.7.7-arm64-arm-64bit-Mach-O",
+        "processor": "arm",
+        "python": "3.13.14"
+      },
+      "phases": {
+        "attach": {
+          "from_s": 90.1,
+          "modes": {
+            "dense": 21,
+            "hybrid": 22
+          },
+          "n": 43,
+          "pool_size": {
+            "max": 55000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 229.739,
+              "n": 43,
+              "p50_ms": 89.768,
+              "p95_ms": 154.828,
+              "p99_ms": 229.739,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 43
+          },
+          "to_s": 91.059,
+          "took_ms": {
+            "max": 228.483,
+            "mean": 94.444,
+            "min": 73.021,
+            "n": 43,
+            "p50": 88.139,
+            "p95": 150.855,
+            "p99": 228.483
+          },
+          "wall_minus_took_ms": {
+            "max": 4.693,
+            "mean": 1.966,
+            "min": 1.001,
+            "n": 43,
+            "p50": 1.769,
+            "p95": 3.517,
+            "p99": 4.693
+          },
+          "wall_ms": {
+            "max": 229.739,
+            "mean": 96.409,
+            "min": 74.438,
+            "n": 43,
+            "p50": 89.768,
+            "p95": 154.828,
+            "p99": 229.739
+          }
+        },
+        "compaction": {
+          "from_s": 91.071,
+          "modes": {
+            "dense": 45,
+            "hybrid": 45
+          },
+          "n": 90,
+          "pool_size": {
+            "max": 55000,
+            "min": 55000
+          },
+          "slices": [
+            {
+              "from_s": 90.0,
+              "max_ms": 198.899,
+              "n": 90,
+              "p50_ms": 107.068,
+              "p95_ms": 118.789,
+              "p99_ms": 198.899,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 90
+          },
+          "to_s": 93.491,
+          "took_ms": {
+            "max": 196.814,
+            "mean": 105.059,
+            "min": 79.29,
+            "n": 90,
+            "p50": 104.914,
+            "p95": 116.713,
+            "p99": 196.814
+          },
+          "wall_minus_took_ms": {
+            "max": 4.951,
+            "mean": 2.054,
+            "min": 0.914,
+            "n": 90,
+            "p50": 1.929,
+            "p95": 3.735,
+            "p99": 4.951
+          },
+          "wall_ms": {
+            "max": 198.899,
+            "mean": 107.113,
+            "min": 80.389,
+            "n": 90,
+            "p50": 107.068,
+            "p95": 118.789,
+            "p99": 198.899
+          }
+        },
+        "rest": {
+          "from_s": 30.036,
+          "modes": {
+            "dense": 1479,
+            "hybrid": 1480
+          },
+          "n": 2959,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 30.0,
+              "max_ms": 165.512,
+              "n": 505,
+              "p50_ms": 77.889,
+              "p95_ms": 80.814,
+              "p99_ms": 87.211,
+              "to_s": 40.0
+            },
+            {
+              "from_s": 40.0,
+              "max_ms": 223.85,
+              "n": 495,
+              "p50_ms": 78.605,
+              "p95_ms": 84.392,
+              "p99_ms": 154.684,
+              "to_s": 50.0
+            },
+            {
+              "from_s": 50.0,
+              "max_ms": 157.793,
+              "n": 493,
+              "p50_ms": 78.706,
+              "p95_ms": 84.826,
+              "p99_ms": 154.571,
+              "to_s": 60.0
+            },
+            {
+              "from_s": 60.0,
+              "max_ms": 158.041,
+              "n": 492,
+              "p50_ms": 79.077,
+              "p95_ms": 87.251,
+              "p99_ms": 155.138,
+              "to_s": 70.0
+            },
+            {
+              "from_s": 70.0,
+              "max_ms": 294.217,
+              "n": 485,
+              "p50_ms": 78.871,
+              "p95_ms": 91.845,
+              "p99_ms": 152.668,
+              "to_s": 80.0
+            },
+            {
+              "from_s": 80.0,
+              "max_ms": 163.84,
+              "n": 485,
+              "p50_ms": 79.331,
+              "p95_ms": 96.381,
+              "p99_ms": 157.396,
+              "to_s": 90.0
+            },
+            {
+              "from_s": 90.0,
+              "max_ms": 88.019,
+              "n": 4,
+              "p50_ms": 86.334,
+              "p95_ms": 88.019,
+              "p99_ms": 88.019,
+              "to_s": 100.0
+            }
+          ],
+          "statuses": {
+            "200": 2959
+          },
+          "to_s": 90.015,
+          "took_ms": {
+            "max": 291.611,
+            "mean": 79.388,
+            "min": 65.036,
+            "n": 2959,
+            "p50": 76.934,
+            "p95": 83.515,
+            "p99": 152.828
+          },
+          "wall_minus_took_ms": {
+            "max": 7.127,
+            "mean": 1.768,
+            "min": 0.689,
+            "n": 2959,
+            "p50": 1.661,
+            "p95": 2.889,
+            "p99": 3.72
+          },
+          "wall_ms": {
+            "max": 294.217,
+            "mean": 81.156,
+            "min": 66.786,
+            "n": 2959,
+            "p50": 78.71,
+            "p95": 84.916,
+            "p99": 154.571
+          }
+        },
+        "warmup": {
+          "from_s": 0.034,
+          "modes": {
+            "dense": 752,
+            "hybrid": 750
+          },
+          "n": 1502,
+          "pool_size": {
+            "max": 50000,
+            "min": 50000
+          },
+          "slices": [
+            {
+              "from_s": 0.0,
+              "max_ms": 164.819,
+              "n": 502,
+              "p50_ms": 77.899,
+              "p95_ms": 88.978,
+              "p99_ms": 152.289,
+              "to_s": 10.0
+            },
+            {
+              "from_s": 10.0,
+              "max_ms": 213.366,
+              "n": 494,
+              "p50_ms": 77.765,
+              "p95_ms": 84.405,
+              "p99_ms": 153.34,
+              "to_s": 20.0
+            },
+            {
+              "from_s": 20.0,
+              "max_ms": 345.873,
+              "n": 504,
+              "p50_ms": 77.701,
+              "p95_ms": 82.326,
+              "p99_ms": 149.463,
+              "to_s": 30.0
+            },
+            {
+              "from_s": 30.0,
+              "max_ms": 77.321,
+              "n": 2,
+              "p50_ms": 77.279,
+              "p95_ms": 77.321,
+              "p99_ms": 77.321,
+              "to_s": 40.0
+            }
+          ],
+          "statuses": {
+            "200": 1502
+          },
+          "to_s": 30.014,
+          "took_ms": {
+            "max": 343.844,
+            "mean": 78.112,
+            "min": 64.371,
+            "n": 1502,
+            "p50": 75.88,
+            "p95": 81.575,
+            "p99": 150.872
+          },
+          "wall_minus_took_ms": {
+            "max": 5.394,
+            "mean": 1.855,
+            "min": 0.799,
+            "n": 1502,
+            "p50": 1.785,
+            "p95": 2.959,
+            "p99": 3.794
+          },
+          "wall_ms": {
+            "max": 345.873,
+            "mean": 79.968,
+            "min": 66.165,
+            "n": 1502,
+            "p50": 77.785,
+            "p95": 83.542,
+            "p99": 152.289
+          }
+        }
+      },
+      "protocol": {
+        "base_passages": 50000,
+        "batch_passages": 2000,
+        "batches": 5,
+        "clients": 4,
+        "dims": 1024,
+        "factor": 3.0,
+        "k": 10,
+        "passages_per_document": 2,
+        "queries": 200,
+        "rest_s": 60.0,
+        "seed": 20261030,
+        "warmup_s": 30.0
+      },
+      "raw_file": "data/mes16-journal/campaign-3/campaign-1.json",
+      "writes": [
+        {
+          "batch_id": "mes16-update-1",
+          "duration_ms": 207.482,
+          "generation": 2,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-2",
+          "duration_ms": 205.503,
+          "generation": 3,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-3",
+          "duration_ms": 206.055,
+          "generation": 4,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-4",
+          "duration_ms": 206.264,
+          "generation": 5,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": "mes16-update-5",
+          "duration_ms": 204.635,
+          "generation": 6,
+          "kind": "attach",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        },
+        {
+          "batch_id": null,
+          "duration_ms": 2441.584,
+          "generation": 7,
+          "kind": "compaction",
+          "retry_after": null,
+          "state": "succeeded",
+          "status": 202
+        }
+      ]
+    }
+  ]
+}

@@ -267,6 +267,15 @@ pub async fn run_server(
             "the analytics of the shutdown could not be flushed"
         );
     }
+    // ADR-0122, decision 7: the journal comes **after** the analytics, because
+    // the journal is the diagnostic and must be the writer that gives way when
+    // the shutdown budget runs short. Its flush is bounded by `STOP_BOUND`.
+    if let Err(failure) = state.stop_debug_journal().await {
+        warn!(
+            code = failure.code().as_str(),
+            "the debug journal of the shutdown could not be flushed"
+        );
+    }
     outcome
 }
 

@@ -51,6 +51,24 @@ Usage, from the repository root::
     cd tools
     uv run --no-sync python bench/mes16/mes16_charge.py --bin ../target/release/crible
 
+The replay of ADR-0122, decision 12 keeps the same protocol and turns the
+observability on: `[analytics]` stays at its default (`retention_days = 90`) and
+`[debug_journal]` is enabled at `sample_rate = 1.0`, the worst case, so every
+search writes a line::
+
+    uv run --no-sync python bench/mes16/mes16_charge.py --bin ../target/release/crible \
+        --debug-journal --debug-journal-sample-rate 1.0 \
+        --out ../data/mes16-journal/campaign-1 --campaigns 1
+
+Without an option the journal stays off, so the campaign of ADR-0113 replays
+identically. The raw JSON carries two extra blocks: `journal` (`dropped` read
+from `GET /v1/debug/queries` before the server stops, then the size and the row
+count of `debug.sqlite` after the shutdown flush) and `analytics` (the retention
+and the fact that the counter has no HTTP read before ROUTE-STATS). Its
+`machine` block records `hw.model` and `machdep.cpu.brand_string` (`None` where
+the platform does not expose them), so the identification a report cites can be
+checked from the versioned data.
+
 A short trial (not a campaign) keeps every parameter at hand; its base stays
 above `exact_threshold` (5 000), so every phase takes the same scan path as the
 campaign and a trial never judges another protocol::
@@ -73,6 +91,7 @@ import secrets
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -142,6 +161,10 @@ FACTOR = 3.0
 #: Number of clients of the closed loop, kept under the number of cores.
 CLIENTS = 4
 
+#: Retention of `[analytics]`, at the default of `docs/07`: the campaign measures
+#: the analytics at their configured value (ADR-0118, decision 8).
+ANALYTICS_RETENTION_DAYS = 90
+
 #: Words of the generated texts, so a hybrid query matches the lexical branch.
 WORDS = (
     "alpha",
@@ -195,6 +218,14 @@ class Options:
     job_timeout: float = 600.0
     #: Keep the temporary directory of a campaign, for a diagnosis.
     keep: bool = False
+    #: Whether `[debug_journal].enabled` is true. The default is the one of
+    #: ADR-0113 and `docs/07`: the journal is off, and a campaign started
+    #: without an option replays the original one identically (ADR-0122,
+    #: decision 12).
+    debug_journal: bool = False
+    #: `[debug_journal].sample_rate`. `1.0` is the worst case of ADR-0122,
+    #: decision 12: every search that does not ask `debug` is recorded too.
+    debug_journal_sample_rate: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -695,12 +726,17 @@ def generate(inbox: Path, options: Options) -> Batches:
     return Batches(base=base_id, updates=tuple(updates))
 
 
-def configuration(root: Path, keys: Mapping[str, str]) -> str:
+def configuration(root: Path, keys: Mapping[str, str], options: Options) -> str:
     """Writes the temporary `crible.toml` of the campaign and returns its path.
 
     Every path is under `root`; the port is chosen free just before the write.
-    The keys are the three of ADR-0095, one per role.
+    The keys are the three of ADR-0095, one per role. `[analytics]` keeps the
+    default of `docs/07` (`retention_days = 90`), so the analytics are measured
+    at their configured value in every campaign; `[debug_journal]` follows
+    `options`, off by default (ADR-0122, decision 12).
     """
+    journal_enabled = "true" if options.debug_journal else "false"
+    journal_rate = repr(float(options.debug_journal_sample_rate))
     port = _free_port()
     text = f"""[server]
 bind = "127.0.0.1:{port}"
@@ -728,11 +764,11 @@ role = "write"
 sha256 = "{_sha256(keys["write"])}"
 
 [analytics]
-retention_days = 90
+retention_days = {ANALYTICS_RETENTION_DAYS}
 
 [debug_journal]
-enabled = false
-sample_rate = 0.0
+enabled = {journal_enabled}
+sample_rate = {journal_rate}
 ttl_days = 7
 
 [encoder]
@@ -754,6 +790,30 @@ def _sha256(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _sysctl(name: str) -> str | None:
+    """Value of `sysctl -n`, or ``None`` where the key is unavailable.
+
+    `hw.model` and `machdep.cpu.brand_string` are what identify the machine of a
+    campaign: MES-16 ran on a MacBook Air M3, `Mac15,12`. They are recorded in
+    the raw JSON so the identification a report cites can be checked from the
+    versioned data. A platform without the key, or without `sysctl`, renders
+    ``None``: the campaign is never failed for an identification it could not
+    read.
+    """
+    try:
+        answer = subprocess.run(
+            ["sysctl", "-n", name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = answer.stdout.strip()
+    return value or None
+
+
 def _free_port() -> int:
     """A free TCP port of the loopback interface."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -769,6 +829,77 @@ def _base_url(config_path: Path) -> str:
             address = stripped.split("=", 1)[1].strip().strip('"')
             return f"http://{address}"
     raise ValueError(f"no bind in {config_path}")
+
+
+def journal_state(url: str, key: str, timeout: float = 10.0) -> dict[str, Any]:
+    """Reads `GET /v1/debug/queries?limit=1`: `enabled` and `dropped`.
+
+    `dropped` is the process-wide `debug_journal_dropped` counter of ADR-0122,
+    decision 6, and the route is the only place it is exposed. The page is one
+    row: this call measures the counter, not the payloads.
+    """
+    request = urllib.request.Request(
+        f"{url}/v1/debug/queries?limit=1",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as answer:
+        body = json.loads(answer.read().decode("utf-8"))
+    return {
+        "enabled": bool(body.get("enabled")),
+        "dropped": int(body.get("dropped", 0)),
+    }
+
+
+def journal_file(data_dir: Path) -> dict[str, Any]:
+    """Size of `debug.sqlite` and its write-ahead log, and its row count.
+
+    The file is read after the server stopped, so the shutdown flush is in it
+    (ADR-0122, decision 7). The row count is the number of lines the campaign
+    wrote; it is compared with the number of searches in the report.
+    """
+    path = data_dir / "debug.sqlite"
+    if not path.is_file():
+        return {
+            "file": "debug.sqlite",
+            "exists": False,
+            "bytes": None,
+            "wal_bytes": None,
+            "rows": None,
+        }
+    sizes: dict[str, int] = {"main": path.stat().st_size}
+    wal = data_dir / "debug.sqlite-wal"
+    if wal.is_file():
+        sizes["wal"] = wal.stat().st_size
+    connection = sqlite3.connect(str(path))
+    try:
+        rows = int(connection.execute("SELECT COUNT(*) FROM queries").fetchone()[0])
+    finally:
+        connection.close()
+    return {
+        "file": "debug.sqlite",
+        "exists": True,
+        "bytes": sizes["main"],
+        "wal_bytes": sizes.get("wal", 0),
+        "rows": rows,
+    }
+
+
+def log_warnings(path: Path) -> dict[str, int] | None:
+    """Counts the `warn` lines of the two drop counters in the server log.
+
+    The analytics and the journal log a `warn` at every flush whose counter grew
+    (ADR-0118, decision 3 ; ADR-0122, decision 6). The lines carry numbers only
+    (ADR-0122, decision 10), so counting them adds no content to the report. The
+    log is read before the temporary directory is removed; `None` when the file
+    is absent, which says nothing about the counters.
+    """
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return {
+        "analytics_dropped": text.count("analytics_dropped grew"),
+        "debug_journal_dropped": text.count("debug_journal_dropped grew"),
+    }
 
 
 class Server:
@@ -1090,7 +1221,8 @@ def campaign(options: Options, number: int) -> dict[str, Any]:
         batches = generate(root / "exchange" / "inbox", options)
         progress(f"{1 + len(batches.updates)} batch(es) written")
 
-        config_path = Path(configuration(root, keys))
+        config_path = Path(configuration(root, keys, options))
+        route_state: dict[str, Any] | None = None
         with Server(options.binary, config_path, root / "server.log") as server:
             server.wait_ready()
             progress("server ready")
@@ -1108,6 +1240,20 @@ def campaign(options: Options, number: int) -> dict[str, Any]:
             samples, writes = asyncio.run(
                 _run_load(root, server.url, keys, batches.updates, options, progress)
             )
+            # `dropped` is a process counter: it is read while the instance runs,
+            # once no client sends anything, and the shutdown cannot raise it
+            # (ADR-0122, decision 6).
+            if options.debug_journal:
+                route_state = journal_state(server.url, keys["admin"])
+                progress(
+                    f"debug journal: enabled={route_state['enabled']} "
+                    f"dropped={route_state['dropped']}"
+                )
+        journal = {
+            "route": route_state,
+            "file": journal_file(root / "data"),
+            "log_warnings": log_warnings(root / "server.log"),
+        }
         phases = split_phases(samples)
         warmup = [sample for sample in samples if sample.phase == WARMUP_PHASE]
         rest = [sample.wall_ms for sample in phases[REFERENCE_PHASE]]
@@ -1124,6 +1270,11 @@ def campaign(options: Options, number: int) -> dict[str, Any]:
                 "processor": platform.processor(),
                 "cores": os.cpu_count(),
                 "python": platform.python_version(),
+                # The identification a report cites: `hw.model` names the model
+                # and `machdep.cpu.brand_string` the chip. `None` when the
+                # platform does not expose them (the reducer copies them as-is).
+                "model": _sysctl("hw.model"),
+                "cpu": _sysctl("machdep.cpu.brand_string"),
             },
             "base": {
                 "batch_id": batches.base,
@@ -1143,6 +1294,15 @@ def campaign(options: Options, number: int) -> dict[str, Any]:
                 "warmup_s": options.warmup,
                 "rest_s": options.rest,
                 "factor": FACTOR,
+            },
+            "journal": journal,
+            "analytics": {
+                "retention_days": ANALYTICS_RETENTION_DAYS,
+                "dropped": None,
+                "dropped_source": (
+                    "no HTTP read for the counter: ROUTE-STATS is not done, "
+                    "so `analytics_dropped` is not exposed by the API (docs/06)"
+                ),
             },
             "warmup": warmup_stats,
             "phases": {
@@ -1221,6 +1381,14 @@ def report(document: Mapping[str, Any]) -> str:
         f"failures={criterion['searches']['failures']}"
     )
     lines.append(f"  writes: {criterion['writes']['statuses']}")
+    journal = document.get("journal") or {}
+    route = journal.get("route")
+    if route is not None:
+        file = journal.get("file") or {}
+        lines.append(
+            f"  debug journal: dropped={route['dropped']} rows={file.get('rows')} "
+            f"bytes={file.get('bytes')}"
+        )
     return "\n".join(lines)
 
 
@@ -1251,7 +1419,20 @@ def parse(argv: Sequence[str] | None = None) -> Options:
     parser.add_argument(
         "--keep", action="store_true", help="keep the temporary directory of each campaign"
     )
+    parser.add_argument(
+        "--debug-journal",
+        action="store_true",
+        help="enable [debug_journal] (default: off, as in ADR-0113)",
+    )
+    parser.add_argument(
+        "--debug-journal-sample-rate",
+        type=float,
+        default=Options.debug_journal_sample_rate,
+        help="[debug_journal].sample_rate, in [0, 1]; 1.0 is the worst case of ADR-0122",
+    )
     arguments = parser.parse_args(argv)
+    if not 0.0 <= arguments.debug_journal_sample_rate <= 1.0:
+        parser.error("--debug-journal-sample-rate must be in [0, 1]")
     return Options(
         binary=Path(arguments.bin),
         out=Path(arguments.out),
@@ -1267,6 +1448,8 @@ def parse(argv: Sequence[str] | None = None) -> Options:
         rest=arguments.rest,
         job_timeout=arguments.job_timeout,
         keep=arguments.keep,
+        debug_journal=arguments.debug_journal,
+        debug_journal_sample_rate=arguments.debug_journal_sample_rate,
     )
 
 

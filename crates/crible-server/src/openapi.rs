@@ -617,6 +617,52 @@ pub struct JobList {
     pub jobs: Vec<Job>,
 }
 
+/// One row of the debug journal as `GET /v1/debug/queries` renders it
+/// (ADR-0122, decision 9).
+///
+/// `index` is `null` for a multi-index row, which names its targets in
+/// `payload.targets[]`; `total_ms` is `null` when `fetch` did not finish; the
+/// payload is an **object**, never a string (ADR-0121, decisions 3 and 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugQuery {
+    /// Primary key, the cursor of the keyset pagination.
+    pub id: i64,
+    /// Timestamp of the flush, RFC 3339 UTC.
+    pub created_at: String,
+    /// Request identifier of ADR-0098.
+    pub request_id: String,
+    /// Name of the index, `null` for a multi-index row.
+    pub index: Option<String>,
+    /// Name of the API key that sent the request.
+    pub client: String,
+    /// `dense`, `lexical` or `hybrid`.
+    pub mode: String,
+    /// `ok` or an error code of `docs/05-api.md`.
+    pub status: String,
+    /// Duration of the request, `null` when it did not finish.
+    pub total_ms: Option<f64>,
+    /// The payload of ADR-0121, decision 4, rendered as an object.
+    #[schema(value_type = Object)]
+    pub payload: FreeObject,
+}
+
+/// Body of `GET /v1/debug/queries` (ADR-0122, decision 9).
+///
+/// `enabled` is `false` and `queries` empty when the journal is disabled;
+/// `dropped` is the counter of the rows the bounded queue refused since the
+/// start of the process (ADR-0122, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugQueryList {
+    /// Whether the journal is enabled on this instance.
+    pub enabled: bool,
+    /// Rows the bounded queue refused since the start of the process.
+    pub dropped: u64,
+    /// The page, `created_at` descending then `id`.
+    pub queries: Vec<DebugQuery>,
+}
+
 /// Mode of an online batch: `upsert` only (ADR-0055).
 ///
 /// `replace_all` is the mode of a deposited batch; the online route refuses it
@@ -1352,6 +1398,7 @@ pub fn snapshots_doc() {}
         crate::http::ready,
         crate::http::list_jobs,
         crate::http::get_job,
+        crate::http::debug_queries,
         crate::indexes::create_index,
         crate::indexes::list_indexes,
         crate::indexes::get_index,
@@ -1407,6 +1454,8 @@ pub fn snapshots_doc() {}
         JobError,
         Job,
         JobList,
+        DebugQuery,
+        DebugQueryList,
         BatchMode,
         OnlinePassage,
         OnlineDocument,

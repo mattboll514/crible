@@ -110,7 +110,7 @@ pub(crate) fn plan(
 }
 
 /// Name of a fusion method in the plan (`docs/05-api.md`).
-const fn fusion_name(fusion: FusionConfig) -> &'static str {
+pub(crate) const fn fusion_name(fusion: FusionConfig) -> &'static str {
     match fusion {
         FusionConfig::Rrf => "rrf",
         FusionConfig::RelativeScore { .. } => "relative_score",

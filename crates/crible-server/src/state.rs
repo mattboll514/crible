@@ -37,7 +37,8 @@ use uuid::Uuid;
 
 use crate::analytics::Analytics;
 use crate::auth::Auth;
-use crate::config::Config;
+use crate::config::{Config, DebugJournalConfig};
+use crate::debug_journal::DebugJournal;
 use crate::error::{internal, invalid};
 use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
@@ -109,6 +110,9 @@ pub struct Loaded {
     query_cache_entries: usize,
     /// Precision of the query encoding (`[encoder].query_precision`, ADR-0052).
     query_precision: Precision,
+    /// `[debug_journal]`, so the route answers `enabled` and the draw reads the
+    /// rate without the writer (ADR-0122, decisions 1 and 9).
+    debug_journal: DebugJournalConfig,
     /// One query encoder per model directory, shared by every request so the
     /// cache of ADR-0051 is the one of the instance and not of a request.
     query_encoders: Mutex<HashMap<PathBuf, Arc<QueryEncoder>>>,
@@ -233,6 +237,12 @@ impl Loaded {
     #[must_use]
     pub fn query_precision(&self) -> Precision {
         self.query_precision
+    }
+
+    /// The `[debug_journal]` section of the instance (ADR-0122).
+    #[must_use]
+    pub fn debug_journal_config(&self) -> DebugJournalConfig {
+        self.debug_journal
     }
 
     /// Query encoder of the model directory of `access`, built once per
@@ -406,6 +416,10 @@ pub struct AppState {
     /// when they could not start without a tokio runtime, which is the case of
     /// a plain unit test of the startup: nothing is recorded then.
     analytics: OnceLock<Option<Arc<Analytics>>>,
+    /// The debug journal of the instance, once the startup opened it. `None`
+    /// when the journal is disabled, which is the default, and when the writer
+    /// could not start without a tokio runtime (ADR-0121, decision 1).
+    debug_journal: OnceLock<Option<Arc<DebugJournal>>>,
     auth: OnceLock<Arc<Auth>>,
     jobs: OnceLock<Arc<JobBoard>>,
     shutdown: OnceLock<Shutdown>,
@@ -477,6 +491,44 @@ impl AppState {
     pub async fn stop_analytics(&self) -> Result<(), CribleError> {
         match self.analytics() {
             Some(analytics) => analytics.stop().await,
+            None => Ok(()),
+        }
+    }
+
+    /// The debug journal of the instance, once the startup has opened it.
+    ///
+    /// `None` when the journal is disabled (the default), and on a loader that
+    /// ran outside a tokio runtime: nothing is recorded then, and a flush has
+    /// nothing to write (ADR-0121, decision 1).
+    #[must_use]
+    pub fn debug_journal(&self) -> Option<&Arc<DebugJournal>> {
+        self.debug_journal.get().and_then(Option::as_ref)
+    }
+
+    /// Drains the journal queue into `debug.sqlite` and waits for the write
+    /// (ADR-0122, decision 7).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush the writer reports, and [`ErrorCode::Internal`]
+    /// when the writer stopped before answering.
+    pub async fn flush_debug_journal(&self) -> Result<(), CribleError> {
+        match self.debug_journal() {
+            Some(journal) => journal.flush().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Drains the journal queue, writes it and stops its writer, bounded by
+    /// [`crate::debug_journal::STOP_BOUND`] (ADR-0122, decision 7).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush, and [`ErrorCode::Internal`] when the writer
+    /// stopped before answering or when the bound was reached.
+    pub async fn stop_debug_journal(&self) -> Result<(), CribleError> {
+        match self.debug_journal() {
+            Some(journal) => journal.stop().await,
             None => Ok(()),
         }
     }
@@ -897,6 +949,7 @@ impl AppState {
             query_cache_entries: config.limits.query_cache_entries,
             query_precision: config.encoder.query_precision,
             query_encoders: Mutex::new(HashMap::new()),
+            debug_journal: config.debug_journal,
         };
         let opened = loaded.indexes()?;
         if opened.is_empty() {
@@ -918,12 +971,19 @@ impl AppState {
             config.analytics.retention_days,
             Arc::clone(&loaded),
         )?;
+        // ADR-0122, decisions 7 and 8: the debug journal opens its file, purges
+        // the retention and starts its writer only when it is enabled. A
+        // disabled journal touches no path at all (ADR-0121, decision 1).
+        let journal = DebugJournal::start(&config.paths.data, config.debug_journal)?;
         self.jobs
             .set(jobs)
             .map_err(|_| internal("the job board of the instance was opened twice"))?;
         self.analytics
             .set(analytics)
             .map_err(|_| internal("the analytics of the instance were opened twice"))?;
+        self.debug_journal
+            .set(journal)
+            .map_err(|_| internal("the debug journal of the instance was opened twice"))?;
         self.loaded
             .set(loaded)
             .map_err(|_| internal("the instance configuration was loaded twice"))

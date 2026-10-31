@@ -188,6 +188,41 @@ pub(crate) async fn wait_analytics_flush() {
     }
 }
 
+/// Name of the mark a test writes to arm the debug journal writer's hold point.
+///
+/// The journal writer runs in every server test whose instance enabled the
+/// journal, so the hold point is opt-in (ADR-0122, decision 11).
+const DEBUG_JOURNAL_FLUSH_ARMED: &str = "armed-debug-journal-flush";
+
+/// Holds the debug journal writer at the head of its loop, before it receives
+/// anything (ADR-0122, decision 11).
+///
+/// It is **async**, like [`wait_analytics_flush`]: the writer runs on the async
+/// runtime, and the route that must answer while it is held runs there too. The
+/// scope `debug-journal-flush` is distinct from `analytics-flush`, so an armed
+/// barrier for one writer never retains the other.
+pub(crate) async fn wait_debug_journal_flush() {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    let directory = Path::new(&directory);
+    if !directory.join(DEBUG_JOURNAL_FLUSH_ARMED).exists() {
+        return;
+    }
+    let ready = directory.join("ready-debug-journal-flush");
+    let go = directory.join("go-debug-journal-flush");
+    if fs::write(&ready, b"").is_err() {
+        return;
+    }
+    let deadline = Instant::now() + RELEASE_TIMEOUT;
+    while !go.exists() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_MILLIS)).await;
+    }
+}
+
 /// Holds the calling job until the test writes `<dir>/go-<scope>`.
 ///
 /// `scope` names the barrier: a test that arms two of them in one binary uses
