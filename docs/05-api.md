@@ -267,7 +267,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
 | `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) ; un nom déclaré `returned: false` est refusé (ADR-0109) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
-| `debug` | bool | false | Ajoute plan, temps et rangs ; journalise si le journal est activé |
+| `debug` | bool | false | Ajoute plan, temps et rangs (ADR-0119) ; alimente le journal de debug quand il est activé (JOURNAL-DE-DEBUG) |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
 | `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
 
@@ -275,7 +275,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 
 Dans `return.fields`, un nom déclaré `returned: false` dans le schéma est refusé en `invalid_request` (400) : le message nomme le champ, son chemin `$.return.fields[i]` et le fait qu'il est déclaré `returned: false` (ADR-0109). `"all"` n'est pas concerné : il ne rend que les champs `returned`.
 
-Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le cas d'un nom absent du tableau ci-dessus, d'un nom absent de `fusion` ou de `return`, et de tout objet imbriqué, et le message nomme le **chemin JSON** du champ, comme pour un `PATCH` de configuration (ADR-0031, ADR-0109). Dans `filter`, une clause hors de la grammaire reste `invalid_filter` (400), avec `details.path` : son code ne change pas. En P6, `debug` et `explain_ids` ne sont pas encore acceptés : ils sont refusés en `invalid_request`, avec un message qui dit que le champ n'est pas encore pris en charge ; P7 les ouvre (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`, ADR-0109). Aucun champ n'est ignoré en silence.
+Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le cas d'un nom absent du tableau ci-dessus, d'un nom absent de `fusion` ou de `return`, et de tout objet imbriqué, et le message nomme le **chemin JSON** du champ, comme pour un `PATCH` de configuration (ADR-0031, ADR-0109). Dans `filter`, une clause hors de la grammaire reste `invalid_filter` (400), avec `details.path` : son code ne change pas. `debug` est accepté depuis P7 (ADR-0119). `explain_ids` reste refusé en `invalid_request`, avec un message qui dit que le champ n'est pas encore pris en charge, jusqu'à `EXPLIQUER-DOCUMENTS` (ADR-0109). Aucun champ n'est ignoré en silence.
 
 ## Recherche : réponse
 
@@ -296,25 +296,33 @@ Un champ **inconnu** du corps est refusé en `invalid_request` (400) : c'est le 
 }
 ```
 
-`took_ms` est la durée totale du traitement, **de la prise du jeton de concurrence à la fin du calcul** : elle couvre l'encodage de la requête ou sa lecture dans le cache, la planification, les deux branches, la fusion, le regroupement et la lecture des payloads (ADR-0109). C'est la même durée que celle de `crible search`, qui mesure depuis l'entrée de sa commande.
+`took_ms` est la durée totale du traitement, **de la prise du jeton de concurrence à la fin du calcul** : elle couvre l'encodage de la requête ou sa lecture dans le cache, la planification, les deux branches, la fusion, le regroupement et la lecture des payloads (ADR-0109). C'est la même durée que celle de `crible search`, qui mesure depuis l'entrée de sa commande. Avec `debug: true`, `timings_ms.total` vaut cette même valeur : le total est arrêté une seule fois et sert à la réponse comme aux analytics (ADR-0119, décisions 5 et 7).
 
 Un résultat dont le document a été supprimé après la prise du snapshot garde son texte et ses champs de passage ; ses champs de document sont absents du résultat, sans marqueur et sans erreur (ADR-0043). C'est pourquoi `return.fields: "all"` signifie « tous les champs disponibles pour ce résultat ». Avec `group_by: "document"`, la réponse garde cette forme : une **liste plate** d'entrées de niveau passage, sans objet par document, et `doc_id` suffit à rattacher une entrée à son document (ADR-0075). `k` compte alors des **documents distincts**, et la liste porte au plus `k × passages_per_document` entrées. Les entrées d'un même document sont consécutives ; les documents sont rangés selon leur meilleur passage (score décroissant, puis clé croissante), et les passages d'un document par score décroissant puis clé croissante. Quand les candidats sur-échantillonnés sont épuisés avant `k` documents, la réponse en contient moins, sans erreur. Avec `dedup: "content"`, la fusion s'applique avant le regroupement. Aucun champ nouveau n'est ajouté aux résultats en P4.
 
-Avec `debug: true`, la réponse ajoute :
+Avec `debug: true`, la réponse ajoute un membre `debug` (ADR-0119) :
 
-<!-- openapi: none — le bloc `debug` arrive avec `REPONSE-DEBUG` (P7) ; aucun composant ne le décrit en P6. -->
+<!-- openapi: SearchDebug -->
 ```json
-{ "debug": {
+{
   "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 5000,
             "candidates_per_branch": 100, "fusion": "rrf", "group_by": null },
-  "timings_ms": { "validate": 0.1, "encode": 23.4, "filter": 0.6, "dense": 9.8,
+  "timings_ms": { "validate": 0.1, "encode": 30.0, "filter": 0.6, "dense": 9.8,
                   "lexical": 6.1, "fusion": 0.1, "group": 0.0, "fetch": 1.2, "total": 41.7 },
   "per_result": [ { "key": "LEGIARTI…#0", "dense_rank": 70, "dense_score": 0.61,
                     "lexical_rank": 2, "lexical_score": 14.2, "fused_rank": 1 } ]
-} }
+}
 ```
 
-`dense_strategy` vaut `"exact"` ou `"binary"` (ADR-0074) : `"exact"` pour un pool de taille inférieure ou égale à `exact_threshold`, pour `exact: true` et pour `search.scan: none` ; `"binary"` sinon. Sous `"binary"`, `rescore_candidates` est le nombre **effectif** de candidats rescorés : il vaut `max(N, candidates_per_branch)`, où `candidates_per_branch` est le nombre de résultats demandés par la branche dense — sur-échantillonné quand la requête regroupe (ADR-0075) —, donc `candidates_per_branch` quand ce nombre dépasse N.
+`plan` est un objet fermé qui porte `mode`, `dense_strategy`, `rescore_candidates`, `candidates_per_branch`, `fusion` et `group_by`, plus `alpha` seulement quand `fusion` vaut `"relative_score"` (ADR-0119, décision 4). `mode` est le mode effectif ; `group_by` vaut `"document"` ou `null`. `candidates_per_branch` est le nombre **effectif** de résultats demandés par branche, sur-échantillonné quand la requête regroupe (ADR-0075). `dense_strategy` vaut `"exact"` ou `"binary"` (ADR-0074) : `"exact"` pour un pool de taille inférieure ou égale à `exact_threshold`, pour `exact: true` et pour `search.scan: none` ; `"binary"` sinon. Sous `"binary"`, `rescore_candidates` est le nombre **effectif** de candidats rescorés : il vaut `max(N, candidates_per_branch)`, donc `candidates_per_branch` quand ce nombre dépasse N. `dense_strategy` et `rescore_candidates` sont **absents** si aucune branche dense n'a tourné, par exemple en mode `lexical`.
+
+`timings_ms` porte toujours les neuf clés de `03-recherche.md`, en millisecondes, `f64` arrondi à trois décimales ; une étape que le mode n'a pas exécutée vaut `0.0` (ADR-0119, décision 5). `total` est la valeur de `took_ms`, prise à la prise du jeton (ADR-0109). La somme de cohérence n'est pas la somme des neuf clés : les branches dense et lexicale tournent en parallèle, et le chemin critique est `encode + filter + max(dense, lexical) + fusion + group + fetch`, `validate` exclu. Dans l'exemple, 30,0 + 0,6 + max(9,8 ; 6,1) + 0,1 + 0,0 + 1,2 = 41,7 ms, égal au total ; ajouter la branche lexicale donnerait 47,8 ms et compterait deux fois un temps parallèle (ADR-0119, décision 6).
+
+`per_result` porte une entrée par résultat, dans l'ordre de `results`. `key` est la clé externe `doc_id#ord`, jamais un `iid`. `dense_rank` et `lexical_rank` sont les rangs dans la liste de sortie de chaque branche — `candidates_per_branch` entrées, après le filtre et avant `dedup` et `group_by`, à partir de 1, l'égalité étant départagée par la clé (ADR-0079 ; ADR-0119, décision 1). `dense_score` et `lexical_score` sont les scores de la branche, sans normalisation : cosinus pour le dense, BM25 pour le lexical. `fused_rank` est le rang dans la sortie de la fusion avant regroupement ; sous `group_by`, toutes les entrées d'un document portent le rang de son meilleur passage (ADR-0119, décision 2).
+
+Un membre de branche qui n'a pas de valeur est **omis**, jamais rendu `null` ni `0` (ADR-0119, décision 3) : `dense_rank` et `dense_score` sont absents en mode `lexical`, `lexical_rank` et `lexical_score` en mode `dense`, et les membres d'une branche qui n'a pas trouvé le résultat le sont aussi. Un score nul est un score réel, un rang ne vaut jamais 0, et l'absence se lit à l'absence du membre.
+
+`debug` ne change ni les résultats, ni leur ordre, ni `k`, ni l'échéance, ni `took_ms` : il ajoute seulement ce membre à une réponse `200`. Une réponse d'erreur, `504` compris, n'en porte jamais (ADR-0119, décision 10).
 
 Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 
@@ -329,7 +337,7 @@ Avec `explain_ids`, chaque document demandé reçoit un diagnostic :
 } ] }
 ```
 
-Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé au debug.
+Le calcul de `exact_rank` est coûteux, car il impose un scan exact du pool. C'est réservé à `explain_ids` (ADR-0109).
 
 Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la ligne `documents` est présente » et `alive` vaut « le document a au moins un passage vivant ». Ils restent distincts ; `exists: false` signifie que le `doc_id` n'a jamais existé ou a été supprimé.
 
@@ -345,7 +353,7 @@ Les deux booléens ont une définition unique (ADR-0041) : `exists` vaut « la l
   "group_by": "document" }
 ```
 
-- **Corps** (ADR-0110). Tous les champs de « Recherche : requête » sont **communs, au premier niveau**, avec la même sémantique et les mêmes bornes : `query`, `vector`, `mode`, `k`, `fusion`, `group_by`, `passages_per_document`, `dedup`, `return`, `exact`, `timeout_ms`. `debug` et `explain_ids` sont refusés en P6, comme sur la route simple (ADR-0109). Seul `filter` est propre à une cible : `targets: [{ "index": "...", "filter": {...} }]`, `index` obligatoire, `filter` facultatif (absent = aucun filtre).
+- **Corps** (ADR-0110). Tous les champs de « Recherche : requête » sont **communs, au premier niveau**, avec la même sémantique et les mêmes bornes : `query`, `vector`, `mode`, `k`, `fusion`, `group_by`, `passages_per_document`, `dedup`, `return`, `exact`, `debug`, `timeout_ms`. `explain_ids` reste refusé jusqu'à `EXPLIQUER-DOCUMENTS`, comme sur la route simple (ADR-0109). Seul `filter` est propre à une cible : `targets: [{ "index": "...", "filter": {...} }]`, `index` obligatoire, `filter` facultatif (absent = aucun filtre).
 - **Champ inconnu** (ADR-0110). La règle de la route simple s'étend à ce corps, **à tous les niveaux**, objets de `targets[i]` compris : `400 invalid_request`, message nommant le **chemin JSON** du champ (`$.targets[0].filtre`). Dans un filtre, une clause hors grammaire reste `invalid_filter`, avec `details.path` préfixé par `$.targets[i].filter`.
 - **`fusion`** (ADR-0110). Absent, chaque index applique sa fusion configurée. Présent, la valeur s'applique à **toutes** les cibles.
 - **`mode` par défaut** (ADR-0110). `hybrid` si **toutes** les cibles ont le lexical activé, sinon `dense`. Un `mode` explicite `lexical` ou `hybrid` avec une cible sans lexical reste refusé en entier, avec le message « lexical branch is disabled for this index » et le nom de l'index fautif ; aucune cible n'est servie en dense à sa place (ADR-0089). Le mode `dense` reste disponible sur les mêmes cibles.
@@ -373,7 +381,33 @@ La réponse garde la forme plate de la route simple, et chaque entrée porte `in
 }
 ```
 
-`took_ms` couvre la requête entière, **de la prise du jeton à la fin du calcul**, encodage compris (ADR-0109). `truncated_query` a la même définition que sur la route simple et n'a qu'une valeur, puisque l'encodage est unique ; il vaut `false` si rien n'est encodé. En debug, un résultat portera aussi `target_rank`, son rang dans son index, et les `explain_ids` prendront la forme `{ "index": "...", "id": "..." }` (P7, ADR-0110).
+`took_ms` couvre la requête entière, **de la prise du jeton à la fin du calcul**, encodage compris (ADR-0109). `truncated_query` a la même définition que sur la route simple et n'a qu'une valeur, puisque l'encodage est unique ; il vaut `false` si rien n'est encodé.
+
+Avec `debug: true`, la réponse ajoute un membre `debug` (ADR-0119) :
+
+<!-- openapi: SearchMultiDebug -->
+```json
+{
+  "targets": [
+    { "index": "articles",
+      "plan": { "mode": "hybrid", "dense_strategy": "binary", "rescore_candidates": 5000,
+                "candidates_per_branch": 100, "fusion": "rrf", "group_by": "document" },
+      "timings_ms": { "validate": 0.0, "encode": 0.0, "filter": 0.6, "dense": 9.8,
+                      "lexical": 6.1, "fusion": 0.1, "group": 0.2, "fetch": 1.2, "total": 11.9 } }
+  ],
+  "timings_ms": { "validate": 0.1, "encode": 30.0, "filter": 0.6, "dense": 9.8,
+                  "lexical": 6.1, "fusion": 0.1, "group": 0.2, "fetch": 1.2, "total": 41.9 },
+  "per_result": [ { "index": "articles", "key": "LEGIARTI…#0", "dense_rank": 70,
+                    "dense_score": 0.61, "lexical_rank": 2, "lexical_score": 14.2,
+                    "fused_rank": 1, "target_rank": 1 } ]
+}
+```
+
+`targets` porte une entrée par cible, dans l'ordre de la requête, avec le `plan` et le `timings_ms` de cette cible (ADR-0119, décision 9). Les deux étapes `validate` et `encode` y valent `0.0`, parce que la validation et l'encodage ont lieu **une fois** pour la requête et appartiennent au `timings_ms` global ; le `total` d'une cible est la durée de son travail, du filtre à la lecture de ses payloads, et c'est à lui que s'applique la règle de cohérence de la route simple (ADR-0119, décision 6). Le `timings_ms` global porte les neuf clés : `validate` et `encode` mesurés une fois, les six autres étapes **sommées** sur les cibles séquentielles, la fusion entre index comprise dans `fusion`. Son `total` vaut `took_ms` ; il n'est pas un chemin critique et n'est pas soumis au test d'écart de 10 %.
+
+`per_result` porte une entrée par résultat, dans l'ordre de `results`, avec `index` et `key` en plus des membres de la route simple. Les rangs et scores de branche gardent la définition de la route simple, prise dans l'index de l'entrée. `fused_rank` est le rang dans la fusion **de l'index**, avant son regroupement. `target_rank` est le rang de l'unité dans la liste finale de son index, à partir de 1 : en `lexical` et en `hybride`, c'est exactement le rang du `1 / (60 + rang)` de la fusion entre index (ADR-0110) ; en `dense`, c'est le rang dans la liste triée par cosinus de l'index. Sous `group_by`, toutes les entrées d'un document portent le rang de son meilleur passage. Le rang dans la fusion **entre index** n'a pas de membre : c'est la position de l'entrée dans `results`.
+
+Les membres absents suivent la même règle qu'en simple : on les omet, jamais `null`, jamais `0` (ADR-0119, décision 3). `explain_ids` reste refusé jusqu'à `EXPLIQUER-DOCUMENTS` ; il prendra alors la forme `{ "index": "...", "id": "..." }` (ADR-0110).
 
 ## Jobs
 

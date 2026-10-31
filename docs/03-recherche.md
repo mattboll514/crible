@@ -104,7 +104,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
   - score fusionné = α·dense + (1−α)·lexical, avec `alpha ∈ [0, 1]`, bornes comprises, et une valeur finie ; toute autre valeur est refusée en `invalid_request` (400), à la création de l'index, au `PATCH` et par requête (ADR-0090). α = 0 sert le lexical seul, α = 1 le dense seul ;
   - un document absent d'une branche y vaut 0.
 - **Défaut par index** : `rrf`, qui n'a rien à régler ; ce défaut est confirmé par MES-10 (ADR-0093). On peut le changer par requête, et choisir le réglage par défaut.
-- **Pour le debug**, on conserve le rang et le score de chaque résultat dans chaque branche.
+- **Pour le debug**, on conserve le rang et le score de chaque résultat dans chaque branche. Le rang d'une branche est celui de sa liste de sortie (`candidates_per_branch` entrées), **après le filtre et avant `dedup` et `group_by`**, à partir de 1, l'égalité de score étant départagée par la clé (ADR-0079, ADR-0119 décision 1).
 - **`score_type`** vaut `cosine`, `bm25`, `rrf` ou `relative`. Un score ne se compare pas d'une requête à l'autre.
 
 ## Regroupement
@@ -129,7 +129,7 @@ Si le rappel du binaire est insuffisant, plusieurs leviers, dans cet ordre :
   - **mode `dense`** : par cosinus. C'est exact, car les scores sont comparables (déjà validé dans Legifacile, `serveur_mcp/perimetres.py`) ; les unités sont triées par score décroissant, puis par nom d'`index` croissant, puis par clé croissante, et le résultat égale le tri global des top-k de chaque index (`score_type` `cosine`) ;
   - **modes `lexical` et `hybrid`** : RRF sur les rangs de chaque index, score = 1 / (60 + rang), le rang étant celui de l'unité dans la liste finale de son index, à partir de 1 ; tri par score décroissant, puis `index` croissant, puis clé croissante ; toutes les entrées d'un document regroupé portent le score de son document, et `score_type` vaut `rrf`, même avec une seule cible (ADR-0110) ;
   - **troncature** : `k` unités, soit `k` résultats, ou `k` documents distincts (paires `index`, `doc_id`) et au plus `k × passages_per_document` entrées.
-- **Résultat** : chaque résultat porte son `index`, et le debug donne son rang dans son index. La réponse porte, par cible, sa `generation` et son `pool_size`, dans l'ordre de la requête (ADR-0110).
+- **Résultat** : chaque résultat porte son `index`, et le debug donne son `target_rank`, le rang de l'unité dans la liste finale de son index, à partir de 1 — en `lexical` et en `hybride`, c'est le rang du `1 / (60 + rang)` de la fusion entre index (ADR-0110, ADR-0119 décision 9). La réponse porte, par cible, sa `generation` et son `pool_size`, dans l'ordre de la requête (ADR-0110).
 
 ## Rerank (hors v1, à garder en tête)
 
