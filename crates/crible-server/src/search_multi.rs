@@ -59,7 +59,7 @@ use crible_search::pipeline::{Mode, RankedHit, ScoreType};
 use serde_json::{Map, Value, json};
 
 use crate::AppState;
-use crate::analytics::{self, Operation, Record};
+use crate::analytics::{self, Operation, Record, StageDurations};
 use crate::auth::Client;
 use crate::error;
 use crate::http::RequestId;
@@ -243,6 +243,8 @@ struct Plan {
     k: usize,
     /// `exact: true` forces the exact dense calculation.
     exact: bool,
+    /// `debug` asks for the `debug` member of ADR-0119.
+    debug: bool,
     /// Deadline of the whole request (ADR-0102, decision 3).
     deadline: Duration,
 }
@@ -425,6 +427,7 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         selection,
         k: common.k,
         exact: common.exact,
+        debug: common.debug,
         deadline,
     })
 }
@@ -516,6 +519,7 @@ fn run_multi(
         selection,
         k,
         exact,
+        debug,
         ..
     } = plan;
 
@@ -548,6 +552,13 @@ fn run_multi(
         None => None,
     };
 
+    // The validation and the single encoding of the request belong to the
+    // global `timings_ms` of `debug`; each target renders `0.0` for them
+    // (ADR-0119, decision 9).
+    // The encoding is measured once, on the observer of the first target and
+    // here; the validation happened before it (ADR-0119, decision 9).
+    let request_validate = first.request_stages().0;
+    let request_encode = encoding;
     let mut observers: Vec<Observed> = targets
         .iter()
         .enumerate()
@@ -569,6 +580,13 @@ fn run_multi(
         .collect();
 
     let mut outcomes: Vec<(&ResolvedTarget, IndexOutcome)> = Vec::with_capacity(targets.len());
+    let mut target_debug: Vec<Value> = Vec::new();
+    let mut filter_total = Duration::ZERO;
+    let mut dense_total = Duration::ZERO;
+    let mut lexical_total = Duration::ZERO;
+    let mut fusion_total = Duration::ZERO;
+    let mut group_total = Duration::ZERO;
+    let mut fetch_total = Duration::ZERO;
     for (position, target) in targets.iter().enumerate() {
         let per_index_fusion = fusion.unwrap_or(target.published.config.search.fusion);
         let target_started = Instant::now();
@@ -576,7 +594,7 @@ fn run_multi(
             state,
             &target.index,
             &target.published,
-            &IndexParams {
+            IndexParams {
                 mode,
                 vector: vector.as_deref(),
                 text: prepared.text.as_deref(),
@@ -585,6 +603,10 @@ fn run_multi(
                 fusion: per_index_fusion,
                 k,
                 exact,
+                // Consigned debt (ADR-0120, decision 4): the capture of
+                // ADR-0119 exists for the simple route only; the shape of a
+                // multi-index journal belongs to JOURNAL-DE-DEBUG.
+                capture: None,
             },
         ) {
             Ok(outcome) => outcome,
@@ -600,10 +622,35 @@ fn run_multi(
                 return (Err(failure), observers);
             }
         };
+        // One reading of the target's total, shared by the event and by the
+        // target's `timings_ms` (ADR-0119, decision 7).
+        let target_total = target_started.elapsed();
         if let Some(observed) = observers.get_mut(position) {
             observed.target(&outcome, prepared.truncated_query);
-            observed.finish_at(target_started);
+            observed.close_total(target_total);
         }
+        if debug {
+            target_debug.push(json!({
+                "index": target.index,
+                "plan": crate::debug::plan(
+                    mode,
+                    outcome.strategy,
+                    &target.published.config.search,
+                    outcome.pool_size,
+                    k,
+                    exact,
+                    &grouping,
+                    per_index_fusion,
+                ),
+                "timings_ms": crate::debug::timings(&target_stages(mode, &outcome, target_total)),
+            }));
+        }
+        filter_total += outcome.filter;
+        dense_total += outcome.stages.dense;
+        lexical_total += outcome.stages.lexical;
+        fusion_total += outcome.stages.fusion;
+        group_total += outcome.stages.group;
+        fetch_total += outcome.stages.fetch;
         outcomes.push((target, outcome));
     }
 
@@ -622,23 +669,69 @@ fn run_multi(
     } else {
         ScoreType::Rrf
     };
+    let fusing = Instant::now();
     let entries = fuse(outcomes, mode, &grouping, k);
-    let results = match render_entries(entries, &targets, score_type, &selection) {
-        Ok(results) => results,
-        // Every target ran: all of them keep their event, and the last one
-        // carries the code of the failure (ADR-0117, decision 5).
-        Err(failure) => return (Err(failure), observers),
-    };
+    // The fusion between indexes belongs to the global `fusion` of `debug`; it
+    // is timed only for a request that asks for it (ADR-0119, decision 9).
+    let exchange_fusion = debug.then(|| fusing.elapsed());
+    // ADR-0120, decision 1: the global total stops at the end of `fetch`, after
+    // the fusion between indexes and before the JSON rendering of the results.
+    // It is read once and shared with the `debug` member (ADR-0119, decisions 7
+    // and 9).
+    let total = started.elapsed();
+    let (results, per_result) =
+        match render_entries(entries, &targets, score_type, &selection, debug) {
+            Ok(rendered) => rendered,
+            // Every target ran: all of them keep their event, and the last one
+            // carries the code of the failure (ADR-0117, decision 5).
+            Err(failure) => return (Err(failure), observers),
+        };
+    let debug = debug.then(|| {
+        let fusion_total = fusion_total + exchange_fusion.unwrap_or_default();
+        json!({
+            "targets": target_debug,
+            "timings_ms": crate::debug::timings(&StageDurations {
+                validate: request_validate,
+                encode: request_encode,
+                filter: Some(filter_total),
+                dense: mode.uses_dense().then_some(dense_total),
+                lexical: mode.uses_lexical().then_some(lexical_total),
+                fusion: (mode == Mode::Hybrid).then_some(fusion_total),
+                group: Some(group_total),
+                fetch: Some(fetch_total),
+                total: Some(total),
+            }),
+            "per_result": per_result,
+        })
+    });
     (
         Ok(MultiOutcome {
             results,
+            debug,
             targets: summaries,
             truncated_query: prepared.truncated_query,
-            took_ms: 0.0,
-        }
-        .with_start(started)),
+            took_ms: total.as_secs_f64() * 1_000.0,
+        }),
         observers,
     )
+}
+
+/// Durations of one target, in the shape of `debug`.
+///
+/// `validate` and `encode` happened once for the request, so they are `0.0`
+/// here; the other steps come from the target's own outcome, and its `total` is
+/// the duration read once by the route (ADR-0119, decision 9).
+fn target_stages(mode: Mode, outcome: &IndexOutcome, total: Duration) -> StageDurations {
+    StageDurations {
+        filter: Some(outcome.filter),
+        dense: mode.uses_dense().then_some(outcome.stages.dense),
+        lexical: mode.uses_lexical().then_some(outcome.stages.lexical),
+        fusion: (mode == Mode::Hybrid).then_some(outcome.stages.fusion),
+        group: Some(outcome.stages.group),
+        fetch: Some(outcome.stages.fetch),
+        total: Some(total),
+        ..StageDurations::default()
+    }
 }
 
 /// One unit of the fusion between indexes: a passage, or a document under
@@ -665,6 +758,9 @@ struct MergedEntry {
     /// Score of the answer: the cosine of the entry in `dense`, the score of the
     /// document in `lexical` and `hybrid`.
     score: f32,
+    /// Rank of the unit in the final list of its index, from 1 (ADR-0119,
+    /// decision 9).
+    target_rank: u32,
 }
 
 /// Fuses the answers of the targets and truncates to `k` units.
@@ -695,12 +791,17 @@ fn fuse(
 /// Splits the final list of one index into units, scoring them by mode.
 fn units_of(index: &str, hits: Vec<RankedHit>, grouping: &Grouping, rrf: bool) -> Vec<MergedUnit> {
     let mut units = group_hits(index, hits, grouping);
-    if rrf {
-        for (position, unit) in units.iter_mut().enumerate() {
-            // The rank is the position of the unit in the final list of its
-            // index, from 1; every entry of a document carries its score.
-            let rank = f32::from(u16::try_from(position + 1).unwrap_or(u16::MAX));
-            let score = 1.0 / (RRF_CONSTANT + rank);
+    for (position, unit) in units.iter_mut().enumerate() {
+        // The rank is the position of the unit in the final list of its index,
+        // from 1; every entry of a document carries its rank and its score
+        // (ADR-0110, decision 9; ADR-0119, decision 9).
+        let rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
+        for entry in &mut unit.entries {
+            entry.target_rank = rank;
+        }
+        if rrf {
+            let position = f32::from(u16::try_from(position + 1).unwrap_or(u16::MAX));
+            let score = 1.0 / (RRF_CONSTANT + position);
             unit.score = score;
             for entry in &mut unit.entries {
                 entry.score = score;
@@ -727,6 +828,7 @@ fn group_hits(index: &str, hits: Vec<RankedHit>, grouping: &Grouping) -> Vec<Mer
                 index: entry_index,
                 score: hit.hit.score,
                 hit,
+                target_rank: 0,
             });
             continue;
         }
@@ -739,6 +841,7 @@ fn group_hits(index: &str, hits: Vec<RankedHit>, grouping: &Grouping) -> Vec<Mer
                 index: entry_index,
                 score: hit.hit.score,
                 hit,
+                target_rank: 0,
             }],
         });
     }
@@ -755,8 +858,10 @@ fn render_entries(
     targets: &[ResolvedTarget],
     score_type: ScoreType,
     selection: &ReturnSelection,
-) -> Result<Vec<Value>, CribleError> {
+    debug: bool,
+) -> Result<(Vec<Value>, Vec<Value>), CribleError> {
     let mut rendered = Vec::with_capacity(entries.len());
+    let mut per_result = Vec::new();
     for entry in entries {
         let target = targets
             .iter()
@@ -774,35 +879,43 @@ fn render_entries(
         if let Some(object) = value.as_object_mut() {
             object.insert("index".to_owned(), json!(entry.index));
         }
+        if debug {
+            per_result.push(crate::debug::multi_result_entry(
+                &entry.index,
+                &hit,
+                entry.target_rank,
+            ));
+        }
         rendered.push(value);
     }
-    Ok(rendered)
+    Ok((rendered, per_result))
 }
 
 /// One answer of the multi-index search, before its envelope.
 struct MultiOutcome {
     results: Vec<Value>,
+    /// `targets[]`, `timings_ms` and `per_result` of a `debug` request; absent
+    /// without `debug` (ADR-0119, decision 9).
+    debug: Option<Value>,
     targets: Vec<Value>,
     truncated_query: bool,
     took_ms: f64,
 }
 
 impl MultiOutcome {
-    /// Sets the duration measured from the token acquisition.
-    fn with_start(mut self, started: Instant) -> Self {
-        self.took_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        self
-    }
-
     /// Renders the body of the `200`, with the request identifier of ADR-0098.
     fn render(self, request_id: &str) -> Value {
-        json!({
+        let mut body = json!({
             "results": self.results,
             "targets": self.targets,
             "took_ms": self.took_ms,
             "truncated_query": self.truncated_query,
             "request_id": request_id,
-        })
+        });
+        if let Some(debug) = self.debug {
+            body["debug"] = debug;
+        }
+        body
     }
 }
 

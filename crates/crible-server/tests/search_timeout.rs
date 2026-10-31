@@ -57,12 +57,14 @@ fn wait_ready(directory: &Path, scope: &str) {
     );
 }
 
-/// A dense search with `timeout_ms` milliseconds.
+/// A dense search with `timeout_ms` milliseconds, asking for `debug`: a `504`
+/// must not carry the member (ADR-0119, decision 10).
 fn body(timeout_ms: u64) -> Value {
     json!({
         "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
         "mode": "dense",
         "timeout_ms": timeout_ms,
+        "debug": true,
     })
 }
 
@@ -102,6 +104,10 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     let (status, first_body) = first.await.expect("the request task finishes");
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{first_body}");
     assert_eq!(first_body["error"]["code"], "timeout", "{first_body}");
+    assert!(
+        first_body.get("debug").is_none(),
+        "a `504` never carries `debug` (ADR-0119, decision 10): {first_body}"
+    );
 
     // The `504` did not give the token back: the work is still held.
     let (status, headers, overloaded) = send_with_headers(
@@ -144,6 +150,10 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     }
     assert_eq!(status, StatusCode::OK, "the token comes back: {last}");
     assert_eq!(last["pool_size"], 0, "{last}");
+    assert!(
+        last.get("debug").is_some(),
+        "the `200` carries the member it was asked for: {last}"
+    );
 
     // SAFETY: the test owns the variable until its end, as for `set_var`.
     unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };

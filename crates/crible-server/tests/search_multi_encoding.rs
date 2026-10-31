@@ -80,6 +80,9 @@ async fn a_multi_index_search_encodes_its_query_once() {
     let body = json!({
         "query": "contrat",
         "mode": "dense",
+        // `debug` proves that the single encoding of the request is the
+        // duration the global timings report (ADR-0119, decision 9).
+        "debug": true,
         "targets": [ { "index": "alpha" }, { "index": "beta" } ],
     });
     let (status, answer) = send(&router, Method::POST, MULTI, READ_SECRET, Some(body)).await;
@@ -101,6 +104,25 @@ async fn a_multi_index_search_encodes_its_query_once() {
         1,
         "the query is encoded once for the two targets: {answer}"
     );
+    // The one measurement of the encoding reaches the global `timings_ms`, and
+    // a target renders `0.0` for it (ADR-0119, decision 9).
+    let global = &answer["debug"]["timings_ms"];
+    let encode = global["encode"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the global timings carry encode: {global}"));
+    assert!(
+        encode > 0.0,
+        "the single encoding is measured in the global timings: {global}"
+    );
+    for target in answer["debug"]["targets"]
+        .as_array()
+        .expect("the debug member holds targets")
+    {
+        assert_eq!(
+            target["timings_ms"]["encode"], 0.0,
+            "a target renders 0.0 for the request encoding: {target}"
+        );
+    }
 
     // SAFETY: the test owns the variable until its end, as for `set_var`.
     unsafe { std::env::remove_var("CRIBLE_TEST_ENCODER") };

@@ -799,9 +799,9 @@ pub struct SearchReturn {
 
 /// Body of `POST /v1/indexes/{index}/search` (ADR-0109).
 ///
-/// `debug` and `explain_ids` are not members: P6 refuses them in
-/// `invalid_request`, and the specification describes only the body the server
-/// accepts. P7 opens them (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`).
+/// `debug` is a member since P7 and adds the diagnostic member of ADR-0119.
+/// `explain_ids` is still not a member: `EXPLIQUER-DOCUMENTS` opens it, and the
+/// specification describes only the body the server accepts.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchRequest {
@@ -845,6 +845,9 @@ pub struct SearchRequest {
     /// Forces the exact computation (eval, debug).
     #[schema(nullable = false)]
     pub exact: Option<bool>,
+    /// Adds the plan, the timings and the branch ranks (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<bool>,
     /// Deadline of the request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -904,6 +907,10 @@ pub struct SearchMultiRequest {
     /// Forces the exact computation.
     #[schema(nullable = false)]
     pub exact: Option<bool>,
+    /// Adds the per-target plan and timings and the per-result ranks
+    /// (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<bool>,
     /// Deadline of the whole request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -979,6 +986,9 @@ pub struct SearchResponse {
     pub took_ms: f64,
     /// Whether the query text was truncated to `max_tokens`.
     pub truncated_query: bool,
+    /// Diagnostic of a `debug` request; absent otherwise (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<SearchDebug>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
 }
@@ -1031,8 +1041,154 @@ pub struct SearchMultiResponse {
     pub took_ms: f64,
     /// Whether the query text was truncated to `max_tokens`.
     pub truncated_query: bool,
+    /// Diagnostic of a `debug` multi-index request; absent otherwise
+    /// (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<SearchMultiDebug>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
+}
+
+/// Plan of one search, as `debug` reports it (ADR-0119, decision 4).
+///
+/// A closed object: `dense_strategy` and `rescore_candidates` are absent when no
+/// dense branch ran, and `alpha` appears only for `relative_score`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugPlan {
+    /// Effective mode of the request, after the default applied.
+    pub mode: SearchMode,
+    /// `"exact"` or `"binary"`; absent without a dense branch (ADR-0074).
+    #[schema(nullable = false)]
+    pub dense_strategy: Option<String>,
+    /// Effective number of candidates rescored; absent without a dense branch.
+    #[schema(minimum = 0, nullable = false)]
+    pub rescore_candidates: Option<u32>,
+    /// Number of candidates asked of each branch, over-sampled when the
+    /// request regroups (ADR-0075).
+    pub candidates_per_branch: u32,
+    /// `"rrf"` or `"relative_score"` (ADR-0008, ADR-0090).
+    pub fusion: String,
+    /// `"document"`, or `null` when the request regroups nothing.
+    pub group_by: Option<GroupBy>,
+    /// Weight of the dense branch, present only for `relative_score`
+    /// (ADR-0090).
+    #[schema(nullable = false)]
+    pub alpha: Option<f64>,
+}
+
+/// The nine timings of one search, in milliseconds (ADR-0119, decision 5).
+///
+/// Every key is always present; a step the mode did not run is `0.0`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugTimings {
+    /// Step 1, validation.
+    pub validate: f64,
+    /// Step 2, encoding.
+    pub encode: f64,
+    /// Step 3, pool.
+    pub filter: f64,
+    /// Step 4, dense branch.
+    pub dense: f64,
+    /// Step 5, lexical branch.
+    pub lexical: f64,
+    /// Step 6, fusion.
+    pub fusion: f64,
+    /// Step 7, regrouping.
+    pub group: f64,
+    /// Step 8, payload.
+    pub fetch: f64,
+    /// Total of the request, equal to `took_ms` (ADR-0109).
+    pub total: f64,
+}
+
+/// One entry of `per_result` of the simple route (ADR-0119, decisions 1 to 3).
+///
+/// `key` and `fused_rank` are always present; a branch member that has no value
+/// is omitted, never `null` and never `0`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugResult {
+    /// External key `doc_id#ord`, never an internal id (INV-01).
+    pub key: String,
+    /// Rank in the dense branch, from 1.
+    #[schema(nullable = false)]
+    pub dense_rank: Option<u32>,
+    /// Cosine of the dense branch.
+    #[schema(nullable = false)]
+    pub dense_score: Option<f64>,
+    /// Rank in the lexical branch, from 1.
+    #[schema(nullable = false)]
+    pub lexical_rank: Option<u32>,
+    /// BM25 of the lexical branch.
+    #[schema(nullable = false)]
+    pub lexical_score: Option<f64>,
+    /// Rank in the fusion, or in the single branch, before the regrouping.
+    pub fused_rank: u32,
+}
+
+/// The `debug` member of a search answer (ADR-0119).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchDebug {
+    /// Plan of the request.
+    pub plan: DebugPlan,
+    /// Durations of the nine steps.
+    pub timings_ms: DebugTimings,
+    /// One entry per result, in the order of `results`.
+    pub per_result: Vec<DebugResult>,
+}
+
+/// One target of the `debug` member of a multi-index answer (ADR-0119,
+/// decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugTarget {
+    /// Name of the index of the target.
+    pub index: String,
+    /// Plan of this target.
+    pub plan: DebugPlan,
+    /// Durations of this target; `validate` and `encode` are `0.0`.
+    pub timings_ms: DebugTimings,
+}
+
+/// One entry of `per_result` of the multi-index route (ADR-0119, decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugMultiResult {
+    /// Index the entry comes from.
+    pub index: String,
+    /// External key `doc_id#ord`.
+    pub key: String,
+    /// Rank in the dense branch of its index.
+    #[schema(nullable = false)]
+    pub dense_rank: Option<u32>,
+    /// Cosine of the dense branch of its index.
+    #[schema(nullable = false)]
+    pub dense_score: Option<f64>,
+    /// Rank in the lexical branch of its index.
+    #[schema(nullable = false)]
+    pub lexical_rank: Option<u32>,
+    /// BM25 of the lexical branch of its index.
+    #[schema(nullable = false)]
+    pub lexical_score: Option<f64>,
+    /// Rank in the fusion of its index, before its regrouping.
+    pub fused_rank: u32,
+    /// Rank of the unit in the final list of its index, from 1.
+    pub target_rank: u32,
+}
+
+/// The `debug` member of a multi-index answer (ADR-0119, decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchMultiDebug {
+    /// One entry per target, in the order of the request.
+    pub targets: Vec<DebugTarget>,
+    /// Global durations; `total` is `took_ms`.
+    pub timings_ms: DebugTimings,
+    /// One entry per result, in the order of `results`.
+    pub per_result: Vec<DebugMultiResult>,
 }
 
 /// Adds the `413` of the body bound to every operation.
@@ -1275,6 +1431,13 @@ pub fn snapshots_doc() {}
         SearchMultiResult,
         SearchTargetState,
         SearchMultiResponse,
+        DebugPlan,
+        DebugTimings,
+        DebugResult,
+        SearchDebug,
+        DebugTarget,
+        DebugMultiResult,
+        SearchMultiDebug,
     )),
     modifiers(&BearerAuth, &BodyBound),
     security(("bearerAuth" = []))

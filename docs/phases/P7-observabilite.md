@@ -74,11 +74,12 @@
 ### REPONSE-DEBUG
 - **Objectif** : `debug: true` dans la réponse.
 - **Dépend de** : ROUTE-RECHERCHE
-- **À lire** : `05-api.md` (réponse, objet `debug`).
-- **Livrables** : le plan, les temps par étape (avec les clés de `03-recherche.md`), et pour chaque résultat le rang et le score dans chaque branche ainsi que le rang fusionné ; en multi-index, aussi le rang dans son index (`target_rank`).
+- **À lire** : `05-api.md` (réponse, objet `debug`) ; `adr/0119-objet-debug-de-la-reponse-de-recherche-forme-rangs-temps-et-capture.md` (forme de l'objet, rangs, temps, capture) ; `adr/0120-fin-de-took-ms-attribution-de-l-ouverture-des-lecteurs-et-rendu-hors-chronometre.md` (fin de `took_ms` à la fin de `fetch`, ouverture des lecteurs rattachée à la clé `fetch`).
+- **Livrables** : le plan et les temps par étape aux clés de `03-recherche.md` (ADR-0119 décisions 4 et 5), et pour chaque résultat le rang et le score dans chaque branche ainsi que le rang fusionné (ADR-0119 décisions 1 à 3) ; en multi-index, aussi le rang dans son index, `target_rank` (ADR-0119 décision 9), et la capture `DebugCapture { top_n }` construite seulement si `debug` est demandé (ADR-0119 décision 8).
 - **Critères d'acceptation** :
-  - la somme des étapes reste cohérente avec le total (écart inférieur à 10 %) ;
-  - les rangs affichés correspondent à ceux d'une exécution branche par branche.
+  - la somme des étapes reste cohérente avec le total (écart inférieur à 10 %) : la somme est le chemin critique `encode + filter + max(dense, lexical) + fusion + group + fetch`, `validate` exclu, en `dense` et `lexical` sur la branche unique et en `hybride` sur le chemin critique (ADR-0119 décision 6) ; le total s'arrête à la fin de `fetch`, avant le rendu JSON, et l'ouverture des lecteurs appartient à la clé `fetch`, dans tous les modes (ADR-0120 décisions 1 et 2) ;
+  - les rangs affichés correspondent à ceux d'une exécution branche par branche, prise après le filtre et avant `dedup`/`group_by` pour les branches et avant regroupement pour `fused_rank` (ADR-0119 décisions 1 et 2).
+- **Invariants** : aucun.
 
 ### EXPLIQUER-DOCUMENTS
 - **Objectif** : `explain_ids`.

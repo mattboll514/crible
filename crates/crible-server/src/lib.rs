@@ -28,6 +28,7 @@ mod barriers;
 mod attach_job;
 mod batches;
 pub mod config;
+mod debug;
 mod documents;
 mod error;
 pub mod http;

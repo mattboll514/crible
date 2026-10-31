@@ -12,7 +12,7 @@
 //! | `a_conforming_answer_carries_generation_pool_size_and_truncated_query` | answer of `docs/05` |
 //! | `an_unknown_index_is_a_404_unknown_index` | `404 unknown_index` |
 //! | `an_unknown_field_names_its_json_path_at_every_level` | ADR-0109, decision 1 |
-//! | `debug_and_explain_are_refused_in_p6` | ADR-0109, decision 1 |
+//! | `explain_is_refused_until_expliquer_documents` | ADR-0109, decision 1; ADR-0119, decision 10 |
 //! | `timeout_ms_is_read_from_the_body_and_bounded` | ADR-0102, decision 3 |
 //! | `a_query_on_an_external_model_is_refused_naming_the_model` | `docs/05:235` |
 //! | `a_vector_of_the_wrong_length_is_refused` | `docs/05:235` |
@@ -234,12 +234,12 @@ async fn an_unknown_field_names_its_json_path_at_every_level() {
 /// `debug` and `explain_ids` are not silently ignored in P6: they are refused
 /// with a message that says they open in P7 (ADR-0109, decision 1).
 #[tokio::test]
-async fn debug_and_explain_are_refused_in_p6() {
+async fn explain_is_refused_until_expliquer_documents() {
     let (_instance, _state, router) = instance_with_alpha().await;
-    for body in [json!({ "debug": true }), json!({ "explain_ids": [] })] {
-        let (status, answer) = search(&router, READ_SECRET, body).await;
-        refused(status, &answer, "not supported yet");
-    }
+    // `debug` is accepted since P7 (ADR-0119, decision 10); `explain_ids` keeps
+    // its P6 refusal until `EXPLIQUER-DOCUMENTS`.
+    let (status, answer) = search(&router, READ_SECRET, json!({ "explain_ids": [] })).await;
+    refused(status, &answer, "not supported yet");
 }
 
 /// `timeout_ms` is read from the body, in the documented domain; the default is
