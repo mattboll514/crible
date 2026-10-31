@@ -5,11 +5,11 @@
 - **Date** : 2026-10-31
 - **Branche de phase / commit** : `phase/P6-serveur-et-api` / `b3fdf9b`
 - **Machine** : Mac de développement, Apple M3, 24 Gio, macOS 15.7.7, exécution native (pas de conteneur)
-- **Verdict de l'agent** : `PRET-POUR-VALIDATION`, avec une réserve connue sur un test intermittent (section 7)
+- **Verdict de l'agent** : `PRET-POUR-VALIDATION`, avec une réserve connue sur un test intermittent (section 7) et une réserve sur la CI distante, pas encore rejouée sur les commits du 2026-10-31 (complété le 2026-10-31, voir §9)
 
 ## 1. Tâches de la phase
 
-Les 12 tâches de `docs/phases/P6-serveur-et-api.md` sont `FAIT` dans `docs/suivi.md`, et aucune autre tâche de P6 n'est ouverte.
+Les 13 tâches de `docs/phases/P6-serveur-et-api.md` sont `FAIT` dans `docs/suivi.md`, et aucune autre tâche de P6 n'est ouverte. La treizième, `CORRIGER-OPERATIONID-OPENAPI`, est une tâche hors plan décidée par le propriétaire pendant la validation de J6 (complété le 2026-10-31, voir §9).
 
 | Tâche | Statut dans `suivi.md` | Commit | Remarque |
 |---|---|---|---|
@@ -25,6 +25,7 @@ Les 12 tâches de `docs/phases/P6-serveur-et-api.md` sont `FAIT` dans `docs/suiv
 | CLIENT-PYTHON-HTTP | FAIT | fusion `370a0c4` | ADR-0112 |
 | TESTER-CHARGE-CONCURRENTE | FAIT | fusion `467a859` | INV-02, MES-16, ADR-0113 |
 | NETTOYER-P6 | FAIT | fusions `041fb53` et `3413c38` | Passage F après un échec de la CI distante |
+| CORRIGER-OPERATIONID-OPENAPI | FAIT | commit `954ee09`, fusion `7b334b4` | Hors plan, décidé pendant la validation de J6 ; `operationId` uniques dans `/openapi.json` (complété le 2026-10-31, voir §9) |
 
 ## 2. Qualité
 
@@ -140,7 +141,7 @@ Attendu : `200`, après des `503` tant que les modèles ne sont pas chargés (AD
 
 ### Étape 4 — le scénario via Swagger UI
 
-**À jouer par le propriétaire** : elle demande un navigateur, que `@jalon` n'a pas. Vérification partielle faite avec `curl` pendant que le serveur tournait :
+**Jouée par le propriétaire le 2026-10-31** dans Swagger UI : le scénario passe en entier, après la correction d'un défaut d'`operationId` (complété le 2026-10-31, voir §9). Elle demande un navigateur, que `@jalon` n'a pas. Vérification partielle faite avec `curl` pendant que le serveur tournait :
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/openapi.json
@@ -148,7 +149,7 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://127.0.0.1:8080/d
 curl -s -o /dev/null -L -w '%{http_code}\n' http://127.0.0.1:8080/docs
 ```
 
-**Observé** : `/openapi.json` rend `200` (OpenAPI 3.1.0, `Crible API`, 14 chemins) ; `/docs` rend `303` vers `http://127.0.0.1:8080/docs/`, puis `200` en suivant la redirection. Le `303` est la forme décidée par le complément du 2026-10-30 d'ADR-0111 ; un navigateur suit la redirection. Les sept opérations de l'étape 4 (création des six index, attaches, recherche simple, recherche multi-index, `PATCH`, `compact`, `export`) ont été jouées par HTTP à l'étape 5, avec les mêmes corps et les mêmes réponses ; les clics **Try it out** et **Authorize** restent à faire par le propriétaire.
+**Observé** : `/openapi.json` rend `200` (OpenAPI 3.1.0, `Crible API`, 14 chemins) ; `/docs` rend `303` vers `http://127.0.0.1:8080/docs/`, puis `200` en suivant la redirection. Le `303` est la forme décidée par le complément du 2026-10-30 d'ADR-0111 ; un navigateur suit la redirection. Les sept opérations de l'étape 4 (création des six index, attaches, recherche simple, recherche multi-index, `PATCH`, `compact`, `export`) ont été jouées par HTTP à l'étape 5, avec les mêmes corps et les mêmes réponses ; les clics **Try it out** et **Authorize** ont été faits par le propriétaire le 2026-10-31, dans Swagger UI (complété le 2026-10-31, voir §9).
 
 ### Étape 5 — le scénario via le client Python
 
@@ -306,6 +307,7 @@ Aucun ADR de la phase n'est `Proposé` : rien n'attend une décision du proprié
 - **Piège d'exploitation** : exporter `CRIBLE_ADMIN_KEY` dans le terminal du serveur le fait refuser au démarrage (`invalid_request`, ADR-0097). Le document sépare bien les deux terminaux ; le signaler à qui rejoue la démo d'une seule commande.
 - **Report déjà consigné** : `GET /v1/indexes/{index}` parcourt le dossier pour `sizes.disk_bytes` (à mesurer au rejeu de MES-16, P8/P9) ; le client Python ne couvre pas `PATCH`/`DELETE` d'index, les instantanés ni `GET /v1/jobs` (à rouvrir seulement si le MCP ou P9 en a besoin) ; MES-16 est à rejouer en conteneur ou à l'échelle de P9.
 - **Données à retirer après validation** : `data/mes16/` (2,6 Mo, sorties brutes des campagnes). Décision laissée au propriétaire, comme noté dans `suivi.md` (« Données de mesure conservées »).
+- **Défaut trouvé puis corrigé (complété le 2026-10-31, voir §9)** : `/openapi.json` donnait le même `operationId` `search` aux deux routes de recherche, et Swagger UI ouvrait les deux blocs ensemble ; `POST /v1/search` ne rendait alors aucune réponse dans l'interface, alors que `curl` rendait `200` en 75 ms. Aucun test ne vérifiait l'unicité des `operationId`. La tâche hors plan `CORRIGER-OPERATIONID-OPENAPI` (commit `954ee09`, fusion `7b334b4`) a renommé les deux attributs en `search_index` et `search_multi` et ajouté le test `every_operation_has_a_unique_operation_id`. Le rejeu dans Swagger UI passe.
 - **Points à décider par le propriétaire** : (1) l'option « plusieurs requêtes par appel » de `crible search`, pour ramener la preuve API = CLI sous une minute ; (2) la conduite à tenir sur le test intermittent d'arrêt ; (3) le retrait de `data/mes16/` ; (4) le sort des trois lignes de « Idées hors périmètre » déjà renvoyées à P8/P9 (lignes 608, 611, 613 de `suivi.md`).
 
 ## 8. Si le jalon n'est pas validé
@@ -316,3 +318,56 @@ Aucune validation n'est demandée ici. Les propositions suivantes sont **hors p�
 - `ACCELERER-PREUVE-API-CLI` (à décider) — si le propriétaire le veut, ajouter à `crible search` un mode « plusieurs requêtes par appel » pour ramener `api_and_cli_return_the_same_results_on_the_legifacile_sample` de 1 901 s à quelques minutes. Critère : résultats identiques au bit près sur les 300 questions × 3 modes, durée divisée par dix environ.
 
 Les corrections qu'un relecteur demanderait après un refus deviendraient, elles, des tâches `CORRIGER-…` dans `docs/phases/P6-serveur-et-api.md`, avec leurs critères d'acceptation.
+
+## 9. Complément du 2026-10-31 : rejeu Swagger UI par le propriétaire
+
+Ce complément rapporte le rejeu de l'étape 4 de `docs/jalons/J6-demo.md` par le propriétaire, les défauts trouvés et leur correction. Aucun test ni aucune démo n'a été relancé par `@jalon` pour l'écrire : tous les faits ci-dessous sont ceux rapportés par le propriétaire, par `@dev` et par `@relecteur`.
+
+### 9.1. Étape 4 jouée dans Swagger UI
+
+Le propriétaire a joué l'étape 4 dans Swagger UI, sur les données de `data/j6-demo`.
+
+- Les six `POST /v1/indexes` et les six attaches de lots passent.
+- Les attaches de `sarde` et `titres` ont rendu `200` au lieu de `202` : `wait=true` était coché, et un job terminé dans le délai est rendu en `200` (`docs/05-api.md:21`). C'est conforme.
+
+### 9.2. Défaut trouvé
+
+`POST /v1/search` ne rendait jamais de réponse dans Swagger UI, et cliquer sur l'un des deux blocs de recherche ouvrait les deux.
+
+### 9.3. Diagnostic de l'orchestrateur, en lecture seule
+
+- Le serveur était sain : 0 % de CPU, `/ready` à `200`, six attaches `succeeded`.
+- La même requête passée par `curl` rendait `200` en 75 ms, avec `JORFDOLE000047079143` (dole) et `JORFARTI000026179331` (jorf) en tête, scores d'environ 0,0164.
+- Cause : `/openapi.json` donnait le même `operationId` `search` (tag `search`) à `POST /v1/indexes/{index}/search` et à `POST /v1/search`. OpenAPI 3.1 l'exige unique, et Swagger UI identifie les blocs par ce nom.
+- Aucun test ne vérifiait l'unicité.
+
+### 9.4. Correction
+
+Tâche hors plan `CORRIGER-OPERATIONID-OPENAPI`, décidée par le propriétaire ; sa fiche est à la fin de `docs/phases/P6-serveur-et-api.md`.
+
+- Commit `954ee09`, fusion `7b334b4` dans `phase/P6-serveur-et-api`.
+- `operation_id` `search_index` et `search_multi` ; les 16 autres sont inchangés.
+- Test `every_operation_has_a_unique_operation_id` dans `crates/crible-server/tests/openapi_routes.rs`, rouge quand le doublon est remis.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo doc` en `-D warnings` verts ; `cargo test --workspace` : **1 003 passés, 0 échoué** (rapportés par `@dev`).
+- `@relecteur` : verdict `OK` au 2e tour, après la correction de deux mineurs du 1er tour.
+
+### 9.5. Rejeu après la correction
+
+Le binaire release a été recompilé et le serveur relancé sur les mêmes données.
+
+- Chaque bloc de recherche s'ouvre seul.
+- La recherche simple et la recherche multi-index passent dans Swagger UI.
+- Le `PATCH`, la compaction et l'export avaient été joués avec succès par le propriétaire pendant la correction : ces routes n'étaient pas concernées par le défaut.
+- Le propriétaire conclut : « c'est bon ça marche ».
+
+### 9.6. Série `--release --include-ignored`
+
+La série de l'orchestrateur (**1 027 / 0 / 0**, section 2) date du commit `b3fdf9b`, d'avant la correction. Elle n'est pas rejouée : la correction ne touche que deux attributs `operation_id` et ajoute un test, déjà couvert par `cargo test --workspace`.
+
+### 9.7. CI distante
+
+La CI distante n'a pas encore été rejouée sur les commits du 2026-10-31. La branche n'est pas poussée.
+
+### 9.8. Verdict
+
+Le critère « le scénario J6 passe en entier via Swagger UI » est désormais tenu. J6 est `PRET-POUR-VALIDATION`, sous réserve de la CI distante.
