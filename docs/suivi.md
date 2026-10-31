@@ -15,7 +15,7 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 | J3 | P3 — Cycle de vie | VALIDE 2026-10-26 | [J3-rapport.md](jalons/J3-rapport.md) |
 | J4 | P4 — Recherche rapide | VALIDE 2026-10-28 | [J4-rapport.md](jalons/J4-rapport.md) |
 | J5 | P5 — Lexical et hybride | VALIDE 2026-10-29 | [J5-rapport.md](jalons/J5-rapport.md) |
-| J6 | P6 — Serveur et API | PRET-POUR-VALIDATION | [J6-rapport.md](jalons/J6-rapport.md) |
+| J6 | P6 — Serveur et API | VALIDE 2026-10-31 | [J6-rapport.md](jalons/J6-rapport.md) |
 | J7 | P7 — Observabilité | EN-ATTENTE | |
 | J8 | P8 — Docker et déploiement | EN-ATTENTE | |
 | J9 | P9 — Migration Legifacile (v1) | EN-ATTENTE | |
@@ -1018,3 +1018,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-10-31 | Début de CORRIGER-OPERATIONID-OPENAPI (`tache/CORRIGER-OPERATIONID-OPENAPI`, depuis `phase/P6-serveur-et-api` à `d82606f`) ; fiche sans invariant, donc sans `@testeur` |
 | 2026-10-31 | CORRIGER-OPERATIONID-OPENAPI terminée : `@dev` (5 min, puis 16 s pour les deux mineurs) donne des `operation_id` explicites aux deux routes de recherche et ajoute le test d'unicité ; fmt, clippy `-D warnings`, `cargo doc` en `-D warnings` et `cargo test --workspace` (1 003 passés) verts ; `@relecteur` `OK` au 1er tour avec deux mineurs (fermeture qui masquait un compteur, littéral `18` répété), corrigés puis relus `OK` au 2e tour ; garde-fou ADR-0037 sans écart aux deux tours. J6 reste `EN-ATTENTE` jusqu'au rejeu Swagger UI des recherches par le propriétaire |
 | 2026-10-31 | Rejeu Swagger UI du propriétaire après CORRIGER-OPERATIONID-OPENAPI (binaire release recompilé, serveur relancé sur `data/j6-demo`) : recherche simple et multi-index passent, chaque bloc s'ouvre seul ; patch, compaction et export joués avec succès pendant la correction (« c'est bon ça marche ») ; complément §9 ajouté au rapport de J6 par `@jalon` ; J6 repasse en `PRET-POUR-VALIDATION`, sous réserve de la CI distante sur les commits du jour |
+| 2026-10-31 | Branche `phase/P6-serveur-et-api` poussée sur confirmation du propriétaire (« oui pousse ») : `3413c38..2ed70c3`, sans force. CI distante verte : run `41226660953` (workflow `CI`, `push`) en succès, jobs `Rust`, `Rust with ONNX Runtime`, `Tools` et `Python` verts. La réserve du rapport de J6 est levée ; J6 reste `PRET-POUR-VALIDATION`, en attente de la décision du propriétaire |
+| 2026-10-31 | Jalon J6 validé sur instruction explicite du propriétaire (`/valider J6`), après le rejeu Swagger UI corrigé par CORRIGER-OPERATIONID-OPENAPI et le run de CI distante `41226660953` vert sur `2ed70c3` : rapport `docs/jalons/J6-rapport.md` ; fusion de `phase/P6-serveur-et-api` dans `main` et tag `jalon-J6`, puis `cargo clean` (règle de fin de phase du 2026-10-31) |
