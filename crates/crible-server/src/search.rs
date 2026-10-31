@@ -113,6 +113,7 @@ pub(crate) const DEFAULT_K: usize = 10;
 #[utoipa::path(
     post,
     path = "/v1/indexes/{index}/search",
+    operation_id = "search_index",
     tag = "search",
     description = "Search one index, dense, lexical or hybrid, and fuse the two rankings. An \
                    unknown field of the body is `400 invalid_request`; an unknown index is `404 \
