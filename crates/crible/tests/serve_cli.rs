@@ -19,10 +19,10 @@
 //! the test fails before its stop.
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -31,10 +31,16 @@ use tempfile::TempDir;
 /// Time a child has to answer or to exit before the test fails.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// A configuration file and the port it binds, in a temporary directory.
+/// A configuration file in a temporary directory.
+///
+/// The port is not chosen here: the configuration binds `127.0.0.1:0`, and the
+/// kernel picks a port that is free at the moment of the bind. A port reserved
+/// by the test and released before the child binds can be taken in that
+/// window: the child then exits on `EADDRINUSE`, and a probe that reached the
+/// foreign listener is reset. That race is `CORRIGER-ARRET-SOUS-CHARGE`; the
+/// address the child bound is read from its journal (see [`Server::start`]).
 struct Instance {
     directory: TempDir,
-    port: u16,
 }
 
 impl Instance {
@@ -50,21 +56,16 @@ impl Instance {
             fs::create_dir_all(directory.path().join(name))
                 .expect("an instance directory is creatable");
         }
-        let port = free_port();
         fs::write(
             directory.path().join("crible.toml"),
-            config(directory.path(), port, timeout_ms),
+            config(directory.path(), timeout_ms),
         )
         .expect("crible.toml is writable");
-        Self { directory, port }
+        Self { directory }
     }
 
     fn config_path(&self) -> PathBuf {
         self.directory.path().join("crible.toml")
-    }
-
-    fn address(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], self.port))
     }
 
     /// Adds an index whose model configuration is a named pipe: the loader
@@ -114,13 +115,16 @@ fn fifo(path: &Path) {
     assert!(status.success(), "mkfifo must create {}", path.display());
 }
 
-/// The configuration of `docs/07`, with the paths of `root`, `port` and
+/// The configuration of `docs/07`, with the paths of `root` and
 /// `[limits].default_timeout_ms`.
-fn config(root: &Path, port: u16, timeout_ms: u64) -> String {
+///
+/// The bind address asks the kernel for a free port (`:0`): the test never
+/// reserves a port it cannot keep until the child binds it.
+fn config(root: &Path, timeout_ms: u64) -> String {
     format!(
         r#"
 [server]
-bind = "127.0.0.1:{port}"
+bind = "127.0.0.1:0"
 search_threads = 0
 max_concurrent_searches = 0
 
@@ -157,27 +161,27 @@ query_cache_entries = 1024
     )
 }
 
-/// Reserves an ephemeral port and releases it.
-///
-/// The port is reused by the child at once: a race exists in principle, and no
-/// test elsewhere binds it in the meantime.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("an ephemeral port is bindable");
-    listener
-        .local_addr()
-        .expect("the bound address is known")
-        .port()
-}
-
 /// A child server, killed if the test fails before it stops it.
+///
+/// It holds the journal reader: the first lines are read while the bound
+/// address is awaited, and [`Server::journal`] returns them with the rest.
 struct Server {
     child: Child,
+    stdout: BufReader<ChildStdout>,
+    /// Lines of the journal read before the test reached its first probe.
+    first_lines: Vec<String>,
+    address: SocketAddr,
 }
 
 impl Server {
-    /// Starts `crible serve` on `instance`.
+    /// Starts `crible serve` on `instance` and waits for the address it bound.
+    ///
+    /// The child binds `127.0.0.1:0`: the kernel picks the port at the bind, so
+    /// no other process can take it between the choice and the bind. The
+    /// address is read from the `"the server is bound"` line of the journal,
+    /// which the server logs right after the bind (ADR-0099, "Démarrage").
     fn start(instance: &Instance) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_crible"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_crible"))
             .arg("serve")
             .arg("--config")
             .arg(instance.config_path())
@@ -189,7 +193,24 @@ impl Server {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|error| panic!("crible serve must start: {error}"));
-        Self { child }
+        let stdout = child
+            .stdout
+            .take()
+            .expect("the journal of the child is captured");
+        let mut stdout = BufReader::new(stdout);
+        let mut first_lines = Vec::new();
+        let address = bound_address(&mut stdout, &mut first_lines);
+        Self {
+            child,
+            stdout,
+            first_lines,
+            address,
+        }
+    }
+
+    /// The address the child bound.
+    fn address(&self) -> SocketAddr {
+        self.address
     }
 
     /// Waits until the process exits, with a bound.
@@ -209,17 +230,17 @@ impl Server {
     }
 
     /// Reads the journal captured on stdout.
+    ///
+    /// The lines read while the bound address was awaited come first, in order:
+    /// the caller sees the whole journal.
     fn journal(&mut self) -> String {
-        let mut stdout = self
-            .child
-            .stdout
-            .take()
-            .expect("the journal of the child is captured");
         let mut text = String::new();
-        stdout
+        self.stdout
             .read_to_string(&mut text)
             .expect("the journal of the child is readable");
-        text
+        let mut lines = std::mem::take(&mut self.first_lines);
+        lines.extend(text.lines().map(str::to_owned));
+        lines.join("\n")
     }
 
     /// Sends `signal` to the child.
@@ -236,6 +257,40 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
+    }
+}
+
+/// Reads the journal until the child announces the address it bound.
+///
+/// The lines read on the way are kept in `lines`, so [`Server::journal`] can
+/// return the whole journal. The line is the one `lifecycle::serve_bound` logs
+/// first (ADR-0099, "Démarrage"): `{"fields":{"message":"the server is bound",
+/// "address":"127.0.0.1:<port>",…}}`. A child that exits before logging it
+/// closes its journal, which this function reports.
+fn bound_address(stdout: &mut BufReader<ChildStdout>, lines: &mut Vec<String>) -> SocketAddr {
+    loop {
+        let mut line = String::new();
+        let read = stdout
+            .read_line(&mut line)
+            .expect("the journal of the child is readable");
+        assert!(
+            read > 0,
+            "crible serve announces the address it bound before it exits, got {lines:?}"
+        );
+        let value: serde_json::Value =
+            serde_json::from_str(line.trim_end()).unwrap_or_else(|error| {
+                panic!("a journal line is a JSON object, got {line:?}: {error}")
+            });
+        lines.push(line.trim_end().to_owned());
+        if value["fields"]["message"] != "the server is bound" {
+            continue;
+        }
+        let address = value["fields"]["address"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the bound line carries its address, got {line:?}"));
+        return address
+            .parse()
+            .unwrap_or_else(|error| panic!("the bound address parses, got {address:?}: {error}"));
     }
 }
 
@@ -344,9 +399,9 @@ fn serve_answers_the_probes_and_stops_on_sigterm() {
     let instance = Instance::new();
     let mut server = Server::start(&instance);
 
-    let health = wait_for(instance.address(), "/health", 200);
+    let health = wait_for(server.address(), "/health", 200);
     assert!(health.body.contains("\"ok\""), "got {}", health.body);
-    let ready = wait_for(instance.address(), "/ready", 200);
+    let ready = wait_for(server.address(), "/ready", 200);
     assert!(ready.body.contains("\"ready\""), "got {}", ready.body);
 
     server.signal("TERM");
@@ -404,8 +459,8 @@ fn serve_stops_on_sigterm_while_the_loader_waits() {
     let instance = Instance::new().with_blocked_model();
     let mut server = Server::start(&instance);
 
-    wait_for(instance.address(), "/health", 200);
-    let ready = try_get(instance.address(), "/ready").expect("the server accepts");
+    wait_for(server.address(), "/health", 200);
+    let ready = try_get(server.address(), "/ready").expect("the server accepts");
     assert_eq!(
         ready.status, 503,
         "the loader is still waiting on the model"
@@ -426,9 +481,9 @@ fn serve_exits_at_once_on_a_second_signal_during_the_drain() {
     // only the second signal can end the process within the test.
     let instance = Instance::with_timeout(60_000);
     let mut server = Server::start(&instance);
-    wait_for(instance.address(), "/ready", 200);
+    wait_for(server.address(), "/ready", 200);
 
-    let mut held = TcpStream::connect(instance.address()).expect("the server accepts");
+    let mut held = TcpStream::connect(server.address()).expect("the server accepts");
     held.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n")
         .expect("the partial request is writable");
 
@@ -454,7 +509,7 @@ fn serve_stops_on_sigint() {
     // ADR-0099: SIGINT triggers the same sequence as SIGTERM.
     let instance = Instance::new();
     let mut server = Server::start(&instance);
-    wait_for(instance.address(), "/ready", 200);
+    wait_for(server.address(), "/ready", 200);
 
     server.signal("INT");
     let status = server.wait_for_exit();
