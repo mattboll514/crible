@@ -12,7 +12,13 @@
 //! the code) and ADR-0111, decisions 5 and 9 (the comparison, the two
 //! publication routes and the routes a later phase delivers).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The number of operations of `docs/05-api.md`.
+///
+/// The tests that walk every operation count them: a loop that visits nothing
+/// would pass. `docs/05-api.md` is the reference (ADR-0111, decision 5).
+const OPERATIONS: usize = 18;
 
 /// The reference document, read at compile time.
 const DOCS: &str = include_str!("../../../docs/05-api.md");
@@ -202,7 +208,7 @@ fn every_operation_declares_the_body_bound() {
         }
     }
     assert_eq!(
-        operations, 18,
+        operations, OPERATIONS,
         "every operation of `docs/05-api.md` is covered"
     );
 }
@@ -248,5 +254,55 @@ fn the_two_probes_need_no_key_in_the_specification() {
     assert!(
         global[0].get("bearerAuth").is_some(),
         "the global requirement names `bearerAuth`: {global:?}"
+    );
+}
+
+/// OpenAPI 3.1 requires an `operationId` to be unique among all the operations,
+/// and Swagger UI identifies the blocks by it: two operations that share one are
+/// clicked as one, and one of them never runs (CORRIGER-OPERATIONID-OPENAPI).
+///
+/// `utoipa` derives the id from the name of the Rust function, so the two
+/// handlers named `search` carried the same id until an explicit `operation_id`
+/// distinguished them. References: ADR-0111 (the specification is published and
+/// read by Swagger UI) and OpenAPI 3.1, the `operationId` field.
+#[test]
+fn every_operation_has_a_unique_operation_id() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let mut routes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut operations = 0;
+    for (path, item) in specification["paths"]
+        .as_object()
+        .expect("the specification has a paths object")
+    {
+        for (method, operation) in item
+            .as_object()
+            .unwrap_or_else(|| panic!("the path item of `{path}` is an object"))
+        {
+            if !METHODS.contains(&method.as_str()) {
+                continue;
+            }
+            operations += 1;
+            let route = format!("{} {path}", method.to_uppercase());
+            let identifier = operation["operationId"]
+                .as_str()
+                .unwrap_or_else(|| panic!("`{route}` declares an `operationId`"));
+            routes.entry(identifier.to_owned()).or_default().push(route);
+        }
+    }
+    // The count the other tests of this file check: an empty loop proves nothing.
+    assert_eq!(
+        operations, OPERATIONS,
+        "every operation of `docs/05-api.md` is visited"
+    );
+    let shared: Vec<String> = routes
+        .iter()
+        .filter(|(_, sharing)| sharing.len() > 1)
+        .map(|(identifier, sharing)| format!("`{identifier}` is shared by {sharing:?}"))
+        .collect();
+    assert!(
+        shared.is_empty(),
+        "the `operationId` of each operation is unique: {}",
+        shared.join("; ")
     );
 }

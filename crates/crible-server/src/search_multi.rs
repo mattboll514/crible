@@ -76,6 +76,7 @@ const RRF_CONSTANT: f32 = 60.0;
 #[utoipa::path(
     post,
     path = "/v1/search",
+    operation_id = "search_multi",
     tag = "search",
     description = "Search several indexes in one request, with one encoding and one deadline, \
                    then fuse their rankings. `targets` is mandatory and holds no duplicate; an \
