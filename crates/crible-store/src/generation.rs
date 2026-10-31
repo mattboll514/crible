@@ -523,7 +523,7 @@ pub(crate) struct CommittedGeneration {
     pub(crate) timings: CommitTimings,
 }
 
-/// Step of the commit protocol of [`GenerationStore::commit_with_rows`] that an
+/// Step of the commit protocol of `GenerationStore::commit_with_rows` that an
 /// observer is called at.
 ///
 /// The two steps sit around the SQLite `COMMIT`, which is the only commit point
@@ -533,7 +533,7 @@ pub(crate) struct CommittedGeneration {
 ///
 /// The type is compiled in every build, like
 /// [`CompactStep`](crate::compact::CompactStep): a production caller hands
-/// [`GenerationStore::commit_with_rows`] a no-op observer, which the compiler
+/// `GenerationStore::commit_with_rows` a no-op observer, which the compiler
 /// removes, and only the attach of the `failpoints` build
 /// (`attach_with_observer`) hands a real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

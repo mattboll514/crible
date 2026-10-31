@@ -440,12 +440,19 @@ async fn the_shape_of_an_online_body_is_refused_before_the_job() {
         "documents": [],
         "deletions": []
     });
+    // `docs/05-api.md`: the refusal names the mode the route accepts, even when
+    // the body carries no document at all.
+    let empty_replace_all = json!({ "batch_id": "batch-shape", "mode": "replace_all" });
     for (case, body) in [
-        ("replace_all", replace_all),
+        ("a mode other than upsert", replace_all),
         ("a document also deleted", overlap),
         ("an unknown member", unknown_member),
         ("no documents and no deletions", empty),
         ("empty documents and empty deletions", empty_arrays),
+        (
+            "no document and a mode other than upsert",
+            empty_replace_all,
+        ),
     ] {
         let (status, answer) = post_documents(&router, body).await;
         assert_eq!(
@@ -457,13 +464,19 @@ async fn the_shape_of_an_online_body_is_refused_before_the_job() {
             answer["error"]["code"], "invalid_request",
             "{case}: {answer}"
         );
+        let message = answer["error"]["message"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
         if case.contains("no documents") || case.contains("empty documents") {
-            let message = answer["error"]["message"]
-                .as_str()
-                .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
             assert!(
                 message.contains("documents") && message.contains("deletions"),
                 "{case}: the message names both members: {answer}"
+            );
+        }
+        if case.contains("mode") {
+            assert!(
+                message.contains("replace_all") && message.contains("upsert"),
+                "{case}: the message names the mode: {answer}"
             );
         }
     }

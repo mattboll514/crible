@@ -23,57 +23,16 @@
 
 mod common;
 
-use std::path::Path;
-use std::time::{Duration, Instant};
-
 use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use common::{
-    ADMIN_SECRET, DOC_ID, INDEX, READ_SECRET, instance_with_alpha, online_batch, post_documents,
-    send, terminal_job,
+    ADMIN_SECRET, DOC_ID, INDEX, READ_SECRET, assert_no_iid_key, instance_with_alpha, online_batch,
+    post_documents, send, terminal_job, wait_for,
 };
 
 /// Environment variable of the barrier (`src/barriers.rs`).
 const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
-
-/// Waits for `path` to exist, or panics after ten seconds.
-///
-/// The wait is asynchronous on purpose: the test runs on the current-thread
-/// runtime, so a blocking wait would keep the runtime from polling the writer
-/// task that starts the compaction.
-async fn wait_for(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the compaction reached the barrier: {}",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
-/// Asserts that no key of `value` at any depth contains `iid` (INV-01).
-fn assert_no_iid_key(label: &str, value: &Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, child) in object {
-                assert!(
-                    !key.to_lowercase().contains("iid"),
-                    "{label} carries the key '{key}' (INV-01)"
-                );
-                assert_no_iid_key(label, child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                assert_no_iid_key(label, item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
 
 /// Reads the fixture document and returns its body.
 async fn read_document(router: &axum::Router) -> Value {
@@ -109,7 +68,7 @@ async fn a_read_during_a_compaction_serves_the_epoch_of_the_snapshot() {
     let path = format!("/v1/indexes/{INDEX}/compact?wait=false");
     let (status, accepted) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    wait_for(&barrier.path().join("ready-compaction")).await;
+    wait_for("the compaction", &barrier.path().join("ready-compaction")).await;
 
     // `CURRENT_EPOCH` names E+1, whose generation is G+1: reading the on-disk
     // current epoch would answer G+1, not G.

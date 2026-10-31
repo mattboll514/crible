@@ -123,8 +123,9 @@ pub(crate) fn response(
 ///
 /// The message is the one of the error, except for `internal`, which keeps
 /// [`INTERNAL_MESSAGE`]: an unexpected failure names a server path or an
-/// internal structure (ADR-0101, decision 2). `details` is empty, because a key
-/// is added only where `docs/05` documents it for that code (decision 3).
+/// internal structure (ADR-0101, decision 2). `details` is empty, except
+/// `path` for the `invalid_filter` error that carries one: `docs/05` documents
+/// that key for that code only (decision 3, ADR-0109, ADR-0110).
 ///
 /// The message of an `internal` is not lost: it travels as a [`Cause`] in the
 /// extension of the response, and [`render_layer_errors`] journals it under the
@@ -136,7 +137,11 @@ pub(crate) fn rendered(failure: &CribleError, request_id: &str) -> Response {
         ErrorCode::Internal => INTERNAL_MESSAGE,
         _ => failure.message(),
     };
-    let mut answer = response(code, message, json!({}), request_id);
+    let details = match (code, failure.path()) {
+        (ErrorCode::InvalidFilter, Some(path)) => json!({ "path": path }),
+        _ => json!({}),
+    };
+    let mut answer = response(code, message, details, request_id);
     if code == ErrorCode::Internal {
         answer
             .extensions_mut()

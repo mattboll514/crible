@@ -461,6 +461,13 @@ async fn the_drain_wait_armed_before_the_last_job_is_woken_by_it() {
     // keeps no permit, so `drained` must arm its future to see the transition
     // (ADR-0104). Without that, the stop would run to its bound and log jobs
     // that were never abandoned.
+    //
+    // This test keeps the nominal path. The other window, a notification sent
+    // between the last count of `pending` and the `await` of the wait, is proved
+    // by the unit test
+    // `jobs::tests::a_notification_between_the_last_count_and_the_wait_is_not_lost`,
+    // the only place that can stop the wait inside that window (`@relecteur`,
+    // FILE-D-ECRITURE-ET-JOBS).
     let instance = Instance::new(16, 60_000);
     let (state, _shutdown) = instance.state();
     let (release, blocked) = mpsc::channel::<()>();
@@ -477,8 +484,9 @@ async fn the_drain_wait_armed_before_the_last_job_is_woken_by_it() {
         .expect("the job is accepted");
     let board = Arc::clone(state.jobs().expect("the board is open"));
     let waiting = tokio::spawn(async move { board.drained().await });
-    // The waiter reached its `await` before the job was released.
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // The spawned wait is polled up to its `await` before the job is released:
+    // yielding hands the current-thread runtime to the waiter, without a sleep.
+    tokio::task::yield_now().await;
     let _ = release.send(());
     tokio::time::timeout(Duration::from_secs(2), waiting)
         .await
@@ -522,7 +530,7 @@ async fn a_full_queue_renders_503_with_retry_after() {
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    state
+    let waiting = state
         .submit_job(
             "alpha",
             JobKind::Export,
@@ -588,6 +596,24 @@ async fn a_full_queue_renders_503_with_retry_after() {
             .expect("the running job is kept")
             .state,
         JobState::Succeeded
+    );
+    // `JobBoard::accept` reserves the place in the queue (`try_reserve`) before
+    // it writes the row (`store.insert`), so the refused job left no line in the
+    // table either.
+    let store = JobStore::open_or_create(&instance.root().join("data").join(JOBS_FILE_NAME))
+        .expect("the job table is readable");
+    let mut rows: Vec<String> = store
+        .list(None, None)
+        .expect("the job table is readable")
+        .into_iter()
+        .map(|row| row.id)
+        .collect();
+    rows.sort();
+    let mut accepted = vec![running.id.clone(), waiting.id.clone()];
+    accepted.sort();
+    assert_eq!(
+        rows, accepted,
+        "the refused job wrote no row in jobs.sqlite"
     );
 }
 

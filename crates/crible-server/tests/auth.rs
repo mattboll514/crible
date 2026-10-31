@@ -36,7 +36,9 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Key of the `read` role used by the tests.
 const READ_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// Role of the key that must receive `403` on the `admin` route.
+/// Key unknown to the instance: no route knows it, so every one answers `401`
+/// with the body of ADR-0100, the `admin` route included; the `403` cases use
+/// the `read` key on `admin` instead.
 const UNKNOWN_KEY: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
 /// In-memory writer that captures the journal of a test.

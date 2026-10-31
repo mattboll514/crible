@@ -259,6 +259,10 @@ pub async fn accepted(state: &AppState, job: JobView, wait: bool) -> Response {
 /// [`build_router`]: a test router meets the `400`, `404`, `413`, `500` and
 /// `503` of `docs/05-api.md` exactly as the real routes do (ADR-0095,
 /// ADR-0101, ADR-0102).
+///
+/// The function is applied once, at the root of a router, but a second
+/// application is harmless: the request identifier already assigned is reused
+/// (ADR-0098).
 pub fn with_common_layers<S>(router: Router<S>) -> Router<S>
 where
     S: Clone + Send + Sync + 'static,
@@ -269,7 +273,7 @@ where
 /// Applies the layers of [`with_common_layers`] with an explicit body bound.
 ///
 /// The bound is a parameter so a test proves the path without a declared
-/// `Content-Length` with two kilobytes instead of 32 MiB; the server passes
+/// `Content-Length` with one kilobyte instead of 32 MiB; the server passes
 /// [`MAX_BODY_BYTES`], the constant of ADR-0102, and no configuration key
 /// reaches this function (ADR-0097).
 fn with_body_limit<S>(router: Router<S>, body_limit: usize) -> Router<S>
@@ -366,12 +370,19 @@ async fn ready(State(state): State<Arc<AppState>>) -> Response {
 /// The layer is the outermost one: a `404`, a `405` or a rejection rendered
 /// before any route still carries the header (ADR-0098). The span carries the
 /// identifier so every line logged during the request names it.
+///
+/// The layer is idempotent: a router already carrying `with_common_layers` keeps
+/// the identifier of the outer application, so wrapping it again cannot give the
+/// header and the body of one error two different identifiers (ADR-0098).
 async fn assign_request_id(mut request: Request, next: Next) -> Response {
-    let identifier = request
-        .headers()
-        .get(REQUEST_ID_HEADER)
-        .and_then(accepted_request_id)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let identifier = match request.extensions().get::<RequestId>() {
+        Some(existing) => existing.0.clone(),
+        None => request
+            .headers()
+            .get(REQUEST_ID_HEADER)
+            .and_then(accepted_request_id)
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
+    };
     request
         .extensions_mut()
         .insert(RequestId(identifier.clone()));
@@ -416,11 +427,12 @@ fn accepted_request_id(value: &HeaderValue) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{REQUEST_ID_HEADER, build_router};
+    use super::{REQUEST_ID_HEADER, RequestId, build_router};
     use crate::state::AppState;
     use axum::Json;
     use axum::Router;
     use axum::body::Body;
+    use axum::extract::Extension;
     use axum::extract::Request;
     use axum::http::StatusCode;
     use axum::response::Response;
@@ -501,6 +513,32 @@ mod tests {
             assert_ne!(identifier, refused);
             assert!(is_uuid_v4(&identifier), "got {identifier}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_router_wrapped_twice_keeps_one_identifier() {
+        // ADR-0098: the layers are applied once, at the root of the router. A
+        // router that carries them again must keep the identifier of the outer
+        // application — otherwise the header and the body of one error would
+        // name two different requests.
+        let router = super::with_common_layers(super::with_common_layers(
+            Router::new().route("/identifier", axum::routing::get(current_identifier)),
+        ));
+        let response = get(&router, "/identifier", None).await;
+        let header = identifier_of(&response);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the body is readable");
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            header,
+            "the handler and the header name the same request (ADR-0098)"
+        );
+    }
+
+    /// Echoes the identifier of the request, for the idempotence test.
+    async fn current_identifier(Extension(identifier): Extension<RequestId>) -> String {
+        identifier.0
     }
 
     #[tokio::test]

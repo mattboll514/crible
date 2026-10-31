@@ -272,12 +272,12 @@ fn main() -> ExitCode {
 /// Runs one command, mapping every engine error to the printed report.
 fn run(cli: Cli) -> Result<(), CribleError> {
     // The server journals on stdout, in JSON, at the level `RUST_LOG` asks for
-    // (ADR-0096): its subscriber replaces the fixed one of the commands, which
-    // stays on stderr.
+    // (ADR-0096): its subscriber replaces the one of the commands, which stays
+    // on stderr.
     if matches!(cli.command, Command::Serve { .. }) {
         crible_server::init_logging()?;
     } else {
-        init_logging();
+        init_logging()?;
     }
     match cli.command {
         Command::Index { command } => match command {
@@ -353,37 +353,50 @@ fn run(cli: Cli) -> Result<(), CribleError> {
     }
 }
 
-/// Installs the log subscriber of the binary: JSON lines, warnings and above,
-/// on stderr.
+/// Installs the log subscriber of a command: JSON lines on stderr, filtered by
+/// `RUST_LOG` through the same [`EnvFilter`](tracing_subscriber::EnvFilter) as
+/// the server (ADR-0096).
 ///
 /// The journal never goes to stdout: a command prints its result there (JSON of
 /// `search`, report of `attach`), and a script parses it. Every stderr line of
 /// the journal is one JSON object, as `docs/07-stack-et-deploiement.md` lists
-/// `tracing-subscriber` "(JSON)". The level is fixed, because raising it
-/// through `RUST_LOG` would need the `env-filter` feature of
-/// `tracing-subscriber`, which `docs/07` does not list for a command; the
-/// warnings that matter are those of the online-batch cleanup (ADR-0056,
-/// decision 3). `RUST_LOG` is honored by the server, which installs its own
-/// subscriber on stdout (ADR-0096); a command keeps this fixed level.
+/// `tracing-subscriber` "(JSON)". An absent or blank `RUST_LOG` keeps the level
+/// of P2, warnings and above, because the warnings that matter are those of the
+/// online-batch cleanup (ADR-0056, decision 3); a present value replaces that
+/// level, as `crible serve` already did.
+///
 /// `try_init` rather than `init`: a second subscriber is not a reason to abort
-/// a command. No message carries a query text or a document value.
-fn init_logging() {
-    let _ = log_subscriber(std::io::stderr).try_init();
+/// a command. A `RUST_LOG` that is not a valid filter is one, though: it is
+/// configuration, and the command reports it like any other error.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`](crible_core::error::ErrorCode::InvalidRequest)
+/// when `RUST_LOG` is not a valid filter.
+fn init_logging() -> Result<(), CribleError> {
+    let raw = std::env::var("RUST_LOG").ok();
+    let filter = effective_filter(raw.as_deref());
+    let subscriber = crible_server::log_subscriber(std::io::stderr, &filter)?;
+    let _ = subscriber.try_init();
+    Ok(())
 }
 
-/// Builds the journal subscriber over `writer`.
+/// Level a command journals at when `RUST_LOG` is absent or blank.
 ///
-/// The writer is a parameter so a test can capture a line; the binary passes
-/// stderr.
-fn log_subscriber<W>(writer: W) -> impl tracing::Subscriber + Send + Sync + 'static
-where
-    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
-{
-    tracing_subscriber::fmt()
-        .json()
-        .with_writer(writer)
-        .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
-        .finish()
+/// The server defaults to `info` (ADR-0096); a command keeps `warn`, the level
+/// of P2, so `crible search > result.json` stays free of lines a caller did not
+/// ask for.
+const DEFAULT_COMMAND_FILTER: &str = "warn";
+
+/// Filter a command uses, from the raw value of `RUST_LOG`.
+///
+/// A present but blank variable is the absent one, as in the server.
+#[must_use]
+fn effective_filter(raw: Option<&str>) -> String {
+    match raw {
+        Some(value) if !value.trim().is_empty() => value.to_owned(),
+        _ => DEFAULT_COMMAND_FILTER.to_owned(),
+    }
 }
 
 /// Prints a failure as `<code>: <message>` on stderr.
@@ -397,7 +410,7 @@ fn report(error: &CribleError) {
 
 #[cfg(test)]
 mod tests {
-    use super::log_subscriber;
+    use super::{DEFAULT_COMMAND_FILTER, effective_filter};
     use std::io;
     use std::sync::{Arc, Mutex};
     use tracing_subscriber::fmt::MakeWriter;
@@ -443,7 +456,8 @@ mod tests {
         // `docs/07` lists `tracing-subscriber` "(JSON)": a line of the journal
         // is a JSON object a tool can parse, not free text.
         let sink = Sink::default();
-        let subscriber = log_subscriber(sink.clone());
+        let subscriber = crible_server::log_subscriber(sink.clone(), DEFAULT_COMMAND_FILTER)
+            .expect("the default filter is valid");
         tracing::subscriber::with_default(subscriber, || {
             tracing::warn!(
                 path = "/data/tmp/online-x.lock",
@@ -467,11 +481,12 @@ mod tests {
     }
 
     #[test]
-    fn the_journal_stays_silent_below_warn() {
-        // The level is fixed to `WARN`: an `info!` must not reach stderr, so a
-        // caller's stdout and stderr stay free of noise until P6.
+    fn the_journal_stays_silent_below_warn_without_rust_log() {
+        // The default of a command is `WARN`: an `info!` must not reach stderr,
+        // so a caller's stderr stays free of noise.
         let sink = Sink::default();
-        let subscriber = log_subscriber(sink.clone());
+        let subscriber = crible_server::log_subscriber(sink.clone(), DEFAULT_COMMAND_FILTER)
+            .expect("the default filter is valid");
         tracing::subscriber::with_default(subscriber, || {
             tracing::info!("a message below the level of the journal");
             tracing::debug!("another one");
@@ -480,6 +495,43 @@ mod tests {
             sink.contents().is_empty(),
             "a level below WARN writes nothing: {:?}",
             String::from_utf8_lossy(&sink.contents())
+        );
+    }
+
+    #[test]
+    fn rust_log_raises_the_level_of_a_command() {
+        // ADR-0096: a command honors `RUST_LOG` through the same `EnvFilter` as
+        // the server, so an operator can ask for the `info` lines of a command
+        // without changing the binary.
+        assert_eq!(effective_filter(None), "warn");
+        assert_eq!(effective_filter(Some("")), "warn");
+        assert_eq!(effective_filter(Some("  ")), "warn");
+        assert_eq!(effective_filter(Some("info")), "info");
+
+        let sink = Sink::default();
+        let filter = effective_filter(Some("info"));
+        let subscriber =
+            crible_server::log_subscriber(sink.clone(), &filter).expect("info is valid");
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!("an info line an operator asked for");
+        });
+        let text = String::from_utf8(sink.contents()).expect("the journal is UTF-8");
+        assert!(
+            text.contains("an info line an operator asked for"),
+            "`RUST_LOG=info` lets the info lines through: {text:?}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_rust_log_is_reported() {
+        // The filter is configuration: a malformed value is a command error of
+        // the category `invalid_request`, not a silent fallback.
+        let failure = crible_server::log_subscriber(Sink::default(), "info,,,=x")
+            .err()
+            .expect("an invalid filter is refused");
+        assert_eq!(
+            failure.code(),
+            crible_core::error::ErrorCode::InvalidRequest
         );
     }
 }

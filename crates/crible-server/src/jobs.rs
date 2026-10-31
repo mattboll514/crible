@@ -219,6 +219,23 @@ pub struct JobBoard {
     jobs: RwLock<HashMap<String, watch::Sender<JobView>>>,
     pending: AtomicUsize,
     finished: Notify,
+    /// Resume point of the drain wait, armed by a unit test only: it stops
+    /// [`JobBoard::drained`] between its second count and its `await`, so the
+    /// test can prove that a notification emitted in that window is observed
+    /// (ADR-0104).
+    #[cfg(test)]
+    resume: Mutex<Option<DrainResume>>,
+}
+
+/// Resume point of the drain wait of a unit test (`cfg(test)` only).
+///
+/// `reached` tells the test that [`JobBoard::drained`] sits in its window, and
+/// `release` lets the test end the wait. The field never exists in a production
+/// build.
+#[cfg(test)]
+struct DrainResume {
+    reached: mpsc::UnboundedSender<()>,
+    release: mpsc::UnboundedReceiver<()>,
 }
 
 impl JobBoard {
@@ -250,6 +267,8 @@ impl JobBoard {
             jobs: RwLock::new(jobs),
             pending: AtomicUsize::new(pending),
             finished: Notify::new(),
+            #[cfg(test)]
+            resume: Mutex::new(None),
         })
     }
 
@@ -506,10 +525,12 @@ impl JobBoard {
 
     /// Waits until every accepted job is terminal.
     ///
-    /// The future is pinned and registered with [`Notified::enable`] before the
-    /// second count, so the last notification, emitted between the two counts,
-    /// is never lost: `notify_waiters` keeps no permit and only wakes a waiter
-    /// already registered (ADR-0104).
+    /// The future is created **before** the second count: `notified` records the
+    /// number of `notify_waiters` calls, so a broadcast after its creation is
+    /// observed when the future is polled, and the second count then returns
+    /// without waiting for a notification that already happened. `enable` queues
+    /// the waiter for `notify_one`, which the board does not send today
+    /// (ADR-0104).
     pub async fn drained(&self) {
         loop {
             if self.pending.load(Ordering::Acquire) == 0 {
@@ -521,7 +542,31 @@ impl JobBoard {
             if self.pending.load(Ordering::Acquire) == 0 {
                 return;
             }
+            #[cfg(test)]
+            self.reach_resume_point().await;
             notified.await;
+        }
+    }
+
+    /// Arms the resume point of the next drain wait (unit test only).
+    #[cfg(test)]
+    fn arm_resume_point(&self, resume: DrainResume) {
+        if let Ok(mut slot) = self.resume.lock() {
+            *slot = Some(resume);
+        }
+    }
+
+    /// Stops the drain wait between its second count and its `await`, when a
+    /// test armed the resume point.
+    ///
+    /// That window is where a wait armed too late loses the notification: the
+    /// future must exist before the last job announces itself.
+    #[cfg(test)]
+    async fn reach_resume_point(&self) {
+        let point = self.resume.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(mut point) = point {
+            let _ = point.reached.send(());
+            let _ = point.release.recv().await;
         }
     }
 
@@ -1096,4 +1141,62 @@ fn job_error_body(code: ErrorCode, message: &str, details: Value) -> Value {
 /// Builds an [`ErrorCode::Internal`] error for a poisoned lock.
 fn poisoned(what: &str) -> CribleError {
     error::internal(format!("{what} is poisoned"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    use tokio::sync::mpsc;
+
+    use super::{DrainResume, JobBoard};
+
+    /// A notification sent after the last count of `pending` is not lost.
+    ///
+    /// `notify_waiters` keeps no permit: the waiter must exist before the last
+    /// job announces itself. `notified` records the number of `notify_waiters`
+    /// calls, so a broadcast after its creation is observed; the wait creates
+    /// its future before the second count, so the notification emitted in the
+    /// resume point below is observed even before the future is polled.
+    /// A wait armed any later would miss it, and the timeout below would fail
+    /// (ADR-0104).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_notification_between_the_last_count_and_the_wait_is_not_lost() {
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let board = Arc::new(
+            JobBoard::open(&directory.path().join("jobs.sqlite"))
+                .expect("the job table is creatable"),
+        );
+        let (reached, mut in_window) = mpsc::unbounded_channel();
+        let (release, released) = mpsc::unbounded_channel();
+        board.arm_resume_point(DrainResume {
+            reached,
+            release: released,
+        });
+        // One accepted job, still running.
+        board.pending.fetch_add(1, Ordering::AcqRel);
+
+        let waiting = {
+            let board = Arc::clone(&board);
+            tokio::spawn(async move { board.drained().await })
+        };
+        // The waiter sits between its second count and its `await`.
+        in_window
+            .recv()
+            .await
+            .expect("the drain wait reaches the resume point");
+
+        // The last job finishes exactly in that window: the notification must
+        // be observed by the wait even before its future is polled.
+        board.pending.fetch_sub(1, Ordering::AcqRel);
+        board.finished.notify_waiters();
+        release.send(()).expect("the wait resumes");
+
+        tokio::time::timeout(Duration::from_secs(2), waiting)
+            .await
+            .expect("the armed wait is woken by the notification of the last job")
+            .expect("the wait task joins");
+    }
 }

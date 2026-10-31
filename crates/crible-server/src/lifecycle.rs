@@ -14,10 +14,10 @@
 //!    task, so `/ready` answers `503` until it is done;
 //! 3. the loader marks the state ready, or its failure stops the startup with a
 //!    non-zero exit code: there is no partial service (ADR-0099);
-//! 4. the drainage withdraws `/ready` (in `run_server`, so a signal and a test
-//!    take the same path), stops the acceptance of new connections, drains the
-//!    requests in flight for at most `default_timeout_ms` + 1 000 ms, then
-//!    exits;
+//! 4. the drainage withdraws `/ready` before it stops accepting new
+//!    connections (in `run_server`, so a signal and a test take the same path),
+//!    drains the requests in flight for at most `default_timeout_ms` + 1 000 ms,
+//!    then exits;
 //! 5. a second signal exits at once with a non-zero code: the binary hands the
 //!    runtime to `shutdown_background`, so a recovery still in progress in a
 //!    blocking task cannot delay the exit.
@@ -167,9 +167,15 @@ pub async fn run_server(
     jobs: Duration,
 ) -> Result<StopReason, CribleError> {
     let mut stopping = shutdown.receiver();
-    let mut serving = shutdown.receiver();
+    let graceful = shutdown.clone();
+    let readiness = Arc::clone(&state);
     let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+        let mut serving = graceful.receiver();
         let _ = serving.wait_for(|phase| *phase != Phase::Running).await;
+        // ADR-0099, "Arrêt", step 1: the readiness is withdrawn before the
+        // acceptance stops, in the same task, so a probe never reads "ready" on
+        // a listener that no longer accepts a connection.
+        readiness.mark_not_ready();
     });
     let mut handle = tokio::spawn(async move { server.await });
 
@@ -183,10 +189,9 @@ pub async fn run_server(
             "the shutdown trigger disappeared before the server stopped",
         ));
     }
-    // The drainage begins here, whether a signal or a test triggered it: this
-    // is the single place that withdraws the readiness, before the connections
-    // already open are drained (ADR-0099, "Arrêt", step 1).
-    state.mark_not_ready();
+    // The drainage begins here, whether a signal or a test triggered it: the
+    // readiness was withdrawn by the graceful shutdown of the server task, just
+    // before it stopped accepting (ADR-0099, "Arrêt", step 1).
     if *stopping.borrow_and_update() == Phase::Forced {
         handle.abort();
         return Ok(StopReason::Forced);
@@ -330,12 +335,17 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
                         let _ = server.await;
                         return Err(failure);
                     }
-                    state.mark_ready();
-                    let indexes = state
-                        .loaded()
-                        .and_then(|loaded| loaded.indexes().ok())
-                        .map_or(0, |indexes| indexes.len());
-                    info!(indexes, "the instance is ready");
+                    if publish_ready(&state, &shutdown) {
+                        let indexes = state
+                            .loaded()
+                            .and_then(|loaded| loaded.indexes().ok())
+                            .map_or(0, |indexes| indexes.len());
+                        info!(indexes, "the instance is ready");
+                    } else {
+                        info!(
+                            "the startup finished during the drainage; the instance stays not ready"
+                        );
+                    }
                 }
                 Ok(Err(failure)) => {
                     error!(
@@ -441,6 +451,24 @@ fn install_signal_handlers(shutdown: Shutdown) -> Result<(), CribleError> {
     Ok(())
 }
 
+/// Publishes the readiness of a finished startup, unless the drainage has begun.
+///
+/// The loader can finish after `run_server` withdrew the readiness. The phase is
+/// read only after [`AppState::mark_ready`], so the window closes: if the read
+/// sees [`Phase::Running`], the withdrawal of the drainage happens strictly after
+/// this `mark_ready` and leaves the state not ready; otherwise the readiness is
+/// withdrawn again here (ADR-0099, "Arrêt", step 1).
+///
+/// Returns whether the instance stays ready.
+fn publish_ready(state: &AppState, shutdown: &Shutdown) -> bool {
+    state.mark_ready();
+    if shutdown.is_draining() {
+        state.mark_not_ready();
+        return false;
+    }
+    true
+}
+
 /// Turns a failed join into an [`ErrorCode::Internal`] error.
 fn join_failure(error: tokio::task::JoinError) -> CribleError {
     internal(format!("a task of the server failed: {error}"))
@@ -453,7 +481,35 @@ fn forced() -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{Phase, Shutdown};
+    use super::{Phase, Shutdown, publish_ready};
+    use crate::state::AppState;
+
+    #[test]
+    fn a_startup_that_finishes_during_the_drainage_stays_not_ready() {
+        // The loader can mark the state ready after the drainage withdrew the
+        // readiness. The test forces that order without a race: the drain and
+        // its withdrawal happen first, then the startup publishes.
+        let state = AppState::new();
+        let shutdown = Shutdown::new();
+        shutdown.drain();
+        state.mark_not_ready();
+        assert!(
+            !publish_ready(&state, &shutdown),
+            "the startup does not publish a ready instance during the drainage"
+        );
+        assert!(
+            !state.is_ready(),
+            "`mark_ready` must not reopen `/ready` during the drainage (ADR-0099)"
+        );
+    }
+
+    #[test]
+    fn a_startup_that_finishes_while_running_stays_ready() {
+        let state = AppState::new();
+        let shutdown = Shutdown::new();
+        assert!(publish_ready(&state, &shutdown));
+        assert!(state.is_ready());
+    }
 
     #[test]
     fn the_phase_only_moves_forward() {

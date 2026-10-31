@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use crible_core::config::IndexConfig;
-use crible_core::error::CribleError;
+use crible_core::error::{CribleError, ErrorCode};
 use crible_core::model::{ModelConfig, ModelKind};
 use crible_core::path::path_component;
 use crible_encode::{ModelRegistry, Precision, QueryEncoder};
@@ -60,7 +60,7 @@ impl IndexHandle {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// [`ErrorCode::Internal`] when the
     /// lock is poisoned.
     pub fn published(&self) -> Result<Published, CribleError> {
         self.writer.published()
@@ -70,7 +70,7 @@ impl IndexHandle {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`](crible_core::error::ErrorCode::Internal) when the
+    /// [`ErrorCode::Internal`] when the
     /// lock is poisoned.
     pub fn configuration(&self) -> Result<IndexConfig, CribleError> {
         self.writer.configuration()
@@ -257,11 +257,11 @@ impl Loaded {
         Ok(encoder)
     }
 
-    /// Configuration and encoder directory of the model `name`.
+    /// Configuration and encoder directory of the model `name`, with its graph.
     ///
-    /// The name comes from `index.json`, not from a request, and is checked as
-    /// one path component so a `..` in a configuration never reads outside
-    /// `[paths].models` (ADR-0105, decision 2).
+    /// The configuration and the directory come from `read_model_parts`, which
+    /// reads `model.json` and refuses a name that is not one path component
+    /// (ADR-0105, decision 2).
     ///
     /// # Errors
     ///
@@ -269,21 +269,7 @@ impl Loaded {
     /// a missing or unreadable `model.json`, and the errors of the model
     /// configuration; the errors of the registry when the model is `onnx`.
     pub fn model(&self, name: &str) -> Result<ModelAccess, CribleError> {
-        let model = path_component(name, "model of an index")?;
-        let directory = self.models_root.join(model);
-        let path = directory.join("model.json");
-        let raw = fs::read_to_string(&path).map_err(|error| {
-            invalid(format!(
-                "cannot read the model configuration {}: {error}",
-                path.display()
-            ))
-        })?;
-        let config = ModelConfig::from_json_str(&raw).map_err(|error| {
-            named(
-                error,
-                &format!("the model '{}' at {}", model, directory.display()),
-            )
-        })?;
+        let (config, directory) = read_model_parts(&self.models_root, name)?;
         let registry = Arc::clone(&self.models);
         let access = ModelAccess {
             config,
@@ -297,6 +283,50 @@ impl Loaded {
         }
         Ok(access)
     }
+
+    /// Configuration of the model `name`, read from `model.json` alone.
+    ///
+    /// Unlike [`Self::model`], this never loads an `onnx` graph: the callers
+    /// that only need the kind or the fingerprint of a model run outside the
+    /// blocking task, where loading a session would stall the async runtime
+    /// (ADR-0107, ADR-0109). The file is small and is read once per target by
+    /// each check, as [`crible_encode::ModelRegistry::get_or_load`] already
+    /// reads it on every call.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] for a name that is not one path component,
+    /// a missing or unreadable `model.json`, and the errors of the model
+    /// configuration.
+    pub fn model_config(&self, name: &str) -> Result<ModelConfig, CribleError> {
+        read_model_parts(&self.models_root, name).map(|(config, _)| config)
+    }
+}
+
+/// Reads the configuration and the directory of the model `name` of `root`.
+///
+/// The name comes from `index.json`, not from a request, and is checked as one
+/// path component so a `..` in a configuration never reads outside
+/// `[paths].models` (ADR-0105, decision 2). Only `model.json` is read: no graph
+/// is loaded, so a caller outside the blocking task cannot stall the async
+/// runtime (ADR-0107, ADR-0109).
+fn read_model_parts(root: &Path, name: &str) -> Result<(ModelConfig, PathBuf), CribleError> {
+    let model = path_component(name, "model of an index")?;
+    let directory = root.join(model);
+    let path = directory.join("model.json");
+    let raw = fs::read_to_string(&path).map_err(|error| {
+        invalid(format!(
+            "cannot read the model configuration {}: {error}",
+            path.display()
+        ))
+    })?;
+    let config = ModelConfig::from_json_str(&raw).map_err(|error| {
+        named(
+            error,
+            &format!("the model '{}' at {}", model, directory.display()),
+        )
+    })?;
+    Ok((config, directory))
 }
 
 /// Removes the directory of a creation that failed after its first write.
@@ -565,7 +595,7 @@ impl AppState {
             && shutdown.is_draining()
         {
             return Err(CribleError::new(
-                crible_core::error::ErrorCode::Overloaded,
+                ErrorCode::Overloaded,
                 SHUTTING_DOWN_MESSAGE,
             ));
         }
@@ -577,10 +607,7 @@ impl AppState {
             .index(index)?
             .map(|handle| Arc::clone(&handle.writer))
             .ok_or_else(|| {
-                CribleError::new(
-                    crible_core::error::ErrorCode::UnknownIndex,
-                    format!("unknown index '{index}'"),
-                )
+                CribleError::new(ErrorCode::UnknownIndex, format!("unknown index '{index}'"))
             })?;
         writer.ensure_started();
         writer.submit(kind, work)
@@ -647,6 +674,24 @@ impl AppState {
             .get()
             .ok_or_else(|| internal("the instance has not loaded its indexes"))?
             .model(name)
+    }
+
+    /// Configuration of the model of a served index, without loading its graph.
+    ///
+    /// The checks that run on the request thread before the concurrency token
+    /// read their model this way: they need its kind or its fingerprint, and
+    /// loading an `onnx` session there would stall the async runtime
+    /// (ADR-0107, ADR-0109).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Loaded::model_config`], and [`ErrorCode::Internal`] when
+    /// the instance has not loaded its configuration.
+    pub fn model_config(&self, name: &str) -> Result<ModelConfig, CribleError> {
+        self.loaded
+            .get()
+            .ok_or_else(|| internal("the instance has not loaded its indexes"))?
+            .model_config(name)
     }
 
     /// Removes `name` from the registry, for the execution of `delete_index`
@@ -948,7 +993,7 @@ fn named(error: CribleError, context: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::CreationQuarantine;
+    use super::{CreationQuarantine, ModelKind, read_model_parts};
     use std::fs;
     use std::path::Path;
 
@@ -962,6 +1007,42 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn reading_a_model_configuration_does_not_load_its_graph() {
+        // The checks that run before the concurrency token only need the kind
+        // or the fingerprint of a model, and they run on the async runtime
+        // (ADR-0109, decision 2; ADR-0110, decision 7). The model here is an
+        // `onnx` one whose graph files are absent: a reader that loaded the
+        // session would fail, so this test pins the configuration-only read.
+        //
+        // It proves that path, not that its callers take it: a caller rewritten
+        // to `Loaded::model` would still load the graph and this test would stay
+        // green. A route test cannot close that gap, because the startup loads
+        // the graphs of the `onnx` models it serves (ADR-0099), so no served
+        // `onnx` model ever reaches a request with an unloaded session.
+        let temp = tempfile::tempdir().expect("a temporary directory is creatable");
+        let models = temp.path();
+        let directory = models.join("onnx");
+        fs::create_dir_all(&directory).expect("the model directory is creatable");
+        fs::write(
+            directory.join("model.json"),
+            r#"{"name":"onnx","kind":"onnx","hf_id":"huggingface/model","revision":"abc",
+                "dims":4,"pooling":"cls","normalize":true,"max_tokens":512,
+                "prompts":{"query":"query: ","document":"document: "},
+                "files":{"fp32":{"path":"model.onnx",
+                                 "blake3":"0000000000000000000000000000000000000000000000000000000000000000"},
+                         "tokenizer":{"path":"tokenizer.json",
+                                      "blake3":"0000000000000000000000000000000000000000000000000000000000000000"}}}"#,
+        )
+        .expect("the model configuration is written");
+
+        let (config, read) =
+            read_model_parts(models, "onnx").expect("the configuration alone is readable");
+
+        assert_eq!(config.kind, ModelKind::Onnx);
+        assert_eq!(read, directory);
     }
 
     #[test]

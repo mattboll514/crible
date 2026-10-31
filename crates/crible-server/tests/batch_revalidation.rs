@@ -24,36 +24,16 @@
 
 mod common;
 
-use std::path::Path;
-use std::time::{Duration, Instant};
-
 use axum::http::{Method, StatusCode};
 use serde_json::json;
 
 use common::{
     INDEX, READ_SECRET, WRITE_SECRET, export_index, instance_with_alpha, online_batch,
-    post_documents, send, terminal_job,
+    post_documents, send, terminal_job, wait_for,
 };
 
 /// Environment variable of the barrier (`src/barriers.rs`).
 const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
-
-/// Waits for `path` to exist, or panics after ten seconds.
-///
-/// The wait is asynchronous on purpose: the test runs on the current-thread
-/// runtime, so a blocking wait would keep the runtime from polling the writer
-/// task that starts the job.
-async fn wait_for(path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the job reached the barrier: {}",
-            path.display()
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
 
 /// Reads the generation of the index.
 async fn generation(router: &axum::Router) -> u64 {
@@ -114,7 +94,7 @@ async fn a_link_added_after_the_accepted_response_fails_the_job() {
 
     let accepted = submit(&router, deposited).await;
     let ready = barrier.path().join("ready-batch");
-    wait_for(&ready).await;
+    wait_for("the batch revalidation", &ready).await;
 
     // The operator adds a link inside the batch once the response is sent: the
     // directory that was checked is no longer the directory the job would read.

@@ -21,6 +21,7 @@
 //! | `two_patches_queued_before_the_first_job_ran_compose` | the patches run in the order of their arrival |
 //! | `a_failed_quarantine_leaves_the_index_registered_and_served` | a failed delete leaves the index intact |
 //! | `a_delete_without_or_with_a_wrong_confirm_is_refused` | `DELETE` requires `confirm` |
+//! | `a_detail_read_between_the_rename_and_the_deregistration_is_a_404` | a read that interleaves a delete answers `404`, never `500` |
 //! | `a_delete_removes_the_index_and_keeps_its_job_history` | delete protocol, `404`, folder gone, history kept |
 //! | `the_startup_purges_the_quarantined_directories` | `deleted-*` purged at startup |
 //! | `the_write_key_is_forbidden_on_the_administration_routes` | `admin` only for `POST`, `PATCH`, `DELETE` |
@@ -523,6 +524,33 @@ async fn a_delete_without_or_with_a_wrong_confirm_is_refused() {
     let (status, _headers, _body) =
         send(&router, Method::GET, "/v1/indexes/alpha", READ_SECRET, None).await;
     assert_eq!(status, StatusCode::OK, "a refused delete removes nothing");
+}
+
+#[tokio::test]
+async fn a_detail_read_between_the_rename_and_the_deregistration_is_a_404() {
+    // ADR-0105, decision 6: `delete_index` renames the index directory first,
+    // then removes the index from the registry. A `GET /v1/indexes/{index}` that
+    // interleaves finds the index still registered and its directory gone: it
+    // answers `404 unknown_index`, never `500 internal` (`@relecteur`,
+    // ROUTES-INDEX). The intermediate state is reproduced exactly, so the test
+    // never races the job.
+    let (instance, router) = instance_with_alpha().await;
+    let tmp = instance.data().join("tmp");
+    std::fs::create_dir_all(&tmp).expect("the quarantine directory is creatable");
+    std::fs::rename(
+        instance.data().join("indexes").join(INDEX),
+        tmp.join("deleted-alpha-job_test"),
+    )
+    .expect("the index directory moves into the quarantine");
+
+    let (status, _headers, body) =
+        send(&router, Method::GET, "/v1/indexes/alpha", READ_SECRET, None).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a renamed directory is an unknown index, not an internal failure: {body}"
+    );
+    assert_eq!(body["error"]["code"], "unknown_index", "{body}");
 }
 
 #[tokio::test]

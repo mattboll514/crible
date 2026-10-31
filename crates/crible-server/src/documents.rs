@@ -324,6 +324,16 @@ fn served(state: &AppState, index: &str) -> Result<(), CribleError> {
 /// Checks the shape of an online body, before it is queued (ADR-0107,
 /// decision 3).
 fn check_online(body: &OnlineBody) -> Result<(), CribleError> {
+    // The mode comes first: a body without a document may also carry the wrong
+    // mode, and `docs/05-api.md` requires the refusal to name the mode the route
+    // accepts (`@relecteur`, ROUTES-DOCUMENTS-ET-LOTS).
+    if body.mode != crible_core::batch::BatchMode::Upsert {
+        return Err(error::invalid(format!(
+            "the online lot accepts mode 'upsert' only, got '{}': at most 10 000 entries per \
+             request make 'replace_all' unusable in line (ADR-0055)",
+            body.mode.as_str()
+        )));
+    }
     // A lot that changes nothing would commit an empty generation: the file
     // path refuses an empty file (`online::survey_file`), and the route refuses
     // an empty body the same way (complement of 2026-10-29 to ADR-0107,
@@ -333,13 +343,6 @@ fn check_online(body: &OnlineBody) -> Result<(), CribleError> {
             "the online lot carries neither 'documents' nor 'deletions'; a lot that changes nothing \
              is not attached (ADR-0107)",
         ));
-    }
-    if body.mode != crible_core::batch::BatchMode::Upsert {
-        return Err(error::invalid(format!(
-            "the online lot accepts mode 'upsert' only, got '{}': at most 10 000 entries per \
-             request make 'replace_all' unusable in line (ADR-0055)",
-            body.mode.as_str()
-        )));
     }
     path_component(&body.batch_id, "batch_id")?;
     let entries = body

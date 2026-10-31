@@ -11,6 +11,10 @@
 //! `m` of four dimensions, no lexical branch, an `admin`, a `write` and a `read`
 //! key. A second instance can share the exchange of the first, which is how the
 //! deposited-batch test hands a batch from an export to an attach.
+//!
+//! Two helpers are shared by binaries of other tasks as well: `wait_for`, which
+//! polls a barrier file of `src/barriers.rs`, and `assert_no_iid_key`, the check
+//! of INV-01.
 
 // This module is compiled into several test binaries and no binary uses every
 // helper. Marking each unused item separately would only add noise.
@@ -19,6 +23,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -433,6 +438,59 @@ pub async fn terminal_job(router: &Router, state: &Arc<AppState>, accepted: &Val
 pub async fn post_documents(router: &Router, body: Value) -> (StatusCode, Value) {
     let path = format!("/v1/indexes/{INDEX}/documents?wait=true");
     send(router, Method::POST, &path, WRITE_SECRET, Some(body)).await
+}
+
+/// Waits for `path` to exist, or panics after ten seconds.
+///
+/// `step` names the barrier in the failure message. The wait is asynchronous on
+/// purpose: the tests run on the current-thread runtime, so a blocking wait
+/// would keep the runtime from polling the writer task that starts the job.
+pub async fn wait_for(step: &str, path: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "{step}: the job reached the barrier: {}",
+            path.display()
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// Serialises the tests that share the process-global `CRIBLE_TEST_BARRIER`.
+static BARRIER_ENVIRONMENT: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+/// Takes the process-wide slot of the tests that arm `CRIBLE_TEST_BARRIER`.
+///
+/// The variable names **one** directory per process and the fixture jobs of a
+/// test read it, so two tests of one binary must not run at once. A test takes
+/// the guard before it builds its instance and holds it until its end.
+pub async fn lock_barrier_environment() -> tokio::sync::MutexGuard<'static, ()> {
+    BARRIER_ENVIRONMENT
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
+/// Asserts that no key of `value` at any depth contains `iid` (INV-01).
+pub fn assert_no_iid_key(label: &str, value: &Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                assert!(
+                    !key.to_lowercase().contains("iid"),
+                    "{label} carries the key '{key}' (INV-01)"
+                );
+                assert_no_iid_key(label, child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                assert_no_iid_key(label, item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 /// In-memory writer that captures the journal of a test binary.

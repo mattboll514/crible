@@ -21,6 +21,8 @@
 //!   `attach-before-commit` or `attach-after-sqlite-commit` also writes
 //!   `<dir>/armed-attach`, so an attach started by a test that only arms the
 //!   `batch`, `search` or `compaction` scope is never held;
+//! - the pre-token step of the search route needs `<dir>/armed-search-start`,
+//!   so a search of a test that holds a write job is never held there;
 //! - without the variable the call returns at once, so a build with the feature
 //!   but no test armed behaves exactly like a normal one.
 //!
@@ -83,6 +85,27 @@ fn wait_attach(scope: &str) {
         return;
     }
     hold(&directory, scope);
+}
+
+/// Name of the mark a test writes to arm the pre-token search step.
+///
+/// The search route is reached by tests that only hold a write job, so the step
+/// is opt-in: without this mark a search of an armed directory runs at full
+/// speed, like for the attach steps.
+const SEARCH_START_ARMED: &str = "armed-search-start";
+
+/// Holds the calling search before it takes its concurrency token.
+///
+/// The route reads the instant of `took_ms` before this point, so a test proves
+/// that the duration covers the wait (ADR-0109, decision 2).
+pub(crate) fn wait_search_start() {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    if !Path::new(&directory).join(SEARCH_START_ARMED).exists() {
+        return;
+    }
+    hold(&directory, "search-start");
 }
 
 /// Holds the calling job until the test writes `<dir>/go-<scope>`.

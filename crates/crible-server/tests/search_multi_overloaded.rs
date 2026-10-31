@@ -89,3 +89,58 @@ async fn a_multi_index_search_beyond_the_limit_is_refused_at_once() {
         "the token comes back when the held work ends"
     );
 }
+
+/// The `400` of an `external` model without its vector is rendered before the
+/// token, so a saturated instance answers `400`, never `503` (ADR-0109,
+/// decision 4; ADR-0110, decision 7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_external_model_refusal_precedes_the_token() {
+    let (_instance, state, router) = instance_with_alpha_and_limit(1).await;
+    let limit = state
+        .search_limit()
+        .expect("the loaded instance exposes its search limit");
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let held = tokio::spawn(async move {
+        limit
+            .run_blocking(Duration::from_secs(30), move || {
+                started_tx.send(()).expect("the test waits for the token");
+                release_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("the test releases the token");
+            })
+            .await
+    });
+    started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the token is held before the search runs");
+
+    // The only token is held. This request needs no token: `alpha` uses an
+    // `external` model and `dense` with `query` alone would encode.
+    let (status, _headers, answer) = send_with_headers(
+        &router,
+        Method::POST,
+        MULTI,
+        READ_SECRET,
+        Some(json!({
+            "query": "contrat",
+            "mode": "dense",
+            "targets": [ { "index": "alpha" } ],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(
+        message.contains("external") && message.contains("'m'"),
+        "the refusal names the model: {message}"
+    );
+
+    release_tx.send(()).expect("the held token is released");
+    let outcome = held.await.expect("the holding task finishes");
+    assert!(outcome.is_ok(), "the held token returns: {outcome:?}");
+}

@@ -175,6 +175,12 @@ pub async fn search(
         Ok(inputs) => inputs,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
+    // A permanent refusal of ADR-0109, decision 4, before the token: an
+    // `external` model cannot encode, so a mode that would encode needs its
+    // `vector` (ADR-0110, decision 7).
+    if let Err(failure) = check_model_inputs(&state, &published, mode, &inputs) {
+        return error::rendered(&failure, &identifier.0);
+    }
     let fusion = request.fusion.unwrap_or(published.config.search.fusion);
     let grouping = match api::grouping(
         request.by_document,
@@ -202,9 +208,16 @@ pub async fn search(
 
     let holder = Arc::clone(&state);
     let name = index.clone();
+    // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
+    // decision 2). This instant is read just before the token, so the
+    // acquisition and everything after it are covered.
+    let started = Instant::now();
+    // A test holds the route here to prove that `took_ms` starts before the
+    // token, not at the entry of the blocking task (ADR-0109, decision 2).
+    #[cfg(feature = "failpoints")]
+    crate::barriers::wait_search_start();
     let outcome = limit
         .run_blocking(deadline, move || {
-            let started = Instant::now();
             // A test holds the work here to prove that a `504` keeps the token
             // until the computation really ends (ADR-0102, decision 3).
             #[cfg(feature = "failpoints")]
@@ -239,8 +252,8 @@ pub async fn search(
 
 /// Runs the pipeline on the blocking thread, with the token held.
 ///
-/// `started` is read by the caller at the entry of this function, which is the
-/// token acquisition for the duration of ADR-0109.
+/// The caller read `started` just before taking the token, which is the start of
+/// the duration `took_ms` reports (ADR-0109, decision 2).
 #[allow(clippy::too_many_arguments)]
 fn run(
     state: &AppState,
@@ -376,6 +389,43 @@ pub(crate) fn search_index(
     })
 }
 
+/// Refuses a dense mode that would have to encode on an `external` model.
+///
+/// ADR-0109, decision 4: `dense` on an `external` index requires `vector`, and
+/// `hybrid` requires `query` **and** `vector`. The message names the model, and
+/// the refusal comes before the concurrency token (ADR-0110, decision 7), so a
+/// saturated instance answers `400` rather than `503`. Only the configuration
+/// of the model is read here, never its graph: an `onnx` load would block the
+/// async runtime, outside the blocking task of the search (ADR-0107).
+pub(crate) fn check_model_inputs(
+    state: &AppState,
+    published: &Published,
+    mode: Mode,
+    inputs: &Inputs,
+) -> Result<(), CribleError> {
+    if !mode.uses_dense() || inputs.has_vector() {
+        return Ok(());
+    }
+    // A `failpoints` test may stand a double at the encoding point; it answers
+    // the encoding this check is about, so the refusal does not apply
+    // (ADR-0110, decision 11).
+    #[cfg(feature = "failpoints")]
+    if crate::test_encoding::armed() {
+        return Ok(());
+    }
+    let config = state.model_config(&published.config.model)?;
+    if config.kind != ModelKind::External {
+        return Ok(());
+    }
+    Err(error::invalid(format!(
+        "index '{}' uses model '{}' of kind external, which has no encoder; mode {} needs a \
+         'vector' in the request",
+        published.config.name,
+        config.name,
+        mode.as_str()
+    )))
+}
+
 /// Checks a provided vector against the dimensions of the model of the index.
 pub(crate) fn check_vector(
     state: &AppState,
@@ -464,6 +514,18 @@ pub(crate) enum Inputs {
 }
 
 impl Inputs {
+    /// Whether the inputs bring the vector the dense branch runs on.
+    fn has_vector(&self) -> bool {
+        matches!(
+            self,
+            Self::Dense { .. }
+                | Self::Hybrid {
+                    vector: Some(_),
+                    ..
+                }
+        )
+    }
+
     /// Prepares the inputs of a request, calling `encode` **at most once**.
     ///
     /// `encode` is the encoding point of the server: the real one of
@@ -593,10 +655,19 @@ impl ReturnSpec {
             Self::Fields { names, text } => {
                 let mut selected = BTreeSet::new();
                 for (position, name) in names.iter().enumerate() {
-                    if !schema.fields().any(|(declared, _, _)| declared == name) {
+                    let Some((field, _level)) = schema.field(name) else {
                         return Err(error::invalid(format!(
                             "the field '{}' of '$.return.fields[{position}]' is not declared by \
                              the schema of the index",
+                            name
+                        )));
+                    };
+                    if !field.returned {
+                        // ADR-0109, decision 5: a declared but never rendered
+                        // field is refused, never accepted for nothing.
+                        return Err(error::invalid(format!(
+                            "the field '{}' of '$.return.fields[{position}]' is declared \
+                             returned: false by the schema of the index",
                             name
                         )));
                     }
@@ -642,7 +713,9 @@ impl SearchRequest {
                 Some(Value::Null) => None,
                 Some(value) => {
                     let _ = json_object(value, "$.filter")?;
-                    Some(Filter::from_json_str(&value.to_string())?)
+                    // The path of the filter in the body, so `details.path` and
+                    // the message both name `$.filter.…` (docs/05, ADR-0109).
+                    Some(Filter::from_json_str_at(&value.to_string(), "$.filter")?)
                 }
             }
         } else {
