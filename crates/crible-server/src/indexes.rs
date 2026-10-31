@@ -18,6 +18,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -417,52 +418,102 @@ fn index_directory(state: &AppState, name: &str) -> Result<PathBuf, CribleError>
 /// `<data>`, and a loop would never end. The value is the disk space the index
 /// itself occupies, never a link target (ADR-0105, "À surveiller").
 ///
+/// The walk measures one instant: `sizes.disk_bytes` is the size of the index
+/// directory on disk (ADR-0105, `docs/05-api.md`), not a promise about the next
+/// instant. An entry of the listing can therefore disappear before its metadata
+/// is read: an attach renames a `tmp-*` staging directory while the walk runs,
+/// and SQLite removes its `-wal` and `-shm` files when the last connection
+/// closes. Such an entry is skipped, because the walk measures what is there,
+/// not what was listed.
+///
 /// A directory that vanished between the read of the registry and this walk is
-/// an unknown index, never an internal failure: `delete_index` renames the
-/// directory before the index leaves the registry, so a `GET` that interleaves
-/// answers `404 unknown_index` (ADR-0105, decision 6).
+/// another matter: it is an unknown index, never an internal failure.
+/// `delete_index` renames the directory before the index leaves the registry, so
+/// a `GET` that interleaves answers `404 unknown_index` (ADR-0105, decision 6).
+/// Only the index directory itself carries that meaning: a child directory that
+/// goes away during the walk is skipped like any other vanished entry.
 fn directory_size(directory: &Path) -> Result<u64, CribleError> {
-    let mut total = 0_u64;
-    let entries = fs::read_dir(directory).map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
-            return vanished_index();
-        }
-        error::internal(format!(
+    let reader = Disk;
+    match reader.read_dir(directory) {
+        Ok(entries) => entries_size(&reader, &entries),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(vanished_index()),
+        Err(error) => Err(error::internal(format!(
             "cannot measure the index directory {}: {error}",
             directory.display()
-        ))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            if error.kind() == ErrorKind::NotFound {
-                return vanished_index();
-            }
-            error::internal(format!(
-                "cannot read an entry of {}: {error}",
-                directory.display()
-            ))
-        })?;
+        ))),
+    }
+}
+
+/// Size of the entries a listing already produced.
+///
+/// A path whose metadata is gone is skipped: the listing is older than this
+/// instant, which is what a disk size measures (see [`directory_size`]).
+fn entries_size(reader: &impl TreeReader, entries: &[PathBuf]) -> Result<u64, CribleError> {
+    let mut total = 0_u64;
+    for path in entries {
         // `symlink_metadata` describes the link itself, so the walk never
         // descends into one nor counts its target.
-        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
-            if error.kind() == ErrorKind::NotFound {
-                return vanished_index();
+        let metadata = match reader.metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error::internal(format!(
+                    "cannot read the metadata of {}: {error}",
+                    path.display()
+                )));
             }
-            error::internal(format!(
-                "cannot read the metadata of {}: {error}",
-                entry.path().display()
-            ))
-        })?;
+        };
         if metadata.file_type().is_symlink() {
             continue;
         }
         if metadata.is_dir() {
-            total = total.saturating_add(directory_size(&entry.path())?);
+            total = total.saturating_add(subtree_size(reader, path)?);
         } else {
             total = total.saturating_add(metadata.len());
         }
     }
     Ok(total)
+}
+
+/// Size of a subdirectory of the index, in bytes; zero when it went away.
+///
+/// A subdirectory listed a moment ago can be renamed or removed before this
+/// call, so its disappearance skips it instead of failing the route.
+fn subtree_size(reader: &impl TreeReader, directory: &Path) -> Result<u64, CribleError> {
+    match reader.read_dir(directory) {
+        Ok(entries) => entries_size(reader, &entries),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error::internal(format!(
+            "cannot read the directory {}: {error}",
+            directory.display()
+        ))),
+    }
+}
+
+/// The two file-system calls of the walk, behind a trait so a test can make an
+/// entry disappear between the listing and its metadata, with no sleep.
+trait TreeReader {
+    /// The paths the directory holds, read in one listing.
+    fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>>;
+    /// The metadata of one path, without following a symbolic link.
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
+}
+
+/// The real file system.
+struct Disk;
+
+impl TreeReader for Disk {
+    fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in fs::read_dir(directory)? {
+            paths.push(entry?.path());
+        }
+        Ok(paths)
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::symlink_metadata(path)
+    }
 }
 
 /// The index directory went away under the reader.
@@ -534,4 +585,203 @@ fn unknown(index: &str, identifier: &str) -> Response {
 /// Whether the request asked for `?wait=true` (ADR-0067).
 fn wait_requested(query: &HashMap<String, String>) -> bool {
     query.get("wait").is_some_and(|value| value == "true")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The real file system, where one listed path is gone before its metadata
+    /// is read: the state of a `tmp-*` staging directory that an attach renamed
+    /// between the listing and the walk.
+    struct VanishedMetadata {
+        vanished: PathBuf,
+        disk: Disk,
+    }
+
+    impl TreeReader for VanishedMetadata {
+        fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+            self.disk.read_dir(directory)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+            if path == self.vanished {
+                return Err(io::Error::from(ErrorKind::NotFound));
+            }
+            self.disk.metadata(path)
+        }
+    }
+
+    /// The real file system, where a listed subdirectory is gone before its
+    /// listing: the state of a segment directory renamed or removed during the
+    /// walk.
+    struct VanishedDirectory {
+        vanished: PathBuf,
+        disk: Disk,
+    }
+
+    impl TreeReader for VanishedDirectory {
+        fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+            if directory == self.vanished {
+                return Err(io::Error::from(ErrorKind::NotFound));
+            }
+            self.disk.read_dir(directory)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+            self.disk.metadata(path)
+        }
+    }
+
+    #[test]
+    fn a_vanished_entry_is_skipped_not_an_unknown_index() {
+        // A detail walks the index while an attach renames its staging
+        // directory: the listing holds `tmp-seg-batch-2`, its metadata does not.
+        // The walk measures the entries that remain instead of answering
+        // `404 unknown_index` for an index that is served.
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let kept = directory.path().join("kept.bin");
+        let vanished = directory.path().join("tmp-seg-batch-2");
+        fs::write(&kept, [0_u8; 7]).expect("the measured file is written");
+        fs::create_dir(&vanished).expect("the staging directory exists when it is listed");
+        let reader = VanishedMetadata {
+            vanished,
+            disk: Disk,
+        };
+
+        let entries = reader
+            .read_dir(directory.path())
+            .expect("the tree is listed");
+        assert_eq!(entries.len(), 2, "the listing holds both entries");
+        assert_eq!(
+            entries_size(&reader, &entries).expect("a vanished entry is skipped, not fatal"),
+            7,
+            "only the entry that is still there counts"
+        );
+    }
+
+    #[test]
+    fn a_vanished_child_directory_is_skipped_too() {
+        // The listing holds a segment directory, then the directory goes away
+        // before its own listing. It contributes nothing, and the rest of the
+        // tree is still measured.
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let kept = directory.path().join("kept.bin");
+        let vanished = directory.path().join("segments");
+        fs::write(&kept, [0_u8; 5]).expect("the measured file is written");
+        fs::create_dir(&vanished).expect("the segment directory exists");
+        fs::write(vanished.join("segment.bin"), [0_u8; 11]).expect("the segment file is written");
+        let reader = VanishedDirectory {
+            vanished: vanished.clone(),
+            disk: Disk,
+        };
+
+        let entries = reader
+            .read_dir(directory.path())
+            .expect("the tree is listed");
+        assert_eq!(
+            entries_size(&reader, &entries).expect("a vanished subdirectory is skipped"),
+            5,
+            "the vanished directory and its file count for nothing"
+        );
+    }
+
+    /// The real file system, where the metadata of one path fails for a reason
+    /// other than its disappearance: a permission or I/O fault, which must not
+    /// pass for a vanished entry.
+    struct UnreadableMetadata {
+        unreadable: PathBuf,
+        disk: Disk,
+    }
+
+    impl TreeReader for UnreadableMetadata {
+        fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+            self.disk.read_dir(directory)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+            if path == self.unreadable {
+                return Err(io::Error::from(ErrorKind::PermissionDenied));
+            }
+            self.disk.metadata(path)
+        }
+    }
+
+    /// The real file system, where the listing of one subdirectory fails for a
+    /// reason other than its disappearance.
+    struct UnreadableDirectory {
+        unreadable: PathBuf,
+        disk: Disk,
+    }
+
+    impl TreeReader for UnreadableDirectory {
+        fn read_dir(&self, directory: &Path) -> io::Result<Vec<PathBuf>> {
+            if directory == self.unreadable {
+                return Err(io::Error::from(ErrorKind::PermissionDenied));
+            }
+            self.disk.read_dir(directory)
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+            self.disk.metadata(path)
+        }
+    }
+
+    #[test]
+    fn an_unreadable_metadata_is_an_internal_failure() {
+        // Only `NotFound` means "this entry is gone": a permission or I/O fault
+        // stays `internal`, so the route never hides a broken file system behind
+        // a plausible size.
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let unreadable = directory.path().join("kept.bin");
+        fs::write(&unreadable, [0_u8; 7]).expect("the measured file is written");
+        let reader = UnreadableMetadata {
+            unreadable,
+            disk: Disk,
+        };
+
+        let entries = reader
+            .read_dir(directory.path())
+            .expect("the tree is listed");
+        let failure = entries_size(&reader, &entries).expect_err("an unreadable entry fails");
+        assert_eq!(failure.code(), ErrorCode::Internal);
+    }
+
+    #[test]
+    fn an_unreadable_child_directory_is_an_internal_failure() {
+        // Same rule for the listing of a subdirectory: `NotFound` skips it, any
+        // other error is an internal failure.
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let unreadable = directory.path().join("segments");
+        fs::create_dir(&unreadable).expect("the segment directory exists");
+        let reader = UnreadableDirectory {
+            unreadable: unreadable.clone(),
+            disk: Disk,
+        };
+
+        let entries = reader
+            .read_dir(directory.path())
+            .expect("the tree is listed");
+        let failure = entries_size(&reader, &entries).expect_err("an unreadable directory fails");
+        assert_eq!(failure.code(), ErrorCode::Internal);
+    }
+
+    #[test]
+    fn a_missing_index_directory_is_an_unknown_index() {
+        // ADR-0105, decision 6: `delete_index` renames the index directory while
+        // the registry still lists it. Only that disappearance is an unknown
+        // index, and its message names no server path (ADR-0096, ADR-0101).
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let missing = directory.path().join("alpha");
+
+        let failure = directory_size(&missing).expect_err("the index directory is gone");
+        assert_eq!(failure.code(), ErrorCode::UnknownIndex);
+        assert!(
+            !failure
+                .message()
+                .contains(missing.to_string_lossy().as_ref()),
+            "the message names no path: {}",
+            failure.message()
+        );
+    }
 }
