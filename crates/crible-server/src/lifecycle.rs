@@ -211,7 +211,7 @@ pub async fn run_server(
         };
         tokio::join!(requests, writes)
     };
-    tokio::select! {
+    let outcome = tokio::select! {
         () = forced_wait => {
             warn!("a second signal cuts the drainage and the process exits now");
             handle.abort();
@@ -256,7 +256,18 @@ pub async fn run_server(
             }
             Ok(reason)
         }
+    };
+    // ADR-0099, "Arrêt", and ADR-0118, decision 3: once the requests have drained
+    // and no new one can arrive, the analytics drain their queue and write it,
+    // bounded by `STOP_BOUND`. A failure is logged with its code and the process
+    // keeps stopping: a disk that refuses a write must not keep the instance up.
+    if let Err(failure) = state.stop_analytics().await {
+        warn!(
+            code = failure.code().as_str(),
+            "the analytics of the shutdown could not be flushed"
+        );
     }
+    outcome
 }
 
 /// Binds the configured address and serves the instance until a signal.

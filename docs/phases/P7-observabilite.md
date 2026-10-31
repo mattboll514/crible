@@ -32,17 +32,17 @@
 ### AGREGER-ANALYTICS
 - **Objectif** : les analytics agrégées.
 - **Dépend de** : ROUTE-RECHERCHE, FILE-D-ECRITURE-ET-JOBS
-- **À lire** : `06-observabilite.md` (analytics).
+- **À lire** : `06-observabilite.md` (analytics) ; `adr/0117-analytics-stockage-et-calcul-schema-histogrammes-percentile-et-formes-de-filtre.md` (schéma, seaux, percentile, formes de filtre) ; `adr/0118-analytics-execution-file-pertes-vidage-purge-operations-et-preuve-inv-17.md` (file, pertes, vidage, purge, preuve d'INV-17).
 - **Livrables** :
-  - `SearchEvent` et `OpEvent`, deux types **sans champ** pour le texte, les valeurs de filtre ou les ids ;
-  - le calcul de `filter_shape` à partir de l'AST (champs et opérateurs seulement) ;
-  - un agrégateur par minute, avec des histogrammes à 64 seaux et un histogramme de pool en log2 ;
-  - un vidage asynchrone toutes les 10 s et à l'arrêt, dans `analytics.sqlite` ;
-  - les lignes journalières par index ;
-  - la purge selon la rétention.
+  - `SearchEvent` et `OpEvent`, deux types **sans champ** pour le texte, les valeurs de filtre ou les ids, à la liste fermée de champs d'ADR-0117 décision 5 (un événement par cible en multi-index) ;
+  - le calcul de `filter_shape` à partir de l'AST (champs et opérateurs seulement), selon la règle de canonicalisation d'ADR-0117 décision 6, rangé dans la table `filter_shapes` ;
+  - un agrégateur par minute, avec des histogrammes à 64 seaux et un histogramme de pool en log2, aux bornes d'ADR-0117 décisions 2 et 3, dans `analytics.sqlite` au schéma d'ADR-0117 décision 1 ;
+  - un vidage asynchrone toutes les 10 s et à l'arrêt, par la file bornée et le compteur `analytics_dropped` d'ADR-0118 décisions 1 à 3 ;
+  - les lignes journalières par index, écrites au premier vidage où la ligne du jour UTC manque (ADR-0118 décision 5) ;
+  - la purge selon la rétention, à l'ouverture puis toutes les 24 h (ADR-0118 décision 4).
 - **Critères d'acceptation** :
-  - un test vérifie que les histogrammes s'additionnent (un p95 calculé sur deux minutes fusionnées égale le p95 calculé sur les événements bruts, à la résolution d'un seau près) ;
-  - le vidage ne bloque jamais une requête (**INV-17**, file saturée artificiellement).
+  - un test vérifie que les histogrammes s'additionnent (un p95 calculé sur deux minutes fusionnées égale le p95 calculé sur les événements bruts, à la **résolution d'un seau** près, c'est-à-dire la largeur relative de 25 % fixée par ADR-0117 décision 4) ;
+  - le vidage ne bloque jamais une requête (**INV-17**, file saturée artificiellement), prouvé par le test `inv_17_*` sous la feature `failpoints` décrit par ADR-0118 décision 7.
 - **Invariants** : INV-17.
 
 ### TESTER-ANALYTICS-SANS-CONTENU
@@ -55,18 +55,21 @@
 ### JOURNAL-DE-DEBUG
 - **Objectif** : un journal complet, activé à la demande.
 - **Dépend de** : AGREGER-ANALYTICS
-- **À lire** : `06-observabilite.md` (journal de debug).
+- **À lire** : `06-observabilite.md` (journal de debug) ; `adr/0118-analytics-execution-file-pertes-vidage-purge-operations-et-preuve-inv-17.md` (décisions 7 et 8 : preuve d'INV-17 et rejeu de MES-16).
 - **Livrables** :
   - `debug.sqlite` ;
   - un enregistrement si `debug: true` et que le journal est activé, et selon `sample_rate` ;
   - une écriture asynchrone ;
   - la purge selon la durée de vie (`ttl_days`) ;
-  - `GET /v1/debug/queries`, réservé à l'admin, avec ses filtres.
+  - `GET /v1/debug/queries`, réservé à l'admin, avec ses filtres ;
+  - le test `inv_17_*` du journal de debug, sur le modèle d'ADR-0118 décision 7 (barrière sur l'écrivain sous la feature `failpoints`, file pleine, réponses identiques, pertes comptées) ;
+  - le rejeu de MES-16 par `@mesureur` avec les analytics et le journal de debug actifs, après le `@dev` de la tâche (ADR-0118 décision 8) : rapport `docs/mesures/MES-16-charge-concurrente-analytics-et-journal.md`, données brutes JSON à côté, protocole d'ADR-0113 décision 5.
 - **Critères d'acceptation** :
   - désactivé par défaut : aucun fichier écrit ;
   - la purge supprime bien les entrées expirées ;
   - un rôle `read` reçoit `403` (ADR-0095) ;
-  - `GET /v1/debug/queries` figure dans la spécification OpenAPI, et son exception nommée est retirée du test des routes de PUBLIER-OPENAPI dans le même changement (ADR-0111, complément du 2026-10-30).
+  - `GET /v1/debug/queries` figure dans la spécification OpenAPI, et son exception nommée est retirée du test des routes de PUBLIER-OPENAPI dans le même changement (ADR-0111, complément du 2026-10-30) ;
+  - le test `inv_17_*` du journal est vert, et le rapport de rejeu de MES-16 existe et tient le critère d'ADR-0113 (chaque recherche sous 3 × le p99 du repos, `5xx` interdit).
 
 ### REPONSE-DEBUG
 - **Objectif** : `debug: true` dans la réponse.

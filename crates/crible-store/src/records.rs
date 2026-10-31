@@ -543,6 +543,15 @@ pub(crate) fn counts(connection: &Connection) -> Result<Counts, CribleError> {
     })
 }
 
+/// Counts the batches the reference state applied, for the daily analytics row
+/// (ADR-0117, decision 1; ADR-0118, decision 5).
+pub(crate) fn count_batches(connection: &Connection) -> Result<u64, CribleError> {
+    let batches: i64 = connection
+        .query_row("SELECT count(*) FROM batches", [], |row| row.get(0))
+        .map_err(|error| database_error("count the batches", &error))?;
+    from_sql_u64(batches, "batches count")
+}
+
 /// Reads the `batches` row of one batch, or `None` when it was never applied.
 pub(crate) fn batch_by_id(
     connection: &Connection,

@@ -59,11 +59,12 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_store::generation::Snapshot;
 
 use crate::dense::exact::{DenseSearcher, Hit};
-use crate::dense::{Scored, candidates, grouped_candidates, ranks};
+use crate::dense::{Scored, Strategy, candidates, grouped_candidates, plan, ranks};
 use crate::fusion::{self, BranchScore, Fused};
 use crate::group::{Candidate, Grouping, candidates_per_branch, group};
 use crate::lexical;
 use crate::pool::Pool;
+use std::time::{Duration, Instant};
 
 /// Branches a search request runs (`mode` of `docs/05-api.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +190,40 @@ pub struct Answer {
     pub score_type: ScoreType,
     /// Results, best first, regrouping applied.
     pub results: Vec<RankedHit>,
+    /// Duration of each timed step, for the debug plan of P7 and the analytics
+    /// (`docs/03-recherche.md`, "Le pipeline d'une requête").
+    pub stages: Stages,
+    /// Strategy the dense branch actually ran, or `None` when no dense branch
+    /// ran (`dense`, `hybrid`; ADR-0074).
+    pub strategy: Option<Strategy>,
+}
+
+/// Duration of the timed steps of one pipeline run.
+///
+/// The keys are the ones of `docs/03-recherche.md` (steps 4 to 8). A step that
+/// the mode does not run keeps a zero duration, like an empty histogram bucket;
+/// `validate`, `encode`, `filter` and `total` are measured by the caller, which
+/// owns those steps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Stages {
+    /// Dense branch: the scan, the rescoring and the ranking.
+    pub dense: Duration,
+    /// Lexical branch: the BM25 query over the pool.
+    pub lexical: Duration,
+    /// Fusion of the two branches, in `hybrid` only.
+    pub fusion: Duration,
+    /// Regrouping and deduplication.
+    pub group: Duration,
+    /// Payload of the survivors: their text and their fields.
+    pub fetch: Duration,
+}
+
+impl Stages {
+    /// Sum of the timed steps, for a caller that bounds the plan on the total.
+    #[must_use]
+    pub fn sum(self) -> Duration {
+        self.dense + self.lexical + self.fusion + self.group + self.fetch
+    }
 }
 
 /// Runs the pipeline of `request` on `pool`.
@@ -210,7 +245,7 @@ pub fn search(
     // The over-sampling of ADR-0075 covers both branches and the fusion: each of
     // them must be able to fill the regrouped answer.
     let requested = candidates_per_branch(request.k, request.grouping);
-    let results = match request.mode {
+    let (results, stages, strategy) = match request.mode {
         Mode::Dense => dense(snapshot, searcher, pool, request, search)?,
         Mode::Lexical => lexical(snapshot, searcher, pool, request, requested)?,
         Mode::Hybrid => hybrid(snapshot, searcher, pool, request, search, requested)?,
@@ -218,6 +253,8 @@ pub fn search(
     Ok(Answer {
         score_type: score_type(request.mode, request.fusion),
         results,
+        stages,
+        strategy,
     })
 }
 
@@ -244,7 +281,7 @@ fn dense(
     pool: &Pool,
     request: &Request<'_>,
     search: &SearchConfig,
-) -> Result<Vec<RankedHit>, CribleError> {
+) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
     let vector = vector(request)?;
     let query = crate::dense::DenseQuery {
         vector,
@@ -252,8 +289,11 @@ fn dense(
         exact: request.exact,
         grouping: request.grouping,
     };
-    let (ranks, kept) = grouped_candidates(snapshot, searcher, pool, &query, search)?;
-    kept.into_iter()
+    let requested = candidates_per_branch(request.k, request.grouping);
+    let (ranks, kept, mut stages) = grouped_candidates(snapshot, searcher, pool, &query, search)?;
+    let fetch = Instant::now();
+    let results = kept
+        .into_iter()
         .map(|candidate| {
             let dense = ranks.get(&candidate.iid()).copied();
             Ok(RankedHit {
@@ -262,7 +302,10 @@ fn dense(
                 lexical: None,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, CribleError>>()?;
+    stages.fetch = fetch.elapsed();
+    let strategy = plan(search, pool.len(), requested, request.exact).strategy;
+    Ok((results, stages, Some(strategy)))
 }
 
 /// Runs the lexical branch alone.
@@ -272,14 +315,23 @@ fn lexical(
     pool: &Pool,
     request: &Request<'_>,
     requested: usize,
-) -> Result<Vec<RankedHit>, CribleError> {
+) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
     let text = text(request)?;
+    let branch_time = Instant::now();
     let branch = lexical::search(snapshot, pool, text, requested)?;
+    let mut stages = Stages {
+        lexical: branch_time.elapsed(),
+        ..Stages::default()
+    };
     let ranks = ranks(&branch);
+    let group_time = Instant::now();
     let kept = group(branch, request.k, request.grouping, |iid| {
         searcher.passage_hash_of(iid)
     })?;
-    kept.into_iter()
+    stages.group = group_time.elapsed();
+    let fetch = Instant::now();
+    let results = kept
+        .into_iter()
         .map(|candidate| {
             let lexical = ranks.get(&candidate.iid()).copied();
             Ok(RankedHit {
@@ -288,7 +340,9 @@ fn lexical(
                 lexical,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, CribleError>>()?;
+    stages.fetch = fetch.elapsed();
+    Ok((results, stages, None))
 }
 
 /// Runs both branches in parallel on the same pool, then fuses and regroups.
@@ -299,14 +353,15 @@ fn hybrid(
     request: &Request<'_>,
     search: &SearchConfig,
     requested: usize,
-) -> Result<Vec<RankedHit>, CribleError> {
+) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
     // Both inputs are checked before any branch runs: a malformed request pays
     // for no work.
     let vector = vector(request)?;
     let text = text(request)?;
     let (dense_branch, lexical_branch) = rayon::join(
         || {
-            candidates(
+            let started = Instant::now();
+            let branch = candidates(
                 snapshot,
                 searcher,
                 pool,
@@ -314,19 +369,37 @@ fn hybrid(
                 requested,
                 search,
                 request.exact,
-            )
+            );
+            (branch, started.elapsed())
         },
-        || lexical::search(snapshot, pool, text, requested),
+        || {
+            let started = Instant::now();
+            let branch = lexical::search(snapshot, pool, text, requested);
+            (branch, started.elapsed())
+        },
     );
+    let (dense_branch, dense_time) = dense_branch;
+    let (lexical_branch, lexical_time) = lexical_branch;
+    let mut stages = Stages {
+        dense: dense_time,
+        lexical: lexical_time,
+        ..Stages::default()
+    };
     // The Dense branch's error is a malformed query vector, which the request
     // alone explains; the lexical branch's refusal is the state of the epoch
     // (ADR-0088, ADR-0089). Both are returned as they are: `hybrid` never
     // degrades to the dense ranking (ADR-0087, decision 2).
+    let fusion_time = Instant::now();
     let fused = fusion::fuse(&dense_branch?, &lexical_branch?, request.fusion);
+    stages.fusion = fusion_time.elapsed();
+    let group_time = Instant::now();
     let kept = group(fused, request.k, request.grouping, |iid| {
         searcher.passage_hash_of(iid)
     })?;
-    kept.into_iter()
+    stages.group = group_time.elapsed();
+    let fetch = Instant::now();
+    let results = kept
+        .into_iter()
         .map(|entry| {
             let Fused {
                 iid,
@@ -341,7 +414,10 @@ fn hybrid(
                 lexical,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, CribleError>>()?;
+    stages.fetch = fetch.elapsed();
+    let strategy = plan(search, pool.len(), requested, request.exact).strategy;
+    Ok((results, stages, Some(strategy)))
 }
 
 /// Query vector the mode needs, or the `invalid_request` that names the mode.

@@ -23,6 +23,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::{Extension, Path as AxumPath, Query, State};
@@ -41,6 +42,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::AppState;
+use crate::analytics::{self, Operation};
+use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
 use crate::jobs::{JobOutcome, log_attach_durations};
@@ -106,6 +109,35 @@ struct PatchBody {
     )
 )]
 pub async fn post_documents(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let started = Instant::now();
+    let answer = post_documents_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        Json(body),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::OnlineBatch,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`post_documents`], without the event of its operation.
+async fn post_documents_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
@@ -213,6 +245,35 @@ pub async fn post_documents(
 pub async fn patch_documents(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let started = Instant::now();
+    let answer = patch_documents_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        Json(body),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::PatchDocuments,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`patch_documents`], without the event of its operation.
+async fn patch_documents_inner(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
     Query(query): Query<HashMap<String, String>>,
     Json(body): Json<Value>,
@@ -297,6 +358,33 @@ pub async fn patch_documents(
     )
 )]
 pub async fn get_document(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath((index, doc_id)): AxumPath<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let started = Instant::now();
+    let answer = get_document_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath((index.clone(), doc_id)),
+        Query(query),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::GetDocument,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`get_document`], without the event of its operation.
+async fn get_document_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath((index, doc_id)): AxumPath<(String, String)>,

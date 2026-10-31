@@ -17,6 +17,7 @@
 //! with the tasks that create them; this crate only provides the state, the
 //! router they mount on and the middleware they wrap their routes with.
 
+pub mod analytics;
 pub mod auth;
 // Test barriers of the `failpoints` build only: they hold a job at a precise
 // point while a test reads the instance (ADR-0107, decisions 5 and 6).

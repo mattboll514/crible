@@ -647,6 +647,9 @@ pub struct IndexSummary {
     pub codes_memory_bytes: u64,
     /// Last applied batch, or `None` when the epoch holds none.
     pub last_batch: Option<LastBatch>,
+    /// Batches the reference state applied, for the daily analytics row
+    /// (ADR-0117, decision 1).
+    pub batches: u64,
 }
 
 impl IndexSummary {
@@ -686,6 +689,7 @@ impl IndexSummary {
                 .unwrap_or(u64::MAX),
             codes_memory_bytes: snapshot.codes_memory(),
             last_batch: store.last_batch()?,
+            batches: store.batch_count()?,
         })
     }
 

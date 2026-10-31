@@ -35,6 +35,7 @@ use crible_store::online;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::analytics::Analytics;
 use crate::auth::Auth;
 use crate::config::Config;
 use crate::error::{internal, invalid};
@@ -400,7 +401,11 @@ impl Drop for CreationQuarantine<'_> {
 #[derive(Default)]
 pub struct AppState {
     ready: AtomicBool,
-    loaded: OnceLock<Loaded>,
+    loaded: OnceLock<Arc<Loaded>>,
+    /// The analytics of the instance, once the startup opened them. `None`
+    /// when they could not start without a tokio runtime, which is the case of
+    /// a plain unit test of the startup: nothing is recorded then.
+    analytics: OnceLock<Option<Arc<Analytics>>>,
     auth: OnceLock<Arc<Auth>>,
     jobs: OnceLock<Arc<JobBoard>>,
     shutdown: OnceLock<Shutdown>,
@@ -436,7 +441,44 @@ impl AppState {
     /// Everything loaded at startup, once the loader has finished.
     #[must_use]
     pub fn loaded(&self) -> Option<&Loaded> {
-        self.loaded.get()
+        self.loaded.get().map(Arc::as_ref)
+    }
+
+    /// The analytics of the instance, once the startup has opened them.
+    ///
+    /// `None` before the startup, and on a loader that ran outside a tokio
+    /// runtime: no event is recorded then, and a flush has nothing to write.
+    #[must_use]
+    pub fn analytics(&self) -> Option<&Arc<Analytics>> {
+        self.analytics.get().and_then(Option::as_ref)
+    }
+
+    /// Drains the queue into `analytics.sqlite` and waits for the write
+    /// (ADR-0118, decision 3).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush the writer reports, and
+    /// [`ErrorCode::Internal`] when the writer stopped before answering.
+    pub async fn flush_analytics(&self) -> Result<(), CribleError> {
+        match self.analytics() {
+            Some(analytics) => analytics.flush().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Drains the queue, writes it and stops the writer, bounded by
+    /// [`crate::analytics::STOP_BOUND`] (ADR-0118, decision 3).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush, and [`ErrorCode::Internal`] when the writer
+    /// stopped before answering or when the bound was reached.
+    pub async fn stop_analytics(&self) -> Result<(), CribleError> {
+        match self.analytics() {
+            Some(analytics) => analytics.stop().await,
+            None => Ok(()),
+        }
     }
 
     /// Semaphore of the concurrent searches.
@@ -448,7 +490,7 @@ impl AppState {
     pub fn search_limit(&self) -> Result<Arc<SearchLimit>, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::search_limit)
+            .map(|loaded| loaded.search_limit())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -461,7 +503,7 @@ impl AppState {
     pub fn scan_pool(&self) -> Result<Arc<ScanPool>, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::scan_pool)
+            .map(|loaded| loaded.scan_pool())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -474,7 +516,7 @@ impl AppState {
     pub fn default_timeout_ms(&self) -> Result<u64, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::default_timeout_ms)
+            .map(|loaded| loaded.default_timeout_ms())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -865,9 +907,23 @@ impl AppState {
             encoders = loaded.models.len(),
             "models and indexes loaded"
         );
+        // ADR-0118, decisions 4 and 5: the analytics open their file, purge the
+        // retention and start their writer before the instance answers a
+        // request. The writer holds a shared `Loaded` so it reads the state of
+        // the indexes at each flush, without a cycle: `Loaded` never knows the
+        // analytics.
+        let loaded = Arc::new(loaded);
+        let analytics = Analytics::start(
+            &config.paths.data,
+            config.analytics.retention_days,
+            Arc::clone(&loaded),
+        )?;
         self.jobs
             .set(jobs)
             .map_err(|_| internal("the job board of the instance was opened twice"))?;
+        self.analytics
+            .set(analytics)
+            .map_err(|_| internal("the analytics of the instance were opened twice"))?;
         self.loaded
             .set(loaded)
             .map_err(|_| internal("the instance configuration was loaded twice"))

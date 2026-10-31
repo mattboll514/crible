@@ -150,12 +150,12 @@ impl Barrier {
         // tests is never held.
         std::fs::write(directory.path().join("armed-attach"), b"")
             .expect("the attach steps are armable");
-        // The search route, the multi-index route and the deposited-batch job
-        // have barriers of their own (`src/search.rs`, `src/search_multi.rs`,
-        // `src/batches.rs`). This file proves INV-02 on the **writes**, so those
-        // are released up front: a search that waited on an unrelated barrier
-        // would answer `504` instead of proving the invariant.
-        for scope in ["search", "search-multi", "batch"].iter().chain(released) {
+        // The deposited-batch job has a barrier of its own (`src/batches.rs`).
+        // This file proves INV-02 on the **writes**, so that job is released up
+        // front. The work steps of the two search routes are opt-in
+        // (`src/barriers.rs`): they stay disarmed here, so the searches of this
+        // file run at full speed and never answer `504` on an unrelated barrier.
+        for scope in ["batch"].iter().chain(released) {
             let go = directory.path().join(format!("go-{scope}"));
             std::fs::write(&go, b"").expect("an unrelated barrier is releasable");
         }

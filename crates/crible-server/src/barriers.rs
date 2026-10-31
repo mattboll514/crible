@@ -23,6 +23,14 @@
 //!   `batch`, `search` or `compaction` scope is never held;
 //! - the pre-token step of the search route needs `<dir>/armed-search-start`,
 //!   so a search of a test that holds a write job is never held there;
+//! - the work step of the search route needs `<dir>/armed-search`, and the one
+//!   of the multi-index route `<dir>/armed-search-multi`, for the same reason:
+//!   every server test sends searches, so a test that arms only another scope
+//!   must not stop them on their token;
+//! - the head of the loop of the analytics writer needs
+//!   `<dir>/armed-analytics-flush`, so a test that holds a write job or a search
+//!   never holds the analytics (ADR-0118, decision 7); that barrier is async, so
+//!   it waits on the async runtime and never blocks the requests of the test;
 //! - without the variable the call returns at once, so a build with the feature
 //!   but no test armed behaves exactly like a normal one.
 //!
@@ -78,10 +86,19 @@ pub(crate) fn hold_attach(step: crible_store::generation::CommitStep) {
 /// A write of a test that only arms another scope runs at full speed: the
 /// attach steps are opt-in through [`ATTACH_ARMED`].
 fn wait_attach(scope: &str) {
+    wait_armed(ATTACH_ARMED, scope);
+}
+
+/// Holds the calling job at `scope`, if the mark `armed` is present.
+///
+/// The variable names one directory per process, and several tests of a binary
+/// may arm different steps of it: a step is held only when the test wrote its
+/// own mark, so an unrelated scope never delays a job.
+fn wait_armed(armed: &str, scope: &str) {
     let Ok(directory) = std::env::var(BARRIER_ENV) else {
         return;
     };
-    if !Path::new(&directory).join(ATTACH_ARMED).exists() {
+    if !Path::new(&directory).join(armed).exists() {
         return;
     }
     hold(&directory, scope);
@@ -106,6 +123,69 @@ pub(crate) fn wait_search_start() {
         return;
     }
     hold(&directory, "search-start");
+}
+
+/// Name of the mark a test writes to arm the work step of the search route.
+///
+/// Every server test sends searches, and the analytics tests arm a directory of
+/// their own; without this mark their searches would stop here for
+/// [`RELEASE_TIMEOUT`] and answer `504` (INV-17, ADR-0118, decision 7).
+const SEARCH_ARMED: &str = "armed-search";
+
+/// Holds the calling search inside its blocking task, before the computation.
+///
+/// A test proves here that a `504` keeps its concurrency token until the
+/// computation really ends (ADR-0102, decision 3). The step is opt-in through
+/// [`SEARCH_ARMED`].
+pub(crate) fn wait_search() {
+    wait_armed(SEARCH_ARMED, "search");
+}
+
+/// Name of the mark a test writes to arm the work step of the multi-index route.
+const SEARCH_MULTI_ARMED: &str = "armed-search-multi";
+
+/// Holds the calling multi-index search inside its blocking task.
+///
+/// A test proves here the single token of the whole request (ADR-0110,
+/// decision 8; ADR-0102, decision 2). The step is opt-in through
+/// [`SEARCH_MULTI_ARMED`].
+pub(crate) fn wait_search_multi() {
+    wait_armed(SEARCH_MULTI_ARMED, "search-multi");
+}
+
+/// Name of the mark a test writes to arm the analytics writer's hold point.
+///
+/// The analytics writer runs in every server test, so the hold point is opt-in:
+/// without this mark a test that armed another scope runs the writer at full
+/// speed, like the attach steps above.
+const ANALYTICS_FLUSH_ARMED: &str = "armed-analytics-flush";
+
+/// Holds the analytics writer at the head of its loop, before it receives
+/// anything (ADR-0118, decision 7).
+///
+/// It is **async**: the writer runs on the async runtime, and a blocking sleep
+/// here would stop every task of a current-thread test runtime, the route that
+/// must answer while the writer is held included.
+pub(crate) async fn wait_analytics_flush() {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    let directory = Path::new(&directory);
+    if !directory.join(ANALYTICS_FLUSH_ARMED).exists() {
+        return;
+    }
+    let ready = directory.join("ready-analytics-flush");
+    let go = directory.join("go-analytics-flush");
+    if fs::write(&ready, b"").is_err() {
+        return;
+    }
+    let deadline = Instant::now() + RELEASE_TIMEOUT;
+    while !go.exists() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_MILLIS)).await;
+    }
 }
 
 /// Holds the calling job until the test writes `<dir>/go-<scope>`.
