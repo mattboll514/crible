@@ -58,12 +58,17 @@ use crible_search::group::Grouping;
 use crible_search::pipeline::{Mode, RankedHit, ScoreType};
 use serde_json::{Map, Value, json};
 
+use crate::AppState;
+use crate::analytics::{self, Operation, Record};
+use crate::auth::Client;
+use crate::error;
+use crate::http::RequestId;
 use crate::jobs::Published;
+use crate::limits;
 use crate::search::{
-    self, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS, ReturnSpec, SearchRequest,
-    json_object, optional_string, reject_unknown,
+    self, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS, Observed, ReturnSpec,
+    SearchRequest, json_object, optional_string, reject_unknown,
 };
-use crate::{AppState, error, http::RequestId, limits};
 
 /// Constant of the reciprocal rank fusion, shared with the fusion of the two
 /// branches of one index (`docs/03-recherche.md:101`, ADR-0110, decision 9).
@@ -99,41 +104,125 @@ const RRF_CONSTANT: f32 = 60.0;
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
     Json(body): Json<Value>,
 ) -> Response {
+    let (answer, records) = search_inner(Arc::clone(&state), identifier, body).await;
+    analytics::record(&state, records, &client);
+    answer
+}
+
+/// The work of [`search`], with the events it records (ADR-0117, decision 5).
+///
+/// A multi-index search produces **one event per target**, never a consolidated
+/// row: the pool, the strategy and the contributions belong to one target, and a
+/// global row could only average them (ADR-0117, decision 5).
+async fn search_inner(
+    state: Arc<AppState>,
+    identifier: RequestId,
+    body: Value,
+) -> (Response, Vec<Record>) {
+    let entry = Instant::now();
+    // A request refused before its targets are resolved carries the first name
+    // the body declares, and an empty index when it declares none: the name of
+    // a target is never invented (ADR-0118, decision 6).
+    let claimed = first_target_name(&body);
     let plan = match MultiRequest::parse(&body).and_then(|request| validate(&state, request)) {
         Ok(plan) => plan,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => {
+            return Observed::new_at(claimed, Operation::SearchMulti, entry)
+                .refused(&failure, &identifier.0);
+        }
     };
     let limit = match state.search_limit() {
         Ok(limit) => limit,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => {
+            return Observed::new_at(claimed, Operation::SearchMulti, entry)
+                .refused(&failure, &identifier.0);
+        }
     };
+    let index = plan
+        .targets
+        .first()
+        .map_or_else(String::new, |target| target.index.clone());
+    let mut first = Observed::new_at(index, Operation::SearchMulti, entry);
+    first.mode(plan.mode);
+    first.shape(
+        plan.targets
+            .first()
+            .and_then(|t| analytics::filter_shape(&t.filter)),
+    );
+    first.validate_now();
 
     let holder = Arc::clone(&state);
     // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
     // decision 2). This instant is read just before the token, so the
     // acquisition and everything after it are covered.
     let started = Instant::now();
+    let reported = first.clone();
     let outcome = limit
         .run_blocking(plan.deadline, move || {
             // A test holds the work here to prove the single token of the whole
             // request (ADR-0110, decision 8; ADR-0102, decision 2).
             #[cfg(feature = "failpoints")]
-            crate::barriers::wait("search-multi");
-            run_multi(&holder, plan).map(|outcome| outcome.with_start(started))
+            crate::barriers::wait_search_multi();
+            run_multi(&holder, plan, first, started)
         })
         .await;
 
     match outcome {
-        Ok(Ok(outcome)) => (
-            axum::http::StatusCode::OK,
-            Json(outcome.render(&identifier.0)),
-        )
-            .into_response(),
-        Ok(Err(failure)) => limits::refusal(&failure, &identifier.0),
-        Err(failure) => limits::refusal(&failure, &identifier.0),
+        Ok((Ok(outcome), observers)) => {
+            let answer = (
+                axum::http::StatusCode::OK,
+                Json(outcome.render(&identifier.0)),
+            )
+                .into_response();
+            (answer, events_of(observers, "ok"))
+        }
+        Ok((Err(failure), observers)) => {
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            (answer, events_of(observers, &status))
+        }
+        // The deadline expired before the blocking thread answered: no target
+        // reported anything, so the single event carries the first target the
+        // plan resolved, without inventing a faulty one.
+        Err(failure) => reported.refused(&failure, &identifier.0),
     }
+}
+
+/// One event per target that ran, the last one with `last_status` and the
+/// earlier ones `ok` (ADR-0117, decision 5).
+///
+/// The callers hand the observers in the order of the request: on a failure, the
+/// faulty target is the last of them, because `run_multi` truncates the list
+/// there.
+fn events_of(observers: Vec<Observed>, last_status: &str) -> Vec<Record> {
+    let mut records = Vec::with_capacity(observers.len());
+    let count = observers.len();
+    for (position, observed) in observers.into_iter().enumerate() {
+        let status = if position + 1 == count {
+            last_status.to_owned()
+        } else {
+            "ok".to_owned()
+        };
+        records.extend(observed.events(status));
+    }
+    records
+}
+
+/// Name the body claims as its first target, without validating the body.
+///
+/// It is read only for the event of a request refused before its targets are
+/// resolved; the route never uses it to serve anything.
+fn first_target_name(body: &Value) -> String {
+    body.get("targets")
+        .and_then(Value::as_array)
+        .and_then(|targets| targets.first())
+        .and_then(|target| target.get("index"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A multi-index request, validated far enough to take the token.
@@ -401,7 +490,23 @@ fn check_common_model(state: &AppState, targets: &[ResolvedTarget]) -> Result<()
 }
 
 /// Runs every target, one after the other, then fuses their answers.
-fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> {
+///
+/// It returns the events of the targets **with** the answer, successful or not:
+/// one event per target that ran, never a consolidated row (ADR-0117,
+/// decision 5). The first target carries the validation and the single encoding
+/// of the request, which happen once and must not be counted again on the
+/// others. Each target closes its own total, so a request of three targets does
+/// not add its whole duration three times (decision 2).
+///
+/// A failure after the targets were resolved keeps the observers of the targets
+/// that ran, the last one being the faulty target: the caller gives it the code
+/// of the answer and the earlier ones `ok`.
+fn run_multi(
+    state: &AppState,
+    plan: Plan,
+    first: Observed,
+    started: Instant,
+) -> (Result<MultiOutcome, CribleError>, Vec<Observed>) {
     let Plan {
         targets,
         mode,
@@ -416,23 +521,58 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
 
     // The single encoding point of the request, whatever the number of targets
     // (ADR-0110, decisions 8 and 11).
-    let first = targets
-        .first()
-        .ok_or_else(|| error::invalid("'$.targets' must name at least one index"))?;
-    let prepared = inputs.prepare(|query| search::encode_query(state, &first.published, query))?;
+    let first_target = match targets.first() {
+        Some(target) => target,
+        None => {
+            let failure = error::invalid("'$.targets' must name at least one index");
+            return (Err(failure), vec![first]);
+        }
+    };
+    let encodes = inputs.encodes();
+    let encoding = Instant::now();
+    let prepared =
+        match inputs.prepare(|query| search::encode_query(state, &first_target.published, query)) {
+            Ok(prepared) => prepared,
+            // No target ran: the one event of the request is the first target the
+            // plan resolved (decision 5).
+            Err(failure) => return (Err(failure), vec![first]),
+        };
+    let encoding = encodes.then(|| encoding.elapsed());
     let vector = match &prepared.vector {
-        Some(vector) => Some(search::check_vector(
-            state,
-            &first.published,
-            vector.clone(),
-        )?),
+        Some(vector) => {
+            match search::check_vector(state, &first_target.published, vector.clone()) {
+                Ok(vector) => Some(vector),
+                Err(failure) => return (Err(failure), vec![first]),
+            }
+        }
         None => None,
     };
 
+    let mut observers: Vec<Observed> = targets
+        .iter()
+        .enumerate()
+        .map(|(position, target)| {
+            let mut observed = if position == 0 {
+                first.clone()
+            } else {
+                Observed::new(target.index.clone(), Operation::SearchMulti)
+            };
+            observed.mode(mode);
+            observed.shape(analytics::filter_shape(&target.filter));
+            if let Some(encoding) = encoding
+                && position == 0
+            {
+                observed.encoded(encoding);
+            }
+            observed
+        })
+        .collect();
+
     let mut outcomes: Vec<(&ResolvedTarget, IndexOutcome)> = Vec::with_capacity(targets.len());
-    for target in &targets {
+    for (position, target) in targets.iter().enumerate() {
         let per_index_fusion = fusion.unwrap_or(target.published.config.search.fusion);
-        let outcome = search::search_index(
+        let target_started = Instant::now();
+        let outcome = match search::search_index(
             state,
             &target.index,
             &target.published,
@@ -446,7 +586,24 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
                 k,
                 exact,
             },
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(failure) => {
+                // One event for every target that ran, the faulty one included:
+                // the targets that answered keep their `ok` and their own
+                // durations, and the targets that never ran produce nothing
+                // (ADR-0117, decision 5).
+                if let Some(observed) = observers.get_mut(position) {
+                    observed.finish_at(target_started);
+                }
+                observers.truncate(position + 1);
+                return (Err(failure), observers);
+            }
+        };
+        if let Some(observed) = observers.get_mut(position) {
+            observed.target(&outcome, prepared.truncated_query);
+            observed.finish_at(target_started);
+        }
         outcomes.push((target, outcome));
     }
 
@@ -466,13 +623,22 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
         ScoreType::Rrf
     };
     let entries = fuse(outcomes, mode, &grouping, k);
-    let results = render_entries(entries, &targets, score_type, &selection)?;
-    Ok(MultiOutcome {
-        results,
-        targets: summaries,
-        truncated_query: prepared.truncated_query,
-        took_ms: 0.0,
-    })
+    let results = match render_entries(entries, &targets, score_type, &selection) {
+        Ok(results) => results,
+        // Every target ran: all of them keep their event, and the last one
+        // carries the code of the failure (ADR-0117, decision 5).
+        Err(failure) => return (Err(failure), observers),
+    };
+    (
+        Ok(MultiOutcome {
+            results,
+            targets: summaries,
+            truncated_query: prepared.truncated_query,
+            took_ms: 0.0,
+        }
+        .with_start(started)),
+        observers,
+    )
 }
 
 /// One unit of the fusion between indexes: a passage, or a document under
@@ -637,5 +803,58 @@ impl MultiOutcome {
             "truncated_query": self.truncated_query,
             "request_id": request_id,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Observed, Operation, events_of};
+    use crate::analytics::{Record, SearchEvent};
+    use std::time::Instant;
+
+    /// An observer of a target that ran, closed on its own duration.
+    fn ran(index: &str) -> Observed {
+        let started = Instant::now();
+        let mut observed = Observed::new_at(index, Operation::SearchMulti, Instant::now());
+        observed.finish_at(started);
+        observed
+    }
+
+    /// The events of the records, in their order.
+    fn events(records: Vec<Record>) -> Vec<SearchEvent> {
+        records
+            .into_iter()
+            .filter_map(|record| match record {
+                Record::Search { event, .. } => Some(event),
+                Record::Operation(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failure_after_the_first_target_leaves_one_event_per_target_that_ran() {
+        // ADR-0117, decision 5: one event per target, never a consolidated row.
+        // The targets that answered keep `ok`, the faulty one carries the code,
+        // and a target that never ran produces no event.
+        let written = events(events_of(vec![ran("alpha"), ran("beta")], "timeout"));
+        assert_eq!(
+            written.len(),
+            2,
+            "one event per target that ran: {written:?}"
+        );
+        assert_eq!(written[0].index, "alpha");
+        assert_eq!(written[0].status, "ok");
+        assert_eq!(written[1].index, "beta");
+        assert_eq!(written[1].status, "timeout");
+    }
+
+    #[test]
+    fn a_request_that_failed_before_any_target_keeps_one_event() {
+        // No target ran: the single event is the first target the plan resolved,
+        // and it carries the code of the failure.
+        let written = events(events_of(vec![ran("alpha")], "invalid_request"));
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert_eq!(written[0].index, "alpha");
+        assert_eq!(written[0].status, "invalid_request");
     }
 }

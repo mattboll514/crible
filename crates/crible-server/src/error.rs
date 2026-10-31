@@ -320,9 +320,22 @@ fn cause_text(cause: &(dyn Any + Send)) -> String {
 /// Code of a response already written in the format of `docs/05-api.md`.
 ///
 /// The formatting layer reads it: such a response keeps its body, and only gets
-/// its line (ADR-0101, decision 4).
+/// its line (ADR-0101, decision 4). The analytics of a route read it too, to
+/// record the code of the failure it rendered (ADR-0117, decision 5).
 #[derive(Debug, Clone, Copy)]
 struct Rendered(ErrorCode);
+
+/// Code of the error an already rendered response carries, when it is one.
+///
+/// `None` is a response no route of `docs/05-api.md` rendered, and in practice a
+/// success. The analytics never guess a code from a status: two codes share a
+/// status (`docs/06-observabilite.md`), so an absent [`Rendered`] is not a code.
+pub(crate) fn rendered_code(response: &Response) -> Option<ErrorCode> {
+    response
+        .extensions()
+        .get::<Rendered>()
+        .map(|rendered| rendered.0)
+}
 
 /// Cause of an `internal`, kept for the line of the journal and never sent to
 /// the client.

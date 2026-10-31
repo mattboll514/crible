@@ -1232,6 +1232,16 @@ impl GenerationStore {
             .map_err(|error| records::database_error("read the last applied batch", &error))
     }
 
+    /// Number of batches the reference state applied, as the daily analytics row
+    /// reports it (ADR-0117, decision 1; ADR-0118, decision 5).
+    ///
+    /// # Errors
+    ///
+    /// The errors of the SQLite query.
+    pub fn batch_count(&self) -> Result<u64, CribleError> {
+        records::count_batches(self.records.connection())
+    }
+
     /// Builds the snapshot a new configuration calls for, **without** publishing
     /// it.
     ///

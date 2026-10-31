@@ -74,6 +74,7 @@ fn summary(marker: u64) -> IndexSummary {
         filter_memory_bytes: 0,
         codes_memory_bytes: 0,
         last_batch: None,
+        batches: 0,
     }
 }
 

@@ -37,7 +37,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -47,16 +47,19 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::model::ModelKind;
 use crible_search::api::{self, ReturnSelection};
+use crible_search::dense::Strategy;
 use crible_search::dense::exact::DenseSearcher;
 use crible_search::group::Grouping;
 use crible_search::pipeline::{
-    self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType,
+    self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType, Stages,
 };
 use crible_search::pool::Pool;
 use crible_store::generation::{epoch_records_path, epoch_segments_directory};
 use serde_json::{Map, Value, json};
 
 use crate::AppState;
+use crate::analytics::{self, Operation, Record, SearchEvent, StageDurations};
+use crate::auth::Client;
 use crate::error;
 use crate::http::RequestId;
 use crate::jobs::Published;
@@ -137,50 +140,69 @@ pub(crate) const DEFAULT_K: usize = 10;
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
     Path(index): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
+    let (answer, records) = search_inner(Arc::clone(&state), identifier, index, body).await;
+    analytics::record(&state, records, &client);
+    answer
+}
+
+/// The work of [`search`], with the events it records (ADR-0117, decision 5).
+///
+/// The route records nothing itself: this function builds the record beside the
+/// response, so an early refusal and a successful answer take the same path and
+/// no exit of the route can forget its event.
+async fn search_inner(
+    state: Arc<AppState>,
+    identifier: RequestId,
+    index: String,
+    body: Value,
+) -> (Response, Vec<Record>) {
+    let mut observed = Observed::new(index.clone(), Operation::Search);
     let handle = match state.index(&index) {
         Ok(Some(handle)) => handle,
-        Ok(None) => return error::rendered(&unknown_index(&index), &identifier.0),
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Ok(None) => return observed.refused(&unknown_index(&index), &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let request = match SearchRequest::parse(&body) {
         Ok(request) => request,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let published = match handle.published() {
         Ok(published) => published,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     // `timeout_ms` is read and bounded before any other work, so a fault of the
     // deadline never hides behind a missing input (ADR-0102, decision 3).
     let default_timeout_ms = match state.default_timeout_ms() {
         Ok(value) => value,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let deadline = match limits::timeout(request.timeout_ms, default_timeout_ms) {
         Ok(deadline) => deadline,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let mode = request
         .mode
         .unwrap_or_else(|| Mode::default_for(published.config.lexical.enabled));
     if mode.uses_lexical() && !published.config.lexical.enabled {
-        return error::rendered(
+        return observed.refused(
             &error::invalid("lexical branch is disabled for this index"),
             &identifier.0,
         );
     }
+    observed.mode(mode);
     let inputs = match request.inputs(mode) {
         Ok(inputs) => inputs,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     // A permanent refusal of ADR-0109, decision 4, before the token: an
     // `external` model cannot encode, so a mode that would encode needs its
     // `vector` (ADR-0110, decision 7).
     if let Err(failure) = check_model_inputs(&state, &published, mode, &inputs) {
-        return error::rendered(&failure, &identifier.0);
+        return observed.refused(&failure, &identifier.0);
     }
     let fusion = request.fusion.unwrap_or(published.config.search.fusion);
     let grouping = match api::grouping(
@@ -189,24 +211,30 @@ pub async fn search(
         request.dedup_content,
     ) {
         Ok(grouping) => grouping,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let selection = match request.selection.resolve(&published.config.schema) {
         Ok(selection) => selection,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
     let filter = match request.filter {
         Some(filter) => match filter.validate(&published.config.schema) {
             Ok(()) => filter,
-            Err(failure) => return error::rendered(&failure, &identifier.0),
+            Err(failure) => return observed.refused(&failure, &identifier.0),
         },
         None => Filter::And(Vec::new()),
     };
+    // ADR-0117, decision 6: the shape is computed from the validated filter, so
+    // a refused filter produces no row.
+    observed.shape(analytics::filter_shape(&filter));
     let limit = match state.search_limit() {
         Ok(limit) => limit,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
     };
 
+    // The validation ends here, and its duration is the first sample of the
+    // event (ADR-0117, decision 2).
+    observed.validate_now();
     let holder = Arc::clone(&state);
     let name = index.clone();
     // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
@@ -217,12 +245,12 @@ pub async fn search(
     // token, not at the entry of the blocking task (ADR-0109, decision 2).
     #[cfg(feature = "failpoints")]
     crate::barriers::wait_search_start();
-    let outcome = limit
+    let attempt = limit
         .run_blocking(deadline, move || {
             // A test holds the work here to prove that a `504` keeps the token
             // until the computation really ends (ADR-0102, decision 3).
             #[cfg(feature = "failpoints")]
-            crate::barriers::wait("search");
+            crate::barriers::wait_search();
             run(
                 &holder,
                 &name,
@@ -235,19 +263,250 @@ pub async fn search(
                 &selection,
                 request.k,
                 request.exact,
+                started,
             )
-            .map(|outcome| outcome.with_start(started))
         })
         .await;
 
+    let outcome = match attempt {
+        Ok(attempt) => observed.absorb(attempt),
+        Err(failure) => return observed.refused(&failure, &identifier.0),
+    };
     match outcome {
-        Ok(Ok(outcome)) => (
-            axum::http::StatusCode::OK,
-            Json(outcome.render(&identifier.0)),
-        )
-            .into_response(),
-        Ok(Err(failure)) => limits::refusal(&failure, &identifier.0),
-        Err(failure) => limits::refusal(&failure, &identifier.0),
+        Ok(outcome) => {
+            let answer = (
+                axum::http::StatusCode::OK,
+                Json(outcome.render(&identifier.0)),
+            )
+                .into_response();
+            observed.answered(answer)
+        }
+        Err(failure) => observed.refused(&failure, &identifier.0),
+    }
+}
+
+/// What one search of a route records, beside its answer (ADR-0117, decision 5).
+///
+/// The route fills it as the request advances, so a refusal records the steps
+/// that really ran and no sample for the steps that did not (ADR-0117,
+/// decision 2): a `400` of the body carries its validation and its total, never
+/// an empty histogram of the dense branch.
+#[derive(Debug, Clone)]
+pub(crate) struct Observed {
+    index: String,
+    operation: Operation,
+    entry: Instant,
+    stages: StageDurations,
+    mode: Option<Mode>,
+    strategy: Option<Strategy>,
+    pool: u32,
+    zero_results: bool,
+    truncated: bool,
+    contributions: Contributions,
+    shape: Option<String>,
+}
+
+/// Results each branch of a `hybrid` search brought, alone or together
+/// (ADR-0117, decision 5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Contributions {
+    /// A result the dense branch alone found.
+    pub(crate) dense_only: bool,
+    /// A result the lexical branch alone found.
+    pub(crate) lexical_only: bool,
+    /// A result both branches found.
+    pub(crate) both: bool,
+}
+
+impl Contributions {
+    /// Reads the contributions of the returned results.
+    ///
+    /// The ranks each branch gave travel on every [`RankedHit`], so the three
+    /// facts are read from the answer and not recomputed: a result both branches
+    /// found carries two ranks, a result one branch alone found carries one.
+    fn of(hits: &[RankedHit]) -> Self {
+        Self {
+            dense_only: hits
+                .iter()
+                .any(|hit| hit.dense.is_some() && hit.lexical.is_none()),
+            lexical_only: hits
+                .iter()
+                .any(|hit| hit.dense.is_none() && hit.lexical.is_some()),
+            both: hits
+                .iter()
+                .any(|hit| hit.dense.is_some() && hit.lexical.is_some()),
+        }
+    }
+}
+
+impl Observed {
+    /// Starts recording a search of `index` at the entry of its route.
+    pub(crate) fn new(index: impl Into<String>, operation: Operation) -> Self {
+        Self::new_at(index, operation, Instant::now())
+    }
+
+    /// Starts recording a search that entered its route at `entry`.
+    pub(crate) fn new_at(index: impl Into<String>, operation: Operation, entry: Instant) -> Self {
+        Self {
+            index: index.into(),
+            operation,
+            entry,
+            stages: StageDurations::default(),
+            mode: None,
+            strategy: None,
+            pool: 0,
+            zero_results: false,
+            truncated: false,
+            contributions: Contributions::default(),
+            shape: None,
+        }
+    }
+
+    /// Records the mode the request resolved to.
+    pub(crate) fn mode(&mut self, mode: Mode) {
+        self.mode = Some(mode);
+    }
+
+    /// Records the canonical form of the filter (ADR-0117, decision 6).
+    pub(crate) fn shape(&mut self, shape: Option<String>) {
+        self.shape = shape;
+    }
+
+    /// Closes the validation step just before the concurrency token.
+    pub(crate) fn validate_now(&mut self) {
+        self.stages.validate = Some(self.entry.elapsed());
+    }
+
+    /// Folds the attempt of the blocking thread and returns its answer.
+    pub(crate) fn absorb(&mut self, attempt: Attempt) -> Result<SearchOutcome, CribleError> {
+        self.stages.encode = attempt.stages.encode;
+        self.stages.filter = attempt.stages.filter;
+        self.stages.dense = attempt.stages.dense;
+        self.stages.lexical = attempt.stages.lexical;
+        self.stages.fusion = attempt.stages.fusion;
+        self.stages.group = attempt.stages.group;
+        self.stages.fetch = attempt.stages.fetch;
+        self.strategy = attempt.strategy;
+        self.pool = attempt.pool;
+        self.contributions = attempt.contributions;
+        if let Ok(outcome) = &attempt.result {
+            self.zero_results = outcome.zero_results;
+            self.truncated = outcome.truncated_query;
+        }
+        attempt.result
+    }
+
+    /// Records the duration of the encoding, step 2 of `docs/03-recherche.md`.
+    pub(crate) fn encoded(&mut self, duration: Duration) {
+        self.stages.encode = Some(duration);
+    }
+
+    /// Folds the outcome of one target of a multi-index search.
+    ///
+    /// The encoding and the validation belong to the request, not to the target,
+    /// and are recorded once on the first target: summing them per target would
+    /// count one encoding several times (ADR-0117, decision 5).
+    pub(crate) fn target(&mut self, outcome: &IndexOutcome, truncated: bool) {
+        let mode = self.mode.unwrap_or(Mode::Dense);
+        let measured = measure(mode, outcome);
+        self.stages.filter = measured.filter;
+        self.stages.dense = measured.dense;
+        self.stages.lexical = measured.lexical;
+        self.stages.fusion = measured.fusion;
+        self.stages.group = measured.group;
+        self.stages.fetch = measured.fetch;
+        self.strategy = outcome.strategy;
+        self.pool = outcome.pool_size;
+        self.zero_results = outcome.hits.is_empty();
+        self.truncated = truncated;
+        self.contributions = contributions(mode, &outcome.hits);
+    }
+
+    /// Closes the total stage of one target of a multi-index request.
+    ///
+    /// Each target measures its own work: closing the total at the entry of the
+    /// request would count the whole request once per target, so three targets
+    /// would add three times its duration to `latency_total` (ADR-0117,
+    /// decision 2).
+    pub(crate) fn finish_at(&mut self, started: Instant) {
+        self.stages.total = Some(started.elapsed());
+    }
+
+    /// Renders `failure` and yields its event.
+    pub(crate) fn refused(
+        self,
+        failure: &CribleError,
+        request_id: &str,
+    ) -> (Response, Vec<Record>) {
+        let answer = error::rendered(failure, request_id);
+        let status = analytics::status(&answer);
+        (answer, self.events(status))
+    }
+
+    /// Yields `answer` and its event.
+    pub(crate) fn answered(self, answer: Response) -> (Response, Vec<Record>) {
+        let status = analytics::status(&answer);
+        (answer, self.events(status))
+    }
+
+    /// Builds the one event of this search.
+    pub(crate) fn events(mut self, status: String) -> Vec<Record> {
+        // A target of a multi-index request closed its own total at its end; a
+        // single search closes it here, at the end of its route.
+        if self.stages.total.is_none() {
+            self.stages.total = Some(self.entry.elapsed());
+        }
+        vec![Record::Search {
+            event: SearchEvent {
+                minute: String::new(),
+                index: self.index,
+                operation: self.operation,
+                status,
+                // The name of the key is filled by the route, which alone reads
+                // the `Client` (ADR-0118, decision 6).
+                client: String::new(),
+                mode: self.mode,
+                dense_strategy: self.strategy,
+                stages: self.stages,
+                pool: self.pool,
+                zero_results: self.zero_results,
+                truncated: self.truncated,
+                dense_only: self.contributions.dense_only,
+                lexical_only: self.contributions.lexical_only,
+                both: self.contributions.both,
+            },
+            shape: self.shape,
+        }]
+    }
+}
+
+/// One attempt at a search on a blocking thread, successful or not.
+///
+/// The durations travel beside the result so a failure of the encoding, of the
+/// pool or of a branch still records the steps that ran.
+pub(crate) struct Attempt {
+    /// Answer of the pipeline, or the failure the route renders.
+    pub(crate) result: Result<SearchOutcome, CribleError>,
+    /// Durations of the steps that ran on the blocking thread.
+    pub(crate) stages: StageDurations,
+    /// Dense strategy that ran, when a dense branch ran.
+    pub(crate) strategy: Option<Strategy>,
+    /// Size of the pool the filter kept, `0` when the filter never ran.
+    pub(crate) pool: u32,
+    /// Results each branch of a `hybrid` search brought.
+    pub(crate) contributions: Contributions,
+}
+
+impl Attempt {
+    /// An attempt that stopped at `failure`, with the steps that ran before it.
+    fn failed(failure: CribleError, stages: StageDurations) -> Self {
+        Self {
+            result: Err(failure),
+            stages,
+            strategy: None,
+            pool: 0,
+            contributions: Contributions::default(),
+        }
     }
 }
 
@@ -268,15 +527,28 @@ fn run(
     selection: &ReturnSelection,
     k: usize,
     exact: bool,
-) -> Result<SearchOutcome, CribleError> {
+    started: Instant,
+) -> Attempt {
+    let mut stages = StageDurations::default();
     // The encoding point of the server: the closure below runs at most once,
     // even though the pipeline has two branches (ADR-0109, ADR-0051).
-    let prepared = inputs.prepare(|query| encode_query(state, published, query))?;
+    let encodes = inputs.encodes();
+    let encoding = Instant::now();
+    let prepared = match inputs.prepare(|query| encode_query(state, published, query)) {
+        Ok(prepared) => prepared,
+        Err(failure) => return Attempt::failed(failure, stages),
+    };
+    if encodes {
+        stages.encode = Some(encoding.elapsed());
+    }
     let vector = match &prepared.vector {
-        Some(vector) => Some(check_vector(state, published, vector.clone())?),
+        Some(vector) => match check_vector(state, published, vector.clone()) {
+            Ok(vector) => Some(vector),
+            Err(failure) => return Attempt::failed(failure, stages),
+        },
         None => None,
     };
-    let outcome = search_index(
+    let outcome = match search_index(
         state,
         index,
         published,
@@ -290,22 +562,71 @@ fn run(
             k,
             exact,
         },
-    )?;
+    ) {
+        Ok(outcome) => outcome,
+        Err(failure) => return Attempt::failed(failure, stages),
+    };
+    // Step 3 to 8 of `docs/03-recherche.md`, read from the outcome: a step the
+    // mode did not run produces no sample (ADR-0117, decision 2).
+    let measured = measure(mode, &outcome);
+    let contributions = contributions(mode, &outcome.hits);
+    let zero_results = outcome.hits.is_empty();
     let results = api::results_json(
         &Answer {
             score_type: outcome.score_type,
             results: outcome.hits,
+            stages: outcome.stages,
+            strategy: outcome.strategy,
         },
         &published.config.schema,
         selection,
     );
-    Ok(SearchOutcome {
-        results,
-        pool_size: outcome.pool_size,
-        generation: outcome.generation,
-        truncated_query: prepared.truncated_query,
-        took_ms: 0.0,
-    })
+    Attempt {
+        result: Ok(SearchOutcome {
+            results,
+            pool_size: outcome.pool_size,
+            generation: outcome.generation,
+            truncated_query: prepared.truncated_query,
+            zero_results,
+            took_ms: 0.0,
+        }
+        .with_start(started)),
+        stages: StageDurations {
+            encode: stages.encode,
+            ..measured
+        },
+        strategy: outcome.strategy,
+        pool: outcome.pool_size,
+        contributions,
+    }
+}
+
+/// Durations of steps 3 to 8 of `docs/03-recherche.md`, read from the pipeline.
+///
+/// Step 2, `encode`, and step 1, `validate`, belong to the caller and are added
+/// beside these (ADR-0117, decision 2).
+pub(crate) fn measure(mode: Mode, outcome: &IndexOutcome) -> StageDurations {
+    StageDurations {
+        filter: Some(outcome.filter),
+        dense: mode.uses_dense().then_some(outcome.stages.dense),
+        lexical: mode.uses_lexical().then_some(outcome.stages.lexical),
+        fusion: (mode == Mode::Hybrid).then_some(outcome.stages.fusion),
+        group: Some(outcome.stages.group),
+        fetch: Some(outcome.stages.fetch),
+        ..StageDurations::default()
+    }
+}
+
+/// Contributions of the two branches, read from the returned results.
+///
+/// Only `hybrid` fills them: `dense` and `lexical` leave the three counters at
+/// zero (ADR-0117, decision 5).
+fn contributions(mode: Mode, hits: &[RankedHit]) -> Contributions {
+    if mode == Mode::Hybrid {
+        Contributions::of(hits)
+    } else {
+        Contributions::default()
+    }
 }
 
 /// One search over one index, with its inputs already prepared.
@@ -344,6 +665,12 @@ pub(crate) struct IndexOutcome {
     pub(crate) pool_size: u32,
     /// Generation of the snapshot the search read.
     pub(crate) generation: u64,
+    /// Durations the pipeline measured, steps 4 to 8 of `docs/03-recherche.md`.
+    pub(crate) stages: Stages,
+    /// Dense strategy that actually ran, `None` without a dense branch.
+    pub(crate) strategy: Option<Strategy>,
+    /// Duration of the pool, step 3, measured here and not by the pipeline.
+    pub(crate) filter: Duration,
 }
 
 /// Runs the pipeline of one index on the blocking thread.
@@ -357,7 +684,11 @@ pub(crate) fn search_index(
         .loaded()
         .ok_or_else(|| error::internal("the instance has not loaded its indexes"))?;
     let snapshot = Arc::clone(&published.snapshot);
+    // Step 3 of `docs/03-recherche.md`: the pool is computed once per index and
+    // shared by the two branches (INV-05); its duration is a sample of its own.
+    let filtering = Instant::now();
     let pool = Pool::evaluate(snapshot.filters(), params.filter)?;
+    let filter = filtering.elapsed();
     let index_dir = loaded.index_directory(index);
     let segments_directory = epoch_segments_directory(&index_dir, snapshot.epoch());
     let records_path = epoch_records_path(&index_dir, snapshot.epoch());
@@ -387,6 +718,9 @@ pub(crate) fn search_index(
         score_type: answer.score_type,
         pool_size: pool.len(),
         generation: snapshot.generation().get(),
+        stages: answer.stages,
+        strategy: answer.strategy,
+        filter,
     })
 }
 
@@ -471,11 +805,13 @@ pub(crate) fn encode_query(
 }
 
 /// One answer of the search, before the envelope of `docs/05-api.md`.
-struct SearchOutcome {
+pub(crate) struct SearchOutcome {
     results: Vec<Value>,
     pool_size: u32,
     generation: u64,
     truncated_query: bool,
+    /// Whether the answer carries no result at all (ADR-0117, decision 5).
+    zero_results: bool,
     took_ms: f64,
 }
 
@@ -524,6 +860,19 @@ impl Inputs {
                     vector: Some(_),
                     ..
                 }
+        )
+    }
+
+    /// Whether preparing the inputs calls the encoding point at all.
+    ///
+    /// It is false for a lexical search and for a vector the client provided:
+    /// step 2 of `docs/03-recherche.md` did not run, so it produces no sample
+    /// (ADR-0117, decision 2). It is read **before** [`Inputs::prepare`]
+    /// consumes the inputs.
+    pub(crate) fn encodes(&self) -> bool {
+        matches!(
+            self,
+            Self::DenseText { .. } | Self::Hybrid { vector: None, .. }
         )
     }
 

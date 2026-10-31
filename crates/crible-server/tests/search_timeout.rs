@@ -89,6 +89,9 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     // SAFETY: the test holds the barrier environment slot, so no other test of
     // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The work step of the route is opt-in, like the attach steps of
+    // `src/barriers.rs`: this test holds it on purpose.
+    std::fs::write(barrier.path().join("armed-search"), b"").expect("the work step is armable");
 
     let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
 
@@ -156,6 +159,8 @@ async fn took_ms_covers_the_time_the_work_is_held() {
     // SAFETY: the test holds the barrier environment slot, so no other test of
     // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The work step of the route is opt-in: this test holds it on purpose.
+    std::fs::write(barrier.path().join("armed-search"), b"").expect("the work step is armable");
 
     let (_instance, _state, router) = instance_with_alpha().await;
     let held = spawn_search(&router, 30_000);
@@ -197,9 +202,8 @@ async fn took_ms_starts_before_the_token_is_taken() {
     // The pre-token step is opt-in, like the attach steps of `src/barriers.rs`.
     std::fs::write(barrier.path().join("armed-search-start"), b"")
         .expect("the pre-token step is armable");
-    // The work barrier is released up front: this test measures the wait that
-    // precedes the token, not the computation.
-    std::fs::write(barrier.path().join("go-search"), b"").expect("the work barrier is released");
+    // The work step is not armed here: this test measures the wait that precedes
+    // the token, not the computation.
 
     let (_instance, _state, router) = instance_with_alpha().await;
     let held = spawn_search(&router, 30_000);

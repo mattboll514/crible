@@ -67,6 +67,7 @@ use super::binary;
 use super::exact::{DenseSearcher, Hit};
 use crate::fusion::BranchScore;
 use crate::group::Grouping;
+use crate::pipeline::Stages;
 use crate::pool::Pool;
 
 /// Strategy the dense branch runs for one query.
@@ -225,6 +226,10 @@ pub struct DenseQuery<'a> {
     pub grouping: &'a Grouping,
 }
 
+/// Result of [`grouped_candidates`]: the ranks of the branch, the candidates the
+/// regrouping kept, and the durations of the stage (ADR-0117, decision 2).
+type Grouped = (HashMap<Iid, BranchScore>, Vec<Scored>, Stages);
+
 /// Candidates of one dense request after over-sampling and regrouping, with the
 /// rank of every candidate in the branch ranking.
 ///
@@ -244,8 +249,9 @@ pub(crate) fn grouped_candidates(
     pool: &Pool,
     request: &DenseQuery<'_>,
     search: &SearchConfig,
-) -> Result<(HashMap<Iid, BranchScore>, Vec<Scored>), CribleError> {
+) -> Result<Grouped, CribleError> {
     let requested = crate::group::candidates_per_branch(request.k, request.grouping);
+    let started = std::time::Instant::now();
     let branch = candidates(
         snapshot,
         searcher,
@@ -255,11 +261,18 @@ pub(crate) fn grouped_candidates(
         search,
         request.exact,
     )?;
+    let dense = started.elapsed();
     let ranks = super::ranks(&branch);
+    let started = std::time::Instant::now();
     let grouped = crate::group::group(branch, request.k, request.grouping, |iid| {
         searcher.passage_hash_of(iid)
     })?;
-    Ok((ranks, grouped))
+    let stages = Stages {
+        dense,
+        group: started.elapsed(),
+        ..Stages::default()
+    };
+    Ok((ranks, grouped, stages))
 }
 
 /// Runs the dense branch of one query as the input of the regrouping step.
@@ -293,7 +306,7 @@ pub fn search_grouped(
     search: &SearchConfig,
 ) -> Result<Vec<Hit>, CribleError> {
     request.grouping.validate()?;
-    let (_, grouped) = grouped_candidates(snapshot, searcher, pool, request, search)?;
+    let (_, grouped, _) = grouped_candidates(snapshot, searcher, pool, request, search)?;
     grouped
         .into_iter()
         .map(|candidate| searcher.payload(candidate))

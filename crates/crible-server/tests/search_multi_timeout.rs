@@ -80,6 +80,9 @@ async fn a_multi_index_search_past_its_deadline_answers_504() {
     // SAFETY: this integration test binary sets the variable before spawning any
     // request, and no other test of this process reads or writes it.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The work step of the multi-index route is opt-in: this test holds it.
+    std::fs::write(barrier.path().join("armed-search-multi"), b"")
+        .expect("the work step is armable");
 
     let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
 
