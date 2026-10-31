@@ -10,6 +10,25 @@
 
 ---
 
+### CORRIGER-ARRET-SOUS-CHARGE
+- **Origine** : ajoutée par le propriétaire le 2026-10-31, hors plan initial. Elle vient du rapport de J6 (`docs/jalons/J6-rapport.md`, §7 et §8) et de l'idée du 2026-10-31 notée dans `docs/suivi.md` (`NETTOYER-P6`, `serve_stops_on_sigint`). Les tests `serve_answers_the_probes_and_stops_on_sigterm` et `serve_stops_on_sigint` (`crates/crible/tests/serve_cli.rs`, échec à la ligne 260, `expect("the reply is readable")`, erreur `ConnectionReset` / « Connection reset by peer ») ont chacun échoué une fois sous la charge de la suite complète, et sont verts 5 fois sur 5 lancés seuls. Le rapport de J6 proposait de rendre `try_get` tolérant à une connexion réinitialisée, en réessayant.
+- **Objectif** : supprimer l'échec intermittent des tests d'arrêt de `crible serve` sous charge, en corrigeant sa **cause**, sans masquer un défaut du serveur.
+- **Dépend de** : DEMARRER-SERVEUR-AXUM
+- **À lire** : `adr/0099-cycle-de-vie-du-serveur-demarrage-health-ready-arret-propre.md` (cycle de vie du serveur, `/health`, `/ready`, arrêt propre) ; `adr/0104-arret-du-serveur-et-jobs-d-ecriture.md` (arrêt du serveur et jobs d'écriture) ; `crates/crible/tests/serve_cli.rs` ; `docs/jalons/J6-rapport.md` §7.
+- **Livrables** :
+  1. un **diagnostic, avant toute correction, écrit dans le compte rendu de `@dev`**, qui dit d'où vient la connexion réinitialisée :
+     - soit du test : requête envoyée pendant le démarrage, ou après le signal d'arrêt, la réinitialisation étant alors admissible ;
+     - soit du serveur : connexion acceptée puis fermée sans réponse avant l'arrêt, ce qui contredirait l'arrêt propre d'ADR-0099.
+  2. la correction, à l'endroit de la cause :
+     - côté test, `try_get` traite une connexion réinitialisée comme « pas encore prêt » ou « déjà arrêté », selon la phase du test, sans affaiblir aucune assertion ; c'est la piste du rapport de J6 ;
+     - côté serveur, corriger l'arrêt.
+  3. si le diagnostic révèle un comportement que la conception ne tranche pas, une `QUESTION-CONCEPTION`.
+- **Critères d'acceptation** :
+  - environ 50 exécutions consécutives vertes de `cargo test -p crible --test serve_cli`, dont une partie sous charge, par exemple en parallèle d'un `cargo test` d'une autre crate ;
+  - les assertions sont inchangées : `/health` et `/ready` rendent toujours `200` avant l'arrêt, et le processus s'arrête avec le code attendu ;
+  - aucun test n'est désactivé ni marqué `#[ignore]`.
+- **Invariants** : aucun.
+
 ### AGREGER-ANALYTICS
 - **Objectif** : les analytics agrégées.
 - **Dépend de** : ROUTE-RECHERCHE, FILE-D-ECRITURE-ET-JOBS
