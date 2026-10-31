@@ -88,8 +88,8 @@ retention_days = 90
 
 [debug_journal]
 enabled = false
-sample_rate = 0.0
-ttl_days = 7
+sample_rate = 0.0            # fraction des requêtes SANS `debug: true`, dans [0, 1] ; `debug: true` est toujours enregistré (ADR-0122)
+ttl_days = 7                 # 0 refusé au démarrage (ADR-0122)
 
 [encoder]
 query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-0052)
@@ -118,7 +118,7 @@ Les variables `CRIBLE_*` documentées **hors configuration** sont exclues de ce 
 - utilisateur non-root ;
 - port 8080 ;
 - `HEALTHCHECK` sur `/health` ;
-- arrêt propre sur SIGTERM et SIGINT (ADR-0099) : `/ready` passe à `503`, le serveur arrête d'accepter, il draine les requêtes en vol pendant au plus `[limits].default_timeout_ms` + 1 000 ms, il vide ensuite la file des analytics quand elles existent — écriture comprise, bornée à 2 s, un échec étant journalisé en `warn` sans reprise (ADR-0118, décision 3) —, puis il sort en journalisant les requêtes coupées ; l'attente des jobs d'écriture est bornée par `[limits].wait_timeout_ms` (60 000 ms par défaut), comptée depuis le signal et en parallèle du drainage des requêtes : toute nouvelle soumission de job rend `503 overloaded` (« the server is shutting down », `Retry-After: 1`), les jobs acceptés avant le signal se terminent, et à l'échéance le processus sort en journalisant les jobs abandonnés, qui passent à `failed` au démarrage suivant (ADR-0104). Un second signal pendant le drainage fait sortir immédiatement avec un code non nul. Conséquence : le délai d'arrêt du conteneur (`stop_grace_period`, réglé en P8) doit être **au-dessus** de `wait_timeout_ms`, faute de quoi l'orchestrateur tue le processus avant la fin de l'attente.
+- arrêt propre sur SIGTERM et SIGINT (ADR-0099) : `/ready` passe à `503`, le serveur arrête d'accepter, il draine les requêtes en vol pendant au plus `[limits].default_timeout_ms` + 1 000 ms, il vide ensuite la file des analytics quand elles existent — écriture comprise, bornée à 2 s, un échec étant journalisé en `warn` sans reprise (ADR-0118, décision 3) —, puis la file du journal de debug quand il est activé — écriture comprise, bornée à 2 s, un échec étant journalisé en `warn` sans reprise (ADR-0122, décision 7) —, puis il sort en journalisant les requêtes coupées ; l'attente des jobs d'écriture est bornée par `[limits].wait_timeout_ms` (60 000 ms par défaut), comptée depuis le signal et en parallèle du drainage des requêtes : toute nouvelle soumission de job rend `503 overloaded` (« the server is shutting down », `Retry-After: 1`), les jobs acceptés avant le signal se terminent, et à l'échéance le processus sort en journalisant les jobs abandonnés, qui passent à `failed` au démarrage suivant (ADR-0104). Un second signal pendant le drainage fait sortir immédiatement avec un code non nul. Conséquence : le délai d'arrêt du conteneur (`stop_grace_period`, réglé en P8) doit être **au-dessus** de `wait_timeout_ms`, faute de quoi l'orchestrateur tue le processus avant la fin de l'attente.
 
 Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 

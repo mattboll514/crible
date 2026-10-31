@@ -55,27 +55,29 @@
 ### JOURNAL-DE-DEBUG
 - **Objectif** : un journal complet, activé à la demande.
 - **Dépend de** : AGREGER-ANALYTICS
-- **À lire** : `06-observabilite.md` (journal de debug) ; `adr/0118-analytics-execution-file-pertes-vidage-purge-operations-et-preuve-inv-17.md` (décisions 7 et 8 : preuve d'INV-17 et rejeu de MES-16).
+- **À lire** : `06-observabilite.md` (journal de debug) ; `adr/0121-journal-de-debug-stockage-debug-sqlite-schema-payload-et-protections.md` (fichier, schéma, payload, protections) ; `adr/0122-journal-de-debug-execution-activation-capture-file-vidage-purge-route-et-preuves.md` (activation, capture, file, vidage, purge, route, preuves) ; `adr/0118-analytics-execution-file-pertes-vidage-purge-operations-et-preuve-inv-17.md` (décisions 7 et 8 : preuve d'INV-17 et rejeu de MES-16).
 - **Livrables** :
-  - `debug.sqlite` ;
-  - un enregistrement si `debug: true` et que le journal est activé, et selon `sample_rate` ;
-  - une écriture asynchrone ;
-  - la purge selon la durée de vie (`ttl_days`) ;
-  - `GET /v1/debug/queries`, réservé à l'admin, avec ses filtres ;
-  - le test `inv_17_*` du journal de debug, sur le modèle d'ADR-0118 décision 7 (barrière sur l'écrivain sous la feature `failpoints`, file pleine, réponses identiques, pertes comptées) ;
-  - le rejeu de MES-16 par `@mesureur` avec les analytics et le journal de debug actifs, après le `@dev` de la tâche (ADR-0118 décision 8) : rapport `docs/mesures/MES-16-charge-concurrente-analytics-et-journal.md`, données brutes JSON à côté, protocole d'ADR-0113 décision 5.
+  - `debug.sqlite`, au schéma d'ADR-0121 ;
+  - l'enregistrement selon les **deux voies** d'ADR-0122 décision 1 : une requête `debug: true` est toujours enregistrée quand le journal est activé, `sample_rate` ne vise que les autres requêtes ; la capture `DebugCapture { top_n = 20 }` d'ADR-0119 décision 8 est construite si `debug` ou si la requête est échantillonnée, et une par cible en multi-index (ADR-0122 décision 3) ;
+  - une écriture asynchrone par file bornée, les pertes étant comptées dans `debug_journal_dropped` (ADR-0122 décisions 6 et 7) ;
+  - la purge selon la durée de vie (`ttl_days`), à l'ouverture puis toutes les 24 h (ADR-0122 décision 8) ;
+  - `GET /v1/debug/queries`, réservé à l'admin, avec ses filtres et sa pagination keyset (ADR-0122 décision 9) ;
+  - le test `inv_17_*` du journal de debug, sur le modèle d'ADR-0118 décision 7 (barrière sur l'écrivain sous la feature `failpoints`, file pleine, réponses identiques, pertes comptées), nommé `inv_17_debug_journal_never_blocks` (ADR-0122 décision 11) ;
+  - le rejeu de MES-16 par `@mesureur` avec les analytics et le journal de debug actifs, après le `@dev` de la tâche (ADR-0118 décision 8) : rapport `docs/mesures/MES-16-charge-concurrente-analytics-et-journal.md`, données brutes JSON à côté, protocole d'ADR-0113 décision 5 (ADR-0122 décision 12).
 - **Critères d'acceptation** :
   - désactivé par défaut : aucun fichier écrit ;
+  - avec le journal activé et `sample_rate = 0`, une requête `debug: true` produit une ligne et une requête sans `debug` n'en produit aucune (ADR-0122 décision 1) ;
   - la purge supprime bien les entrées expirées ;
   - un rôle `read` reçoit `403` (ADR-0095) ;
   - `GET /v1/debug/queries` figure dans la spécification OpenAPI, et son exception nommée est retirée du test des routes de PUBLIER-OPENAPI dans le même changement (ADR-0111, complément du 2026-10-30) ;
   - le test `inv_17_*` du journal est vert, et le rapport de rejeu de MES-16 existe et tient le critère d'ADR-0113 (chaque recherche sous 3 × le p99 du repos, `5xx` interdit).
+- **Invariants** : INV-17.
 
 ### REPONSE-DEBUG
 - **Objectif** : `debug: true` dans la réponse.
 - **Dépend de** : ROUTE-RECHERCHE
 - **À lire** : `05-api.md` (réponse, objet `debug`) ; `adr/0119-objet-debug-de-la-reponse-de-recherche-forme-rangs-temps-et-capture.md` (forme de l'objet, rangs, temps, capture) ; `adr/0120-fin-de-took-ms-attribution-de-l-ouverture-des-lecteurs-et-rendu-hors-chronometre.md` (fin de `took_ms` à la fin de `fetch`, ouverture des lecteurs rattachée à la clé `fetch`).
-- **Livrables** : le plan et les temps par étape aux clés de `03-recherche.md` (ADR-0119 décisions 4 et 5), et pour chaque résultat le rang et le score dans chaque branche ainsi que le rang fusionné (ADR-0119 décisions 1 à 3) ; en multi-index, aussi le rang dans son index, `target_rank` (ADR-0119 décision 9), et la capture `DebugCapture { top_n }` construite seulement si `debug` est demandé (ADR-0119 décision 8).
+- **Livrables** : le plan et les temps par étape aux clés de `03-recherche.md` (ADR-0119 décisions 4 et 5), et pour chaque résultat le rang et le score dans chaque branche ainsi que le rang fusionné (ADR-0119 décisions 1 à 3) ; en multi-index, aussi le rang dans son index, `target_rank` (ADR-0119 décision 9), et la capture `DebugCapture { top_n }` construite seulement si `debug` est demandé (ADR-0119 décision 8), ou si la requête est échantillonnée pour le journal (ADR-0122 décision 3).
 - **Critères d'acceptation** :
   - la somme des étapes reste cohérente avec le total (écart inférieur à 10 %) : la somme est le chemin critique `encode + filter + max(dense, lexical) + fusion + group + fetch`, `validate` exclu, en `dense` et `lexical` sur la branche unique et en `hybride` sur le chemin critique (ADR-0119 décision 6) ; le total s'arrête à la fin de `fetch`, avant le rendu JSON, et l'ouverture des lecteurs appartient à la clé `fetch`, dans tous les modes (ADR-0120 décisions 1 et 2) ;
   - les rangs affichés correspondent à ceux d'une exécution branche par branche, prise après le filtre et avant `dedup`/`group_by` pour les branches et avant regroupement pour `fused_rank` (ADR-0119 décisions 1 et 2).

@@ -61,6 +61,7 @@ use serde_json::{Map, Value, json};
 use crate::AppState;
 use crate::analytics::{self, Operation, Record, SearchEvent, StageDurations};
 use crate::auth::Client;
+use crate::debug_journal::{self, Deposit, RequestView};
 use crate::error;
 use crate::http::RequestId;
 use crate::jobs::Published;
@@ -145,23 +146,37 @@ pub async fn search(
     Path(index): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
-    let (answer, records) = search_inner(Arc::clone(&state), identifier, index, body).await;
+    // ADR-0122, decision 1: the draw happens at the entry of the route, before
+    // the concurrency token, so it costs no token and never extends `took_ms`.
+    let sampled = debug_journal::sampled(&state);
+    let (answer, records, deposit) =
+        search_inner(Arc::clone(&state), &identifier, index, body, sampled).await;
     analytics::record(&state, records, &client);
+    if let Some(deposit) = deposit {
+        debug_journal::deposit(&state, deposit, &client, &identifier.0);
+    }
     answer
 }
 
-/// The work of [`search`], with the events it records (ADR-0117, decision 5).
+/// The work of [`search`], with the events it records (ADR-0117, decision 5)
+/// and the row of the debug journal, when the request is recorded (ADR-0122).
 ///
-/// The route records nothing itself: this function builds the record beside the
-/// response, so an early refusal and a successful answer take the same path and
-/// no exit of the route can forget its event.
+/// The route records nothing itself: this function builds the record and the
+/// row beside the response, so an early refusal and a successful answer take
+/// the same path and no exit of the route can forget its event.
 async fn search_inner(
     state: Arc<AppState>,
-    identifier: RequestId,
+    identifier: &RequestId,
     index: String,
     body: Value,
-) -> (Response, Vec<Record>) {
+    sampled: bool,
+) -> (Response, Vec<Record>, Option<Deposit>) {
     let mut observed = Observed::new(index.clone(), Operation::Search);
+    // ADR-0122, decision 5: a sampled request opens its row at the entry, so a
+    // body refused before it is parsed is still recorded, with its code alone.
+    if sampled {
+        observed.open_journal(None);
+    }
     let handle = match state.index(&index) {
         Ok(Some(handle)) => handle,
         Ok(None) => return observed.refused(&unknown_index(&index), &identifier.0),
@@ -228,6 +243,27 @@ async fn search_inner(
     // ADR-0117, decision 6: the shape is computed from the validated filter, so
     // a refused filter produces no row.
     observed.shape(analytics::filter_shape(&filter));
+    // ADR-0122, decision 1: a `debug` request is always recorded when the
+    // journal is on, and the draw records the others. ADR-0122, decision 3: the
+    // plan and the capture are built when the row is recorded, and the `debug`
+    // member of the answer stays conditioned on `debug`. A journal that is off
+    // records nothing, so the payload is not built (ADR-0122, decision 8).
+    let recording = state.debug_journal().is_some() && (sampled || request.debug);
+    if recording {
+        let view = RequestView {
+            body: &body,
+            mode,
+            k: request.k,
+            exact: request.exact,
+            fusion,
+            by_document: request.by_document,
+            passages_per_document: request.passages_per_document,
+            dedup_content: request.dedup_content,
+            with_filter: true,
+            dimension: inputs.vector_dimension(),
+        };
+        observed.open_journal(Some(debug_journal::request_payload(&view)));
+    }
     let limit = match state.search_limit() {
         Ok(limit) => limit,
         Err(failure) => return observed.refused(&failure, &identifier.0),
@@ -265,6 +301,7 @@ async fn search_inner(
                 request.k,
                 request.exact,
                 request.debug,
+                recording,
                 started,
             )
         })
@@ -311,6 +348,70 @@ pub(crate) struct Observed {
     truncated: bool,
     contributions: Contributions,
     shape: Option<String>,
+    /// Row of the debug journal, when this request is recorded (ADR-0122).
+    journal: Option<JournalDraft>,
+}
+
+/// The parts of the payload of one journal row, filled as the request advances
+/// (ADR-0121, decision 4).
+#[derive(Debug, Clone)]
+pub(crate) struct JournalDraft {
+    /// The `request` member, as received; absent when the body was not parsed.
+    request: Option<Value>,
+    /// The closed `plan` object, built by the same code as the `debug` member.
+    plan: Option<Value>,
+    /// The capture of the branch tops, rendered for the payload.
+    capture: Option<Value>,
+    /// `targets[]` of a multi-index request, in the order of the request.
+    targets: Option<Vec<Value>>,
+    /// Generation of the index; a multi-index row carries it per target.
+    generation: Option<u64>,
+}
+
+impl JournalDraft {
+    /// Renders the payload of a request that answered.
+    fn success(&self, stages: &StageDurations) -> Value {
+        let mut rendered = Map::new();
+        if let Some(request) = &self.request {
+            rendered.insert("request".to_owned(), request.clone());
+        }
+        if let Some(plan) = &self.plan {
+            rendered.insert("plan".to_owned(), plan.clone());
+        }
+        rendered.insert(
+            "timings_ms".to_owned(),
+            debug_journal::timings_payload(stages),
+        );
+        if let Some(capture) = &self.capture {
+            rendered.insert("capture".to_owned(), capture.clone());
+        }
+        if let Some(targets) = &self.targets {
+            rendered.insert("targets".to_owned(), Value::Array(targets.clone()));
+        }
+        if let Some(generation) = self.generation {
+            rendered.insert("generation".to_owned(), json!(generation));
+        }
+        Value::Object(rendered)
+    }
+
+    /// Renders the payload of a refused request: the code alone, never its
+    /// message nor its details, and the steps that were really measured
+    /// (ADR-0121, decision 4; ADR-0122, decision 5).
+    fn failure(&self, code: &str, stages: &StageDurations) -> Value {
+        let mut rendered = Map::new();
+        if let Some(request) = &self.request {
+            rendered.insert("request".to_owned(), request.clone());
+        }
+        if let Some(targets) = &self.targets {
+            rendered.insert("targets".to_owned(), Value::Array(targets.clone()));
+        }
+        rendered.insert(
+            "timings_ms".to_owned(),
+            debug_journal::measured_timings_payload(stages),
+        );
+        rendered.insert("error".to_owned(), json!({ "code": code }));
+        Value::Object(rendered)
+    }
 }
 
 /// Results each branch of a `hybrid` search brought, alone or together
@@ -366,7 +467,20 @@ impl Observed {
             truncated: false,
             contributions: Contributions::default(),
             shape: None,
+            journal: None,
         }
+    }
+
+    /// Opens the journal row of this request with its `request` member, or
+    /// without it when the body has not been parsed yet (ADR-0122, decision 5).
+    pub(crate) fn open_journal(&mut self, request: Option<Value>) {
+        self.journal = Some(JournalDraft {
+            request,
+            plan: None,
+            capture: None,
+            targets: None,
+            generation: None,
+        });
     }
 
     /// Records the mode the request resolved to.
@@ -400,6 +514,15 @@ impl Observed {
         if let Ok(outcome) = &attempt.result {
             self.zero_results = outcome.zero_results;
             self.truncated = outcome.truncated_query;
+        }
+        // ADR-0122, decision 3: the plan and the capture built for the journal
+        // are folded into the row; the answer keeps its own `debug` member.
+        if let Some(draft) = &mut self.journal {
+            draft.plan.clone_from(&attempt.plan);
+            draft.capture = attempt.capture.as_ref().map(debug_journal::capture_payload);
+            if let Ok(outcome) = &attempt.result {
+                draft.generation = Some(outcome.generation);
+            }
         }
         attempt.result
     }
@@ -456,21 +579,54 @@ impl Observed {
         (self.stages.validate, self.stages.encode)
     }
 
-    /// Renders `failure` and yields its event.
+    /// Renders `failure` and yields its event and its journal row.
     pub(crate) fn refused(
         self,
         failure: &CribleError,
         request_id: &str,
-    ) -> (Response, Vec<Record>) {
+    ) -> (Response, Vec<Record>, Option<Deposit>) {
+        let code = failure.code().as_str().to_owned();
+        let deposit = self.deposit(&code);
         let answer = error::rendered(failure, request_id);
         let status = analytics::status(&answer);
-        (answer, self.events(status))
+        let records = self.events(status);
+        (answer, records, deposit)
     }
 
-    /// Yields `answer` and its event.
-    pub(crate) fn answered(self, answer: Response) -> (Response, Vec<Record>) {
+    /// Yields `answer`, its event and its journal row.
+    pub(crate) fn answered(self, answer: Response) -> (Response, Vec<Record>, Option<Deposit>) {
         let status = analytics::status(&answer);
-        (answer, self.events(status))
+        let deposit = self.deposit(&status);
+        let records = self.events(status);
+        (answer, records, deposit)
+    }
+
+    /// Builds the row of the journal, if this request is recorded.
+    ///
+    /// The total is read **before** [`Self::events`] falls back to the entry of
+    /// the route: a `503` taken at the token, a `400` of the body and a `504` of
+    /// the deadline keep `NULL` (ADR-0121, decision 3).
+    fn deposit(&self, status: &str) -> Option<Deposit> {
+        let draft = self.journal.as_ref()?;
+        let payload = if status == "ok" {
+            draft.success(&self.stages)
+        } else {
+            draft.failure(status, &self.stages)
+        };
+        Some(Deposit {
+            request_id: String::new(),
+            index: match self.operation {
+                Operation::Search => Some(self.index.clone()),
+                _ => None,
+            },
+            client: String::new(),
+            mode: self
+                .mode
+                .map_or_else(String::new, |mode| mode.as_str().to_owned()),
+            status: status.to_owned(),
+            total_ms: self.stages.total.map(|total| total.as_secs_f64() * 1_000.0),
+            payload,
+        })
     }
 
     /// Builds the one event of this search.
@@ -523,6 +679,11 @@ pub(crate) struct Attempt {
     pub(crate) pool: u32,
     /// Results each branch of a `hybrid` search brought.
     pub(crate) contributions: Contributions,
+    /// Capture of the branch tops, built for `debug` or for the journal
+    /// (ADR-0122, decision 3).
+    pub(crate) capture: Option<DebugCapture>,
+    /// The closed `plan` object, built for `debug` or for the journal.
+    pub(crate) plan: Option<Value>,
 }
 
 impl Attempt {
@@ -535,15 +696,18 @@ impl Attempt {
             strategy: None,
             pool: 0,
             contributions: Contributions::default(),
+            capture: None,
+            plan: None,
         }
     }
 }
 
 /// Runs the pipeline on the blocking thread, with the token held.
 ///
-/// `debug` asks for the `debug` member of ADR-0119: the plan, the timings and
-/// the ranks of the results, plus the `DebugCapture` the journal will read. A
-/// request that does not ask for it builds no capture and renders no member.
+/// `debug` asks for the `debug` member of ADR-0119 and `recording` for the row
+/// of the journal (ADR-0122, decision 3). Either one builds the capture and the
+/// plan; only `debug` renders them in the answer, so a sampled request never
+/// gains a `debug` member.
 #[allow(clippy::too_many_arguments)]
 fn run(
     state: &AppState,
@@ -558,6 +722,7 @@ fn run(
     k: usize,
     exact: bool,
     debug: bool,
+    recording: bool,
     started: Instant,
 ) -> Attempt {
     let mut stages = StageDurations::default();
@@ -579,11 +744,12 @@ fn run(
         },
         None => None,
     };
-    // ADR-0119, decision 8: the capture exists only for a request that asks for
-    // `debug`; without it, no vector is allocated on the search path.
-    // One source for the depth of the capture: the default of the engine
-    // (`docs/06-observabilite.md:82`).
-    let mut capture = debug.then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
+    // ADR-0119, decision 8, and ADR-0122, decision 3: the capture exists for a
+    // request that asks for `debug` or is sampled; without either, no vector is
+    // allocated on the search path. One source for its depth: the default of
+    // the engine (`docs/06-observabilite.md:82`).
+    let collecting = debug || recording;
+    let mut capture = collecting.then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
     let outcome = match search_index(
         state,
         index,
@@ -612,8 +778,10 @@ fn run(
     let measured = measure(mode, &outcome);
     let contributions = contributions(mode, &outcome.hits);
     let zero_results = outcome.hits.is_empty();
-    let debug = debug.then(|| crate::debug::SearchDebug {
-        plan: crate::debug::plan(
+    // ADR-0121, decision 4: the `plan` member is built by the same code as the
+    // `debug` member, then consumed by the answer or by the journal.
+    let plan_value = collecting.then(|| {
+        crate::debug::plan(
             mode,
             outcome.strategy,
             &published.config.search,
@@ -622,13 +790,19 @@ fn run(
             exact,
             grouping,
             fusion,
-        ),
-        per_result: outcome
-            .hits
-            .iter()
-            .map(crate::debug::result_entry)
-            .collect(),
+        )
     });
+    let debug = match (&plan_value, debug) {
+        (Some(plan), true) => Some(crate::debug::SearchDebug {
+            plan: plan.clone(),
+            per_result: outcome
+                .hits
+                .iter()
+                .map(crate::debug::result_entry)
+                .collect(),
+        }),
+        _ => None,
+    };
     let results = api::results_json(
         &Answer {
             score_type: outcome.score_type,
@@ -656,6 +830,8 @@ fn run(
         strategy: outcome.strategy,
         pool: outcome.pool_size,
         contributions,
+        capture,
+        plan: plan_value,
     }
 }
 
@@ -935,7 +1111,6 @@ impl Inputs {
     }
 
     /// Whether preparing the inputs calls the encoding point at all.
-    ///
     /// It is false for a lexical search and for a vector the client provided:
     /// step 2 of `docs/03-recherche.md` did not run, so it produces no sample
     /// (ADR-0117, decision 2). It is read **before** [`Inputs::prepare`]
@@ -945,6 +1120,19 @@ impl Inputs {
             self,
             Self::DenseText { .. } | Self::Hybrid { vector: None, .. }
         )
+    }
+
+    /// Dimension of the vector the request carries, when it carries one.
+    ///
+    /// The journal records the presence and the dimension of the vector, never
+    /// its bytes (ADR-0121, decision 4). It is read **before**
+    /// [`Inputs::prepare`] consumes the inputs.
+    pub(crate) fn vector_dimension(&self) -> Option<usize> {
+        match self {
+            Self::Dense { vector } => Some(vector.len()),
+            Self::Hybrid { vector, .. } => vector.as_ref().map(Vec::len),
+            Self::Lexical { .. } | Self::DenseText { .. } => None,
+        }
     }
 
     /// Prepares the inputs of a request, calling `encode` **at most once**.

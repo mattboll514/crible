@@ -54,6 +54,7 @@ use crible_core::config::FusionConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_search::api::{self, ReturnSelection};
+use crible_search::debug::DebugCapture;
 use crible_search::group::Grouping;
 use crible_search::pipeline::{Mode, RankedHit, ScoreType};
 use serde_json::{Map, Value, json};
@@ -61,6 +62,7 @@ use serde_json::{Map, Value, json};
 use crate::AppState;
 use crate::analytics::{self, Operation, Record, StageDurations};
 use crate::auth::Client;
+use crate::debug_journal::{self, Deposit, RequestView};
 use crate::error;
 use crate::http::RequestId;
 use crate::jobs::Published;
@@ -107,38 +109,58 @@ pub async fn search(
     Extension(client): Extension<Client>,
     Json(body): Json<Value>,
 ) -> Response {
-    let (answer, records) = search_inner(Arc::clone(&state), identifier, body).await;
+    // ADR-0122, decision 1: the draw happens at the entry of the route, before
+    // the concurrency token.
+    let sampled = debug_journal::sampled(&state);
+    let (answer, records, deposit) =
+        search_inner(Arc::clone(&state), &identifier, body, sampled).await;
     analytics::record(&state, records, &client);
+    if let Some(deposit) = deposit {
+        debug_journal::deposit(&state, deposit, &client, &identifier.0);
+    }
     answer
 }
 
-/// The work of [`search`], with the events it records (ADR-0117, decision 5).
+/// The work of [`search`], with the events it records (ADR-0117, decision 5)
+/// and the row of the debug journal, when the request is recorded (ADR-0122).
 ///
 /// A multi-index search produces **one event per target**, never a consolidated
 /// row: the pool, the strategy and the contributions belong to one target, and a
-/// global row could only average them (ADR-0117, decision 5).
+/// global row could only average them (ADR-0117, decision 5). The journal, on the
+/// other hand, writes **one row per request** (ADR-0122, decision 4).
 async fn search_inner(
     state: Arc<AppState>,
-    identifier: RequestId,
+    identifier: &RequestId,
     body: Value,
-) -> (Response, Vec<Record>) {
+    sampled: bool,
+) -> (Response, Vec<Record>, Option<Deposit>) {
     let entry = Instant::now();
     // A request refused before its targets are resolved carries the first name
     // the body declares, and an empty index when it declares none: the name of
     // a target is never invented (ADR-0118, decision 6).
     let claimed = first_target_name(&body);
-    let plan = match MultiRequest::parse(&body).and_then(|request| validate(&state, request)) {
-        Ok(plan) => plan,
-        Err(failure) => {
-            return Observed::new_at(claimed, Operation::SearchMulti, entry)
-                .refused(&failure, &identifier.0);
-        }
-    };
+    let plan =
+        match MultiRequest::parse(&body).and_then(|request| validate(&state, request, sampled)) {
+            Ok(plan) => plan,
+            Err(failure) => {
+                let answered = Observed::new_at(claimed, Operation::SearchMulti, entry)
+                    .refused(&failure, &identifier.0);
+                let deposit = sampled.then(|| failure_deposit(&failure, None, &identifier.0));
+                return (answered.0, answered.1, deposit);
+            }
+        };
+    // ADR-0122, decisions 1 and 3: a `debug` request is recorded when the
+    // journal is on, and the draw records the others; the capture and the plan
+    // are built only for a recorded request.
+    let recording = plan.recording;
+    let request = recording.then(|| request_payload_of(&body, &plan));
     let limit = match state.search_limit() {
         Ok(limit) => limit,
         Err(failure) => {
-            return Observed::new_at(claimed, Operation::SearchMulti, entry)
+            let answered = Observed::new_at(claimed, Operation::SearchMulti, entry)
                 .refused(&failure, &identifier.0);
+            let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
+            return (answered.0, answered.1, deposit);
         }
     };
     let index = plan
@@ -160,35 +182,120 @@ async fn search_inner(
     // acquisition and everything after it are covered.
     let started = Instant::now();
     let reported = first.clone();
+    let mode = plan.mode;
+    let journal_request = request.clone();
     let outcome = limit
         .run_blocking(plan.deadline, move || {
             // A test holds the work here to prove the single token of the whole
             // request (ADR-0110, decision 8; ADR-0102, decision 2).
             #[cfg(feature = "failpoints")]
             crate::barriers::wait_search_multi();
-            run_multi(&holder, plan, first, started)
+            run_multi(&holder, plan, first, started, journal_request)
         })
         .await;
 
     match outcome {
-        Ok((Ok(outcome), observers)) => {
+        Ok((Ok(outcome), observers, journal)) => {
+            let took_ms = Some(outcome.took_ms);
+            let payload = journal;
             let answer = (
                 axum::http::StatusCode::OK,
                 Json(outcome.render(&identifier.0)),
             )
                 .into_response();
-            (answer, events_of(observers, "ok"))
+            let deposit =
+                payload.map(|payload| multi_deposit(&identifier.0, mode, "ok", took_ms, payload));
+            (answer, events_of(observers, "ok"), deposit)
         }
-        Ok((Err(failure), observers)) => {
+        Ok((Err(failure), observers, journal)) => {
             let answer = error::rendered(&failure, &identifier.0);
             let status = analytics::status(&answer);
-            (answer, events_of(observers, &status))
+            let payload = journal.or_else(|| failure_payload(&failure, request));
+            let deposit =
+                payload.map(|payload| multi_deposit(&identifier.0, mode, &status, None, payload));
+            (answer, events_of(observers, &status), deposit)
         }
         // The deadline expired before the blocking thread answered: no target
         // reported anything, so the single event carries the first target the
         // plan resolved, without inventing a faulty one.
-        Err(failure) => reported.refused(&failure, &identifier.0),
+        Err(failure) => {
+            let answered = reported.refused(&failure, &identifier.0);
+            let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
+            (answered.0, answered.1, deposit)
+        }
     }
+}
+
+/// Builds the journal row of a multi-index answer (ADR-0122, decision 4).
+///
+/// `index` stays `NULL` for **every** request of this route, even when it names
+/// one target: the column says which route wrote the row, not how many targets
+/// it had.
+fn multi_deposit(
+    request_id: &str,
+    mode: Mode,
+    status: &str,
+    total_ms: Option<f64>,
+    payload: Value,
+) -> Deposit {
+    Deposit {
+        request_id: request_id.to_owned(),
+        index: None,
+        client: String::new(),
+        mode: mode.as_str().to_owned(),
+        status: status.to_owned(),
+        total_ms,
+        payload,
+    }
+}
+
+/// The payload of a refused request whose `request` member is already known.
+fn failure_payload(failure: &CribleError, request: Option<Value>) -> Option<Value> {
+    request.map(|request| {
+        json!({
+            "request": request,
+            "error": { "code": failure.code().as_str() },
+        })
+    })
+}
+
+/// The row of a refusal recorded before the `request` member could be built.
+fn failure_deposit(failure: &CribleError, request: Option<Value>, request_id: &str) -> Deposit {
+    Deposit {
+        request_id: request_id.to_owned(),
+        index: None,
+        client: String::new(),
+        mode: String::new(),
+        status: failure.code().as_str().to_owned(),
+        total_ms: None,
+        payload: failure_payload(failure, request)
+            .unwrap_or_else(|| json!({ "error": { "code": failure.code().as_str() } })),
+    }
+}
+
+/// Builds the `request` member of a multi-index journal row.
+///
+/// `filter` is absent: each target carries its own in `targets[]`
+/// (ADR-0121, decision 4). The rest of the body is common to the request.
+fn request_payload_of(body: &Value, plan: &Plan) -> Value {
+    let fusion = plan.fusion.unwrap_or_else(|| {
+        plan.targets.first().map_or(FusionConfig::Rrf, |target| {
+            target.published.config.search.fusion
+        })
+    });
+    let view = RequestView {
+        body,
+        mode: plan.mode,
+        k: plan.k,
+        exact: plan.exact,
+        fusion,
+        by_document: plan.grouping.by_document,
+        passages_per_document: plan.grouping.passages_per_document,
+        dedup_content: plan.grouping.dedup_content,
+        with_filter: false,
+        dimension: plan.dimension,
+    };
+    debug_journal::request_payload(&view)
 }
 
 /// One event per target that ran, the last one with `last_status` and the
@@ -247,6 +354,11 @@ struct Plan {
     debug: bool,
     /// Deadline of the whole request (ADR-0102, decision 3).
     deadline: Duration,
+    /// Whether the request is recorded by the debug journal (ADR-0122).
+    recording: bool,
+    /// Dimension of the vector the body carries, when it carries one, for the
+    /// `request` member of the journal payload.
+    dimension: Option<usize>,
 }
 
 /// One target of the request, with its published state and its filter.
@@ -257,6 +369,8 @@ struct ResolvedTarget {
     published: Published,
     /// Filter of this target; the empty filter matches every living passage.
     filter: Filter,
+    /// Filter of this target as it was received, for the journal payload.
+    filter_json: Value,
 }
 
 /// Body of the multi-index request: the common fields and the list of targets.
@@ -273,6 +387,8 @@ struct TargetRequest {
     index: String,
     /// `filter` of the target, structurally parsed with its full JSON path.
     filter: Option<Filter>,
+    /// `filter` of the target as received, `{}` when absent.
+    filter_json: Value,
 }
 
 impl MultiRequest {
@@ -323,13 +439,21 @@ fn parse_targets(object: &Map<String, Value>) -> Result<Vec<TargetRequest>, Crib
                 Some(Filter::from_json_str_at(&value.to_string(), &filter_path)?)
             }
         };
-        targets.push(TargetRequest { index, filter });
+        let filter_json = match target.get("filter") {
+            Some(value) if !value.is_null() => value.clone(),
+            _ => json!({}),
+        };
+        targets.push(TargetRequest {
+            index,
+            filter,
+            filter_json,
+        });
     }
     Ok(targets)
 }
 
 /// Applies the order of ADR-0110, decision 7, and builds the plan.
-fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError> {
+fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Plan, CribleError> {
     let common = request.common;
     // (a) bounds of the body, and the entries of an explicit mode, before any
     // index is read. `targets` was already checked by the parser.
@@ -404,6 +528,7 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
             index: target.index,
             published,
             filter,
+            filter_json: target.filter_json,
         });
     }
     // (c) `return.fields` against the whole set of targets, once their schemas
@@ -412,6 +537,7 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         check_return_names(&common.selection, &targets)?;
     }
     let selection = common.selection.selection();
+    let dimension = inputs.vector_dimension();
 
     // (d) common model of a mode that compares vectors (ADR-0110, decision 3).
     if mode.uses_dense() {
@@ -429,6 +555,10 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         exact: common.exact,
         debug: common.debug,
         deadline,
+        // ADR-0122, decision 1: a `debug` request is always recorded when the
+        // journal is on; the draw records the others.
+        recording: state.debug_journal().is_some() && (sampled || common.debug),
+        dimension,
     })
 }
 
@@ -509,7 +639,12 @@ fn run_multi(
     plan: Plan,
     first: Observed,
     started: Instant,
-) -> (Result<MultiOutcome, CribleError>, Vec<Observed>) {
+    journal_request: Option<Value>,
+) -> (
+    Result<MultiOutcome, CribleError>,
+    Vec<Observed>,
+    Option<Value>,
+) {
     let Plan {
         targets,
         mode,
@@ -520,6 +655,7 @@ fn run_multi(
         k,
         exact,
         debug,
+        recording,
         ..
     } = plan;
 
@@ -529,7 +665,8 @@ fn run_multi(
         Some(target) => target,
         None => {
             let failure = error::invalid("'$.targets' must name at least one index");
-            return (Err(failure), vec![first]);
+            let payload = failure_payload(&failure, journal_request);
+            return (Err(failure), vec![first], payload);
         }
     };
     let encodes = inputs.encodes();
@@ -539,14 +676,20 @@ fn run_multi(
             Ok(prepared) => prepared,
             // No target ran: the one event of the request is the first target the
             // plan resolved (decision 5).
-            Err(failure) => return (Err(failure), vec![first]),
+            Err(failure) => {
+                let payload = failure_payload(&failure, journal_request);
+                return (Err(failure), vec![first], payload);
+            }
         };
     let encoding = encodes.then(|| encoding.elapsed());
     let vector = match &prepared.vector {
         Some(vector) => {
             match search::check_vector(state, &first_target.published, vector.clone()) {
                 Ok(vector) => Some(vector),
-                Err(failure) => return (Err(failure), vec![first]),
+                Err(failure) => {
+                    let payload = failure_payload(&failure, journal_request);
+                    return (Err(failure), vec![first], payload);
+                }
             }
         }
         None => None,
@@ -581,6 +724,7 @@ fn run_multi(
 
     let mut outcomes: Vec<(&ResolvedTarget, IndexOutcome)> = Vec::with_capacity(targets.len());
     let mut target_debug: Vec<Value> = Vec::new();
+    let mut target_journal: Vec<Value> = Vec::new();
     let mut filter_total = Duration::ZERO;
     let mut dense_total = Duration::ZERO;
     let mut lexical_total = Duration::ZERO;
@@ -590,6 +734,10 @@ fn run_multi(
     for (position, target) in targets.iter().enumerate() {
         let per_index_fusion = fusion.unwrap_or(target.published.config.search.fusion);
         let target_started = Instant::now();
+        // ADR-0122, decision 3: the capture exists for a request that asks for
+        // `debug` or is recorded; without either, no vector is allocated.
+        let mut capture =
+            (debug || recording).then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
         let outcome = match search::search_index(
             state,
             &target.index,
@@ -603,10 +751,7 @@ fn run_multi(
                 fusion: per_index_fusion,
                 k,
                 exact,
-                // Consigned debt (ADR-0120, decision 4): the capture of
-                // ADR-0119 exists for the simple route only; the shape of a
-                // multi-index journal belongs to JOURNAL-DE-DEBUG.
-                capture: None,
+                capture: capture.as_mut(),
             },
         ) {
             Ok(outcome) => outcome,
@@ -619,7 +764,8 @@ fn run_multi(
                     observed.finish_at(target_started);
                 }
                 observers.truncate(position + 1);
-                return (Err(failure), observers);
+                let payload = failure_payload(&failure, journal_request);
+                return (Err(failure), observers, payload);
             }
         };
         // One reading of the target's total, shared by the event and by the
@@ -644,6 +790,23 @@ fn run_multi(
                 ),
                 "timings_ms": crate::debug::timings(&target_stages(mode, &outcome, target_total)),
             }));
+        }
+        if recording {
+            // ADR-0122, decision 4: one entry per target, in the order of the
+            // request, with the filter as received and its own generation.
+            // ADR-0119, decision 3: `capture` is omitted when no capture was
+            // built, never written as an empty object.
+            let mut entry = Map::new();
+            entry.insert("index".to_owned(), json!(target.index));
+            entry.insert("filter".to_owned(), target.filter_json.clone());
+            entry.insert("generation".to_owned(), json!(outcome.generation));
+            if let Some(capture) = capture.as_ref() {
+                entry.insert(
+                    "capture".to_owned(),
+                    debug_journal::capture_payload(capture),
+                );
+            }
+            target_journal.push(Value::Object(entry));
         }
         filter_total += outcome.filter;
         dense_total += outcome.stages.dense;
@@ -671,38 +834,57 @@ fn run_multi(
     };
     let fusing = Instant::now();
     let entries = fuse(outcomes, mode, &grouping, k);
-    // The fusion between indexes belongs to the global `fusion` of `debug`; it
-    // is timed only for a request that asks for it (ADR-0119, decision 9).
-    let exchange_fusion = debug.then(|| fusing.elapsed());
+    // The fusion between indexes belongs to the global `fusion` of `debug` and
+    // of the journal; it is timed only for a request that needs it
+    // (ADR-0119, decision 9).
+    let exchange_fusion = (debug || recording).then(|| fusing.elapsed());
     // ADR-0120, decision 1: the global total stops at the end of `fetch`, after
     // the fusion between indexes and before the JSON rendering of the results.
     // It is read once and shared with the `debug` member (ADR-0119, decisions 7
-    // and 9).
+    // and 9) and with the journal (ADR-0121, decision 4).
     let total = started.elapsed();
     let (results, per_result) =
         match render_entries(entries, &targets, score_type, &selection, debug) {
             Ok(rendered) => rendered,
             // Every target ran: all of them keep their event, and the last one
             // carries the code of the failure (ADR-0117, decision 5).
-            Err(failure) => return (Err(failure), observers),
+            Err(failure) => {
+                let payload = failure_payload(&failure, journal_request);
+                return (Err(failure), observers, payload);
+            }
         };
+    let stages = StageDurations {
+        validate: request_validate,
+        encode: request_encode,
+        filter: Some(filter_total),
+        dense: mode.uses_dense().then_some(dense_total),
+        lexical: mode.uses_lexical().then_some(lexical_total),
+        fusion: (mode == Mode::Hybrid)
+            .then_some(fusion_total + exchange_fusion.unwrap_or_default()),
+        group: Some(group_total),
+        fetch: Some(fetch_total),
+        total: Some(total),
+    };
     let debug = debug.then(|| {
-        let fusion_total = fusion_total + exchange_fusion.unwrap_or_default();
         json!({
             "targets": target_debug,
-            "timings_ms": crate::debug::timings(&StageDurations {
-                validate: request_validate,
-                encode: request_encode,
-                filter: Some(filter_total),
-                dense: mode.uses_dense().then_some(dense_total),
-                lexical: mode.uses_lexical().then_some(lexical_total),
-                fusion: (mode == Mode::Hybrid).then_some(fusion_total),
-                group: Some(group_total),
-                fetch: Some(fetch_total),
-                total: Some(total),
-            }),
+            "timings_ms": crate::debug::timings(&stages),
             "per_result": per_result,
         })
+    });
+    // ADR-0122, decision 4: one row for the request, the text once, and one
+    // entry per target in `targets[]`.
+    let journal = recording.then(|| {
+        let mut payload = Map::new();
+        if let Some(request) = journal_request {
+            payload.insert("request".to_owned(), request);
+        }
+        payload.insert(
+            "timings_ms".to_owned(),
+            debug_journal::timings_payload(&stages),
+        );
+        payload.insert("targets".to_owned(), Value::Array(target_journal));
+        Value::Object(payload)
     });
     (
         Ok(MultiOutcome {
@@ -713,6 +895,7 @@ fn run_multi(
             took_ms: total.as_secs_f64() * 1_000.0,
         }),
         observers,
+        journal,
     )
 }
 
