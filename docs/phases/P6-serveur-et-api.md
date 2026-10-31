@@ -156,3 +156,18 @@
   - `docs/jalons/J6-demo.md` est écrit.
 - **Précisions** : ADR-0113 (critère d'INV-02 par requête, MES-16, protocole, `503` attendus : aucun).
 - **Invariants** : INV-02.
+
+### CORRIGER-OPERATIONID-OPENAPI
+- **Origine** : ajoutée par le propriétaire le 2026-10-31, hors plan initial (« oui lance la correction »). Elle vient du rejeu de l'étape 4 de `docs/jalons/J6-demo.md` (Swagger UI) le 2026-10-31. Dans Swagger UI, `POST /v1/search` ne rend jamais de réponse, et rien n'arrive côté serveur (0 % de CPU), alors que la même requête passée par `curl` rend `200` en 75 ms avec les résultats attendus. Cliquer sur l'un des deux blocs de recherche ouvre les deux. La cause est dans `/openapi.json` : `POST /v1/indexes/{index}/search` et `POST /v1/search` ont le même `operationId` (`search`) et le même tag (`search`), `utoipa` reprenant le nom de la fonction Rust. La spécification OpenAPI 3.1 exige qu'un `operationId` soit unique parmi toutes les opérations ; Swagger UI s'en sert pour identifier les blocs et confond donc les deux opérations. Les 16 autres opérations ont un `operationId` unique, mais ni `docs/05-api.md` ni ADR-0111 ne fixent les noms. Le critère de J6 « le scénario passe en entier via Swagger UI » n'est pas tenu tant que ce défaut reste.
+- **Objectif** : un `operationId` unique pour chaque opération de la spécification servie, pour que Swagger UI distingue la recherche simple de la recherche multi-index.
+- **Dépend de** : PUBLIER-OPENAPI
+- **À lire** : `adr/0111-specification-openapi-et-validation-des-exemples.md` (spécification OpenAPI, Swagger UI embarqué) ; `05-api.md` (tableau des routes) ; `docs/jalons/J6-demo.md` (étape 4).
+- **Livrables** :
+  - un `operationId` explicite `search_index` pour `POST /v1/indexes/{index}/search`, et `search_multi` pour `POST /v1/search` (noms choisis avec le propriétaire) ;
+  - un test sur la spécification générée, qui échoue si deux opérations partagent un `operationId` et qui nomme le doublon.
+- **Critères d'acceptation** :
+  - le test d'unicité passe, et il échoue si l'on remet le doublon (`@dev` le vérifie une fois avant de livrer) ;
+  - les 16 autres `operationId` sont inchangés ;
+  - les tests existants de la spécification restent verts (égalité avec les routes de `docs/05`, exemples validés, ADR-0111) ;
+  - aucun test n'est désactivé.
+- **Invariants** : aucun.
