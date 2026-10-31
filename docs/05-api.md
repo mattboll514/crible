@@ -73,11 +73,11 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` ; sans corps → `202` avec un job `export` (ADR-0107) |
 | `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` ; sans corps → `202` avec un job `snapshot` ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065, ADR-0107) |
 | `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
-| `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé |
+| `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé ; `200` avec `enabled: false` et `queries: []` quand il est désactivé (ADR-0121, ADR-0122) |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
 
-La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite : en P6, `GET /v1/stats` (`ROUTE-STATS`) et `GET /v1/debug/queries` (`JOURNAL-DE-DEBUG`), chacun cité dans le test avec la tâche qui le livre. La tâche qui monte la route la déclare dans la spécification et retire son exception du test dans le même changement. Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
+La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite : en P6, `GET /v1/stats` (`ROUTE-STATS`), cité dans le test avec la tâche qui le livre. `GET /v1/debug/queries` est déclarée dans la spécification par JOURNAL-DE-DEBUG, et son exception a quitté le test dans le même changement (ADR-0122, décision 9). Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
 
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
 
@@ -267,7 +267,7 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `dedup` | `"content"` ou null | null | Fusion des passages identiques |
 | `return` | `{fields: [...] ou "all", text: bool}` | `{fields: "all", text: true}` | Contenu renvoyé ; `"all"` vaut tous les champs **disponibles pour ce résultat** (ADR-0043) ; un nom déclaré `returned: false` est refusé (ADR-0109) |
 | `exact` | bool | false | Force le calcul exact (éval, debug) |
-| `debug` | bool | false | Ajoute plan, temps et rangs (ADR-0119) ; alimente le journal de debug quand il est activé (JOURNAL-DE-DEBUG) |
+| `debug` | bool | false | Ajoute plan, temps et rangs (ADR-0119) ; alimente le journal de debug quand il est activé : **toujours** pour `debug: true`, par échantillonnage sinon (ADR-0122, décisions 1 et 2) |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` | [] | Diagnostic de documents précis |
 | `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
 
@@ -432,6 +432,38 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 - **Rétention** : les jobs terminés depuis plus de 30 jours sont purgés, de la table et de la mémoire, au démarrage et à la fin de chaque job ; les jobs en cours ne sont jamais purgés. La valeur est fixe, sans clé de configuration. Un job inconnu ou purgé rend `404 not_found` (ADR-0103).
 - **Liste** : `GET /v1/jobs` rend tous les jobs retenus, dans un objet à une seule clé, `{ "jobs": [ … ] }` (ADR-0103), filtrables par `index` et par `state`, triés par `created_at` décroissant puis `id`, sans pagination en v1 ; une valeur de `state` hors des quatre états rend `invalid_request` (400). Aucune isolation par clé : toute clé `write` ou `admin` voit les jobs de l'instance (ADR-0103).
 - **Arrêt du serveur** : dès le début du drainage, toute nouvelle soumission rend `503 overloaded` avec le message « the server is shutting down » ; les jobs acceptés avant le signal se terminent, et l'attente est bornée par `wait_timeout_ms` comptée depuis le signal, en parallèle du drainage des requêtes. À l'échéance, le processus sort et les jobs non terminés passent à `failed` au démarrage suivant (ADR-0104).
+
+## Journal de debug
+
+`GET /v1/debug/queries` lit le journal de debug, **réservé au rôle `admin`** : une clé `read` ou `write` reçoit `403 forbidden` (ADR-0095 ; ADR-0122, décision 9). Le journal est **désactivé par défaut** ; quand il l'est, la route rend `200` avec `enabled: false` et `queries: []`, sans ouvrir `debug.sqlite` (ADR-0121 ; ADR-0122, décision 9).
+
+| Paramètre | Type | Défaut | Rôle |
+|---|---|---|---|
+| `index` | chaîne | — | nom exact pour une ligne d'index simple ; appartenance à `payload.targets[]` pour une ligne multi-index |
+| `min_total_ms` | nombre | — | garde les lignes dont `total_ms` est supérieur ou égal à la valeur ; une ligne à `total_ms` `NULL` est exclue |
+| `from` | chaîne ISO 8601 | — | borne basse incluse sur `created_at` |
+| `to` | chaîne ISO 8601 | — | borne haute incluse sur `created_at` |
+| `limit` | entier | 100 | nombre de lignes, de 1 à 1 000 |
+| `before_id` | entier | — | pagination par clé : ne rend que les lignes d'`id` strictement inférieur |
+
+<!-- openapi: DebugQueryList -->
+```json
+{ "enabled": true, "dropped": 0,
+  "queries": [
+    { "id": 42, "created_at": "2026-10-31T10:00:00.123Z", "request_id": "…",
+      "index": "decisions", "client": "legifacile-mcp", "mode": "hybrid",
+      "status": "ok", "total_ms": 41.7,
+      "payload": { "request": { "query": "responsabilité du fait des choses",
+                                "filter": { "fonds": "LEGI" } },
+                   "generation": 1287 } } ] }
+```
+
+- L'ordre est `created_at DESC, id DESC`, un ordre total : deux lignes du même vidage partagent `created_at`, et `id` les départage. Le client reprend le dernier `id` reçu pour la page suivante ; il n'y a pas d'`OFFSET` (ADR-0122, décision 9).
+- `payload` est rendu comme un **objet JSON**, jamais comme une chaîne ; sa forme est celle d'ADR-0121, décision 4. Un `payload` illisible rend `internal`.
+- En multi-index, `index` vaut `null` et `payload.targets[]` porte les cibles, avec leur filtre, leur génération et leur capture (ADR-0122, décision 4).
+- `dropped` est le compteur de pertes de file du processus, `debug_journal_dropped` (ADR-0122, décision 6).
+- Un paramètre **inconnu** ou **invalide** (`limit` hors de `[1, 1 000]`, `before_id` négatif, date qui n'est pas ISO 8601, `min_total_ms` négatif ou non numérique) rend `400 invalid_request`, avec un message qui nomme le paramètre (ADR-0109 ; ADR-0122, décision 9).
+- La route est déclarée dans la spécification OpenAPI et son exception nommée est retirée du test des routes dans le même changement (ADR-0111, complément du 2026-10-30).
 
 ## Limites par défaut (configurables)
 

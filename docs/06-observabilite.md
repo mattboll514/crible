@@ -4,7 +4,7 @@ L'observabilité a deux composants, avec deux politiques différentes :
 
 | | Analytics | Journal de debug |
 |---|---|---|
-| Activation | Toujours | À la demande (config + `debug: true`, ou échantillonnage) |
+| Activation | Toujours | À la demande : `debug: true` toujours quand le journal est activé, `sample_rate` pour les autres requêtes (ADR-0122, décision 1) |
 | Contenu | Agrégats chiffrés **sans aucun contenu** | Requête complète : texte, filtre, plan, résultats |
 | Conservation | Longue (90 jours par défaut) | Courte (7 jours par défaut) |
 | Fichier | `data/analytics.sqlite` | `data/debug.sqlite` |
@@ -75,17 +75,23 @@ La CLI `crible stats` affiche la même chose en tableau. La forme de la réponse
 
 ## Journal de debug
 
-- **Config** : `debug_journal.enabled` (false par défaut), `sample_rate` (0 par défaut), `ttl_days` (7 par défaut).
-- **Ce qui est enregistré** : une requête avec `debug: true`, si le journal est activé, et une fraction `sample_rate` des autres requêtes.
+- **Config** : `debug_journal.enabled` (false par défaut), `sample_rate` (0 par défaut, dans `[0, 1]`), `ttl_days` (7 par défaut, `0` refusé au démarrage) (ADR-0122, décisions 1 et 8).
+- **Deux voies d'enregistrement** : une requête qui porte `debug: true` est **toujours** enregistrée quand le journal est activé, quel que soit `sample_rate` ; `sample_rate` ne vise que les autres requêtes, dont une fraction tirée au hasard est enregistrée (ADR-0122, décision 1). Le tirage a lieu avant la prise du jeton de concurrence, donc il n'allonge pas `took_ms`.
+- **Rôle** : aucune restriction de rôle ne s'ajoute à `debug: true` ; toute clé valide peut faire enregistrer **sa propre** requête, et la lecture du journal reste réservée à `admin` (ADR-0122, décision 2).
 - **Contenu** :
-  - `request_id`, horodatage, index, client ;
-  - la requête complète (texte et filtre) ;
-  - le plan et les temps par étape ;
-  - le top 20 (clé et score de chaque branche) ;
-  - la génération et l'erreur éventuelle.
-- **Consultation** : `GET /v1/debug/queries?index=&min_total_ms=&from=&to=&limit=`.
-- **Écriture** : asynchrone, comme les analytics. La purge selon la durée de vie tourne chaque jour. L'écriture du journal ne bloque pas plus une requête que celle des analytics : INV-17 couvre les deux, et le journal est prouvé sur le même modèle que les analytics (ADR-0118, décisions 7 et 8).
-- **Pourquoi** : les requêtes de Legifacile peuvent être sensibles. Le journal est donc désactivé par défaut, sa durée de vie est courte, et il n'est lisible que par un admin.
+  - `request_id`, horodatage lu par SQLite, index, client (nom de la clé) ;
+  - la requête complète (texte et filtre tel que reçu) ;
+  - le plan et les temps par étape, repris de l'objet `debug` sans recalcul ;
+  - le top 20 (clé, rang et score de chaque branche) ;
+  - la génération et l'erreur éventuelle, réduite à son code ;
+  - en multi-index, les cibles avec leur filtre, leur génération et leur capture, et `index` à `NULL` sur la ligne (ADR-0121, décision 4 ; ADR-0122, décision 4).
+- **Stockage** : `data/debug.sqlite`, à la racine du dossier de données, ouvert et écrit par `crible-store`, avec une table `meta` à `format_version = 1` refusée quand elle est inconnue (INV-15). Le fichier n'est ni ouvert ni créé quand le journal est désactivé (ADR-0121).
+- **Consultation** : `GET /v1/debug/queries?index=&min_total_ms=&from=&to=&limit=&before_id=`, réservée à `admin` ; réponse `{ "enabled": bool, "dropped": u64, "queries": [...] }`, ordre `created_at DESC, id DESC`, pagination keyset sur `id` ; journal désactivé : `200` avec `enabled: false` et `queries: []` ; paramètre inconnu ou invalide : `400 invalid_request` nommant le paramètre (ADR-0122, décision 9).
+- **Écriture** : asynchrone, comme les analytics. Chaque requête dépose sa ligne dans un canal **borné de 4 096 entrées** par `try_send`, et un seul écrivain vide ; aucune requête ne tient de verrou. File pleine : la ligne neuve est perdue et comptée dans `debug_journal_dropped`, un compteur par processus exposé par la route et journalisé en `warn` à chaque vidage où il augmente (INV-17 ; ADR-0122, décision 6).
+- **Vidage** : toutes les 10 secondes et à l'arrêt. À l'arrêt, la file est fermée avant son drainage, et le journal est vidé **après les analytics**, avec une borne de 2 secondes ; un échec est journalisé en `warn` sans reprise (ADR-0122, décision 7).
+- **Purge** : selon `ttl_days`, à l'ouverture puis au premier vidage dont la dernière purge date de plus de 24 heures ; pas de minuteur dédié (ADR-0122, décision 8).
+- **Logs** : le journal n'écrit jamais `query`, `filter`, la clé ni le payload, à aucun niveau et quel que soit `RUST_LOG` ; seules des lignes `warn` de comptage (pertes, échec de vidage ou de purge) sont permises (ADR-0122, décision 10).
+- **Pourquoi** : les requêtes de Legifacile peuvent être sensibles. Le journal est donc désactivé par défaut, sa durée de vie est courte, et il n'est lisible que par un admin. Il **contient** le texte et le filtre par conception : INV-13 ne vise que les analytics (ADR-0014 ; ADR-0121, décision 6).
 
 ## Debug dans la réponse et explain
 
