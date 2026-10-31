@@ -156,7 +156,7 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 - **Corps vide** : un corps qui ne porte **ni** `documents` **ni** `deletions` rend `400 invalid_request`, avant la mise en file, avec un message qui nomme les deux champs attendus ; c'est le refus du fichier vide du chemin par fichier, appliqué au corps (ADR-0107).
 - **Erreurs d'attache** : `batch_conflict`, `acceptance_failed` et `incompatible_model` sont détectés pendant le job. La soumission rend `202` et le job passe à `failed` avec le `error.code` correspondant (ADR-0103, ADR-0107). Seule la forme du corps est refusée avant la mise en file (`400 invalid_request`, `413 payload_too_large`).
 - Limite : 10 000 entrées par requête, passages décrits et `doc_id` de `deletions` confondus (ADR-0107).
-- **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 entrées le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé.
+- **Mode** : `upsert` seulement (ADR-0055). `replace_all` est refusé avec `invalid_request`, et le message nomme le mode : la limite de 10 000 entrées le rend inutilisable en ligne. `replace_all` reste le mode d'un lot déposé. Le contrôle du `mode` précède celui du corps vide : un corps qui cumule les deux fautes, par exemple `{"batch_id":"x","mode":"replace_all"}`, rend le `400` qui nomme le mode (ADR-0115).
 - **Manifeste du lot interne** : déterministe, `producer` vaut `crible-online` ; ses valeurs sont fixées par ADR-0055 et décrites dans `04-donnees-et-ingestion.md` (mode en ligne) et `format-lot-v1.md` (lot interne du mode en ligne).
 
 ### Lot déposé
