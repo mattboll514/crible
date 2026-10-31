@@ -10,6 +10,43 @@
 
 ---
 
+### OUVRIR-EN-LECTURE-SANS-ECRIRE
+- **Objectif** : une ouverture en lecture ne modifie rien sous le dossier de l'index.
+- **Dépend de** : EXPORTER-LOT, NETTOYER-P4. `NETTOYER-P4` est la tâche hors plan qui a livré `GenerationStore::open_read_only` pour `search` et `inspect` (`recover` et `ensure_manifest` inchangés) ; `EXPORTER-LOT` a livré `crible export`, qui ouvre encore en écriture.
+- **À lire** : `02-architecture.md` (« Organisation sur disque », « Reprise au démarrage »), `04-donnees-et-ingestion.md` (« Export, instantanés, restauration »), ADR-0116 (décision 1), ADR-0069 (décision 2), ADR-0056, `08-invariants-et-tests.md` (INV-04).
+- **Livrables** :
+  - `open_index` n'exécute plus `recover` ni `ensure_manifest` quand l'ouverture est en lecture ; les réparations restent à l'ouverture en écriture ;
+  - `crible export` ouvre l'index en lecture, les codes binaires manquants étant construits en RAM comme pour `search` (ADR-0069, décision 2) ;
+  - le commentaire d'`inspect` qui parle d'un montage inscriptible est corrigé.
+- **Critères d'acceptation** :
+  - sur un index qui porte un fichier `tmp-*`, un dossier de segment absent de la table `segments` et un manifeste absent, une ouverture en lecture laisse le dossier de l'index identique octet pour octet, `-wal` et `-shm` exceptés (comparaison de l'inventaire des chemins, des tailles et des blake3) ; c'est un test nommé `inv_04_*` ;
+  - la même lecture rend les mêmes résultats qu'avant le changement, sur les mêmes requêtes ;
+  - l'ouverture en écriture qui suit répare comme avant : le `tmp-*` et le segment non référencé disparaissent, le manifeste manquant est écrit ;
+  - `crible export` ouvre en lecture et rend le même lot qu'avant le changement, à la date du manifeste près.
+- **Invariants** : INV-04.
+- **Hors périmètre** : la lecture depuis un volume réellement monté en lecture seule, le `-shm` du WAL exigeant un dossier inscriptible ; le verrou d'écrivain (`VERROU-ECRIVAIN-PAR-INDEX`) ; tout changement de format sur disque.
+
+### VERROU-ECRIVAIN-PAR-INDEX
+- **Objectif** : un seul processus écrit un index donné, et une erreur d'exploitant devient un refus immédiat et nommé.
+- **Dépend de** : OUVRIR-EN-LECTURE-SANS-ECRIRE, DEMARRER-SERVEUR-AXUM.
+- **À lire** : `02-architecture.md` (« Organisation sur disque », « Concurrence »), `05-api.md` (code `overloaded`), ADR-0116 (décision 2), ADR-0056 (verrou de présence et vérification d'identité), ADR-0108, ADR-0101.
+- **Livrables** :
+  - le verrou `<dossier de l'index>/WRITER_LOCK`, pris par `std::fs::File::try_lock` exclusif et non bloquant, avec la vérification d'identité après verrouillage d'ADR-0056 ;
+  - dans le serveur, la prise du verrou à l'ouverture de chaque index, au démarrage comme à la création par l'API, sa tenue tant que l'index est servi et son relâchement à la suppression (job `delete_index`) ;
+  - dans la CLI, la prise du verrou par chaque commande qui ouvre un index existant en écriture, pour toute sa durée ; refus immédiat, sans attente, en `overloaded` (503), avec un message qui nomme l'index et dit qu'un autre processus l'écrit, sans chemin du serveur ;
+  - l'exclusion de `WRITER_LOCK` de l'inventaire d'époque, des instantanés et des exports ;
+  - la règle (a) de l'ADR, déjà écrite dans `docs/02`, appliquée telle quelle : aucune commande d'écriture de la CLI sur un index servi, arrêt du serveur d'abord, lectures permises.
+- **Critères d'acceptation** :
+  - une commande d'écriture de la CLI, `compact` par exemple, est refusée en `503 overloaded` pendant qu'un vrai processus `crible serve` sert l'index ; le test de bout en bout lance le binaire, attend `/ready`, lance la commande, vérifie le code et le message, puis vérifie que l'index est intact ;
+  - le verrou est libre après la mort du processus qui le tenait, y compris après un `SIGKILL` : la commande suivante passe ;
+  - un fichier `WRITER_LOCK` recréé entre l'ouverture et le verrouillage ne donne pas deux verrous ;
+  - `search`, `inspect` et `export` passent à côté d'un serveur qui tient le verrou ;
+  - `WRITER_LOCK` n'apparaît ni dans un instantané, ni dans son `snapshot.json`, ni dans un export.
+- **Invariants** : INV-04.
+- **Hors périmètre** : un nouveau code d'erreur ; une attente avec délai ; un verrou partagé en lecture ; la lecture depuis un volume monté en lecture seule ; un réglage de configuration pour le verrou.
+
+---
+
 ### CONSTRUIRE-IMAGE-DOCKER
 - **Objectif** : l'image de production.
 - **Dépend de** : DEMARRER-SERVEUR-AXUM
@@ -27,7 +64,7 @@
 
 ### DEFINIR-VOLUMES-ET-CONFIG
 - **Objectif** : un déploiement correct sur Mac.
-- **Dépend de** : CONSTRUIRE-IMAGE-DOCKER
+- **Dépend de** : CONSTRUIRE-IMAGE-DOCKER, VERROU-ECRIVAIN-PAR-INDEX
 - **À lire** : `07-stack-et-deploiement.md` (volumes, configuration).
 - **Livrables** :
   - `docker/crible.example.toml` ;

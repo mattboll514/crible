@@ -65,6 +65,7 @@ data/                                   # volume Docker nommé (mmap rapide)
   tmp/deleted-<index>-<job_id>/         # index supprimé, renommé puis effacé par le job delete_index (ADR-0105)
   indexes/<index>/
     index.json                          # config de l'index, figée + réglable
+    WRITER_LOCK                         # verrou d'écrivain de l'index : pris par le serveur tant qu'il le sert et par toute commande d'écriture de la CLI (ADR-0116)
     CURRENT_EPOCH                       # époque courante (écrit tmp puis rename)
     epochs/<epoch>/
       records.sqlite                    # ÉTAT DE RÉFÉRENCE (WAL)
@@ -81,7 +82,7 @@ exchange/                               # dossier monté : inbox/ (lots), outbox
 
 `jobs.sqlite` n'appartient à aucune époque : c'est la table des jobs d'écriture de l'instance, versionnée par sa propre table `meta` (`format_version = 1`), ouverte et écrite par `crible-store` avec les réglages de connexion de `records.sqlite` (ADR-0103). Elle survit à la suppression d'un index.
 
-Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien dans l'époque et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087). La phrase vaut pour `lexical/` sans exception. Pour `lexical/`, « absent » et « illisible » ont la même conséquence : un état indécidable est reconstruit à l'ouverture en écriture, et la lecture seule publie l'instantané sans lecteur lexical (ADR-0088).
+Tout ce qui est marqué « dérivé » se reconstruit à partir de `records.sqlite` et des fichiers `vectors.*`. La reconstruction a lieu à l'ouverture en **écriture** ; une ouverture en lecture seule n'écrit rien sous le dossier de l'index — à la seule exception des fichiers que SQLite gère lui-même en mode WAL, `-wal` et `-shm` (ADR-0038) — et tient en RAM ce qu'elle doit reconstruire (ADR-0069, ADR-0087, ADR-0116). La phrase vaut pour `lexical/` sans exception. Pour `lexical/`, « absent » et « illisible » ont la même conséquence : un état indécidable est reconstruit à l'ouverture en écriture, et la lecture seule publie l'instantané sans lecteur lexical (ADR-0088).
 
 Deux fichiers méritent une description de format propre :
 
@@ -138,7 +139,7 @@ Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3,
 
 Une génération n'est créée que si au moins un document change réellement : un patch dont tous les documents sont inchangés laisse la génération à G, n'écrit aucun manifeste et ne publie aucun instantané.
 
-**Reprise au démarrage**, pour chaque index :
+**Reprise au démarrage**, pour chaque index. Elle n'a lieu qu'à l'ouverture en **écriture** : une ouverture en lecture n'exécute aucune des suppressions ni des réécritures décrites ici, si bien qu'un `tmp-*` ou un manifeste absent y subsiste jusqu'à la prochaine ouverture en écriture (ADR-0116).
 
 - Lire `CURRENT_EPOCH`, ouvrir SQLite et lire la génération G.
 - Supprimer `segments/tmp-*` et tout dossier de segment absent de la table `segments`.
@@ -163,6 +164,8 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 ## Concurrence
 
 - **Un écrivain par index** : une tâche tokio avec une file bornée. Les écritures d'un index sont sérialisées ; les lectures ne sont jamais bloquées (**INV-02**).
+- **Un seul processus écrivain pour un index donné.** Aucune commande d'écriture de la CLI ne s'exécute sur un index servi par une instance en service : on arrête le serveur d'abord, comme pour `snapshot` et `restore`. Les commandes de lecture (`search`, `inspect`, `export`) restent permises à côté d'un serveur en service. La règle est vérifiée par le verrou d'écrivain décrit au point suivant (ADR-0116).
+- **Verrou d'écrivain par index.** Un fichier `<dossier de l'index>/WRITER_LOCK` est pris avec `std::fs::File::try_lock`, exclusif et non bloquant, après la vérification d'identité d'ADR-0056 : un fichier recréé entre l'ouverture et le verrouillage ne doit pas donner deux verrous. Le serveur le prend à l'ouverture de chaque index, au démarrage comme à la création par l'API, le tient tant qu'il sert l'index et le relâche à la suppression de l'index. Chaque commande de la CLI qui ouvre un index existant en écriture le prend pour toute sa durée. S'il est déjà tenu, la commande est refusée immédiatement, sans attente, en `503 overloaded` : le message nomme l'index et dit qu'un autre processus l'écrit, sans chemin du serveur (ADR-0101). Le noyau relâche le verrou à la mort du processus. Les commandes de lecture ne le prennent pas. Le fichier n'appartient à aucune époque : il est exclu de l'inventaire d'époque, des instantanés et des exports (ADR-0116).
 - **Cohérence de l'époque avant commit.** Avant tout commit — attache, lot en ligne, patch, compaction suivante —, le magasin vérifie que `CURRENT_EPOCH` nomme bien son époque ; s'il en diffère, il refuse en `internal`, sans rien écrire, et la cause est journalisée. Le coût est une lecture de fichier par commit, marginale devant le commit lui-même (ADR-0108, MES-15).
 - **Registre d'index mutable.** Le serveur tient en mémoire la liste des index ouverts. `POST /v1/indexes` y inscrit un index créé à chaud, et le job `delete_index` l'en retire, sans redémarrage. La création est sérialisée par un verrou d'instance — une à la fois —, et ne bloque jamais une lecture. Une requête en vol sur un index retiré finit sur l'instantané qu'elle tient (ADR-0105).
 - **La portée de cette règle est l'index, pas la racine de données.** `<data>/tmp/` est commun à tous les index d'une racine : deux index distincts y ont chacun un écrivain légitime, et l'ingestion en ligne peut donc s'y dérouler en parallèle. Ce qui arbitre ces rencontres n'est pas la règle « un écrivain par index », mais le **verrou de présence** du lot en ligne (ADR-0056) : l'ingestion prend un verrou exclusif sur `<data>/tmp/online-<batch_id>.lock` avant de créer le dossier du lot et le tient jusqu'après `attach`. Si le verrou est déjà tenu, l'ingestion échoue en `overloaded` sans rien créer ; elle ne détruit ni ne bloque un lot qu'un autre processus tient.
