@@ -110,8 +110,9 @@ pub async fn search(
     };
 
     let holder = Arc::clone(&state);
-    // `took_ms` starts at the token acquisition (ADR-0109, decision 2); the
-    // token is taken without waiting.
+    // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
+    // decision 2). This instant is read just before the token, so the
+    // acquisition and everything after it are covered.
     let started = Instant::now();
     let outcome = limit
         .run_blocking(plan.deadline, move || {
@@ -283,7 +284,9 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
     // (b') an `external` model cannot encode: a mode that would encode needs the
     // `vector` (ADR-0109, decision 4). It is a permanent `400` of the inputs,
     // rendered before the token (ADR-0110, decision 7), so a saturated instance
-    // answers `400` rather than `503`.
+    // answers `400` rather than `503`. It needs the published configuration of
+    // each target, so it follows the existence step `(b)` — the `404` of an
+    // unknown index still comes first — and it still precedes the token.
     for (_, published) in &published_targets {
         search::check_model_inputs(state, published, mode, &inputs)?;
     }
@@ -378,12 +381,11 @@ fn check_common_model(state: &AppState, targets: &[ResolvedTarget]) -> Result<()
         .first()
         .ok_or_else(|| error::invalid("'$.targets' must name at least one index"))?;
     let fingerprint = state
-        .model(&first.published.config.model)?
-        .config
+        .model_config(&first.published.config.model)?
         .fingerprint();
     for target in &targets[1..] {
-        let access = state.model(&target.published.config.model)?;
-        if access.config.fingerprint() != fingerprint {
+        let config = state.model_config(&target.published.config.model)?;
+        if config.fingerprint() != fingerprint {
             return Err(CribleError::new(
                 ErrorCode::IncompatibleModel,
                 format!(

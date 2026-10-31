@@ -208,8 +208,9 @@ pub async fn search(
 
     let holder = Arc::clone(&state);
     let name = index.clone();
-    // `took_ms` starts at the token acquisition (ADR-0109, decision 2). The
-    // token is taken without waiting, so this instant is that acquisition.
+    // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
+    // decision 2). This instant is read just before the token, so the
+    // acquisition and everything after it are covered.
     let started = Instant::now();
     // A test holds the route here to prove that `took_ms` starts before the
     // token, not at the entry of the blocking task (ADR-0109, decision 2).
@@ -393,7 +394,9 @@ pub(crate) fn search_index(
 /// ADR-0109, decision 4: `dense` on an `external` index requires `vector`, and
 /// `hybrid` requires `query` **and** `vector`. The message names the model, and
 /// the refusal comes before the concurrency token (ADR-0110, decision 7), so a
-/// saturated instance answers `400` rather than `503`.
+/// saturated instance answers `400` rather than `503`. Only the configuration
+/// of the model is read here, never its graph: an `onnx` load would block the
+/// async runtime, outside the blocking task of the search (ADR-0107).
 pub(crate) fn check_model_inputs(
     state: &AppState,
     published: &Published,
@@ -410,15 +413,15 @@ pub(crate) fn check_model_inputs(
     if crate::test_encoding::armed() {
         return Ok(());
     }
-    let access = state.model(&published.config.model)?;
-    if access.config.kind != ModelKind::External {
+    let config = state.model_config(&published.config.model)?;
+    if config.kind != ModelKind::External {
         return Ok(());
     }
     Err(error::invalid(format!(
         "index '{}' uses model '{}' of kind external, which has no encoder; mode {} needs a \
          'vector' in the request",
         published.config.name,
-        access.config.name,
+        config.name,
         mode.as_str()
     )))
 }

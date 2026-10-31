@@ -955,6 +955,27 @@ async fn the_validation_order_is_400_then_404_then_422() {
         .as_str()
         .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
     assert!(message.contains("absent"), "{message}");
+
+    // A text `dense` request on the `external` `alpha` would be a `400` of the
+    // inputs (ADR-0109, decision 4), but the check of the inputs needs the
+    // published configuration of each target: the `404` of the unknown index
+    // comes first (ADR-0110, decision 7).
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "query": "contrat",
+            "mode": "dense",
+            "targets": [ { "index": "alpha" }, { "index": "absent" } ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"]["code"], "unknown_index", "{answer}");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(message.contains("absent"), "{message}");
 }
 
 /// Under RRF, every entry of a regrouped document carries the score of its
