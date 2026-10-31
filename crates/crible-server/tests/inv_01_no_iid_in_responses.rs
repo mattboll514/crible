@@ -251,6 +251,9 @@ async fn exercise(
         Some(json!({
             "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
             "mode": "dense",
+            // The `debug` member of ADR-0119 is a body of the engine too, and
+            // its ranks (INV-01) are documented numbers, not internal ids.
+            "debug": true,
         })),
     )
     .await;
@@ -306,6 +309,7 @@ fn is_documented_numeric(key: &str) -> bool {
         "version",
         "ratio",
         "score",
+        "rank",
         "cosine",
         "median",
         "truncated",

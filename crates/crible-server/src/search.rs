@@ -30,10 +30,10 @@
 //!
 //! A field outside the fourteen of `docs/05-api.md` is an `invalid_request` that
 //! names its JSON path, at every level (`fusion`, `return`, `filter` keeps its
-//! `invalid_filter` code). `debug` and `explain_ids` are named as not supported
-//! yet: P7 opens them (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`). No field is
-//! ignored in silence. A query text or a filter value never reaches a log
-//! (AGENTS.md, "Confidentialité").
+//! `invalid_filter` code). `explain_ids` is still named as not supported yet:
+//! `EXPLIQUER-DOCUMENTS` opens it. `debug` is accepted since P7 (ADR-0119). No
+//! field is ignored in silence. A query text or a filter value never reaches a
+//! log (AGENTS.md, "Confidentialité").
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -47,6 +47,7 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::model::ModelKind;
 use crible_search::api::{self, ReturnSelection};
+use crible_search::debug::DebugCapture;
 use crible_search::dense::Strategy;
 use crible_search::dense::exact::DenseSearcher;
 use crible_search::group::Grouping;
@@ -121,9 +122,9 @@ pub(crate) const DEFAULT_K: usize = 10;
     description = "Search one index, dense, lexical or hybrid, and fuse the two rankings. An \
                    unknown field of the body is `400 invalid_request`; an unknown index is `404 \
                    unknown_index`; an insufficient role `403`; a saturated concurrency limit \
-                   `503` with `Retry-After: 1`; a deadline `504 timeout`. `debug` and \
-                   `explain_ids` are refused until P7. Role: `read`; `write` and `admin` include \
-                   it (ADR-0095).",
+                   `503` with `Retry-After: 1`; a deadline `504 timeout`. `debug` adds the plan, the timings and the branch ranks \
+                   (ADR-0119); `explain_ids` is refused until `EXPLIQUER-DOCUMENTS`. Role: \
+                   `read`; `write` and `admin` include it (ADR-0095).",
     params(("index" = String, Path, description = "Name of the index")),
     request_body = crate::openapi::SearchRequest,
     responses(
@@ -263,6 +264,7 @@ async fn search_inner(
                 &selection,
                 request.k,
                 request.exact,
+                request.debug,
                 started,
             )
         })
@@ -274,9 +276,14 @@ async fn search_inner(
     };
     match outcome {
         Ok(outcome) => {
+            // ADR-0120, decision 1: the total is stopped at the end of `fetch`,
+            // before the JSON rendering; it serves the `debug` member and the
+            // analytics column alike (ADR-0119, decision 7). The fallback only
+            // covers an attempt that closed no total.
+            let total = observed.stages.total.unwrap_or_else(|| started.elapsed());
             let answer = (
                 axum::http::StatusCode::OK,
-                Json(outcome.render(&identifier.0)),
+                Json(outcome.render(&identifier.0, total, &observed.stages)),
             )
                 .into_response();
             observed.answered(answer)
@@ -386,6 +393,7 @@ impl Observed {
         self.stages.fusion = attempt.stages.fusion;
         self.stages.group = attempt.stages.group;
         self.stages.fetch = attempt.stages.fetch;
+        self.stages.total = attempt.total;
         self.strategy = attempt.strategy;
         self.pool = attempt.pool;
         self.contributions = attempt.contributions;
@@ -432,6 +440,22 @@ impl Observed {
         self.stages.total = Some(started.elapsed());
     }
 
+    /// Closes the total stage with a duration already measured.
+    ///
+    /// The caller reads the instant once and hands the same duration to the
+    /// event and to the `debug` member (ADR-0119, decision 7).
+    pub(crate) fn close_total(&mut self, total: Duration) {
+        self.stages.total = Some(total);
+    }
+
+    /// Validation and encoding durations, measured once for the request.
+    ///
+    /// The multi-index route renders them in its global `timings_ms` and
+    /// `0.0` in each target (ADR-0119, decision 9).
+    pub(crate) fn request_stages(&self) -> (Option<Duration>, Option<Duration>) {
+        (self.stages.validate, self.stages.encode)
+    }
+
     /// Renders `failure` and yields its event.
     pub(crate) fn refused(
         self,
@@ -451,8 +475,9 @@ impl Observed {
 
     /// Builds the one event of this search.
     pub(crate) fn events(mut self, status: String) -> Vec<Record> {
-        // A target of a multi-index request closed its own total at its end; a
-        // single search closes it here, at the end of its route.
+        // A successful search closes its total at the end of `fetch`
+        // (ADR-0120, decision 1); a target of a multi-index request closes its
+        // own. The fallback covers a refusal, which keeps the route duration.
         if self.stages.total.is_none() {
             self.stages.total = Some(self.entry.elapsed());
         }
@@ -489,6 +514,9 @@ pub(crate) struct Attempt {
     pub(crate) result: Result<SearchOutcome, CribleError>,
     /// Durations of the steps that ran on the blocking thread.
     pub(crate) stages: StageDurations,
+    /// Duration from the token acquisition to the end of `fetch`, read once
+    /// (ADR-0120, decision 1); `None` when the attempt stopped before it.
+    pub(crate) total: Option<Duration>,
     /// Dense strategy that ran, when a dense branch ran.
     pub(crate) strategy: Option<Strategy>,
     /// Size of the pool the filter kept, `0` when the filter never ran.
@@ -503,6 +531,7 @@ impl Attempt {
         Self {
             result: Err(failure),
             stages,
+            total: None,
             strategy: None,
             pool: 0,
             contributions: Contributions::default(),
@@ -512,8 +541,9 @@ impl Attempt {
 
 /// Runs the pipeline on the blocking thread, with the token held.
 ///
-/// The caller read `started` just before taking the token, which is the start of
-/// the duration `took_ms` reports (ADR-0109, decision 2).
+/// `debug` asks for the `debug` member of ADR-0119: the plan, the timings and
+/// the ranks of the results, plus the `DebugCapture` the journal will read. A
+/// request that does not ask for it builds no capture and renders no member.
 #[allow(clippy::too_many_arguments)]
 fn run(
     state: &AppState,
@@ -527,6 +557,7 @@ fn run(
     selection: &ReturnSelection,
     k: usize,
     exact: bool,
+    debug: bool,
     started: Instant,
 ) -> Attempt {
     let mut stages = StageDurations::default();
@@ -548,11 +579,16 @@ fn run(
         },
         None => None,
     };
+    // ADR-0119, decision 8: the capture exists only for a request that asks for
+    // `debug`; without it, no vector is allocated on the search path.
+    // One source for the depth of the capture: the default of the engine
+    // (`docs/06-observabilite.md:82`).
+    let mut capture = debug.then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
     let outcome = match search_index(
         state,
         index,
         published,
-        &IndexParams {
+        IndexParams {
             mode,
             vector: vector.as_deref(),
             text: prepared.text.as_deref(),
@@ -561,16 +597,38 @@ fn run(
             fusion,
             k,
             exact,
+            capture: capture.as_mut(),
         },
     ) {
         Ok(outcome) => outcome,
         Err(failure) => return Attempt::failed(failure, stages),
     };
+    // ADR-0120, decision 1: the total stops at the end of `fetch`, before the
+    // JSON rendering of the results. The deadline and the token still cover the
+    // whole request.
+    let total = started.elapsed();
     // Step 3 to 8 of `docs/03-recherche.md`, read from the outcome: a step the
     // mode did not run produces no sample (ADR-0117, decision 2).
     let measured = measure(mode, &outcome);
     let contributions = contributions(mode, &outcome.hits);
     let zero_results = outcome.hits.is_empty();
+    let debug = debug.then(|| crate::debug::SearchDebug {
+        plan: crate::debug::plan(
+            mode,
+            outcome.strategy,
+            &published.config.search,
+            outcome.pool_size,
+            k,
+            exact,
+            grouping,
+            fusion,
+        ),
+        per_result: outcome
+            .hits
+            .iter()
+            .map(crate::debug::result_entry)
+            .collect(),
+    });
     let results = api::results_json(
         &Answer {
             score_type: outcome.score_type,
@@ -584,17 +642,17 @@ fn run(
     Attempt {
         result: Ok(SearchOutcome {
             results,
+            debug,
             pool_size: outcome.pool_size,
             generation: outcome.generation,
             truncated_query: prepared.truncated_query,
             zero_results,
-            took_ms: 0.0,
-        }
-        .with_start(started)),
+        }),
         stages: StageDurations {
             encode: stages.encode,
             ..measured
         },
+        total: Some(total),
         strategy: outcome.strategy,
         pool: outcome.pool_size,
         contributions,
@@ -653,6 +711,9 @@ pub(crate) struct IndexParams<'a> {
     pub(crate) k: usize,
     /// `exact: true` forces the exact dense calculation.
     pub(crate) exact: bool,
+    /// Capture of the branch tops, built only for a `debug` request
+    /// (ADR-0119, decision 8).
+    pub(crate) capture: Option<&'a mut DebugCapture>,
 }
 
 /// Answer of one index, before the envelope of a search route.
@@ -678,7 +739,7 @@ pub(crate) fn search_index(
     state: &AppState,
     index: &str,
     published: &Published,
-    params: &IndexParams<'_>,
+    params: IndexParams<'_>,
 ) -> Result<IndexOutcome, CribleError> {
     let loaded = state
         .loaded()
@@ -694,10 +755,15 @@ pub(crate) fn search_index(
     let records_path = epoch_records_path(&index_dir, snapshot.epoch());
     let segments = snapshot.segments().to_vec();
     let scan = loaded.scan_pool();
+    // ADR-0120, decision 2: the opening of the segment and payload readers
+    // stays in `took_ms` and belongs to the `fetch` key, in every mode, until
+    // the per-generation cache replaces it.
+    let opening = Instant::now();
     let searcher =
         scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
+    let open = opening.elapsed();
     let answer = scan.install(|| {
-        pipeline::search(
+        pipeline::search_captured(
             &snapshot,
             &searcher,
             &pool,
@@ -711,14 +777,17 @@ pub(crate) fn search_index(
                 fusion: params.fusion,
             },
             &published.config.search,
+            params.capture,
         )
     })?;
+    let mut stages = answer.stages;
+    stages.fetch += open;
     Ok(IndexOutcome {
         hits: answer.results,
         score_type: answer.score_type,
         pool_size: pool.len(),
         generation: snapshot.generation().get(),
-        stages: answer.stages,
+        stages,
         strategy: answer.strategy,
         filter,
     })
@@ -807,31 +876,33 @@ pub(crate) fn encode_query(
 /// One answer of the search, before the envelope of `docs/05-api.md`.
 pub(crate) struct SearchOutcome {
     results: Vec<Value>,
+    /// Plan and ranks of a `debug` request; absent without `debug`.
+    debug: Option<crate::debug::SearchDebug>,
     pool_size: u32,
     generation: u64,
     truncated_query: bool,
     /// Whether the answer carries no result at all (ADR-0117, decision 5).
     zero_results: bool,
-    took_ms: f64,
 }
 
 impl SearchOutcome {
-    /// Sets the duration measured from the token acquisition.
-    fn with_start(mut self, started: Instant) -> Self {
-        self.took_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        self
-    }
-
     /// Renders the body of the `200`, with the request identifier of ADR-0098.
-    fn render(self, request_id: &str) -> Value {
-        json!({
+    ///
+    /// `total` is the duration `took_ms` reports, read once by the route; the
+    /// `debug` member renders it as its `total` too (ADR-0119, decision 7).
+    fn render(self, request_id: &str, total: Duration, stages: &StageDurations) -> Value {
+        let mut body = json!({
             "results": self.results,
             "pool_size": self.pool_size,
             "generation": self.generation,
-            "took_ms": self.took_ms,
+            "took_ms": total.as_secs_f64() * 1_000.0,
             "truncated_query": self.truncated_query,
             "request_id": request_id,
-        })
+        });
+        if let Some(debug) = self.debug {
+            body["debug"] = debug.render(stages);
+        }
+        body
     }
 }
 
@@ -954,6 +1025,7 @@ pub(crate) struct SearchRequest {
     pub(crate) dedup_content: bool,
     pub(crate) selection: ReturnSpec,
     pub(crate) exact: bool,
+    pub(crate) debug: bool,
     pub(crate) timeout_ms: Option<u64>,
 }
 
@@ -1044,12 +1116,12 @@ impl SearchRequest {
     pub(crate) fn parse_with(body: &Value, allowed: &[&str]) -> Result<Self, CribleError> {
         let object = json_object(body, "$")?;
         reject_unknown(object, "$", allowed)?;
-        for opened in ["debug", "explain_ids"] {
-            if object.contains_key(opened) {
-                return Err(error::invalid(format!(
-                    "the field '$.{opened}' is not supported yet; it opens in P7"
-                )));
-            }
+        // `explain_ids` is the only field the server parses and then refuses:
+        // it opens with EXPLIQUER-DOCUMENTS, after P7 (ADR-0109, ADR-0119).
+        if object.contains_key("explain_ids") {
+            return Err(error::invalid(
+                "the field '$.explain_ids' is not supported yet; it opens in P7",
+            ));
         }
         let query = optional_string(object, "$", "query")?;
         let vector = optional_string(object, "$", "vector")?;
@@ -1086,6 +1158,7 @@ impl SearchRequest {
             Some(value) => parse_return(value)?,
         };
         let exact = optional_bool(object, "$", "exact")?.unwrap_or(false);
+        let debug = optional_bool(object, "$", "debug")?.unwrap_or(false);
         let timeout_ms = optional_unsigned(object, "$", "timeout_ms")?;
         Ok(Self {
             query,
@@ -1099,6 +1172,7 @@ impl SearchRequest {
             dedup_content,
             selection,
             exact,
+            debug,
             timeout_ms,
         })
     }
@@ -1381,15 +1455,22 @@ mod tests {
     }
 
     #[test]
-    fn debug_and_explain_are_refused_as_not_supported_yet() {
-        for body in [json!({ "debug": true }), json!({ "explain_ids": [] })] {
-            let failure = parse(body);
-            assert!(
-                failure.message().contains("not supported yet"),
-                "{}",
-                failure.message()
-            );
-        }
+    fn only_explain_is_refused_as_not_supported_yet() {
+        // ADR-0119, decision 10: `debug` is accepted since P7, `explain_ids`
+        // waits for `EXPLIQUER-DOCUMENTS`.
+        let failure = parse(json!({ "explain_ids": [] }));
+        assert!(
+            failure.message().contains("not supported yet"),
+            "{}",
+            failure.message()
+        );
+        let asked = SearchRequest::parse(&json!({ "debug": true })).expect("debug is accepted");
+        assert!(asked.debug);
+        let omitted = SearchRequest::parse(&json!({})).expect("the body parses");
+        assert!(!omitted.debug);
+        let refused =
+            SearchRequest::parse(&json!({ "debug": 1 })).expect_err("a number is refused");
+        assert!(refused.message().contains("debug"), "{}", refused.message());
     }
 
     #[test]

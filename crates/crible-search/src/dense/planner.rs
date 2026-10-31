@@ -249,6 +249,7 @@ pub(crate) fn grouped_candidates(
     pool: &Pool,
     request: &DenseQuery<'_>,
     search: &SearchConfig,
+    capture: Option<&mut crate::debug::DebugCapture>,
 ) -> Result<Grouped, CribleError> {
     let requested = crate::group::candidates_per_branch(request.k, request.grouping);
     let started = std::time::Instant::now();
@@ -262,6 +263,9 @@ pub(crate) fn grouped_candidates(
         request.exact,
     )?;
     let dense = started.elapsed();
+    if let Some(capture) = capture {
+        capture.capture_dense(&branch);
+    }
     let ranks = super::ranks(&branch);
     let started = std::time::Instant::now();
     let grouped = crate::group::group(branch, request.k, request.grouping, |iid| {
@@ -306,7 +310,7 @@ pub fn search_grouped(
     search: &SearchConfig,
 ) -> Result<Vec<Hit>, CribleError> {
     request.grouping.validate()?;
-    let (_, grouped, _) = grouped_candidates(snapshot, searcher, pool, request, search)?;
+    let (_, grouped, _) = grouped_candidates(snapshot, searcher, pool, request, search, None)?;
     grouped
         .into_iter()
         .map(|candidate| searcher.payload(candidate))

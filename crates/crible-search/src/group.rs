@@ -309,7 +309,7 @@ fn keep_documents<C: Candidate>(
 /// The key of a [`Scored`] candidate is written by
 /// `PassageKey::Display`, `doc_id#ord`; this reads it back the way
 /// `PassageKey::from_str` does, at the last `#`.
-fn doc_id_of(key: &str) -> Result<&str, CribleError> {
+pub(crate) fn doc_id_of(key: &str) -> Result<&str, CribleError> {
     let (doc_id, _) = key.rsplit_once('#').ok_or_else(|| {
         CribleError::new(
             ErrorCode::Internal,
