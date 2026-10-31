@@ -29,6 +29,8 @@ La forme est **canonicalisée** (ADR-0117, décision 6) : un scalaire vaut `eq`,
 
 Opérations comptées : `search`, `search_multi`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `index_admin`. Le statut est `ok` ou un code d'erreur de l'API.
 
+La clé `fetch` porte, **provisoirement**, l'ouverture des lecteurs de segments et de charges utiles, dans tous les modes (ADR-0120, décision 2) : son histogramme se lit « ouverture + lecture des payloads ». À `k` constant, son p50 monte donc avec la taille du corpus ; cette constante disparaîtra avec le cache du `DenseSearcher` par génération (ADR-0120, décision 3).
+
 Une ligne par **jour** et par **index** : documents, passages vivants et morts, ratio de morts, tailles sur disque, génération, nombre de lots. Elle est écrite au premier vidage où la ligne du jour UTC courant manque — donc, en marche continue, au premier vidage après minuit UTC —, comme un instantané de l'état de chaque index à cet instant ; le ratio de morts se dérive des deux comptes et n'est pas stocké (ADR-0118, décision 5 ; ADR-0117, décision 1).
 
 ### Ce qu'on ne stocke jamais (INV-13)
