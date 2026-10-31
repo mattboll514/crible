@@ -1,6 +1,6 @@
 # ADR-0114 — Vérifier les liens intra-doc en intégration continue
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-30)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-30, confirmé par le propriétaire le 2026-10-31)
 - **Date** : 2026-10-30
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche hors plan NETTOYER-P6 (phase P6, branche `tache/NETTOYER-P6`), passage A, sur délégation du propriétaire du 2026-10-30

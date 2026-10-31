@@ -1,6 +1,6 @@
 # ADR-0115 — Précisions de fin de P6 : ordre des refus de `POST documents` et identifiants d'une époque compactée
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-10-31)
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche hors plan NETTOYER-P6 (phase P6, branche `tache/NETTOYER-P6`), passage B, sur délégation du propriétaire du 2026-10-31
