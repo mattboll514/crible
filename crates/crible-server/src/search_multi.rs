@@ -110,9 +110,11 @@ pub async fn search(
     };
 
     let holder = Arc::clone(&state);
+    // `took_ms` starts at the token acquisition (ADR-0109, decision 2); the
+    // token is taken without waiting.
+    let started = Instant::now();
     let outcome = limit
         .run_blocking(plan.deadline, move || {
-            let started = Instant::now();
             // A test holds the work here to prove the single token of the whole
             // request (ADR-0110, decision 8; ADR-0102, decision 2).
             #[cfg(feature = "failpoints")]
@@ -277,6 +279,14 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         Some(inputs) => inputs,
         None => common.inputs(mode)?,
     };
+
+    // (b') an `external` model cannot encode: a mode that would encode needs the
+    // `vector` (ADR-0109, decision 4). It is a permanent `400` of the inputs,
+    // rendered before the token (ADR-0110, decision 7), so a saturated instance
+    // answers `400` rather than `503`.
+    for (_, published) in &published_targets {
+        search::check_model_inputs(state, published, mode, &inputs)?;
+    }
 
     // (c) per target, in the order of `targets`: the lexical branch, then the
     // filter against the schema of the index.

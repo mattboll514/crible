@@ -18,6 +18,11 @@
 //! | `a_vector_of_the_wrong_length_is_refused` | `docs/05:235` |
 //! | `a_lexical_mode_on_a_disabled_index_is_refused` | ADR-0089, decision 3 |
 //! | `the_return_selection_bounds_the_payload` | `docs/05:243`, ADR-0043 |
+//! | `a_return_field_declared_not_returned_is_refused` | ADR-0109, decision 5 |
+//! | `a_filter_outside_its_grammar_is_an_invalid_filter_with_its_path` | `details.path`, ADR-0110, decision 2 |
+//! | `the_regrouping_options_are_bounded_on_the_route` | `docs/05:266`, ADR-0075 |
+//! | `a_hybrid_search_on_an_external_model_is_served_with_query_and_vector` | ADR-0109, decision 4 |
+//! | `a_hybrid_search_on_an_external_model_needs_a_vector` | ADR-0109, decision 4 |
 //! | `k_is_bounded_by_the_documented_domain` | `docs/05:242` |
 //! | `the_fusion_domain_is_checked` | ADR-0090 |
 //!
@@ -27,21 +32,60 @@
 
 mod common;
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::http::{Method, StatusCode};
+use crible_server::http::build_router;
+use crible_server::state::AppState;
 use serde_json::{Value, json};
 
 use common::{
-    ADMIN_SECRET, DOC_ID, INDEX, READ_SECRET, WRITE_SECRET, base64_vector, instance_with_alpha,
-    post_documents, send, terminal_job,
+    ADMIN_SECRET, DOC_ID, INDEX, Instance, READ_SECRET, WRITE_SECRET, base64_vector, index_config,
+    instance_with_alpha, post_documents, send, terminal_job,
 };
 
 /// Path of the search route of the fixture index.
 const SEARCH: &str = "/v1/indexes/alpha/search";
 
-/// Posts `body` on the search route with `secret`.
+/// Posts `body` on the search route of `index` with `secret`.
+async fn search_in(router: &Router, index: &str, secret: &str, body: Value) -> (StatusCode, Value) {
+    let path = format!("/v1/indexes/{index}/search");
+    send(router, Method::POST, &path, secret, Some(body)).await
+}
+
+/// Posts `body` on the search route of the fixture index with `secret`.
 async fn search(router: &Router, secret: &str, body: Value) -> (StatusCode, Value) {
-    send(router, Method::POST, SEARCH, secret, Some(body)).await
+    search_in(router, INDEX, secret, body).await
+}
+
+/// Creates an instance whose only index is described by `config`.
+///
+/// The tests of ADR-0109 need an index the shared fixture does not serve: one
+/// with the lexical branch enabled (`hybrid` on an `external` model), or one
+/// whose schema declares a `returned: false` field.
+async fn instance_with_index(config: Value) -> (Instance, Arc<AppState>, Router) {
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = build_router(Arc::clone(&state));
+    let (status, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(config),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    (instance, state, router)
+}
+
+/// Configuration of an index named `name`, with the lexical branch on or off.
+fn config(name: &str, lexical: bool) -> Value {
+    let mut config = index_config();
+    config["name"] = json!(name);
+    config["lexical"]["enabled"] = json!(lexical);
+    config
 }
 
 /// Asserts a refusal and returns its message.
@@ -370,6 +414,154 @@ async fn an_empty_body_is_refused() {
     let (_instance, _state, router) = instance_with_alpha().await;
     let (status, answer) = search(&router, READ_SECRET, json!({})).await;
     refused(status, &answer, "query");
+}
+
+/// A clause outside the filter grammar is `invalid_filter`, and its JSON path is
+/// in the message and in `details.path` (`docs/05`, ADR-0109, ADR-0110).
+#[tokio::test]
+async fn a_filter_outside_its_grammar_is_an_invalid_filter_with_its_path() {
+    let (_instance, _state, router) = instance_with_alpha().await;
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+            "filter": { "numero": { "regex": "1240" } },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["error"]["code"], "invalid_filter", "{answer}");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(message.contains("unknown operator 'regex'"), "{message}");
+    assert!(message.contains("$.filter.numero"), "{message}");
+    assert_eq!(
+        answer["error"]["details"]["path"], "$.filter.numero",
+        "the details carry the full path of the filter: {answer}"
+    );
+}
+
+/// `group_by`, `dedup` and `passages_per_document` are bounded on the route,
+/// and their accepted values reach the pipeline (`docs/05:266`, ADR-0075).
+#[tokio::test]
+async fn the_regrouping_options_are_bounded_on_the_route() {
+    let (_instance, state, router) = instance_with_alpha().await;
+    fill(&router, &state).await;
+    for (body, needle) in [
+        (
+            json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "group_by": "article" }),
+            "group_by",
+        ),
+        (
+            json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "dedup": "text" }),
+            "dedup",
+        ),
+        (
+            json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "passages_per_document": 6 }),
+            "passages_per_document",
+        ),
+        (
+            json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "passages_per_document": 0 }),
+            "passages_per_document",
+        ),
+    ] {
+        let (status, answer) = search(&router, READ_SECRET, body).await;
+        refused(status, &answer, needle);
+    }
+
+    // The accepted values run through the pipeline: two documents, one passage
+    // each, in a flat list.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+            "group_by": "document",
+            "dedup": "content",
+            "passages_per_document": 2,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let results = answer["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the answer holds results: {answer}"));
+    assert_eq!(results.len(), 2, "one passage per document: {answer}");
+}
+
+/// `hybrid` on an `external` index is served when the request carries both the
+/// query text and the vector (ADR-0109, decision 4).
+#[tokio::test]
+async fn a_hybrid_search_on_an_external_model_is_served_with_query_and_vector() {
+    let (_instance, state, router) = instance_with_index(config(INDEX, true)).await;
+    fill(&router, &state).await;
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "query": "contrat",
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "hybrid",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(
+        answer["results"][0]["score_type"], "rrf",
+        "the two branches are fused: {answer}"
+    );
+}
+
+/// `hybrid` with the query alone on an `external` index is `400`, and the
+/// message names the model (ADR-0109, decision 4).
+#[tokio::test]
+async fn a_hybrid_search_on_an_external_model_needs_a_vector() {
+    let (_instance, _state, router) = instance_with_index(config(INDEX, true)).await;
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "query": "contrat", "mode": "hybrid" }),
+    )
+    .await;
+    refused(status, &answer, "external");
+    refused(status, &answer, "'m'");
+}
+
+/// A name of `return.fields` declared `returned: false` is `400`, and the
+/// message names the field, its path and the declaration (ADR-0109,
+/// decision 5).
+#[tokio::test]
+async fn a_return_field_declared_not_returned_is_refused() {
+    let mut gamma = config("gamma", false);
+    gamma["schema"] = json!({
+        "document_fields": {
+            "numero": { "type": "keyword", "returned": true },
+            "interne": { "type": "keyword", "returned": false },
+        },
+        "passage_fields": { "texte": { "type": "keyword", "returned": true } },
+    });
+    let (_instance, _state, router) = instance_with_index(gamma).await;
+    let (status, answer) = search_in(
+        &router,
+        "gamma",
+        READ_SECRET,
+        json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+            "return": { "fields": ["interne"] },
+        }),
+    )
+    .await;
+    refused(status, &answer, "interne");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(message.contains("$.return.fields[0]"), "{message}");
+    assert!(message.contains("returned: false"), "{message}");
 }
 
 /// The fixture index is `alpha`; this keeps `INDEX` used by the path helper and

@@ -525,12 +525,12 @@ impl JobBoard {
 
     /// Waits until every accepted job is terminal.
     ///
-    /// The future is created **before** the second count: `Notify::notified`
-    /// registers the waiter, so the last notification, emitted between the two
-    /// counts, is observed when the future is polled, and the second count then
-    /// returns without waiting for a notification that already happened.
-    /// `enable` also queues the waiter for `notify_one`, which the board does not
-    /// send today (ADR-0104).
+    /// The future is created **before** the second count: `notified` records the
+    /// number of `notify_waiters` calls, so a broadcast after its creation is
+    /// observed when the future is polled, and the second count then returns
+    /// without waiting for a notification that already happened. `enable` queues
+    /// the waiter for `notify_one`, which the board does not send today
+    /// (ADR-0104).
     pub async fn drained(&self) {
         loop {
             if self.pending.load(Ordering::Acquire) == 0 {
@@ -1156,9 +1156,10 @@ mod tests {
     /// A notification sent after the last count of `pending` is not lost.
     ///
     /// `notify_waiters` keeps no permit: the waiter must exist before the last
-    /// job announces itself. `Notify::notified` registers it, and the wait
-    /// creates its future before the second count, so the notification emitted
-    /// in the resume point below is observed even before the future is polled.
+    /// job announces itself. `notified` records the number of `notify_waiters`
+    /// calls, so a broadcast after its creation is observed; the wait creates
+    /// its future before the second count, so the notification emitted in the
+    /// resume point below is observed even before the future is polled.
     /// A wait armed any later would miss it, and the timeout below would fail
     /// (ADR-0104).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

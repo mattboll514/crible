@@ -23,30 +23,9 @@ use axum::http::{Method, StatusCode};
 use serde_json::Value;
 
 use common::{
-    DOC_ID, INDEX, READ_SECRET, instance_with_alpha, online_batch, post_documents, send,
-    terminal_job,
+    DOC_ID, INDEX, READ_SECRET, assert_no_iid_key, instance_with_alpha, online_batch,
+    post_documents, send, terminal_job,
 };
-
-/// Asserts that no key of `value` at any depth contains `iid` (INV-01).
-fn assert_no_iid_key(label: &str, value: &Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, child) in object {
-                assert!(
-                    !key.to_lowercase().contains("iid"),
-                    "{label} carries the key '{key}' (INV-01)"
-                );
-                assert_no_iid_key(label, child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                assert_no_iid_key(label, item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
-}
 
 /// Submits a valid online batch and returns its accepted body.
 async fn submit_batch(router: &axum::Router) -> Value {

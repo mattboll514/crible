@@ -13,7 +13,9 @@
 //! | `a_lexical_search_scores_rrf_on_the_ranks_of_each_index` | RRF in `lexical` |
 //! | `a_hybrid_search_scores_rrf_on_the_ranks_of_each_index` | RRF in `hybrid` |
 //! | `group_by_keeps_documents_consecutive_and_k_documents` | unit of the fusion |
+//! | `group_by_under_rrf_scores_every_entry_with_the_document` | ADR-0110, decision 9 |
 //! | `an_unknown_field_names_its_json_path_at_every_level` | ADR-0110, decision 2 |
+//! | `the_validation_order_is_400_then_404_then_422` | ADR-0110, decision 7 |
 //! | `an_incompatible_model_is_refused_in_dense_and_hybrid_only` | ADR-0110, decision 3 |
 //! | `the_targets_list_is_checked_before_any_search_runs` | ADR-0110, decision 5 |
 //! | `a_filter_is_checked_against_the_schema_of_its_target` | ADR-0110, decisions 2 and 7 |
@@ -42,8 +44,8 @@ use crible_server::state::AppState;
 use serde_json::{Map, Value, json};
 
 use common::{
-    ADMIN_SECRET, INDEX, Instance, READ_SECRET, REQUEST_ID, WRITE_SECRET, base64_vector,
-    index_config, send, terminal_job,
+    ADMIN_SECRET, Instance, READ_SECRET, REQUEST_ID, WRITE_SECRET, base64_vector, index_config,
+    send, terminal_job,
 };
 
 /// Path of the multi-index route.
@@ -805,6 +807,10 @@ async fn an_unknown_field_names_its_json_path_at_every_level() {
         message.contains("$.targets[0].filter"),
         "the filter path is rooted at the target: {message}"
     );
+    assert_eq!(
+        answer["error"]["details"]["path"], "$.targets[0].filter.$xor",
+        "details.path carries the full path of the clause: {answer}"
+    );
 }
 
 /// In `dense` and `hybrid`, two different fingerprints are `422`; `lexical`
@@ -897,6 +903,154 @@ async fn the_targets_list_is_checked_before_any_search_runs() {
     assert!(
         answer.get("results").is_none(),
         "no partial result is served: {answer}"
+    );
+}
+
+/// The first fault is rendered in the order of ADR-0110, decision 7: `400`
+/// before `404`, and `404` before `422`.
+#[tokio::test]
+async fn the_validation_order_is_400_then_404_then_422() {
+    let (_instance, _state, router) = instance();
+    create_simple(&router, "alpha", "m", false, "numero", "texte").await;
+    create_simple(&router, "beta", "n", false, "code", "partie").await;
+    let vector = base64_vector([1.0, 0.0, 0.0, 0.0]);
+
+    // The duplicate is a `400` of the body, and it wins over the unknown index
+    // the same request repeats.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "mode": "dense",
+            "vector": vector,
+            "targets": [ { "index": "absent" }, { "index": "absent" } ],
+        }),
+    )
+    .await;
+    let message = refused(status, &answer, "invalid_request");
+    assert!(
+        message.contains("$.targets[1].index"),
+        "the duplicate is the first fault: {message}"
+    );
+
+    // `alpha` and `beta` have different models (`422`), but `absent` does not
+    // exist: the `404` of the target list comes first.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "mode": "dense",
+            "vector": vector,
+            "targets": [
+                { "index": "alpha" },
+                { "index": "beta" },
+                { "index": "absent" },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["error"]["code"], "unknown_index", "{answer}");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(message.contains("absent"), "{message}");
+}
+
+/// Under RRF, every entry of a regrouped document carries the score of its
+/// document (ADR-0110, decision 9).
+#[tokio::test]
+async fn group_by_under_rrf_scores_every_entry_with_the_document() {
+    let (_instance, state, router) = instance();
+    create_simple(&router, "lexg", "m", true, "numero", "texte").await;
+    attach(
+        &router,
+        &state,
+        "lexg",
+        "g-rrf",
+        vec![
+            document(
+                "G1",
+                "numero",
+                "1",
+                vec![
+                    passage(
+                        "le contrat fait la loi",
+                        "texte",
+                        "un",
+                        [1.0, 0.0, 0.0, 0.0],
+                    ),
+                    passage("contrat de vente", "texte", "deux", [0.0, 1.0, 0.0, 0.0]),
+                ],
+            ),
+            document(
+                "G2",
+                "numero",
+                "2",
+                vec![passage(
+                    "un contrat de bail",
+                    "texte",
+                    "trois",
+                    [0.0, 0.0, 1.0, 0.0],
+                )],
+            ),
+        ],
+    )
+    .await;
+
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "query": "contrat",
+            "mode": "lexical",
+            "k": 2,
+            "group_by": "document",
+            "passages_per_document": 2,
+            "targets": [ { "index": "lexg" } ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let results = answer["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the answer holds results: {answer}"));
+    assert_eq!(
+        results.len(),
+        3,
+        "two documents, one with two passages: {answer}"
+    );
+
+    // The entries of one document stay consecutive: one run per document, in
+    // the order of the answer.
+    let mut runs: Vec<(String, Vec<f64>)> = Vec::new();
+    for result in results {
+        let doc_id = result["doc_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a result carries its document: {result}"))
+            .to_owned();
+        let score = result["score"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("a score is a number: {result}"));
+        match runs.last_mut() {
+            Some((last, scores)) if *last == doc_id => scores.push(score),
+            _ => runs.push((doc_id, vec![score])),
+        }
+    }
+    assert_eq!(runs.len(), 2, "k counts documents: {answer}");
+    for (position, (_, scores)) in runs.iter().enumerate() {
+        let rank = f64::from(u32::try_from(position + 1).unwrap_or(u32::MAX));
+        let expected = 1.0 / (60.0 + rank);
+        for score in scores {
+            assert!(
+                (score - expected).abs() < 1e-6,
+                "every entry carries the document score {expected}: {answer}"
+            );
+        }
+    }
+    assert!(
+        runs.iter().any(|(_, scores)| scores.len() == 2),
+        "the grouped document keeps its two entries: {answer}"
     );
 }
 
@@ -1019,6 +1173,10 @@ async fn a_filter_is_checked_against_the_schema_of_its_target() {
     assert!(
         message.contains("$.targets[1].filter.inconnu"),
         "the filter path names its target: {message}"
+    );
+    assert_eq!(
+        answer["error"]["details"]["path"], "$.targets[1].filter.inconnu",
+        "details.path carries the full path of the clause: {answer}"
     );
 }
 
@@ -1152,17 +1310,21 @@ async fn a_target_without_lexical_is_refused_but_does_not_change_the_default() {
         )],
     )
     .await;
-    for mode in ["lexical", "hybrid"] {
-        let (status, answer) = search(
-            &router,
-            READ_SECRET,
-            json!({
-                "query": "contrat",
-                "mode": mode,
-                "targets": [ { "index": "alpha" }, { "index": "beta" } ],
-            }),
-        )
-        .await;
+    // `hybrid` carries a vector so that the external-model check passes and the
+    // missing branch of `beta` is the reason named.
+    for (mode, vector) in [
+        ("lexical", Value::Null),
+        ("hybrid", json!(base64_vector([1.0, 0.0, 0.0, 0.0]))),
+    ] {
+        let mut body = json!({
+            "query": "contrat",
+            "mode": mode,
+            "targets": [ { "index": "alpha" }, { "index": "beta" } ],
+        });
+        if !vector.is_null() {
+            body["vector"] = vector;
+        }
+        let (status, answer) = search(&router, READ_SECRET, body).await;
         let message = refused(status, &answer, "invalid_request");
         assert!(
             message.contains("lexical branch is disabled") && message.contains("beta"),
@@ -1266,12 +1428,4 @@ async fn the_answer_carries_the_index_of_each_result_and_one_summary_per_target(
         assert!(result["index"].is_string(), "{answer}");
     }
     assert_eq!(answer["truncated_query"], false, "{answer}");
-}
-
-/// The fixture `index_config` still names the simple route's index, and the
-/// helper below pins that the two paths are distinct.
-#[test]
-fn the_multi_index_route_is_not_the_simple_one() {
-    assert_eq!(MULTI, "/v1/search");
-    assert_ne!(MULTI, format!("/v1/indexes/{INDEX}/search"));
 }

@@ -11,7 +11,8 @@
 //! `/v1/indexes/{index}/documents`, `GET /v1/indexes/{index}/documents/{doc_id}`
 //! with and without `?text=true`, `POST /v1/indexes/{index}/batches`,
 //! `POST /compact`, `/exports` and `/snapshots`, and the job each of them
-//! renders (`GET /v1/jobs/{job_id}`, ADR-0103).
+//! renders (`GET /v1/jobs/{job_id}`, ADR-0103); the answer of
+//! `/v1/indexes/{index}/search` is walked too (`ROUTE-RECHERCHE`).
 //!
 //! Every body rendered by those routes is walked twice:
 //!
@@ -47,8 +48,8 @@ use serde_json::{Value, json};
 mod common;
 
 use common::{
-    ADMIN_SECRET, DOC_ID, INDEX, Instance, READ_SECRET, REQUEST_ID, WRITE_SECRET, base64_vector,
-    instance_with_alpha, journal, send, terminal_job,
+    ADMIN_SECRET, DOC_ID, INDEX, Instance, READ_SECRET, REQUEST_ID, WRITE_SECRET,
+    assert_no_iid_key, base64_vector, instance_with_alpha, journal, send, terminal_job,
 };
 
 /// Body of the online batch: two passages of `D1` with their vectors.
@@ -239,33 +240,34 @@ async fn exercise(
     );
     seen.push(("job list".to_owned(), jobs));
 
+    // 8. `POST /v1/indexes/{index}/search`: the answer of the read route of
+    // `ROUTE-RECHERCHE` is a body of the engine too (INV-01).
+    let path = format!("/v1/indexes/{INDEX}/search");
+    let (status, answer) = send(
+        router,
+        Method::POST,
+        &path,
+        READ_SECRET,
+        Some(json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the search runs: {answer}");
+    assert!(
+        answer["results"]
+            .as_array()
+            .is_some_and(|results| !results.is_empty()),
+        "the search returns the passages of the fixture: {answer}"
+    );
+    seen.push(("search answer".to_owned(), answer));
+
     assert!(
         instance.root().join("data").is_dir(),
         "the instance directory stays in place"
     );
     seen
-}
-
-/// Panics when an object key at any depth of `value` contains `iid`, whatever
-/// its case.
-fn assert_no_iid_key(label: &str, value: &Value) {
-    match value {
-        Value::Object(object) => {
-            for (key, child) in object {
-                assert!(
-                    !key.to_ascii_lowercase().contains("iid"),
-                    "the key '{key}' of {label} names an internal id (INV-01): {value}"
-                );
-                assert_no_iid_key(label, child);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                assert_no_iid_key(label, item);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-    }
 }
 
 /// True when `docs/05-api.md` documents `key` as a counter, an `ord`, a

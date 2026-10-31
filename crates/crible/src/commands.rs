@@ -522,7 +522,8 @@ fn open_store_for_write(
 /// The mode decides which inputs are needed: `dense` takes a vector file or a
 /// text, `lexical` takes a text alone — the BM25 branch reads the text as it is,
 /// so it needs no encoder and no `--models` — and `hybrid` takes a text, which
-/// serves the lexical branch and is encoded for the dense one.
+/// serves the lexical branch, plus an optional vector file that replaces the
+/// encoding of the dense branch (ADR-0109, decision 4).
 #[derive(Clone, Copy)]
 pub struct SearchRequest<'a> {
     /// Root data directory (`<data>/indexes/<index>`).
@@ -655,13 +656,15 @@ fn fusion_of(
 
 /// Checks that the flags give the inputs `mode` runs on.
 ///
-/// `dense` takes a vector file or a text; `lexical` and `hybrid` take a text,
-/// since the lexical branch scores the query text as it is. A vector file alone
-/// gives no text, so it is refused for those two modes rather than silently
-/// dropping the lexical branch (ADR-0087, decision 2).
+/// `dense` takes exactly one of a vector file or a text; `lexical` takes the
+/// text alone, since the lexical branch scores it as it is; `hybrid` takes the
+/// text and accepts a vector file, which then serves its dense branch in place
+/// of the encoding (ADR-0109, decision 4). A vector file alone gives the lexical
+/// branch nothing to score, so it is refused for `lexical` and `hybrid` rather
+/// than silently dropping that branch (ADR-0087, decision 2).
 fn query_inputs(request: &SearchRequest<'_>, mode: Mode) -> Result<(), CribleError> {
-    if !mode.uses_lexical() {
-        return match (request.vector_file, request.query) {
+    match mode {
+        Mode::Dense => match (request.vector_file, request.query) {
             (Some(_), Some(_)) => Err(invalid_request(
                 "--vector-file and --query are mutually exclusive; pass one of them",
             )),
@@ -669,22 +672,27 @@ fn query_inputs(request: &SearchRequest<'_>, mode: Mode) -> Result<(), CribleErr
                 "search needs --vector-file <file> or --query <text>",
             )),
             _ => Ok(()),
-        };
+        },
+        Mode::Lexical => {
+            if request.vector_file.is_some() {
+                return Err(invalid_request(
+                    "--mode lexical runs the lexical branch, which scores the query text: pass \
+                     --query <text> and no --vector-file",
+                ));
+            }
+            if request.query.is_none() {
+                return Err(invalid_request("--mode lexical needs --query <text>"));
+            }
+            Ok(())
+        }
+        Mode::Hybrid => match request.query {
+            Some(_) => Ok(()),
+            None => Err(invalid_request(format!(
+                "--mode {} needs --query <text>",
+                mode.as_str()
+            ))),
+        },
     }
-    if request.vector_file.is_some() {
-        return Err(invalid_request(format!(
-            "--mode {} runs the lexical branch, which scores the query text: pass --query <text> \
-             and no --vector-file",
-            mode.as_str()
-        )));
-    }
-    if request.query.is_none() {
-        return Err(invalid_request(format!(
-            "--mode {} needs --query <text>",
-            mode.as_str()
-        )));
-    }
-    Ok(())
 }
 
 /// Query text the mode needs, which [`query_inputs`] has checked.
@@ -770,9 +778,16 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
         Mode::Lexical => (None, Some(required_text(request, mode)?), false),
         Mode::Hybrid => {
             let text = required_text(request, mode)?;
-            let (vector, truncated) =
-                encode_text_query(request.models, &config, request.model, text)?;
-            (Some(vector), Some(text), truncated)
+            // ADR-0109, decision 4: a provided vector serves the dense branch in
+            // place of the encoding, and the text still serves the lexical one.
+            match request.vector_file {
+                Some(path) => (Some(vector::load(path)?), Some(text), false),
+                None => {
+                    let (vector, truncated) =
+                        encode_text_query(request.models, &config, request.model, text)?;
+                    (Some(vector), Some(text), truncated)
+                }
+            }
         }
     };
     let filter = match request.filter {

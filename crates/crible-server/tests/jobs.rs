@@ -597,8 +597,9 @@ async fn a_full_queue_renders_503_with_retry_after() {
             .state,
         JobState::Succeeded
     );
-    // ADR-0103, decision 9: the place in the queue is reserved before the row is
-    // written, so the refused job left no line in the table either.
+    // `JobBoard::accept` reserves the place in the queue (`try_reserve`) before
+    // it writes the row (`store.insert`), so the refused job left no line in the
+    // table either.
     let store = JobStore::open_or_create(&instance.root().join("data").join(JOBS_FILE_NAME))
         .expect("the job table is readable");
     let mut rows: Vec<String> = store

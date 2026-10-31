@@ -457,6 +457,21 @@ pub async fn wait_for(step: &str, path: &Path) {
     }
 }
 
+/// Serialises the tests that share the process-global `CRIBLE_TEST_BARRIER`.
+static BARRIER_ENVIRONMENT: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+
+/// Takes the process-wide slot of the tests that arm `CRIBLE_TEST_BARRIER`.
+///
+/// The variable names **one** directory per process and the fixture jobs of a
+/// test read it, so two tests of one binary must not run at once. A test takes
+/// the guard before it builds its instance and holds it until its end.
+pub async fn lock_barrier_environment() -> tokio::sync::MutexGuard<'static, ()> {
+    BARRIER_ENVIRONMENT
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
 /// Asserts that no key of `value` at any depth contains `iid` (INV-01).
 pub fn assert_no_iid_key(label: &str, value: &Value) {
     match value {

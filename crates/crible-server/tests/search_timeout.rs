@@ -17,7 +17,9 @@
 //! 2. after that `504`, a second search still finds no token (`503 overloaded`),
 //!    so the token did not come back at the deadline;
 //! 3. when the barrier is released, the token comes back and the next search
-//!    answers `200`.
+//!    answers `200`;
+//! 4. a completed search reports a `took_ms` that covers the time its work was
+//!    held, from the token acquisition (ADR-0109, decision 2).
 //!
 //! ```text
 //! cargo test -p crible-server --features failpoints --test search_timeout
@@ -32,7 +34,10 @@ use axum::Router;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use common::{READ_SECRET, base64_vector, instance_with_alpha_and_limit, send, send_with_headers};
+use common::{
+    READ_SECRET, base64_vector, instance_with_alpha, instance_with_alpha_and_limit, send,
+    send_with_headers,
+};
 
 /// Path of the search route of the fixture index.
 const SEARCH: &str = "/v1/indexes/alpha/search";
@@ -78,9 +83,11 @@ fn spawn_search(router: &Router, timeout_ms: u64) -> tokio::task::JoinHandle<(St
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
+    // The two tests of this binary share the process-global barrier directory.
+    let _environment = common::lock_barrier_environment().await;
     let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
-    // SAFETY: this integration test binary sets the variable before spawning any
-    // request, and no other test of this process reads or writes it.
+    // SAFETY: the test holds the barrier environment slot, so no other test of
+    // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
 
     let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
@@ -134,6 +141,85 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     }
     assert_eq!(status, StatusCode::OK, "the token comes back: {last}");
     assert_eq!(last["pool_size"], 0, "{last}");
+
+    // SAFETY: the test owns the variable until its end, as for `set_var`.
+    unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };
+}
+
+/// `took_ms` is measured from the token acquisition, so it covers the time the
+/// work is held (ADR-0109, decision 2).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn took_ms_covers_the_time_the_work_is_held() {
+    // The two tests of this binary share the process-global barrier directory.
+    let _environment = common::lock_barrier_environment().await;
+    let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
+    // SAFETY: the test holds the barrier environment slot, so no other test of
+    // this process reads or writes the variable while it is set.
+    unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+
+    let (_instance, _state, router) = instance_with_alpha().await;
+    let held = spawn_search(&router, 30_000);
+    wait_ready(barrier.path(), "search");
+
+    // The work is held here for a measured duration, then released. No ordering
+    // depends on the sleep: it only guarantees a lower bound of the hold.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::fs::write(barrier.path().join("go-search"), b"").expect("the barrier is released");
+
+    let (status, body) = held.await.expect("the request task finishes");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let took_ms = body["took_ms"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("took_ms is a number: {body}"));
+    assert!(
+        took_ms >= 90.0,
+        "took_ms covers the 100 ms the work was held: {took_ms} ms in {body}"
+    );
+
+    // SAFETY: the test owns the variable until its end, as for `set_var`.
+    unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };
+}
+
+/// `took_ms` starts before the concurrency token, which the route reads just
+/// before it takes the token (ADR-0109, decision 2).
+///
+/// The route is held **before** the token, then for a measured duration. A
+/// `took_ms` read at the entry of the blocking task would not cover that wait,
+/// so this test fails when the instant moves after the token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn took_ms_starts_before_the_token_is_taken() {
+    // The two tests of this binary share the process-global barrier directory.
+    let _environment = common::lock_barrier_environment().await;
+    let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
+    // SAFETY: the test holds the barrier environment slot, so no other test of
+    // this process reads or writes the variable while it is set.
+    unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The pre-token step is opt-in, like the attach steps of `src/barriers.rs`.
+    std::fs::write(barrier.path().join("armed-search-start"), b"")
+        .expect("the pre-token step is armable");
+    // The work barrier is released up front: this test measures the wait that
+    // precedes the token, not the computation.
+    std::fs::write(barrier.path().join("go-search"), b"").expect("the work barrier is released");
+
+    let (_instance, _state, router) = instance_with_alpha().await;
+    let held = spawn_search(&router, 30_000);
+    let start = barrier.path().join("ready-search-start");
+    common::wait_for("search-start", &start).await;
+
+    // The hold is measured here, then released: the sleep only guarantees a
+    // lower bound, no ordering depends on it.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::fs::write(barrier.path().join("go-search-start"), b"").expect("the barrier is released");
+
+    let (status, body) = held.await.expect("the request task finishes");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let took_ms = body["took_ms"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("took_ms is a number: {body}"));
+    assert!(
+        took_ms >= 90.0,
+        "took_ms covers the 100 ms that precede the token: {took_ms} ms in {body}"
+    );
 
     // SAFETY: the test owns the variable until its end, as for `set_var`.
     unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };

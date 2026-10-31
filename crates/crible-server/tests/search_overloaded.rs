@@ -55,9 +55,11 @@ fn body() -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_beyond_the_limit_is_refused_at_once_with_retry_after() {
+    // The two tests of this binary share the process-global barrier directory.
+    let _environment = common::lock_barrier_environment().await;
     let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
-    // SAFETY: this integration test binary sets the variable before spawning any
-    // request, and no other test of this process reads or writes it.
+    // SAFETY: the test holds the barrier environment slot, so no other test of
+    // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
 
     let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
@@ -93,6 +95,62 @@ async fn a_search_beyond_the_limit_is_refused_at_once_with_retry_after() {
             .and_then(|value| value.to_str().ok()),
         Some("1"),
         "the overloaded answer carries Retry-After: 1"
+    );
+
+    std::fs::write(barrier.path().join("go-search"), b"").expect("the barrier is released");
+    let (status, held_body) = held.await.expect("the held search finishes");
+    assert_eq!(status, StatusCode::OK, "{held_body}");
+
+    // SAFETY: the test owns the variable until its end, as for `set_var`.
+    unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };
+}
+
+/// The `400` of an `external` model without its vector is rendered before the
+/// token, so a saturated instance answers `400`, never `503` (ADR-0109,
+/// decision 4; ADR-0110, decision 7).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_external_model_refusal_precedes_the_token() {
+    // The two tests of this binary share the process-global barrier directory.
+    let _environment = common::lock_barrier_environment().await;
+    let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
+    // SAFETY: the test holds the barrier environment slot, so no other test of
+    // this process reads or writes the variable while it is set.
+    unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+
+    let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
+    let held = {
+        let router = router.clone();
+        tokio::spawn(async move {
+            send(
+                &router,
+                axum::http::Method::POST,
+                SEARCH,
+                READ_SECRET,
+                Some(body()),
+            )
+            .await
+        })
+    };
+    wait_ready(barrier.path());
+
+    // The only token is held. This request needs no token: the model is
+    // `external` and the mode would encode, which is a permanent `400`.
+    let (status, answer) = send(
+        &router,
+        axum::http::Method::POST,
+        SEARCH,
+        READ_SECRET,
+        Some(json!({ "query": "le contrat", "mode": "dense", "timeout_ms": 30_000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    let message = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"));
+    assert!(
+        message.contains("external") && message.contains("'m'"),
+        "the refusal names the model: {message}"
     );
 
     std::fs::write(barrier.path().join("go-search"), b"").expect("the barrier is released");

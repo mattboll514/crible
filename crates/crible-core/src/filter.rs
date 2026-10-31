@@ -5,8 +5,12 @@
 //! References: `docs/05-api.md`, section "Grammaire des filtres"; ADR-0029
 //! (depth and clause counting); ADR-0030 (one level per field name).
 //!
-//! Error paths are rooted at `$` for the filter object itself: an error about
-//! the field `juridiction` names `$.juridiction`.
+//! Error paths start at the `root` parameter of [`Filter::from_json_str_at`]:
+//! the route passes the path of the filter in the body, so an error about the
+//! field `juridiction` names `$.filter.juridiction` on the simple route and
+//! `$.targets[0].filter.juridiction` on the multi-index route. [`Filter::from_json_str`]
+//! passes `$`, the filter object itself. The same path travels in
+//! `details.path` of `invalid_filter` (`docs/05-api.md`).
 
 use serde_json::Value;
 
@@ -109,33 +113,39 @@ impl Condition {
             return Err(self.unknown_field(schema));
         };
         if !spec.filterable {
-            return Err(invalid(format!(
-                "field '{}' is not filterable at {}",
-                self.field, self.path
-            )));
+            return Err(invalid(
+                &self.path,
+                format!("field '{}' is not filterable at {}", self.field, self.path),
+            ));
         }
         if !spec.field_type.operators().contains(&self.operator) {
-            return Err(invalid(format!(
-                "operator '{}' is not allowed for {} at {}; expected one of: {}",
-                self.operator.as_str(),
-                spec.field_type.as_str(),
-                self.path,
-                spec.field_type
-                    .operators()
-                    .iter()
-                    .map(|operator| operator.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
+            return Err(invalid(
+                &self.path,
+                format!(
+                    "operator '{}' is not allowed for {} at {}; expected one of: {}",
+                    self.operator.as_str(),
+                    spec.field_type.as_str(),
+                    self.path,
+                    spec.field_type
+                        .operators()
+                        .iter()
+                        .map(|operator| operator.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
         }
         match self.operator {
             Operator::Exists => {
                 if !self.value.is_boolean() {
-                    return Err(invalid(format!(
-                        "expected a boolean at {} for 'exists', got {}",
-                        self.path,
-                        json_type(&self.value)
-                    )));
+                    return Err(invalid(
+                        &self.path,
+                        format!(
+                            "expected a boolean at {} for 'exists', got {}",
+                            self.path,
+                            json_type(&self.value)
+                        ),
+                    ));
                 }
                 Ok(())
             }
@@ -146,21 +156,27 @@ impl Condition {
 
     fn validate_values(&self, field_type: FieldType) -> Result<(), CribleError> {
         let Some(values) = self.value.as_array() else {
-            return Err(invalid(format!(
-                "expected an array at {} for '{}', got {}",
-                self.path,
-                self.operator.as_str(),
-                json_type(&self.value)
-            )));
+            return Err(invalid(
+                &self.path,
+                format!(
+                    "expected an array at {} for '{}', got {}",
+                    self.path,
+                    self.operator.as_str(),
+                    json_type(&self.value)
+                ),
+            ));
         };
         if values.len() > MAX_VALUES {
-            return Err(invalid(format!(
-                "too many values in '{}' at {}: {}, at most {}",
-                self.operator.as_str(),
-                self.path,
-                values.len(),
-                MAX_VALUES
-            )));
+            return Err(invalid(
+                &self.path,
+                format!(
+                    "too many values in '{}' at {}: {}, at most {}",
+                    self.operator.as_str(),
+                    self.path,
+                    values.len(),
+                    MAX_VALUES
+                ),
+            ));
         }
         for (index, value) in values.iter().enumerate() {
             check_scalar(field_type, value, &format!("{}[{}]", self.path, index))?;
@@ -173,7 +189,7 @@ impl Condition {
         if let Some(suggestion) = closest_field(schema, &self.field) {
             message.push_str(&format!("; did you mean '{suggestion}'?"));
         }
-        invalid(message)
+        invalid(&self.path, message)
     }
 }
 
@@ -202,12 +218,12 @@ impl Filter {
     /// Parses a filter from its JSON form, naming its faults under `root`.
     ///
     /// `root` is the JSON path of the filter in the body of the request. The
-    /// route `POST /v1/search` passes `$.targets[i].filter`, so a clause outside
-    /// the grammar names its full path (ADR-0110, decision 2). The simple search
-    /// route uses `$`, through [`Filter::from_json_str`].
+    /// simple search route passes `$.filter`, the multi-index route
+    /// `$.targets[i].filter`, so a clause outside the grammar names its full
+    /// path (ADR-0110, decision 2). [`Filter::from_json_str`] passes `$`.
     pub fn from_json_str_at(raw: &str, root: &str) -> Result<Self, CribleError> {
         let value: Value = serde_json::from_str(raw)
-            .map_err(|error| invalid(format!("invalid filter JSON: {error}")))?;
+            .map_err(|error| invalid(root, format!("invalid filter JSON: {error}")))?;
         let mut clauses = 0;
         Self::parse(&value, root, 1, &mut clauses)
     }
@@ -233,10 +249,10 @@ impl Filter {
             return Err(depth_error(path));
         }
         let Some(object) = value.as_object() else {
-            return Err(invalid(format!(
-                "expected an object at {path}, got {}",
-                json_type(value)
-            )));
+            return Err(invalid(
+                path,
+                format!("expected an object at {path}, got {}", json_type(value)),
+            ));
         };
         let mut children = Vec::new();
         for (key, operand) in object {
@@ -249,16 +265,22 @@ impl Filter {
                     children.push(Self::Not(Box::new(child)));
                 }
                 other if other.starts_with('$') => {
-                    return Err(invalid(format!(
-                        "unknown logical operator '{other}' at {path}.{other}; expected $and, $or or $not"
-                    )));
+                    return Err(invalid(
+                        &format!("{path}.{other}"),
+                        format!(
+                            "unknown logical operator '{other}' at {path}.{other}; expected $and, $or or $not"
+                        ),
+                    ));
                 }
                 field => {
                     *clauses += 1;
                     if *clauses > MAX_CLAUSES {
-                        return Err(invalid(format!(
-                            "too many clauses at {path}.{field}: at most {MAX_CLAUSES} clauses"
-                        )));
+                        return Err(invalid(
+                            &format!("{path}.{field}"),
+                            format!(
+                                "too many clauses at {path}.{field}: at most {MAX_CLAUSES} clauses"
+                            ),
+                        ));
                     }
                     let condition_path = format!("{path}.{field}");
                     children.push(Self::parse_field(field, operand, &condition_path, depth)?);
@@ -280,10 +302,13 @@ impl Filter {
         clauses: &mut usize,
     ) -> Result<Self, CribleError> {
         let Some(items) = operand.as_array() else {
-            return Err(invalid(format!(
-                "expected an array at {path}.{key}, got {}",
-                json_type(operand)
-            )));
+            return Err(invalid(
+                &format!("{path}.{key}"),
+                format!(
+                    "expected an array at {path}.{key}, got {}",
+                    json_type(operand)
+                ),
+            ));
         };
         let mut children = Vec::with_capacity(items.len());
         if depth + 1 > MAX_DEPTH {
@@ -309,9 +334,10 @@ impl Filter {
         depth: usize,
     ) -> Result<Self, CribleError> {
         if operand.is_array() {
-            return Err(invalid(format!(
-                "expected a scalar or an operator object at {path}, got array"
-            )));
+            return Err(invalid(
+                path,
+                format!("expected a scalar or an operator object at {path}, got array"),
+            ));
         }
         let Some(operators) = operand.as_object() else {
             return Ok(Self::Condition(Condition {
@@ -322,7 +348,10 @@ impl Filter {
             }));
         };
         if operators.is_empty() {
-            return Err(invalid(format!("expected at least one operator at {path}")));
+            return Err(invalid(
+                path,
+                format!("expected at least one operator at {path}"),
+            ));
         }
         if depth + 1 > MAX_DEPTH {
             return Err(depth_error(path));
@@ -330,10 +359,13 @@ impl Filter {
         let mut children = Vec::with_capacity(operators.len());
         for (key, value) in operators {
             let Some(operator) = Operator::parse(key) else {
-                return Err(invalid(format!(
-                    "unknown operator '{key}' at {path}; expected one of: {}",
-                    Operator::list()
-                )));
+                return Err(invalid(
+                    path,
+                    format!(
+                        "unknown operator '{key}' at {path}; expected one of: {}",
+                        Operator::list()
+                    ),
+                ));
             };
             children.push(Self::Condition(Condition {
                 field: field.to_owned(),
@@ -350,14 +382,15 @@ impl Filter {
     }
 }
 
-fn invalid(message: impl Into<String>) -> CribleError {
-    CribleError::new(ErrorCode::InvalidFilter, message)
+fn invalid(path: &str, message: impl Into<String>) -> CribleError {
+    CribleError::new(ErrorCode::InvalidFilter, message).with_path(path)
 }
 
 fn depth_error(path: &str) -> CribleError {
-    invalid(format!(
-        "filter depth exceeds the maximum of {MAX_DEPTH} at {path}"
-    ))
+    invalid(
+        path,
+        format!("filter depth exceeds the maximum of {MAX_DEPTH} at {path}"),
+    )
 }
 
 /// Checks that `value` is a scalar of the given field type.
@@ -393,23 +426,30 @@ fn check_scalar(field_type: FieldType, value: &Value, path: &str) -> Result<(), 
         }
         FieldType::Date => match value.as_str() {
             Some(text) if is_valid_date(text) => Ok(()),
-            Some(text) => Err(invalid(format!(
-                "invalid date at {path}: '{text}'; expected YYYY-MM-DD"
-            ))),
-            None => Err(invalid(format!(
-                "expected a date in YYYY-MM-DD format at {path}, got {}",
-                json_type(value)
-            ))),
+            Some(text) => Err(invalid(
+                path,
+                format!("invalid date at {path}: '{text}'; expected YYYY-MM-DD"),
+            )),
+            None => Err(invalid(
+                path,
+                format!(
+                    "expected a date in YYYY-MM-DD format at {path}, got {}",
+                    json_type(value)
+                ),
+            )),
         },
     }
 }
 
 fn type_error(field_type: FieldType, value: &Value, path: &str) -> CribleError {
-    invalid(format!(
-        "expected {} at {path}, got {}",
-        field_type.as_str(),
-        json_type(value)
-    ))
+    invalid(
+        path,
+        format!(
+            "expected {} at {path}, got {}",
+            field_type.as_str(),
+            json_type(value)
+        ),
+    )
 }
 
 /// True for a real calendar date written `YYYY-MM-DD`.

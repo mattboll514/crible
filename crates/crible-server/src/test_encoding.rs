@@ -34,6 +34,15 @@ pub(crate) const ENCODER_ENV: &str = "CRIBLE_TEST_ENCODER";
 /// Name of the file whose length counts the real calls to the encoder.
 pub(crate) const COUNT_FILE: &str = "encoded";
 
+/// Whether a test armed the double, without counting a call.
+///
+/// [`crate::search::check_model_inputs`] asks this before it refuses an
+/// `external` model for a text query: an armed double answers the encoding the
+/// route asks for, so the request runs and the test observes its real calls.
+pub(crate) fn armed() -> bool {
+    std::env::var(ENCODER_ENV).is_ok()
+}
+
 /// Encodes through the double, or returns `None` when no test armed it.
 ///
 /// The returned vector is the first axis of the model space, so a fixture whose
