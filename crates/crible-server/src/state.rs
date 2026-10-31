@@ -257,11 +257,11 @@ impl Loaded {
         Ok(encoder)
     }
 
-    /// Configuration and encoder directory of the model `name`.
+    /// Configuration and encoder directory of the model `name`, with its graph.
     ///
-    /// The name comes from `index.json`, not from a request, and is checked as
-    /// one path component so a `..` in a configuration never reads outside
-    /// `[paths].models` (ADR-0105, decision 2).
+    /// The configuration and the directory come from `read_model_parts`, which
+    /// reads `model.json` and refuses a name that is not one path component
+    /// (ADR-0105, decision 2).
     ///
     /// # Errors
     ///
@@ -269,7 +269,7 @@ impl Loaded {
     /// a missing or unreadable `model.json`, and the errors of the model
     /// configuration; the errors of the registry when the model is `onnx`.
     pub fn model(&self, name: &str) -> Result<ModelAccess, CribleError> {
-        let (config, directory) = self.model_parts(name)?;
+        let (config, directory) = read_model_parts(&self.models_root, name)?;
         let registry = Arc::clone(&self.models);
         let access = ModelAccess {
             config,
@@ -289,8 +289,9 @@ impl Loaded {
     /// Unlike [`Self::model`], this never loads an `onnx` graph: the callers
     /// that only need the kind or the fingerprint of a model run outside the
     /// blocking task, where loading a session would stall the async runtime
-    /// (ADR-0107, ADR-0109). The file is small and read once per request, as
-    /// [`crible_encode::ModelRegistry::get_or_load`] already does.
+    /// (ADR-0107, ADR-0109). The file is small and is read once per target by
+    /// each check, as [`crible_encode::ModelRegistry::get_or_load`] already
+    /// reads it on every call.
     ///
     /// # Errors
     ///
@@ -298,23 +299,17 @@ impl Loaded {
     /// a missing or unreadable `model.json`, and the errors of the model
     /// configuration.
     pub fn model_config(&self, name: &str) -> Result<ModelConfig, CribleError> {
-        self.model_parts(name).map(|(config, _)| config)
-    }
-
-    /// Configuration and directory of the model `name`, without its graph.
-    ///
-    /// The name comes from `index.json`, not from a request, and is checked as
-    /// one path component so a `..` in a configuration never reads outside
-    /// `[paths].models` (ADR-0105, decision 2).
-    fn model_parts(&self, name: &str) -> Result<(ModelConfig, PathBuf), CribleError> {
-        read_model_parts(&self.models_root, name)
+        read_model_parts(&self.models_root, name).map(|(config, _)| config)
     }
 }
 
 /// Reads the configuration and the directory of the model `name` of `root`.
 ///
-/// Only `model.json` is read: no graph is loaded, so a caller outside the
-/// blocking task cannot stall the async runtime (ADR-0107, ADR-0109).
+/// The name comes from `index.json`, not from a request, and is checked as one
+/// path component so a `..` in a configuration never reads outside
+/// `[paths].models` (ADR-0105, decision 2). Only `model.json` is read: no graph
+/// is loaded, so a caller outside the blocking task cannot stall the async
+/// runtime (ADR-0107, ADR-0109).
 fn read_model_parts(root: &Path, name: &str) -> Result<(ModelConfig, PathBuf), CribleError> {
     let model = path_component(name, "model of an index")?;
     let directory = root.join(model);
@@ -1021,6 +1016,12 @@ mod tests {
         // (ADR-0109, decision 2; ADR-0110, decision 7). The model here is an
         // `onnx` one whose graph files are absent: a reader that loaded the
         // session would fail, so this test pins the configuration-only read.
+        //
+        // It proves that path, not that its callers take it: a caller rewritten
+        // to `Loaded::model` would still load the graph and this test would stay
+        // green. A route test cannot close that gap, because the startup loads
+        // the graphs of the `onnx` models it serves (ADR-0099), so no served
+        // `onnx` model ever reaches a request with an unloaded session.
         let temp = tempfile::tempdir().expect("a temporary directory is creatable");
         let models = temp.path();
         let directory = models.join("onnx");
