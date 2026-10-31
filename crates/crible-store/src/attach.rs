@@ -90,6 +90,14 @@
 //! containing `CRIBLE_FAILPOINT`, exactly as
 //! [`GenerationStore::commit`](crate::generation::GenerationStore::commit)
 //! does, so the transaction rolls back (INV-03).
+//!
+//! A crash cannot *hold* an attach, so the `failpoints` build also offers
+//! `attach_with_observer`, the hold counterpart of
+//! `compact_with_observer`: the observer is called just before the SQLite
+//! `COMMIT` and just after it, before the publication of the snapshot, and a
+//! test that blocks in it holds the write while a search reads the published
+//! generation (INV-02). Both exist only behind the `failpoints` feature, so
+//! their names are not links.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
@@ -116,7 +124,7 @@ use serde_json::{Map, Number, Value, json};
 
 use crate::batch_reader::BatchReader;
 use crate::filters_index::{CommitDelta, CreatedPassage};
-use crate::generation::{GenerationStore, stop_at_failpoint};
+use crate::generation::{CommitStep, GenerationStore, stop_at_failpoint};
 use crate::records::{self, DocumentRecord, PassageRecord};
 use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 
@@ -278,7 +286,12 @@ impl AttachReport {
     /// the ignored deletions is `ignored`, the name ADR-0041 and `docs/04` use.
     /// A missing acceptance check is written `null`, so a reader of the report
     /// tells "no check ran" from "a check ran and found nothing wrong".
-    fn to_json(&self) -> Value {
+    ///
+    /// The server renders it as the `result.report` of an `attach_batch` or
+    /// `online_batch` job (ADR-0107); it carries no duration, so no API answer
+    /// can expose one.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
         json!({
             "generation": self.generation.get(),
             "added": self.added,
@@ -464,6 +477,66 @@ pub fn attach(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
 ) -> Result<AttachReport, CribleError> {
+    run(
+        store,
+        batch_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        &mut |_step| {},
+    )
+}
+
+/// Same as [`attach`], and calls `observer` at each [`CommitStep`] of the
+/// commit protocol.
+///
+/// Test hook: like
+/// [`compact_with_observer`](crate::compact::compact_with_observer), it only
+/// exists with the `failpoints` cargo feature, never in a release build. The
+/// observer runs on the caller's thread, so a test that blocks in it holds the
+/// attach write exactly before the SQLite `COMMIT` or exactly after it, before
+/// the snapshot of the new generation is published (INV-02).
+#[cfg(feature = "failpoints")]
+#[allow(clippy::too_many_arguments)]
+pub fn attach_with_observer<F>(
+    store: &mut GenerationStore,
+    batch_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    observer: F,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep),
+{
+    let mut observer = observer;
+    run(
+        store,
+        batch_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        &mut observer,
+    )
+}
+
+/// Runs one attach of `batch_dir`, reporting the commit protocol to `observer`.
+#[allow(clippy::too_many_arguments)]
+fn run<F>(
+    store: &mut GenerationStore,
+    batch_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    observer: &mut F,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+{
     let validation_started = Instant::now();
     let reader = BatchReader::open(batch_dir, index_config, model_config)?;
     let batch_id = reader.manifest().batch_id.clone();
@@ -543,8 +616,8 @@ pub fn attach(
     // it as an unreferenced segment directory (INV-03, INV-04).
     stop_at_failpoint("after_attach_segment");
 
-    let committed =
-        store.commit_with_rows(|transaction, committed_generation, committed_iid| {
+    let committed = store.commit_with_rows_observed(
+        |transaction, committed_generation, committed_iid| {
             if committed_generation != generation {
                 return Err(CribleError::new(
                     ErrorCode::Internal,
@@ -636,7 +709,9 @@ pub fn attach(
                     removed_documents: plan.removed.clone(),
                 },
             ))
-        })?;
+        },
+        observer,
+    )?;
 
     let mut report =
         AttachReport::from_counters(&batch_id, committed.generation, counters, acceptance);

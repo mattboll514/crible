@@ -39,7 +39,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 - Chaque champ a deux options : `filterable` et `returned`, toutes deux à `true` par défaut.
 - Tous les champs acceptent null.
 - Les champs multivalués sont hors v1 (Q-03).
-- Un même nom de champ ne peut pas être déclaré à la fois dans `document_fields` et dans `passage_fields` (ADR-0030). La validation le refuse avec `invalid_request` (400), et le message nomme le champ et les deux niveaux. La règle s'applique à la création de l'index et à tout ajout de champ par `PATCH`.
+- Un même nom de champ ne peut pas être déclaré à la fois dans `document_fields` et dans `passage_fields` (ADR-0030). La validation le refuse avec `invalid_request` (400), et le message nomme le champ et les deux niveaux. La règle s'applique à la création de l'index et à l'ajout par `PATCH` d'un champ **nouveau** ; déclarer un champ existant à l'autre niveau est un changement de niveau, réglage figé, refusé en `409 immutable_setting` (ADR-0105).
 
 ### Ce qui est figé, ce qui est réglable
 
@@ -52,7 +52,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 | | Ajout d'un champ (nullable) |
 | | `ingest.*`, `compaction.*` |
 
-Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**).
+Toute tentative de modifier un réglage figé renvoie `409 immutable_setting` (**INV-16**). Un `PATCH` accepté n'est pas appliqué au moment de la réponse : l'écrivain de l'index l'exécute comme un job (`rebuild_lexical` ou `patch_config`), et la valeur en vigueur ne change qu'à la fin du job (ADR-0105).
 
 Deux réglages de `ingest.*` ont un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0054) :
 
@@ -140,6 +140,8 @@ documents.parquet      (ou documents-0001.parquet, … pour les gros lots)
 passages.parquet       (ou passages-0001.parquet, …)
 deletions.parquet      (optionnel)
 ```
+
+Un lot **déposé** est lu dans `<exchange>/inbox/<nom>/`, et non à un chemin quelconque. `<nom>` est un seul composant de chemin (`path_component` : ni vide, ni `.`, ni `..`, ni `/`, ni `\`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox ; `<nom>` n'est pas un lien symbolique, et aucun lien symbolique n'est admis dans le dossier du lot, à quelque profondeur, pas plus qu'une entrée qui n'est ni un fichier ni un dossier. Un refus rend `400 invalid_request`, avec un message qui nomme le champ `directory` et jamais un chemin absolu du serveur ; un dossier absent rend `404 not_found`. Le job relit le lot dans le même dossier : la course entre la validation et la lecture est assumée, l'inbox étant sous le contrôle de l'exploitant et le serveur seul à la lire (ADR-0101, ADR-0107).
 
 `manifest.json` :
 
@@ -272,6 +274,8 @@ Le serveur construit ensuite un lot interne et suit exactement le même chemin q
 
 **`doc_hash`.** Le `doc_hash` du lot interne est **toujours** rempli : le document le fournit, ou il vaut le blake3 du JSON canonique de ses passages (règle et forme dans `docs/05-api.md`, ADR-0055).
 
+**Suppressions.** Le corps de `POST /v1/indexes/{index}/documents` porte aussi des `deletions` (`docs/05-api.md`). Le lot interne les écrit dans un `deletions.parquet` conforme au format, avec `counts.deletions` et son checksum, et l'attache les applique comme pour tout lot : les passages reçoivent des pierres tombales, et la ligne `documents` tombe dans la transaction du commit (ADR-0041). Il n'y a **pas de second chemin** de suppression : la route ne fait pas écrire de suppression par `GenerationStore::commit` (ADR-0107). Les `doc_id` de `deletions` comptent dans la limite de 10 000 entrées du corps, et un `doc_id` présent à la fois dans `documents` et dans `deletions` fait refuser la requête en `400 invalid_request` (ADR-0040). Un corps qui ne porte que des `deletions` est un lot **sans passage** : son rapport porte `acceptance: null` (voir « Contrôles et recette »), et ses fichiers `documents` et `passages` sont vides, le format exigeant au moins un fichier de chaque rôle.
+
 ## Patch de métadonnées
 
 Un patch modifie les **champs d'un document** sans ré-encodage : il ne touche ni le texte, ni les vecteurs, ni les iid, ni le lexical, et il ne change pas le `doc_hash` (ADR-0060). Les champs de document sont hors du hash (ADR-0055) ; un patch ne peut donc pas se confondre avec un remplacement de passages.
@@ -297,7 +301,7 @@ Un patch modifie les **champs d'un document** sans ré-encodage : il ne touche n
 
 **Un patch n'est pas durable.** Une attache ultérieure du même document avec un `doc_hash` identique réécrit les champs de document s'ils diffèrent (`:169`) : la valeur patchée est alors écrasée sans erreur. C'est la conséquence acceptée du fait que les champs de document ne font pas partie du `doc_hash`.
 
-Un patch passe la même file d'écriture que les autres écritures de l'index. Faire tourner `crible patch` sur un index servi par un serveur reste une règle d'exploitation : `busy_timeout` n'assure que la vivacité (ADR-0038), pas l'exclusion entre deux processus.
+Un patch passe la même file d'écriture que les autres écritures de l'index. C'est une écriture de la CLI : il ne s'exécute pas sur un index servi par une instance en service, et le serveur est arrêté d'abord. Le verrou `WRITER_LOCK` le fait respecter — `crible patch` est refusé en `503 overloaded` tant que le serveur tient l'index (`docs/02`, section « Concurrence » ; ADR-0116) ; `busy_timeout` n'assure que la vivacité (ADR-0038), pas l'exclusion entre deux processus.
 
 ## Producteurs
 
@@ -321,6 +325,8 @@ Un patch passe la même file d'écriture que les autres écritures de l'index. F
 | Avantage | Portable, indépendant de la version de Crible, lisible avec DuckDB | Restauration rapide, sans reconstruction |
 | Pendant l'opération | L'écrivain continue | L'écrivain est suspendu le temps de la copie ; en CLI, la prise est hors ligne, le serveur étant arrêté (ADR-0065) |
 
+`crible export` ouvre l'index **en lecture** : il ne répare rien, ne reconstruit aucun `codes.bin` sur disque et ne suspend pas l'écrivain (ADR-0116 ; ADR-0069, décision 2). Les commandes de lecture (`search`, `inspect`, `export`) restent permises pendant qu'un serveur sert l'index. Toute commande d'écriture de la CLI demande l'arrêt du serveur, et le verrou `WRITER_LOCK` de `docs/02`, section « Concurrence », le fait respecter (ADR-0116).
+
 Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, section « Lot d'export ») et porte les règles suivantes (ADR-0061) :
 
 - `chunker` et `template` valent `{ "name": "none", "version": "1" }` : l'export ne découpe ni ne recompose rien, il recopie des entrées encodeur déjà stockées. La provenance du découpage d'origine n'est pas transportée ; elle reste dans l'index source (`batches.manifest`, `segments.batch_id`).
@@ -336,13 +342,13 @@ Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, s
 `crible snapshot --data <dir> --exchange <dir> --index <nom>` n'encode rien et ne prend donc pas `--models`.
 
 - **Contenu copié** : le résultat de `VACUUM INTO` de `records.sqlite`, posé à la racine de l'époque sous le nom `records.sqlite` ; pour chaque segment de l'époque, `segment.json` et `vectors.f16` ou `vectors.f32` ; `index.json` ; `manifests/<G>.json` ; `lexical/` s'il existe. Le `VACUUM INTO` rend un fichier unique et cohérent, sans `-wal` ni `-shm` : la copie n'a pas à embarquer les fichiers annexes de WAL.
-- **Exclusions** : `codes.bin`, `cache/` et les autres fichiers dérivés, reconstructibles (`02-architecture.md`), ainsi que `CURRENT_EPOCH`, que la restauration pose elle-même. `codes.bin` est dérivé des vecteurs : le copier ajouterait des octets sans rien rendre possible. `CURRENT_EPOCH`, lui, nomme l'époque de la **source** ; l'installer ferait pointer l'index cible vers une époque qui peut déjà exister chez lui.
+- **Exclusions** : `codes.bin`, `cache/` et les autres fichiers dérivés, reconstructibles (`02-architecture.md`), ainsi que `CURRENT_EPOCH`, que la restauration pose elle-même, et `WRITER_LOCK`, qui est le verrou d'écrivain de l'index source et n'appartient à aucune époque (ADR-0116). `codes.bin` est dérivé des vecteurs : le copier ajouterait des octets sans rien rendre possible. `CURRENT_EPOCH`, lui, nomme l'époque de la **source** ; l'installer ferait pointer l'index cible vers une époque qui peut déjà exister chez lui.
 - **« Le manifeste » de la fiche** désigne `manifests/<G>.json` de l'époque copiée. Seul le manifeste de la génération G est copié ; ceux des générations antérieures restent l'histoire de l'index.
 - **`snapshot.json`** : un JSON versionné (`format_version: 1`, INV-15), **sans horodatage**, écrit **après** la copie, par fichier temporaire, fsync, renommage puis fsync du dossier. Il porte le nom de l'index, l'époque source E, la génération G et, pour **chaque fichier copié** sauf lui-même, son chemin relatif, sa taille en octets et son blake3 sous la forme `blake3:<hex>`, la liste étant triée par chemin. Il **atteste une copie** : il ne décrit pas une génération et ne remplace ni `manifests/<G>.json`, ni `meta.generation`, qui restent dérivés de SQLite (ADR-0016). Sa présence à la racine est le signal que la copie est allée au bout.
 - **Refus à la restauration** : la restauration refuse en `invalid_request`, sans rien écrire, un instantané sans `snapshot.json`, dont le `format_version` est inconnu, auquel il manque un fichier listé, dont un fichier listé a une taille ou un blake3 différents, ou qui contient un fichier **non listé**. Le refus d'un fichier en trop est strict : une note ajoutée à la main, ou un `.DS_Store` déposé par macOS, rend l'instantané inutilisable.
 - **Destination occupée** : un dossier `exchange/snapshots/<index>-e<E>-g<G>/` déjà présent est refusé en `invalid_request` (400), avec le dossier nommé ; un instantané n'écrase jamais un instantané existant, qu'une restauration ou un opérateur peut être en train de lire. C'est la règle de l'export (ADR-0061).
 - **Transit** : l'instantané s'écrit sous `exchange/snapshots/.tmp-<index>-e<E>-g<G>-<pid>-<n>-<nanos>/`, puis le dossier est renommé ; le nom temporaire garantit que deux prises simultanées n'écrivent jamais au même endroit. Une panne laisse un résidu `.tmp-*` que ni la reprise ni une commande ne supprime : il se nettoie à la main, comme celui de l'export.
-- **Hors ligne en P3** : l'opérateur arrête le serveur, comme pour `crible restore`. Le cœur de la commande prend `&mut GenerationStore`, ce qui suspend l'écrivain au sens d'ADR-0017 — les écritures sont retenues, les lectures continuent — quand il tourne dans le serveur ; un processus ne peut pas suspendre l'écrivain d'un autre, et aucun verrou inter-processus n'est ajouté : c'est la règle d'exploitation déjà écrite pour `crible patch`, `busy_timeout` n'assurant que la vivacité (ADR-0038). La future route `POST /v1/indexes/{index}/snapshots` (P6) réutilisera le même cœur.
+- **Hors ligne en P3** : l'opérateur arrête le serveur, comme pour `crible restore`. Le cœur de la commande prend `&mut GenerationStore`, ce qui suspend l'écrivain au sens d'ADR-0017 — les écritures sont retenues, les lectures continuent — quand il tourne dans le serveur ; un processus ne peut pas suspendre l'écrivain d'un autre : c'est la règle d'exploitation déjà écrite pour `crible patch`, que le verrou d'écrivain par index d'ADR-0116 fait désormais respecter, `crible snapshot` et `crible restore` étant refusés en `503 overloaded` tant qu'un serveur tient l'index (`busy_timeout` n'assure que la vivacité, ADR-0038). La future route `POST /v1/indexes/{index}/snapshots` (P6) réutilisera le même cœur.
 - **Rapport** : destination, époque E, génération G, nombre de documents, nombre de passages, octets copiés.
 
 ### Règles de la restauration (ADR-0065)

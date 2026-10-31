@@ -107,6 +107,7 @@ impl ErrorCode {
 pub struct CribleError {
     code: ErrorCode,
     message: String,
+    path: Option<String>,
 }
 
 impl CribleError {
@@ -116,7 +117,18 @@ impl CribleError {
         Self {
             code,
             message: message.into(),
+            path: None,
         }
+    }
+
+    /// Attaches the JSON path of the fault, for `details.path`.
+    ///
+    /// Only `invalid_filter` publishes that key (`docs/05-api.md`); the message
+    /// keeps naming the path as well, so a CLI without a body still reads it.
+    #[must_use]
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
     }
 
     /// Category of the error.
@@ -129,5 +141,11 @@ impl CribleError {
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    /// JSON path of the fault, when the error carries one.
+    #[must_use]
+    pub fn path(&self) -> Option<&str> {
+        self.path.as_deref()
     }
 }

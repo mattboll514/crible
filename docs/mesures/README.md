@@ -1,6 +1,6 @@
 # Mesures
 
-**Règle** : aucune affirmation de performance ou de qualité sans une mesure consignée ici. La liste des mesures (MES-00 à MES-15) et des cibles se trouve dans `docs/08-invariants-et-tests.md`.
+**Règle** : aucune affirmation de performance ou de qualité sans une mesure consignée ici. La liste des mesures (MES-00 à MES-16) et des cibles se trouve dans `docs/08-invariants-et-tests.md`.
 
 - **Un fichier par mesure** : `MES-xx-<slug>.md`. Une nouvelle campagne sur la même mesure ajoute une section datée ; on n'écrase jamais l'ancienne.
 - **Données brutes** : en JSON ou CSV à côté du rapport (`MES-xx-<slug>.<date>.json`) si elles sont petites ; sinon, le chemin dans `data/` est cité.

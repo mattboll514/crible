@@ -176,6 +176,7 @@ version = "0.1.0"
 source = { editable = "../clients/python" }
 dependencies = [
     { name = "blake3" },
+    { name = "httpx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pyarrow" },
@@ -184,6 +185,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "blake3", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyarrow", specifier = ">=15" },
 ]

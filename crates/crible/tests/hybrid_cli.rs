@@ -37,7 +37,8 @@
 //! | `the_default_mode_is_dense_on_an_index_without_the_lexical_branch` | ADR-0089 §3 |
 //! | `the_default_mode_is_hybrid_on_an_index_with_the_lexical_branch` | ADR-0089 §3 |
 //! | `hybrid_is_refused_when_the_lexical_branch_is_disabled` | ADR-0089 §3, no degradation |
-//! | `a_text_mode_refuses_a_vector_file` | ADR-0087 §2 |
+//! | `a_lexical_mode_refuses_a_vector_file` | ADR-0087 §2 |
+//! | `hybrid_accepts_a_vector_file_with_the_query_text` | ADR-0109 §4 |
 //! | `a_text_mode_needs_the_query_text` | `invalid_request` on a missing input |
 //! | `the_fusion_flags_are_checked_in_every_mode` | ADR-0075, `docs/05-api.md` |
 //! | `the_alpha_domain_is_checked_by_the_cli` | ADR-0090 §2 |
@@ -402,19 +403,42 @@ fn hybrid_is_refused_when_the_lexical_branch_is_disabled() {
 }
 
 #[test]
-fn a_text_mode_refuses_a_vector_file() {
+fn a_lexical_mode_refuses_a_vector_file() {
     // ADR-0087 decision 2: the lexical branch scores the query text, so a vector
-    // file alone gives it nothing to score; the request is refused rather than
-    // silently dropping the branch.
+    // file alone gives it nothing to score; `lexical` is refused rather than
+    // silently dropping the branch. `hybrid` accepts the vector for its dense
+    // branch (ADR-0109, decision 4).
     let instance = Instance::new(true);
 
-    for mode in ["lexical", "hybrid"] {
-        let stderr = instance.refused(&["--mode", mode, "--vector-file", path(&instance.vector)]);
-        assert!(
-            stderr.contains(&format!("--mode {mode} runs the lexical branch")),
-            "--mode {mode} must refuse a vector file by name, got: {stderr}"
-        );
-    }
+    let stderr = instance.refused(&["--mode", "lexical", "--vector-file", path(&instance.vector)]);
+    assert!(
+        stderr.contains("--mode lexical runs the lexical branch"),
+        "--mode lexical must refuse a vector file by name, got: {stderr}"
+    );
+}
+
+#[test]
+fn hybrid_accepts_a_vector_file_with_the_query_text() {
+    // ADR-0109, decision 4: in `hybrid`, `--query` serves the lexical branch and
+    // `--vector-file` serves the dense one in place of the encoding, so the
+    // search runs without ONNX Runtime.
+    let instance = Instance::new(true);
+
+    let output = instance.with_vector(&["--mode", "hybrid", "--query", "contrat"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "hybrid with --query and --vector-file must run: {stderr}"
+    );
+    let response: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("the search answer must be JSON: {error}"));
+    assert_eq!(score_type(&response), "rrf");
+    assert!(
+        keys(&response)
+            .iter()
+            .any(|key| key.starts_with("V1#") || key.starts_with("V2#")),
+        "the fused answer holds the dense and lexical results: {response}"
+    );
 }
 
 #[test]

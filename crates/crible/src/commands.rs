@@ -38,10 +38,12 @@ use crible_core::config::{FusionConfig, IndexConfig, check_alpha};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_core::model::{ModelConfig, ModelKind};
+use crible_core::path::path_component;
 use crible_encode::{
     DEFAULT_QUERY_CACHE_ENTRIES, DEFAULT_QUERY_PRECISION, Model, ModelRegistry, Precision,
     QueryEncoder, TokenCounter,
 };
+use crible_search::api::{self, ReturnSelection};
 use crible_search::dense::exact::DenseSearcher;
 use crible_search::fusion::BranchScore;
 use crible_search::group::Grouping;
@@ -60,9 +62,6 @@ use crible_store::patch::{self, PatchSource};
 use serde_json::{Value, json};
 
 use crate::vector;
-
-/// Highest `k` accepted by a search (`docs/05-api.md`, "Recherche : requête").
-const MAX_K: usize = 1_000;
 
 /// Number of characters of a passage shown by the readable output of `search`.
 ///
@@ -151,6 +150,23 @@ pub fn create_index(data: &Path, config_path: &Path) -> Result<(), CribleError> 
         store.epoch().get(),
         store.generation().get()
     );
+    Ok(())
+}
+
+/// `crible key generate`: prints a key and its SHA-256 digest (ADR-0100).
+///
+/// Exactly two lines on stdout, `key: <key>` then `sha256: <digest>`, and nothing
+/// else: the digest is the SHA-256 of the 64 characters of the key, the form
+/// `[[auth.keys]]` expects. The command reads and writes no file, and the key
+/// is never journalised.
+///
+/// # Errors
+///
+/// [`ErrorCode::Internal`] when the system random source fails.
+pub fn generate_key() -> Result<(), CribleError> {
+    let (key, digest) = crible_server::auth::generate()?;
+    println!("key: {key}");
+    println!("sha256: {digest}");
     Ok(())
 }
 
@@ -506,7 +522,8 @@ fn open_store_for_write(
 /// The mode decides which inputs are needed: `dense` takes a vector file or a
 /// text, `lexical` takes a text alone — the BM25 branch reads the text as it is,
 /// so it needs no encoder and no `--models` — and `hybrid` takes a text, which
-/// serves the lexical branch and is encoded for the dense one.
+/// serves the lexical branch, plus an optional vector file that replaces the
+/// encoding of the dense branch (ADR-0109, decision 4).
 #[derive(Clone, Copy)]
 pub struct SearchRequest<'a> {
     /// Root data directory (`<data>/indexes/<index>`).
@@ -588,33 +605,9 @@ impl std::fmt::Debug for SearchRequest<'_> {
 /// its own domain is checked either way, so a request that leaves it is refused
 /// even when nothing is grouped.
 fn grouping_of(request: &SearchRequest<'_>) -> Result<Grouping, CribleError> {
-    let by_document = match request.group_by {
-        None => false,
-        Some("document") => true,
-        Some(other) => {
-            return Err(CribleError::new(
-                ErrorCode::InvalidRequest,
-                format!("group_by must be \"document\" or absent, got {other:?}"),
-            ));
-        }
-    };
-    let dedup_content = match request.dedup {
-        None => false,
-        Some("content") => true,
-        Some(other) => {
-            return Err(CribleError::new(
-                ErrorCode::InvalidRequest,
-                format!("dedup must be \"content\" or absent, got {other:?}"),
-            ));
-        }
-    };
-    let grouping = Grouping {
-        by_document,
-        passages_per_document: request.passages_per_document,
-        dedup_content,
-    };
-    grouping.validate()?;
-    Ok(grouping)
+    let by_document = api::group_by(request.group_by)?;
+    let dedup_content = api::dedup(request.dedup)?;
+    api::grouping(by_document, request.passages_per_document, dedup_content)
 }
 
 /// Mode of one `crible search`, from the flag or the index.
@@ -663,13 +656,15 @@ fn fusion_of(
 
 /// Checks that the flags give the inputs `mode` runs on.
 ///
-/// `dense` takes a vector file or a text; `lexical` and `hybrid` take a text,
-/// since the lexical branch scores the query text as it is. A vector file alone
-/// gives no text, so it is refused for those two modes rather than silently
-/// dropping the lexical branch (ADR-0087, decision 2).
+/// `dense` takes exactly one of a vector file or a text; `lexical` takes the
+/// text alone, since the lexical branch scores it as it is; `hybrid` takes the
+/// text and accepts a vector file, which then serves its dense branch in place
+/// of the encoding (ADR-0109, decision 4). A vector file alone gives the lexical
+/// branch nothing to score, so it is refused for `lexical` and `hybrid` rather
+/// than silently dropping that branch (ADR-0087, decision 2).
 fn query_inputs(request: &SearchRequest<'_>, mode: Mode) -> Result<(), CribleError> {
-    if !mode.uses_lexical() {
-        return match (request.vector_file, request.query) {
+    match mode {
+        Mode::Dense => match (request.vector_file, request.query) {
             (Some(_), Some(_)) => Err(invalid_request(
                 "--vector-file and --query are mutually exclusive; pass one of them",
             )),
@@ -677,22 +672,27 @@ fn query_inputs(request: &SearchRequest<'_>, mode: Mode) -> Result<(), CribleErr
                 "search needs --vector-file <file> or --query <text>",
             )),
             _ => Ok(()),
-        };
+        },
+        Mode::Lexical => {
+            if request.vector_file.is_some() {
+                return Err(invalid_request(
+                    "--mode lexical runs the lexical branch, which scores the query text: pass \
+                     --query <text> and no --vector-file",
+                ));
+            }
+            if request.query.is_none() {
+                return Err(invalid_request("--mode lexical needs --query <text>"));
+            }
+            Ok(())
+        }
+        Mode::Hybrid => match request.query {
+            Some(_) => Ok(()),
+            None => Err(invalid_request(format!(
+                "--mode {} needs --query <text>",
+                mode.as_str()
+            ))),
+        },
     }
-    if request.vector_file.is_some() {
-        return Err(invalid_request(format!(
-            "--mode {} runs the lexical branch, which scores the query text: pass --query <text> \
-             and no --vector-file",
-            mode.as_str()
-        )));
-    }
-    if request.query.is_none() {
-        return Err(invalid_request(format!(
-            "--mode {} needs --query <text>",
-            mode.as_str()
-        )));
-    }
-    Ok(())
 }
 
 /// Query text the mode needs, which [`query_inputs`] has checked.
@@ -745,12 +745,7 @@ fn required_text<'a>(request: &SearchRequest<'a>, mode: Mode) -> Result<&'a str,
 /// the readable report of [`print_search_text`] instead, for the J2 demo.
 pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let started = Instant::now();
-    if request.k == 0 || request.k > MAX_K {
-        return Err(invalid_request(format!(
-            "k must be between 1 and {MAX_K}, got {}",
-            request.k
-        )));
-    }
+    api::check_k(request.k)?;
     // The regrouping options are validated before the index is opened, the
     // model loaded and the pool evaluated: a request the command can refuse
     // pays for none of that.
@@ -783,9 +778,16 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
         Mode::Lexical => (None, Some(required_text(request, mode)?), false),
         Mode::Hybrid => {
             let text = required_text(request, mode)?;
-            let (vector, truncated) =
-                encode_text_query(request.models, &config, request.model, text)?;
-            (Some(vector), Some(text), truncated)
+            // ADR-0109, decision 4: a provided vector serves the dense branch in
+            // place of the encoding, and the text still serves the lexical one.
+            match request.vector_file {
+                Some(path) => (Some(vector::load(path)?), Some(text), false),
+                None => {
+                    let (vector, truncated) =
+                        encode_text_query(request.models, &config, request.model, text)?;
+                    (Some(vector), Some(text), truncated)
+                }
+            }
         }
     };
     let filter = match request.filter {
@@ -826,21 +828,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
 
     match request.format {
         SearchFormat::Json => {
-            let results: Vec<Value> = answer
-                .results
-                .iter()
-                .map(|result| {
-                    json!({
-                        "doc_id": result.hit.doc_id,
-                        "passage": result.hit.ord,
-                        "key": result.hit.key,
-                        "score": result.hit.score,
-                        "score_type": answer.score_type.as_str(),
-                        "fields": result.hit.fields,
-                        "text": result.hit.text,
-                    })
-                })
-                .collect();
+            let results = api::results_json(&answer, &config.schema, &ReturnSelection::all());
             let response = json!({
                 "results": results,
                 "pool_size": pool.len(),
@@ -1120,16 +1108,6 @@ fn list_indexes(data: &Path) -> Result<Vec<String>, CribleError> {
     }
     names.sort();
     Ok(names)
-}
-
-/// Accepts `name` only as one path component.
-fn path_component<'a>(name: &'a str, what: &str) -> Result<&'a str, CribleError> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
-        return Err(invalid_request(format!(
-            "{what} '{name}' must be a single path component"
-        )));
-    }
-    Ok(name)
 }
 
 /// Serializes a response, or reports the serialization fault.

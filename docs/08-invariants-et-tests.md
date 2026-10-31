@@ -33,7 +33,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 | Intégration | `cargo test` (`tests/`), `tempfile` | Index réel dans un dossier temporaire : attache, recherche, compaction, export |
 | Référence | `tools/reference_topk.py` (numpy) | Top-k exact calculé en Python sur le jeu synthétique ; Crible doit le reproduire |
 | Pannes | Points d'injection `CRIBLE_FAILPOINT=<étape>` (en build de test uniquement) | INV-03, INV-04 |
-| Charge | Script de charge (Rust ou Python), recherches concurrentes | INV-02, INV-17 |
+| Charge | Script de charge (Rust ou Python), recherches concurrentes | INV-02, INV-17 (INV-17 sera prouvé en P7, avec le même harnais, quand les analytics et le journal existeront ; ADR-0113) |
 | Micro-benchmarks | `criterion` | Noyaux SIMD, scans, fusion |
 | Éval | `crible eval` | Rappel et latence sur des jeux de requêtes |
 | Python | `pytest` | `BatchWriter`, client HTTP |
@@ -45,7 +45,7 @@ Règle normative (ADR-0057) : **`#[ignore]` est le seul mécanisme de saut autor
 Deux conséquences pratiques :
 
 - un test qui saute silencieusement ne prouve rien et se lit pourtant comme vert : c'est le défaut corrigé dans `crates/crible/tests/recette_import.rs` par `AJOUTER-ORT-CI` ; les tests de `crates/crible-encode/tests/charger_modele.rs` et de `crates/crible-core/tests/model_config.rs` sont le modèle à suivre, puisqu'ils échouent déjà avec la commande d'export à lancer ;
-- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction`, de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import` et de `inv_12_the_reference_batch_acceptance_statistics_are_unchanged`, dont les données dérivent de la production Legifacile (ADR-0032) et qui passent tous par la recette, laquelle demande ONNX Runtime et le vrai modèle (ADR-0057, ADR-0062, ADR-0063, ADR-0085).
+- une CI qui exécute `--include-ignored` doit nommer explicitement chaque test qu'elle laisse local, par son nom, et le justifier : c'est le cas de `inv_12_the_legifacile_sample_passes_the_acceptance_check`, de `inv_09_legifacile_sample_queries_return_the_same_results_after_compaction`, de `inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import`, de `inv_12_the_reference_batch_acceptance_statistics_are_unchanged` et de `api_and_cli_return_the_same_results_on_the_legifacile_sample`, dont les données dérivent de la production Legifacile (ADR-0032) et qui demandent ONNX Runtime et le vrai modèle, par la recette pour les quatre premiers et par l'encodage de la requête pour le dernier (ADR-0057, ADR-0062, ADR-0063, ADR-0085, ADR-0109).
 
 ## Jeux de données
 
@@ -78,6 +78,7 @@ Une mesure n'est valable que si elle est consignée dans `docs/mesures/MES-xx-<s
 | MES-13 | Temps de démarrage : reconstruction des bitmaps depuis SQLite contre chargement du cache | P1, P3 |
 | MES-14 | Coût des filtres d'intervalle (colonne de valeurs) selon le domaine | P1, P4 |
 | MES-15 | Coût d'un commit de génération selon le nombre de passages vivants (matérialisation des iid vivants, relecture des `segment.json`) | P1, P3 |
+| MES-16 | Charge concurrente pendant les écritures : recherches denses et hybrides pendant des attaches puis une compaction. Protocole fixé par ADR-0113 : critère d'INV-02 par requête (chaque recherche sous 3 × le p99 de la phase de repos), N = 4 clients en boucle fermée, latence à l'horloge murale côté client, trois campagnes sur données neuves, rapport `docs/mesures/MES-16-charge-concurrente.md` | P6 |
 
 ## Cibles chiffrées
 

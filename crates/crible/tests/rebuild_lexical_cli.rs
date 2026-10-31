@@ -493,9 +493,12 @@ fn rebuild_lexical_command_rebuilds_from_the_live_passages_only() {
     );
 }
 
-/// The reason of the job (`RECONSTRUIRE-LEXICAL`, ADR-0088 decision 2): a change
-/// of `lexical.positions` changes no text, so the state stays `Ready` and a write
-/// open repairs nothing. Only the command applies the new analysis chain.
+/// The reason of the job (`RECONSTRUIRE-LEXICAL`, ADR-0088 decision 2, revised by
+/// ADR-0106 decision 4): a change of `lexical.positions` changes the analysis
+/// chain recorded in the payload, so a write open rebuilds the lexical index
+/// before serving. The command opens the index for writing before it rebuilds;
+/// that open already applies the new chain, and the command must keep the same
+/// passages at the same generation.
 #[test]
 fn rebuild_lexical_command_applies_a_changed_analysis_chain() {
     let prepared = prepare();
@@ -508,27 +511,34 @@ fn rebuild_lexical_command_applies_a_changed_analysis_chain() {
     );
 
     enable_positions(&prepared);
-    // The command opens the index for writing before it rebuilds, and that open
-    // must change nothing on its own: the test runs the same open, then checks
-    // that the old chain is still the one on disk. A rebuild by the recovery
-    // would make the command's own effect invisible.
     drop(
         GenerationStore::open(&prepared.index_dir, &declared_schema(&prepared))
             .unwrap_or_else(|error| panic!("the index must open for writing: {}", error.message())),
     );
     assert_eq!(
         text_record(&prepared),
-        "freq",
-        "the recovery of a write open repairs a `Ready` index, so it must not apply the new chain"
+        "position",
+        "the write open compares the recorded chain with the configuration and rebuilds it \
+         (ADR-0106, decision 4)"
     );
 
-    rebuild_lexical(&prepared);
+    let output = rebuild_lexical(&prepared);
 
+    // The write open above already applied the chain, so the final text alone
+    // would pass even if the command did nothing. Its own report is the proof
+    // that it rebuilt the index (ADR-0106, decision 5).
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(&format!(
+            "lexical index rebuilt from the reference state at generation {}",
+            before.0
+        )),
+        "the command must report its own rebuild, not rely on the open before it: {stdout}"
+    );
     assert_eq!(
         text_record(&prepared),
         "position",
-        "the command must rebuild the lexical index with the analysis chain the configuration asks \
-         for"
+        "the command must leave the lexical index on the analysis chain the configuration asks for"
     );
     assert_eq!(
         indexed_state(&prepared),

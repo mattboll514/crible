@@ -5,8 +5,56 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+description = "HTTP server of the Crible engine"
 
 [dependencies]
+axum.workspace = true
+crible-core = { path = "../crible-core" }
+crible-encode = { path = "../crible-encode" }
+# The search route runs the same pipeline, the same regroupment and the same
+# answer shape as `crible search` (ADR-0109, `ROUTE-RECHERCHE`).
+crible-search = { path = "../crible-search" }
+crible-store = { path = "../crible-store" }
+getrandom.workspace = true
+# The bodies of the write routes are decoded into the types of `crible-store`,
+# which derive `Deserialize` (`ROUTES-DOCUMENTS-ET-LOTS`, ADR-0107).
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+# The specification is generated from the code and served with Swagger UI
+# (ADR-0015, ADR-0111).
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# `oneshot` drives the router of a test without a socket. `util` is a
+# development feature (complement of 2026-10-29 to ADR-0096).
+tower = { workspace = true, features = ["util"] }
+# `AsyncReadExt`/`AsyncWriteExt` let the tests speak HTTP over a socket; the
+# feature is a test need, so the server build keeps the list of ADR-0096.
+tokio = { workspace = true, features = ["io-util"] }
+tempfile.workspace = true
+
+# The tests validate the examples of `docs/05-api.md` against the generated
+# specification, with every default feature off so no test resolves a remote
+# `$ref` nor reads a file (ADR-0111, decision 8).
+jsonschema = { version = "=0.60.2", default-features = false }
+
+[features]
+# Off by default: it turns on the failpoints of `crible-store` for the test
+# build only, so a plain `cargo test` exercises the build without them; the
+# tests that arm them live behind it (`compaction_recovery.rs`,
+# `batch_revalidation.rs`). No dev-dependency enables it, so the normal build
+# keeps `crible-store` without the feature (complement of 2026-10-29 to
+# ADR-0068, decision 2).
+failpoints = ["crible-store/failpoints"]
 
 [lints]
 workspace = true

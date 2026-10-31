@@ -236,13 +236,9 @@ impl Schema {
             .map(String::as_str)
     }
 
-    /// Serializes the schema in the JSON form of `docs/04`.
-    ///
-    /// The two options are written explicitly, so the text round-trips through
-    /// [`Schema::from_json_str`] even when a caller relied on the defaults. The
-    /// keys are sorted by name, as [`Schema::fields`] yields them.
+    /// Writes the schema as a JSON value, in the form of `docs/04`.
     #[must_use]
-    pub fn to_json_string(&self) -> String {
+    pub fn to_value(&self) -> Value {
         let mut document_fields = Map::new();
         let mut passage_fields = Map::new();
         for (name, level, spec) in self.fields() {
@@ -256,7 +252,16 @@ impl Schema {
             ("document_fields".to_owned(), Value::Object(document_fields)),
             ("passage_fields".to_owned(), Value::Object(passage_fields)),
         ]))
-        .to_string()
+    }
+
+    /// Serializes the schema in the JSON form of `docs/04`.
+    ///
+    /// The two options are written explicitly, so the text round-trips through
+    /// [`Schema::from_json_str`] even when a caller relied on the defaults. The
+    /// keys are sorted by name, as [`Schema::fields`] yields them.
+    #[must_use]
+    pub fn to_json_string(&self) -> String {
+        self.to_value().to_string()
     }
 
     /// Refuses a name declared at both levels (ADR-0030).
@@ -297,6 +302,15 @@ pub enum ReferencePrecision {
 }
 
 impl ReferencePrecision {
+    /// Wire name used in the configuration and in a `GET /v1/indexes` body.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fp16 => "fp16",
+            Self::Fp32 => "fp32",
+        }
+    }
+
     fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
         let raw = json::string(value, path)?;
         match raw.as_str() {
@@ -319,6 +333,15 @@ pub enum ScanStrategy {
 }
 
 impl ScanStrategy {
+    /// Wire name used in the configuration.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Binary => "binary",
+            Self::None => "none",
+        }
+    }
+
     fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
         let raw = json::string(value, path)?;
         match raw.as_str() {
@@ -345,6 +368,17 @@ pub enum FusionConfig {
 }
 
 impl FusionConfig {
+    /// Writes the fusion in the JSON form of `docs/04`.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        match self {
+            Self::Rrf => serde_json::json!({ "method": "rrf" }),
+            Self::RelativeScore { alpha } => {
+                serde_json::json!({ "method": "relative_score", "alpha": alpha })
+            }
+        }
+    }
+
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
         json::reject_unknown_keys(object, path, &["method", "alpha"])?;
@@ -647,6 +681,46 @@ impl IndexConfig {
                 "$.compaction",
             )?,
         })
+    }
+
+    /// Returns the stored form of a configuration as a JSON value.
+    ///
+    /// Every setting is written explicitly, including `search.exact_threshold`
+    /// (ADR-0074), so the value is the materialised form of `docs/04` and
+    /// round-trips through [`IndexConfig::from_value`]. The `PATCH` job of
+    /// ADR-0105 writes that form to `index.json`.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        serde_json::json!({
+            "name": &self.name,
+            "model": &self.model,
+            "reference_precision": self.reference_precision.as_str(),
+            "schema": self.schema.to_value(),
+            "cluster_by": &self.cluster_by,
+            "lexical": {
+                "enabled": self.lexical.enabled,
+                "language": &self.lexical.language,
+                "positions": self.lexical.positions,
+            },
+            "search": {
+                "scan": self.search.scan.as_str(),
+                "rescore_candidates": self.search.rescore_candidates,
+                "exact_threshold": self.search.exact_threshold,
+                "candidates_per_branch": self.search.candidates_per_branch,
+                "fusion": self.search.fusion.to_value(),
+            },
+            "ingest": {
+                "acceptance_sample": self.ingest.acceptance_sample,
+                "acceptance_min_cosine": self.ingest.acceptance_min_cosine,
+            },
+            "compaction": { "dead_ratio": self.compaction.dead_ratio },
+        })
+    }
+
+    /// Returns the stored form of a configuration as JSON text.
+    #[must_use]
+    pub fn to_json_string(&self) -> String {
+        self.to_value().to_string()
     }
 
     /// Returns the stored form of a configuration: every setting that has a
@@ -982,20 +1056,35 @@ impl SchemaPatch {
         ] {
             for (name, patch) in fields {
                 let path = format!("$.schema.{}.{name}", level.as_str());
-                if let Some(existing) = config.schema.spec_at(level, name)
-                    && let Some(field_type) = patch.field_type
-                    && field_type != existing.field_type
-                {
-                    return Err(CribleError::new(
-                        ErrorCode::ImmutableSetting,
-                        format!(
-                            "field '{name}' type is immutable at {path}.type; the type of an existing field cannot change"
-                        ),
-                    ));
+                if let Some((_, declared_at)) = config.schema.field(name) {
+                    // Declaring a known name at the other level is a level
+                    // change, and the level of a field is frozen with its type
+                    // (`docs/04:44-55`, INV-16). The control runs before the
+                    // same-name collision of ADR-0030, so the client reads the
+                    // reason that can never change instead of a collision a
+                    // valid patch would avoid.
+                    if declared_at != level {
+                        return Err(CribleError::new(
+                            ErrorCode::ImmutableSetting,
+                            format!(
+                                "field '{name}' level is immutable at {path}; it is declared \
+                                 in schema.{} and a field name designates one level",
+                                declared_at.as_str()
+                            ),
+                        ));
+                    }
+                    if let Some(field_type) = patch.field_type
+                        && let Some(existing) = config.schema.spec_at(level, name)
+                        && field_type != existing.field_type
+                    {
+                        return Err(CribleError::new(
+                            ErrorCode::ImmutableSetting,
+                            format!(
+                                "field '{name}' type is immutable at {path}.type; the type of an existing field cannot change"
+                            ),
+                        ));
+                    }
                 }
-                // Declaring the name at the other level is not a move: the
-                // resulting schema would hold it twice, which ADR-0030 refuses
-                // with `invalid_request` during validation (see `apply_patch`).
             }
         }
         Ok(())
@@ -1381,6 +1470,46 @@ mod tests {
             text.find("\"a\"").expect("a is serialized")
                 < text.find("\"b\"").expect("b is serialized"),
             "the document fields must be sorted: {text}"
+        );
+    }
+
+    /// `IndexConfig::to_value` writes every setting explicitly and round-trips
+    /// through `from_value`: the `PATCH` job of ADR-0105 writes that form to
+    /// `index.json`, so a value the parser accepts is a value the file can hold.
+    #[test]
+    fn index_config_json_round_trips_with_every_setting() {
+        let raw = r#"{
+            "name": "decisions",
+            "model": "m",
+            "reference_precision": "fp16",
+            "schema": {
+                "document_fields": { "numero": { "type": "keyword" } },
+                "passage_fields": { "texte": { "type": "keyword" } }
+            },
+            "cluster_by": ["numero"],
+            "lexical": { "enabled": true, "language": "en", "positions": true },
+            "search": {
+                "scan": "binary",
+                "rescore_candidates": 20,
+                "exact_threshold": 30,
+                "candidates_per_branch": 40,
+                "fusion": { "method": "relative_score", "alpha": 0.25 }
+            },
+            "ingest": { "acceptance_sample": 2, "acceptance_min_cosine": 0.8 },
+            "compaction": { "dead_ratio": 0.2 }
+        }"#;
+        let config = IndexConfig::from_json_str(raw).expect("the test configuration is valid");
+
+        let value = config.to_value();
+        let reparsed = IndexConfig::from_value(&value).expect("the serialized form is valid");
+        assert_eq!(config, reparsed, "the configuration must round-trip");
+        assert_eq!(
+            value["search"]["exact_threshold"], 30,
+            "the stored form writes the threshold explicitly (ADR-0074)"
+        );
+        assert_eq!(
+            value["lexical"]["language"], "en",
+            "the stored form keeps the analysis settings the chain depends on (ADR-0106)"
         );
     }
 

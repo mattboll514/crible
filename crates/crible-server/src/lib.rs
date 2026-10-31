@@ -1,3 +1,55 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! HTTP server for the Crible engine.
+//!
+//! References: `docs/05-api.md` (conventions), `docs/06-observabilite.md`
+//! ("Santé et logs"), `docs/07-stack-et-deploiement.md` ("Configuration de
+//! l'instance", "Docker"), and ADR-0096 to ADR-0099.
+//!
+//! This crate carries the skeleton of the server: the instance configuration
+//! with its `CRIBLE_*` overrides ([`config`]), the startup that loads the
+//! models and opens the indexes for writing with their recovery ([`state`]),
+//! the probes and the request identifier ([`http`]), the API keys and their
+//! roles ([`auth`]), the JSON journal ([`logging`]) and the lifecycle with its
+//! bounded drainage ([`lifecycle`]).
+//!
+//! The `/v1` routes, the general error conversion and the write jobs arrive
+//! with the tasks that create them; this crate only provides the state, the
+//! router they mount on and the middleware they wrap their routes with.
+
+pub mod auth;
+// Test barriers of the `failpoints` build only: they hold a job at a precise
+// point while a test reads the instance (ADR-0107, decisions 5 and 6).
+#[cfg(feature = "failpoints")]
+mod barriers;
+// The attach of a write job, holding it at the test barriers when they are
+// armed (ADR-0113, decision 3).
+mod attach_job;
+mod batches;
+pub mod config;
+mod documents;
+mod error;
+pub mod http;
+mod indexes;
+pub mod jobs;
+pub mod lifecycle;
+pub mod limits;
+pub mod logging;
+mod maintenance;
+// The OpenAPI specification, generated from the annotations of the routes and
+// served by `GET /openapi.json` and `GET /docs` (ADR-0015, ADR-0111).
+pub mod openapi;
+mod search;
+mod search_multi;
+pub mod state;
+// Test double of the query encoder, `failpoints` build only: it proves that a
+// multi-index request encodes once (ADR-0110, decision 11).
+#[cfg(feature = "failpoints")]
+mod test_encoding;
+
+pub use auth::{Auth, Client, protect};
+pub use config::Config;
+pub use http::{REQUEST_ID_HEADER, RequestId, accepted, build_router};
+pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};
+pub use logging::{DEFAULT_FILTER, effective_filter, init_logging, log_subscriber};
+pub use state::{AppState, IndexHandle, Loaded};

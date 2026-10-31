@@ -109,7 +109,7 @@ use arc_swap::ArcSwap;
 use crible_core::config::{IndexConfig, LexicalConfig, Schema};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Epoch, Generation, Iid};
-use rusqlite::{Connection, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::{Value, json};
 
 use crate::codes;
@@ -176,6 +176,25 @@ pub fn write_index_config(index_dir: &Path, config_json: &str) -> Result<(), Cri
     }
     fs::create_dir_all(index_dir)
         .map_err(|error| io_error("create the index directory", index_dir, &error))?;
+    write_atomically(&index_dir.join(INDEX_CONFIG_FILE_NAME), stored.as_bytes())
+}
+
+/// Rewrites the configuration of an **existing** index atomically.
+///
+/// The `PATCH` job of ADR-0105 writes the new configuration here after the API
+/// validated it against the current one. Unlike [`write_index_config`], this
+/// function does not refuse a directory that already holds an index: replacing
+/// `index.json` is the whole point. The text is parsed and materialised first
+/// (ADR-0074), then written with the same temporary-file, fsync, rename and
+/// directory-fsync protocol, so a crash leaves either the old configuration or
+/// the whole new one.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] when the text is not a valid configuration, and
+/// the errors of the atomic write otherwise.
+pub fn rewrite_index_config(index_dir: &Path, config_json: &str) -> Result<(), CribleError> {
+    let stored = IndexConfig::materialised_json(config_json)?;
     write_atomically(&index_dir.join(INDEX_CONFIG_FILE_NAME), stored.as_bytes())
 }
 
@@ -502,6 +521,28 @@ pub(crate) struct CommittedGeneration {
     pub(crate) generation: Generation,
     /// Time spent in each step of the commit protocol.
     pub(crate) timings: CommitTimings,
+}
+
+/// Step of the commit protocol of `GenerationStore::commit_with_rows` that an
+/// observer is called at.
+///
+/// The two steps sit around the SQLite `COMMIT`, which is the only commit point
+/// of a generation (ADR-0016). A job held at the first step has written no
+/// visible state; a job held at the second one has committed a generation that
+/// no reader sees until the snapshot is published (INV-02, INV-03).
+///
+/// The type is compiled in every build, like
+/// [`CompactStep`](crate::compact::CompactStep): a production caller hands
+/// `GenerationStore::commit_with_rows` a no-op observer, which the compiler
+/// removes, and only the attach of the `failpoints` build
+/// (`attach_with_observer`) hands a real one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitStep {
+    /// Just before the `COMMIT` of the generation, no state visible yet.
+    BeforeSqliteCommit,
+    /// Just after the `COMMIT`, before the lexical index, the snapshot and the
+    /// manifest are written: the generation is committed but not published.
+    AfterSqliteCommit,
 }
 
 /// Time spent in the steps of [`GenerationStore::commit_with_rows`], measured
@@ -861,6 +902,59 @@ impl GenerationStore {
     where
         F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
     {
+        self.commit_with_rows_observed(write, &mut |_step| {})
+    }
+
+    /// Same as [`GenerationStore::commit_with_rows`], and calls `observer` at
+    /// each [`CommitStep`] of the protocol.
+    ///
+    /// Only the attach of the `failpoints` build hands a real observer
+    /// (`attach_with_observer`, `ingest_documents_with_observer`): it holds the
+    /// job at a step while a test reads the index (INV-02). The observer runs on
+    /// the caller's thread, so a test that blocks in it holds the commit
+    /// protocol at that exact step. A production caller goes through
+    /// [`GenerationStore::commit_with_rows`], which passes a no-op closure the
+    /// compiler removes.
+    pub(crate) fn commit_with_rows_observed<F, O>(
+        &mut self,
+        write: F,
+        observer: &mut O,
+    ) -> Result<CommittedGeneration, CribleError>
+    where
+        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
+        O: FnMut(CommitStep) + ?Sized,
+    {
+        // ADR-0108, decision 1: before any commit, the pointer is the authority
+        // on which epoch is current. A store left on E while `CURRENT_EPOCH`
+        // names E+1 (a failed `adopt_epoch`) would write generations no reader
+        // reopens, so the commit is refused without writing anything.
+        let on_disk = read_current_epoch(&self.index_dir).map_err(|failure| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "cannot read CURRENT_EPOCH of {}: {}",
+                    self.index_dir.display(),
+                    failure.message()
+                ),
+            )
+        })?;
+        if on_disk != self.lease.epoch {
+            tracing::error!(
+                index = %self.index_dir.display(),
+                pointer = on_disk.get(),
+                epoch = self.lease.epoch.get(),
+                "CURRENT_EPOCH names another epoch than the store; refusing to commit (ADR-0108)"
+            );
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "CURRENT_EPOCH names epoch {} but this store holds epoch {}; a commit there \
+                     would be lost, reopen the store first (ADR-0108)",
+                    on_disk.get(),
+                    self.lease.epoch.get()
+                ),
+            ));
+        }
         let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
 
         let transaction_started = Instant::now();
@@ -885,11 +979,13 @@ impl GenerationStore {
         };
 
         failpoint!("before_sqlite_commit");
+        observer(CommitStep::BeforeSqliteCommit);
         transaction
             .commit()
             .map_err(|error| records::database_error("commit the generation", &error))?;
         let transaction_time = transaction_started.elapsed();
         failpoint!("after_sqlite_commit");
+        observer(CommitStep::AfterSqliteCommit);
 
         let previous = self.snapshot.load_full();
         // Step 4 is measured on its own: the tantivy commit and its reader
@@ -990,7 +1086,12 @@ impl GenerationStore {
     }
 
     /// Root directory of the index: `<index>`.
-    pub(crate) fn index_dir(&self) -> &Path {
+    ///
+    /// The server keeps it to reopen the writer after a failed compaction
+    /// (ADR-0108) and to let a route read the reference database of the epoch a
+    /// snapshot holds (ADR-0107).
+    #[must_use]
+    pub fn index_dir(&self) -> &Path {
         &self.index_dir
     }
 
@@ -1098,6 +1199,123 @@ impl GenerationStore {
             codes_memory: snapshot.codes_memory(),
         })
     }
+
+    /// The last batch the reference state applied, or `None` when the epoch
+    /// holds no row of `batches`.
+    ///
+    /// ADR-0105, decision 3: `GET /v1/indexes/{index}` reports that row as
+    /// `last_batch`. The "last" row is the one with the greatest `applied_at`,
+    /// then the greatest `batch_id`; the compaction copies the rows verbatim, so
+    /// the answer survives an epoch change.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the SQLite query.
+    pub fn last_batch(&self) -> Result<Option<LastBatch>, CribleError> {
+        self.records
+            .connection()
+            .query_row(
+                "SELECT batch_id, applied_at, generation FROM batches \
+                 ORDER BY applied_at DESC, batch_id DESC LIMIT 1",
+                [],
+                |row| {
+                    let generation: i64 = row.get(2)?;
+                    Ok(LastBatch {
+                        batch_id: row.get(0)?,
+                        applied_at: row.get(1)?,
+                        generation: u64::try_from(generation)
+                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, generation))?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| records::database_error("read the last applied batch", &error))
+    }
+
+    /// Builds the snapshot a new configuration calls for, **without** publishing
+    /// it.
+    ///
+    /// This is the second half of the `PATCH` job of ADR-0105, decision 4: the
+    /// caller has already written `index.json` and validated the patch, so this
+    /// function rebuilds what derives from the configuration and returns the
+    /// snapshot describing the result. The caller publishes that snapshot
+    /// together with the configuration, under one lock (decision 4, "publie
+    /// ensemble"), and then calls [`GenerationStore::adopt`] so the next job of
+    /// the writer builds on it.
+    ///
+    /// - the lexical branch is rebuilt when the analysis settings
+    ///   (`lexical.enabled`, `lexical.language`, `lexical.positions`) changed and
+    ///   the branch is enabled after the patch;
+    /// - the filter structures are rebuilt from `records.sqlite` with the new
+    ///   schema, which covers `filterable`, `returned` and an added field;
+    /// - segments, codes and the generation are unchanged.
+    ///
+    /// The store must be open for writing, because the lexical rebuild writes
+    /// under the epoch (`ADR-0069`, `ADR-0087`).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] on a read-only store, and the errors of the
+    /// rebuild, the observation and the snapshot otherwise.
+    pub fn reconfigure(&mut self, config: &IndexConfig) -> Result<Arc<Snapshot>, CribleError> {
+        if !self.writable {
+            return Err(CribleError::new(
+                ErrorCode::Internal,
+                "applying a configuration rebuilds derived files under the epoch, so it needs a \
+                 store opened for writing (ADR-0105)",
+            ));
+        }
+        let lexical_changed = self.lexical != config.lexical;
+        self.lexical = config.lexical.clone();
+        let meta = self.records.meta()?;
+        let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
+        let never_carried_a_passage =
+            matches!(meta.passage_change_generation.map(Generation::get), Some(0));
+        if lexical_changed && config.lexical.enabled && !never_carried_a_passage {
+            drop(rebuild_lexical_index(
+                &self.records,
+                &epoch_dir,
+                &config.lexical,
+                meta.generation,
+            )?);
+        }
+        let observed = lexical::observe(
+            &epoch_dir,
+            &config.lexical,
+            meta.generation,
+            meta.passage_change_generation,
+        )?;
+        let snapshot = build_snapshot(
+            &self.records,
+            &epoch_dir,
+            &config.schema,
+            PublishedLexical::from_observation(observed),
+            Arc::clone(&self.lease),
+        )?;
+        Ok(Arc::new(snapshot))
+    }
+
+    /// Publishes a snapshot [`GenerationStore::reconfigure`] built, once its
+    /// caller has published it beside the configuration (ADR-0105, decision 4).
+    ///
+    /// The next job of the writer reads the store snapshot as its base, so a
+    /// rebuilt filter structure must become the store's own before the job
+    /// returns. Nothing else reads it: the routes of an index read the triplet
+    /// the server publishes, never the store.
+    pub fn adopt(&self, snapshot: Arc<Snapshot>) {
+        self.snapshot.store(snapshot);
+    }
+}
+
+/// One row of `batches`, as the index state of ADR-0105 reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LastBatch {
+    /// Identifier of the batch.
+    pub batch_id: String,
+    /// Time SQLite wrote when the batch was applied, RFC 3339 UTC.
+    pub applied_at: String,
+    /// Generation the batch published.
+    pub generation: u64,
 }
 
 /// State of one published generation, for inspection.
@@ -1283,6 +1501,16 @@ fn recover_lexical(
             )?;
             observe(meta)
         }
+        LexicalStatus::OtherChain => {
+            rebuild(
+                records,
+                epoch_dir,
+                config,
+                meta.generation,
+                "the lexical index was built with another analysis chain",
+            )?;
+            observe(meta)
+        }
     }
 }
 
@@ -1351,11 +1579,11 @@ pub struct RebuildOutcome {
 /// index was in, and leaves the generations untouched.
 ///
 /// A change of `lexical.language` or `lexical.positions` changes no text, so the
-/// state stays [`LexicalStatus::Ready`] and the recovery of a write open repairs
-/// nothing (`ADR-0088`, decision 2): only an explicit rebuild applies the new
-/// analysis chain. The server runs this job when a `PATCH` changes one of those
-/// two settings (`docs/04`, "Ce qui est figé, ce qui est réglable"); `crible
-/// rebuild-lexical` runs it on demand.
+/// generation does not move. The analysis chain is recorded in the payload of
+/// the commit, and a write open compares it with the configuration and rebuilds
+/// before serving (`ADR-0106`, decisions 4 and 5); the server also queues this
+/// job when a `PATCH` changes one of those two settings (`docs/04`, "Ce qui est
+/// figé, ce qui est réglable"), and `crible rebuild-lexical` runs it on demand.
 ///
 /// The store must be open for **writing**: the rebuild removes `lexical/` and
 /// commits a new tantivy index, which is a write under the epoch (`ADR-0069`,
@@ -1678,6 +1906,23 @@ fn index_lexical(
                 worked: true,
             })
         }
+        LexicalStatus::OtherChain => {
+            let reader = rebuild(
+                records,
+                epoch_dir,
+                config,
+                generation,
+                "the lexical index was built with another analysis chain",
+            )?;
+            failpoint!("after_lexical_commit");
+            Ok(LexicalStep {
+                index: Some(Arc::new(reader)),
+                status: LexicalStatus::Ready {
+                    committed: generation,
+                },
+                worked: true,
+            })
+        }
         LexicalStatus::Disabled => Ok(LexicalStep::reused(None, LexicalStatus::Disabled)),
     }
 }
@@ -1781,9 +2026,28 @@ pub(crate) fn epoch_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
     epochs_directory(index_dir).join(epoch.get().to_string())
 }
 
+/// Path of the reference database of one epoch of an index.
+///
+/// A reader of a document opens it on the epoch of the snapshot it holds, never
+/// on the current state (ADR-0107, decision 6).
+#[must_use]
+pub fn epoch_records_path(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    epoch_directory(index_dir, epoch).join(RECORDS_FILE_NAME)
+}
+
 /// Directory holding every epoch of an index: `<index>/epochs`.
 pub(crate) fn epochs_directory(index_dir: &Path) -> PathBuf {
     index_dir.join(EPOCHS_DIR_NAME)
+}
+
+/// Directory of the segments of one epoch of an index.
+///
+/// The search route opens its searcher on the epoch of the snapshot it holds,
+/// not on the epoch the store currently publishes, so it needs the path for an
+/// explicit epoch (ADR-0107, decision 6; ADR-0109).
+#[must_use]
+pub fn epoch_segments_directory(index_dir: &Path, epoch: Epoch) -> PathBuf {
+    segments_directory(&epoch_directory(index_dir, epoch))
 }
 
 /// Directory of the segments of an epoch.
@@ -2220,7 +2484,7 @@ mod tests {
         CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationChange, GenerationStore,
         INDEX_CONFIG_FILE_NAME, RECORDS_FILE_NAME, read_current_epoch,
     };
-    use crible_core::config::{ReferencePrecision, Schema};
+    use crible_core::config::{IndexConfig, ReferencePrecision, Schema};
     use crible_core::error::ErrorCode;
     use crible_core::ids::{Epoch, Generation, Iid};
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
@@ -3281,6 +3545,57 @@ mod tests {
         );
     }
 
+    /// ADR-0108, decision 1: `CURRENT_EPOCH` is the authority. A store still
+    /// holding epoch E while the pointer names E+1 — the state a compaction
+    /// leaves behind when it dies after its switch — must refuse the commit
+    /// before opening its transaction, and write nothing.
+    #[test]
+    fn commit_refuses_when_current_epoch_names_another_epoch() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        let schema = empty_schema();
+        let mut store =
+            GenerationStore::create(&index, Epoch::new(1), &schema).expect("the index is created");
+        let before = store
+            .with_connection(crate::records::read_meta)
+            .expect("the meta of the created index is readable");
+
+        super::write_current_epoch(&index, Epoch::new(2))
+            .expect("the pointer of a switched epoch is written");
+        let error = store
+            .commit(GenerationChange {
+                segments: Vec::new(),
+                documents: Vec::new(),
+                passages: Vec::new(),
+                deletions: Vec::new(),
+            })
+            .expect_err("a store on epoch 1 must not commit while the pointer names epoch 2");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "the epoch mismatch is an internal error, not a request error: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("ADR-0108"),
+            "the refusal must name the decision it applies, so the log points at it: {}",
+            error.message()
+        );
+
+        let after = store
+            .with_connection(crate::records::read_meta)
+            .expect("the meta stays readable after the refused commit");
+        assert_eq!(
+            after.generation, before.generation,
+            "the refused commit must not advance the generation"
+        );
+        assert_eq!(
+            after.next_iid, before.next_iid,
+            "the refused commit must not consume an internal identifier"
+        );
+    }
+
     /// A directory without `CURRENT_EPOCH` is not an index: opening it is a bad
     /// request, and recovery does not touch it.
     #[test]
@@ -3365,6 +3680,80 @@ mod tests {
             shared[0].as_slice(),
             &[1_u64],
             "the codes of another epoch must not be shared"
+        );
+    }
+    /// Schema whose `annee` field starts unfilterable and unreturned.
+    const RECONFIGURE_SCHEMA_BEFORE: &str = r#"{ "document_fields": { "annee": { "type": "integer", "filterable": false, "returned": false } }, "passage_fields": {} }"#;
+
+    /// Same schema after the patch: `filterable` and `returned` are now true.
+    const RECONFIGURE_SCHEMA_AFTER: &str = r#"{ "document_fields": { "annee": { "type": "integer", "filterable": true, "returned": true } }, "passage_fields": {} }"#;
+
+    #[test]
+    fn reconfigure_refuses_a_read_only_store() {
+        // ADR-0105, decision 4: a `PATCH` job may have to rebuild the lexical
+        // index, which writes under the epoch; a store open for reading cannot.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, EMPTY_SCHEMA_JSON);
+        drop(
+            GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+                .expect("the index is created"),
+        );
+        let mut store = GenerationStore::open_read_only(&index, &empty_schema())
+            .expect("the read-only open succeeds");
+        let config = IndexConfig::from_json_str(&test_config("test", EMPTY_SCHEMA_JSON))
+            .expect("the configuration parses");
+
+        let error = store
+            .reconfigure(&config)
+            .expect_err("a read-only store must refuse a reconfigure");
+        assert_eq!(
+            error.code(),
+            ErrorCode::Internal,
+            "wrong error code: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn reconfigure_rebuilds_the_filter_structures_from_the_new_schema() {
+        // `docs/04` and ADR-0105, decision 4: the snapshot a patch calls for is
+        // rebuilt from `records.sqlite` with the new schema, so `filterable` and
+        // `returned` take effect; the snapshot is returned, not published.
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_config(&index, RECONFIGURE_SCHEMA_BEFORE);
+        let schema =
+            Schema::from_json_str(RECONFIGURE_SCHEMA_BEFORE).expect("the before schema is valid");
+        let mut store =
+            GenerationStore::create(&index, Epoch::new(1), &schema).expect("the index is created");
+        let after = IndexConfig::from_json_str(&test_config("test", RECONFIGURE_SCHEMA_AFTER))
+            .expect("the after configuration parses");
+
+        let snapshot = store
+            .reconfigure(&after)
+            .expect("the reconfigure builds a snapshot");
+        let (spec, _level) = snapshot
+            .filters()
+            .schema()
+            .field("annee")
+            .expect("the new schema declares annee");
+        assert!(spec.filterable, "the rebuilt structures cover filterable");
+        assert!(spec.returned, "the rebuilt structures cover returned");
+        assert!(
+            snapshot.filters().column("annee").is_some(),
+            "the filter structure of the field is rebuilt"
+        );
+
+        let held = store.snapshot();
+        let (published, _level) = held
+            .filters()
+            .schema()
+            .field("annee")
+            .expect("the published schema declares annee");
+        assert!(
+            !published.filterable && !published.returned,
+            "reconfigure returns the snapshot without publishing it"
         );
     }
 }

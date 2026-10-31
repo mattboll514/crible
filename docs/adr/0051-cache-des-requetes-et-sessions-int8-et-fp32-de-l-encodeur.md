@@ -7,6 +7,10 @@
 - **Proposé par** : agent greffier, sur demande du propriétaire. Origine : `QUESTION-CONCEPTION` remontée par `@dev` sur la tâche `ENCODER-REQUETES` (phase P2, fiche `docs/phases/P2-encodeur-et-recette.md`), avant implémentation. Verdicts de `@architecte` le 2026-10-23 : `NON-COUVERT` pour les points 1 et 3, `ECART` pour le point 2.
 - **Remplace** : —
 
+## Erratum du 2026-10-29
+
+Dans « ADR liés », le renvoi « ADR-0027 (configuration `serde` et surcharges `CRIBLE_*`) » est erroné. ADR-0027 ne décide que l'ajout de `serde_json`. La forme des surcharges `CRIBLE_*`, le refus d'une variable inconnue ou invalide et la liste des variables exclues sont décidés par ADR-0097. La variable `CRIBLE_LIMITS__QUERY_CACHE_ENTRIES` citée dans la décision suit ADR-0097. Le texte d'origine est laissé tel quel. Rien ne change dans les décisions de cet ADR.
+
 ## Contexte
 
 La tâche `ENCODER-REQUETES` doit livrer `encode_query(text)` : INT8 par défaut, fp32 en option, prompt `query: `, troncature à `max_tokens`, un cache LRU en RAM jamais persisté, et un repli vers fp32 si le modèle INT8 est absent. Trois choix nécessaires à cette implémentation ne sont tranchés ni par `docs/01` à `docs/08` ni par un ADR accepté. `@dev` s'est arrêté avant d'écrire le code, comme le veut la règle 3 des agents.

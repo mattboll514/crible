@@ -25,6 +25,13 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
+      # ADR-0114, decision 1: a broken intra-doc link fails at the push that
+      # writes it. `RUSTDOCFLAGS` is set on this step only, and the step runs
+      # with the default features, without `--document-private-items`.
+      - name: Check the documentation links
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --workspace --locked
       - name: Install uv
         uses: astral-sh/setup-uv@v7
       - name: Generate the synthetic dataset
@@ -41,13 +48,20 @@ jobs:
         run: cargo clippy -p crible-store --all-targets --locked --features failpoints -- -D warnings
       - name: Test the failpoint build
         run: cargo test -p crible-store --locked --features failpoints
+      # `compaction_recovery` arms the store failpoint through the server's own
+      # `failpoints` feature (complement of 2026-10-29 to ADR-0068, decision 2):
+      # without these two steps the recovery of ADR-0108 is never run in CI.
+      - name: Lint the server failpoint build
+        run: cargo clippy -p crible-server --all-targets --locked --features failpoints -- -D warnings
+      - name: Test the server failpoint build
+        run: cargo test -p crible-server --locked --features failpoints
       - name: Test the Python client against the binary
         working-directory: clients/python
         env:
           CRIBLE_BIN: ${{ github.workspace }}/target/debug/crible
         run: |
           uv sync
-          uv run pytest tests/test_online_batch.py
+          uv run pytest -m server
 
   python:
     name: Python
@@ -134,7 +148,7 @@ jobs:
         working-directory: tools
         run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
       # No save step here: `.github/workflows/model-cache.yml` is the only writer of this cache (ADR-0059).
-      # The four Legifacile sample tests stay local, excluded by name one by one
-      # (ADR-0057, ADR-0062, ADR-0063, ADR-0085).
+      # The five Legifacile sample tests stay local, excluded by name one by one
+      # (ADR-0057, ADR-0062, ADR-0063, ADR-0085, ADR-0109).
       - name: Test with ONNX Runtime
-        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import --skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged
+        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import --skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged --skip api_and_cli_return_the_same_results_on_the_legifacile_sample
