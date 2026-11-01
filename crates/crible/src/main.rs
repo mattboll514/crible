@@ -220,6 +220,36 @@ enum Command {
         #[arg(long)]
         index: Option<String>,
     },
+    /// Report the aggregated analytics of an instance (`GET /v1/stats`), read
+    /// from `<data>/analytics.sqlite` without a server (ADR-0124).
+    Stats {
+        /// Root data directory (`<data>/analytics.sqlite`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Lower bound, included, of the window: an ISO 8601 date with its
+        /// offset; defaults to the oldest retained row.
+        #[arg(long)]
+        from: Option<String>,
+        /// Upper bound, included, of the window: an ISO 8601 date with its
+        /// offset; defaults to the newest retained row.
+        #[arg(long)]
+        to: Option<String>,
+        /// Only the events of that index.
+        #[arg(long)]
+        index: Option<String>,
+        /// Only the events of that operation: `search`, `search_multi`,
+        /// `get_document`, `online_batch`, `attach_batch`, `patch_documents`,
+        /// `compact`, `export`, `snapshot` or `index_admin`.
+        #[arg(long)]
+        operation: Option<String>,
+        /// Width of the buckets: `minute`, `hour` (default) or `day`.
+        #[arg(long, value_name = "minute|hour|day")]
+        group_by: Option<String>,
+        /// Output format: `table` (ASCII tables, default) or `json` (the body
+        /// of `GET /v1/stats`, less `analytics_dropped`).
+        #[arg(long, value_enum, default_value_t = commands::StatsFormat::Table)]
+        format: commands::StatsFormat,
+    },
     /// Serve the HTTP API of an instance until SIGTERM or SIGINT (ADR-0099).
     Serve {
         /// Path of the instance configuration file (ADR-0097).
@@ -346,6 +376,23 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
+        Command::Stats {
+            data,
+            from,
+            to,
+            index,
+            operation,
+            group_by,
+            format,
+        } => commands::stats(&commands::StatsRequest {
+            data: &data,
+            from: from.as_deref(),
+            to: to.as_deref(),
+            index: index.as_deref(),
+            operation: operation.as_deref(),
+            group_by: group_by.as_deref(),
+            format,
+        }),
         Command::Serve { config } => crible_server::serve_blocking(&config),
         Command::Key { command } => match command {
             KeyCommand::Generate => commands::generate_key(),

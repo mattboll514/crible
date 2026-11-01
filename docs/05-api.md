@@ -494,7 +494,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 ```json
 {
   "from": "2026-10-31T00:00:00Z",
-  "to": "2026-10-31T23:59:59Z",
+  "to": "2026-10-31T23:59:00Z",
   "group_by": "hour",
   "buckets": [
     { "start": "2026-10-31T08:00:00Z",

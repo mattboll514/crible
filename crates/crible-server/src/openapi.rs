@@ -663,6 +663,284 @@ pub struct DebugQueryList {
     pub queries: Vec<DebugQuery>,
 }
 
+/// Body of `GET /v1/stats` (ADR-0124, decision 1).
+///
+/// The members are the fixed list of `docs/05-api.md`; a member without a value
+/// is omitted, never rendered `null` nor filled with an invented `0`
+/// (ADR-0119, decision 3). The four lists are always present, even empty.
+/// `analytics_dropped` is the counter of the process, not a value of the file
+/// (ADR-0118, decision 2).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsResponse {
+    /// Lower bound applied, in UTC; absent when no row and no bound exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Upper bound applied, in UTC; absent for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Width of the buckets, echoed: `minute`, `hour` or `day`.
+    pub group_by: StatsGroup,
+    /// Buckets that hold at least one event, in chronological order.
+    pub buckets: Vec<StatsBucket>,
+    /// The aggregate of the window, the shape of a bucket without `start`;
+    /// absent when the window holds no event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub totals: Option<StatsTotals>,
+    /// At most ten indexes, by count descending then name.
+    pub top_indexes: Vec<StatsIndexCount>,
+    /// At most ten filter forms, by count descending then form.
+    pub top_filter_shapes: Vec<StatsFilterShape>,
+    /// The last daily row of each index in the window, by name.
+    pub indexes: Vec<StatsIndexState>,
+    /// Events the bounded queue refused since the start of the process.
+    pub analytics_dropped: u64,
+}
+
+/// Width of the buckets of a statistics answer (ADR-0124, decision 2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsGroup {
+    /// One bucket per stored minute.
+    Minute,
+    /// One bucket per hour, the default.
+    Hour,
+    /// One bucket per UTC day.
+    Day,
+}
+
+/// One bucket of a statistics answer (ADR-0124, decision 1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsBucket {
+    /// Start of the bucket in UTC, truncated to the width.
+    pub start: String,
+    /// Number of events of the bucket.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<BTreeMap<String, u64>>,
+    /// Share of the successful searches that returned nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage; omitted when no stage has a sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<StatsLatency>,
+}
+
+/// The aggregate of the whole window, the shape of a bucket without `start`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsTotals {
+    /// Number of events of the window.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<BTreeMap<String, u64>>,
+    /// Share of the successful searches that returned nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage over the window; omitted when none has a sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<StatsLatency>,
+}
+
+/// The three percentiles of one stage, in milliseconds (ADR-0124, decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsPercentiles {
+    /// Nearest-rank median.
+    pub p50: f64,
+    /// Nearest-rank 95th percentile.
+    pub p95: f64,
+    /// Nearest-rank 99th percentile.
+    pub p99: f64,
+}
+
+/// The percentiles of the nine stages, a stage without a sample omitted.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsLatency {
+    /// Step 1, validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate: Option<StatsPercentiles>,
+    /// Step 2, encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encode: Option<StatsPercentiles>,
+    /// Step 3, pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<StatsPercentiles>,
+    /// Step 4, dense branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense: Option<StatsPercentiles>,
+    /// Step 5, lexical branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical: Option<StatsPercentiles>,
+    /// Step 6, fusion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<StatsPercentiles>,
+    /// Step 7, regrouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<StatsPercentiles>,
+    /// Step 8, payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<StatsPercentiles>,
+    /// Total of the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<StatsPercentiles>,
+}
+
+/// One entry of `top_indexes` (ADR-0124, decision 7).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsIndexCount {
+    /// Name of the index.
+    pub index: String,
+    /// Events of that index on the window.
+    pub count: u64,
+}
+
+/// One entry of `top_filter_shapes` (ADR-0124, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsFilterShape {
+    /// Canonical form: field names and operators only, never a value.
+    pub shape: String,
+    /// Searches that carried that form on the window.
+    pub count: u64,
+}
+
+/// One entry of `indexes`: the last daily row of an index in the window
+/// (ADR-0124, decision 8).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsIndexState {
+    /// Day of the row, `AAAA-MM-JJ`.
+    pub day: String,
+    /// Index the row describes.
+    pub index: String,
+    /// Documents of the reference state.
+    pub documents: u64,
+    /// Passages alive at the generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at the generation or an earlier one.
+    pub dead_passages: u64,
+    /// Derived `dead_passages / (live_passages + dead_passages)`.
+    pub dead_ratio: f64,
+    /// Bytes the index directory occupies.
+    pub disk_bytes: u64,
+    /// Published generation.
+    pub generation: u64,
+    /// Batches the reference state applied.
+    pub batches: u64,
+}
+
+impl From<crible_store::analytics::Stats> for StatsResponse {
+    fn from(stats: crible_store::analytics::Stats) -> Self {
+        Self {
+            from: stats.from,
+            to: stats.to,
+            group_by: stats.group_by.into(),
+            buckets: stats.buckets.into_iter().map(StatsBucket::from).collect(),
+            totals: stats.totals.map(StatsTotals::from),
+            top_indexes: stats
+                .top_indexes
+                .into_iter()
+                .map(|entry| StatsIndexCount {
+                    index: entry.index,
+                    count: entry.count,
+                })
+                .collect(),
+            top_filter_shapes: stats
+                .top_filter_shapes
+                .into_iter()
+                .map(|entry| StatsFilterShape {
+                    shape: entry.shape,
+                    count: entry.count,
+                })
+                .collect(),
+            indexes: stats
+                .indexes
+                .into_iter()
+                .map(|entry| StatsIndexState {
+                    day: entry.day,
+                    index: entry.index,
+                    documents: entry.documents,
+                    live_passages: entry.live_passages,
+                    dead_passages: entry.dead_passages,
+                    dead_ratio: entry.dead_ratio,
+                    disk_bytes: entry.disk_bytes,
+                    generation: entry.generation,
+                    batches: entry.batches,
+                })
+                .collect(),
+            // Filled by the route, which alone reads the state of the process.
+            analytics_dropped: 0,
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsGroupBy> for StatsGroup {
+    fn from(width: crible_store::analytics::StatsGroupBy) -> Self {
+        match width {
+            crible_store::analytics::StatsGroupBy::Minute => Self::Minute,
+            crible_store::analytics::StatsGroupBy::Hour => Self::Hour,
+            crible_store::analytics::StatsGroupBy::Day => Self::Day,
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsBucket> for StatsBucket {
+    fn from(bucket: crible_store::analytics::StatsBucket) -> Self {
+        let errors = (!bucket.errors.is_empty()).then_some(bucket.errors);
+        Self {
+            start: bucket.start,
+            count: bucket.count,
+            errors,
+            zero_results_rate: bucket.zero_results_rate,
+            latency_ms: (!bucket.latency_ms.is_empty()).then(|| bucket.latency_ms.into()),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsTotals> for StatsTotals {
+    fn from(totals: crible_store::analytics::StatsTotals) -> Self {
+        let errors = (!totals.errors.is_empty()).then_some(totals.errors);
+        Self {
+            count: totals.count,
+            errors,
+            zero_results_rate: totals.zero_results_rate,
+            latency_ms: (!totals.latency_ms.is_empty()).then(|| totals.latency_ms.into()),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsLatency> for StatsLatency {
+    fn from(latency: crible_store::analytics::StatsLatency) -> Self {
+        Self {
+            validate: latency.validate.map(StatsPercentiles::from),
+            encode: latency.encode.map(StatsPercentiles::from),
+            filter: latency.filter.map(StatsPercentiles::from),
+            dense: latency.dense.map(StatsPercentiles::from),
+            lexical: latency.lexical.map(StatsPercentiles::from),
+            fusion: latency.fusion.map(StatsPercentiles::from),
+            group: latency.group.map(StatsPercentiles::from),
+            fetch: latency.fetch.map(StatsPercentiles::from),
+            total: latency.total.map(StatsPercentiles::from),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsPercentiles> for StatsPercentiles {
+    fn from(percentiles: crible_store::analytics::StatsPercentiles) -> Self {
+        Self {
+            p50: percentiles.p50,
+            p95: percentiles.p95,
+            p99: percentiles.p99,
+        }
+    }
+}
+
 /// Mode of an online batch: `upsert` only (ADR-0055).
 ///
 /// `replace_all` is the mode of a deposited batch; the online route refuses it
@@ -1557,6 +1835,7 @@ pub fn snapshots_doc() {}
         crate::http::list_jobs,
         crate::http::get_job,
         crate::http::debug_queries,
+        crate::http::stats,
         crate::indexes::create_index,
         crate::indexes::list_indexes,
         crate::indexes::get_index,
@@ -1614,6 +1893,15 @@ pub fn snapshots_doc() {}
         JobList,
         DebugQuery,
         DebugQueryList,
+        StatsResponse,
+        StatsGroup,
+        StatsBucket,
+        StatsTotals,
+        StatsPercentiles,
+        StatsLatency,
+        StatsIndexCount,
+        StatsFilterShape,
+        StatsIndexState,
         BatchMode,
         OnlinePassage,
         OnlineDocument,
