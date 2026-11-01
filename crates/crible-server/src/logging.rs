@@ -31,7 +31,11 @@ pub const DEFAULT_FILTER: &str = "info";
 
 /// Target on which axum journals the rejection of an extractor, body text
 /// included.
-pub const REJECTION_TARGET: &str = "axum::rejection";
+///
+/// The crate keeps the name for itself: the fixed filter of [`log_subscriber`]
+/// and its test are its only readers, so it is not part of the public surface
+/// of the server (`@relecteur`, NETTOYER-P6).
+pub(crate) const REJECTION_TARGET: &str = "axum::rejection";
 
 /// Installs the journal of the server on stdout.
 ///
@@ -68,7 +72,7 @@ pub fn effective_filter(raw: Option<&str>) -> String {
 /// stdout.
 ///
 /// Two filters decide together: the one of `RUST_LOG`, then a fixed one that
-/// refuses [`REJECTION_TARGET`] and its sub-targets. The second filter is not a
+/// refuses `axum::rejection` and its sub-targets. The second filter is not a
 /// directive, so no value of `RUST_LOG` can outrank it: `axum::rejection=trace`
 /// as much as `axum::rejection[body]=trace`, which is more specific than a mere
 /// directive on the target, leave it in place. axum journals the body text of an
@@ -108,7 +112,7 @@ where
 
 /// Whether a line of `target` comes from the rejection journal of axum.
 ///
-/// The target of axum today is exactly [`REJECTION_TARGET`]; a sub-target is
+/// The target of axum today is exactly `axum::rejection`; a sub-target is
 /// refused as well, so a later version of the crate cannot slip a body through
 /// a deeper module.
 #[must_use]

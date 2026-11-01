@@ -186,6 +186,16 @@ mod tests {
     /// guard can release work that never started without hanging the test; a
     /// `Barrier` would wait for a partner that does not exist when the route
     /// answers before the work runs (`@relecteur`, second pass of NETTOYER-P6).
+    ///
+    /// The same rendezvous stands in `tests/errors.rs`, and the two cannot share
+    /// one: this module is a unit test, built only with `#[cfg(test)]`, while an
+    /// integration test links the crate as an external library and sees none of
+    /// it. A `pub` module gated on the `failpoints` feature would be invisible to
+    /// `errors.rs`, which runs in a plain build (and every test of that file
+    /// would then be gated as well), and a module compiled in every build would
+    /// add test code to the public surface of the server. The fixture is thirty
+    /// lines and both copies are pinned by their tests, so the duplication is
+    /// kept and named here and there (`@relecteur`, NETTOYER-P6; NETTOYER-P7).
     struct Rendezvous {
         release: mpsc::Sender<()>,
         wait: Mutex<Option<mpsc::Receiver<()>>>,

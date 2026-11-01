@@ -127,11 +127,19 @@ async fn a_job_failing_after_its_commit_point_still_refreshes_the_counts() {
         "the failure of the manifest is reported: {job}"
     );
 
-    // The refresh ran whatever the work returned: `documents` and the passage
-    // count come from the committed store, generation 2 included, while the
-    // generation served stays the last one published. An implementation that
+    // The refresh ran whatever the work returned: `documents`, `last_batch` and
+    // the generation come from the committed store, generation 2 included, while
+    // the generation served stays the last one published. An implementation that
     // skipped the refresh on an error would still serve `documents = 1`
     // (ADR-0126, decision 4).
+    //
+    // `live_passages` and `dead_passages` read the mix of
+    // `GenerationStore::state()` and must not be read as a tombstone: the live
+    // count comes from the bitmap of the published snapshot, which is still
+    // generation 1 and holds one passage, while the total comes from
+    // `records.sqlite`, which holds the two passages of the committed history.
+    // The difference counts the passage of the generation that is not served
+    // yet, not a deletion (`@relecteur`, REUTILISER-LECTEURS-DENSES).
     let body = detail(&router).await;
     for (field, expected) in [
         ("generation", 1),

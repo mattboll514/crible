@@ -367,6 +367,32 @@ fn refused_targets(
     records
 }
 
+/// Events of a failed target and of the targets the loop never reached.
+///
+/// `position` is the target whose search failed: its observer is closed at
+/// `started`, and the list is truncated **at** it, so the targets after it never
+/// produce an event of their own with work that did not happen (ADR-0124,
+/// decision 10). The events of the targets that answered keep `ok`; the faulty
+/// one carries `status`; each target after it carries `status` with empty steps
+/// and no pool size, in the order of the request.
+fn failure_events(
+    observers: &mut Vec<Observed>,
+    resolved: &[(String, Option<String>)],
+    position: usize,
+    started: Instant,
+    mode: Mode,
+    status: &str,
+) -> Vec<Record> {
+    if let Some(observed) = observers.get_mut(position) {
+        observed.finish_at(started);
+    }
+    observers.truncate(position + 1);
+    let mut records = events_of(std::mem::take(observers), status);
+    let unreached = resolved.get(position + 1..).unwrap_or_default();
+    records.extend(refused_targets(unreached, None, mode, started, status));
+    records
+}
+
 /// A multi-index request, validated far enough to take the token.
 struct Plan {
     /// Targets in the order of the request.
@@ -767,7 +793,7 @@ fn run_multi(
     // (ADR-0119, decision 9).
     // The encoding is measured once, on the observer of the first target and
     // here; the validation happened before it (ADR-0119, decision 9).
-    let request_validate = first.request_stages().0;
+    let request_validate = first.validate_step();
     let request_encode = encoding;
     let mut observers: Vec<Observed> = targets
         .iter()
@@ -834,15 +860,16 @@ fn run_multi(
                 // were never reached carry the same code with empty steps — no
                 // duration and no pool size is invented for work that did not
                 // happen.
-                if let Some(observed) = observers.get_mut(position) {
-                    observed.finish_at(target_started);
-                }
-                observers.truncate(position + 1);
                 let payload = failure_payload(&failure, journal_request);
                 let status = failure.code().as_str().to_owned();
-                let mut records = events_of(observers, &status);
-                let unreached = resolved.get(position + 1..).unwrap_or_default();
-                records.extend(refused_targets(unreached, None, mode, started, &status));
+                let records = failure_events(
+                    &mut observers,
+                    &resolved,
+                    position,
+                    target_started,
+                    mode,
+                    &status,
+                );
                 return (Err(failure), records, payload);
             }
         };
@@ -1283,7 +1310,7 @@ impl MultiOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{Observed, Operation, events_of};
+    use super::{Mode, Observed, Operation, events_of, failure_events};
     use crate::analytics::{Record, SearchEvent};
     use std::time::Instant;
 
@@ -1293,6 +1320,11 @@ mod tests {
         let mut observed = Observed::new_at(index, Operation::SearchMulti, Instant::now());
         observed.finish_at(started);
         observed
+    }
+
+    /// An observer of a target the loop never reached: no step was measured.
+    fn waiting(index: &str) -> Observed {
+        Observed::new_at(index, Operation::SearchMulti, Instant::now())
     }
 
     /// The events of the records, in their order.
@@ -1331,5 +1363,42 @@ mod tests {
         assert_eq!(written.len(), 1, "{written:?}");
         assert_eq!(written[0].index, "alpha");
         assert_eq!(written[0].status, "invalid_request");
+    }
+
+    #[test]
+    fn a_failure_on_the_second_target_stops_the_events_at_it() {
+        // ADR-0124, decision 10: the second target fails and the third is never
+        // reached. The truncation of `run_multi` keeps the faulty target **in**,
+        // so `alpha` stays `ok`, `beta` carries the code, and `gamma` reports the
+        // same code with no step of its own — without it `beta` would read `ok`
+        // and `gamma` would carry the failure twice.
+        let mut observers = vec![ran("alpha"), ran("beta"), waiting("gamma")];
+        let resolved = vec![
+            ("alpha".to_owned(), None),
+            ("beta".to_owned(), None),
+            ("gamma".to_owned(), None),
+        ];
+        let written = events(failure_events(
+            &mut observers,
+            &resolved,
+            1,
+            Instant::now(),
+            Mode::Dense,
+            "internal",
+        ));
+        assert_eq!(
+            written.len(),
+            3,
+            "one event per resolved target, never two for the faulty one: {written:?}"
+        );
+        let statuses: Vec<&str> = written.iter().map(|event| event.status.as_str()).collect();
+        assert_eq!(statuses, ["ok", "internal", "internal"], "{written:?}");
+        let indexes: Vec<&str> = written.iter().map(|event| event.index.as_str()).collect();
+        assert_eq!(indexes, ["alpha", "beta", "gamma"], "{written:?}");
+        // The target that never ran invents no step and no pool size.
+        let unreached = &written[2];
+        assert!(unreached.stages.filter.is_none(), "{unreached:?}");
+        assert!(unreached.stages.dense.is_none(), "{unreached:?}");
+        assert_eq!(unreached.pool, 0, "{unreached:?}");
     }
 }
