@@ -846,8 +846,8 @@ pub struct SearchReturn {
 /// Body of `POST /v1/indexes/{index}/search` (ADR-0109).
 ///
 /// `debug` is a member since P7 and adds the diagnostic member of ADR-0119.
-/// `explain_ids` is still not a member: `EXPLIQUER-DOCUMENTS` opens it, and the
-/// specification describes only the body the server accepts.
+/// `explain_ids` is a member since `EXPLIQUER-DOCUMENTS` and adds the `explain`
+/// member of ADR-0123.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchRequest {
@@ -894,6 +894,9 @@ pub struct SearchRequest {
     /// Adds the plan, the timings and the branch ranks (ADR-0119).
     #[schema(nullable = false)]
     pub debug: Option<bool>,
+    /// Ids to explain, 100 at most, duplicates merged (ADR-0123).
+    #[schema(nullable = false, max_items = 100)]
+    pub explain_ids: Option<Vec<String>>,
     /// Deadline of the request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -957,6 +960,9 @@ pub struct SearchMultiRequest {
     /// (ADR-0119).
     #[schema(nullable = false)]
     pub debug: Option<bool>,
+    /// Ids to explain, each naming a target of `targets` (ADR-0123).
+    #[schema(nullable = false, max_items = 100)]
+    pub explain_ids: Option<Vec<SearchExplainTarget>>,
     /// Deadline of the whole request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -1035,6 +1041,10 @@ pub struct SearchResponse {
     /// Diagnostic of a `debug` request; absent otherwise (ADR-0119).
     #[schema(nullable = false)]
     pub debug: Option<SearchDebug>,
+    /// Explanation of `explain_ids`, in the order of the request; absent
+    /// otherwise (ADR-0123).
+    #[schema(nullable = false)]
+    pub explain: Option<Vec<SearchExplainEntry>>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
 }
@@ -1091,8 +1101,156 @@ pub struct SearchMultiResponse {
     /// (ADR-0119).
     #[schema(nullable = false)]
     pub debug: Option<SearchMultiDebug>,
+    /// Explanation of `explain_ids`, flat and in the order of the request; each
+    /// entry names its index (ADR-0123).
+    #[schema(nullable = false)]
+    pub explain: Option<Vec<SearchMultiExplainEntry>>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
+}
+
+/// One element of `explain_ids` on the multi-index route (ADR-0123).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplainTarget {
+    /// Target of the entry; it must be one of `targets`.
+    pub index: String,
+    /// `doc_id` or passage key to explain.
+    pub id: String,
+}
+
+/// Member `explain` of the simple route (ADR-0123, decision 1).
+///
+/// A list with one entry per requested id, in the order of the request, duplicates
+/// merged. Every member without a value is omitted, never `null`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplain {
+    /// Entries of the explanation, in the order of the request.
+    pub explain: Vec<SearchExplainEntry>,
+}
+
+/// One entry of `explain` on the simple route (ADR-0123, decision 1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplainEntry {
+    /// Identifier as requested, `doc_id` or `doc_id#ord`.
+    pub id: String,
+    /// Document the id belongs to.
+    pub doc_id: String,
+    /// Whether the `documents` row is present (ADR-0041).
+    pub exists: bool,
+    /// Whether the document has at least one living passage; absent when
+    /// `exists` is false.
+    #[schema(nullable = false)]
+    pub alive: Option<bool>,
+    /// Whether the id is in the filtered pool.
+    pub in_pool: bool,
+    /// Leaves of the filter that exclude the id, by JSON path; absent when the
+    /// id is in the pool (ADR-0123, decision 7).
+    #[schema(nullable = false)]
+    pub excluded_by: Option<Vec<String>>,
+    /// Dense branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub dense: Option<ExplainDense>,
+    /// Lexical branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub lexical: Option<ExplainLexical>,
+    /// Fused rank before the regrouping; absent when the id is not in that list.
+    #[schema(nullable = false)]
+    pub fused: Option<ExplainFused>,
+    /// Key of the result that absorbed the passage; absent when it was not
+    /// absorbed.
+    #[schema(nullable = false)]
+    pub grouped_under: Option<String>,
+}
+
+/// Dense branch of one explanation (ADR-0123, decision 5).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainDense {
+    /// Key of the passage the branch describes.
+    pub key: String,
+    /// Rank over the whole filtered pool, independent of `k`.
+    pub exact_rank: u32,
+    /// Rank in the order of the binary selection; absent under `exact`.
+    #[schema(nullable = false)]
+    pub binary_rank: Option<u32>,
+    /// Whether the passage is among the rescorable candidates; absent under
+    /// `exact`.
+    #[schema(nullable = false)]
+    pub in_binary_candidates: Option<bool>,
+}
+
+/// Lexical branch of one explanation (ADR-0123, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainLexical {
+    /// Key of the passage the branch describes.
+    pub key: String,
+    /// Rank among the pool passages that have a BM25 score.
+    pub rank: u32,
+    /// BM25 score of the passage.
+    pub score: f64,
+    /// Contribution of each analysed term present in the passage.
+    pub terms: Vec<ExplainTerm>,
+}
+
+/// One analysed term of the query, in the passage of an explanation.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainTerm {
+    /// Analysed term.
+    pub term: String,
+    /// Frequency of the term in the passage.
+    pub tf: u32,
+    /// BM25 contribution of the term, in the unit of `lexical.score`.
+    pub score: f64,
+}
+
+/// Fused branch of one explanation: the rank before the regrouping.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainFused {
+    /// Rank in the fused list, from 1.
+    pub rank: u32,
+}
+
+/// One entry of `explain` on the multi-index route: the simple entry plus the
+/// index it names (ADR-0123, decision 2).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchMultiExplainEntry {
+    /// Index the entry explains.
+    pub index: String,
+    /// Identifier as requested, `doc_id` or `doc_id#ord`.
+    pub id: String,
+    /// Document the id belongs to.
+    pub doc_id: String,
+    /// Whether the `documents` row is present (ADR-0041).
+    pub exists: bool,
+    /// Whether the document has at least one living passage; absent when
+    /// `exists` is false.
+    #[schema(nullable = false)]
+    pub alive: Option<bool>,
+    /// Whether the id is in the filtered pool.
+    pub in_pool: bool,
+    /// Leaves of the filter that exclude the id, by JSON path.
+    #[schema(nullable = false)]
+    pub excluded_by: Option<Vec<String>>,
+    /// Dense branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub dense: Option<ExplainDense>,
+    /// Lexical branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub lexical: Option<ExplainLexical>,
+    /// Fused rank before the regrouping; absent when the id is not in that list.
+    #[schema(nullable = false)]
+    pub fused: Option<ExplainFused>,
+    /// Key of the result that absorbed the passage; absent when it was not
+    /// absorbed.
+    #[schema(nullable = false)]
+    pub grouped_under: Option<String>,
 }
 
 /// Plan of one search, as `debug` reports it (ADR-0119, decision 4).
@@ -1487,6 +1645,14 @@ pub fn snapshots_doc() {}
         DebugTarget,
         DebugMultiResult,
         SearchMultiDebug,
+        SearchExplainTarget,
+        SearchExplain,
+        SearchExplainEntry,
+        SearchMultiExplainEntry,
+        ExplainDense,
+        ExplainLexical,
+        ExplainTerm,
+        ExplainFused,
     )),
     modifiers(&BearerAuth, &BodyBound),
     security(("bearerAuth" = []))

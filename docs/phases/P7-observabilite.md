@@ -89,13 +89,14 @@
 - **À lire** : `06-observabilite.md` (explain) ; `05-api.md` (format).
 - **Livrables** : pour chaque document demandé :
   - s'il existe et s'il est vivant ;
-  - s'il est dans le pool, et sinon les clauses qui l'excluent (chaque clause est évaluée séparément) ;
-  - son rang dense exact (scan exact du pool), son rang binaire et sa présence dans les N candidats ;
-  - son rang et son score BM25, avec l'explication tantivy ;
+  - s'il est dans le pool, et sinon les clauses qui l'excluent (chaque clause est évaluée séparément, sur une feuille du filtre et par son chemin JSON complet, ADR-0123 décision 7) ;
+  - son rang dense exact (scan exact du pool), son rang binaire et sa présence dans les N candidats (ADR-0123 décision 5) ;
+  - son rang et son score BM25, avec la liste fermée `terms` terme par terme (ADR-0123 décision 6) ;
   - son rang fusionné, et s'il a été absorbé par un regroupement.
 - **Critères d'acceptation** :
   - un test par cas : exclu par le filtre, mort, hors des N candidats binaires, rang lexical seul, absorbé par un regroupement ;
-  - le cas « rang 70 en dense, rang 2 en lexical » de l'échantillon est expliqué.
+  - le cas « rang 70 en dense, rang 2 en lexical » est expliqué sur une fixture synthétique qui reproduit ce cas, verte en CI (ADR-0123 décision 11).
+- **Note du 2026-11-01** (ADR-0123, décision 11) : ce cas n'existe pas sur `data/legifacile-sample`, où MES-10 mesure l'article 1240 à rang dense 1 et lexical 5 ; le prouver sur l'échantillon demanderait un sixième test local exclu de la CI, hors de la liste fermée de `docs/07:148-150`. La fixture synthétique fixe le cas — rang dense exact 70, rang lexical 2 — sans modèle ni données de production.
 
 ### ROUTE-STATS
 - **Objectif** : lire les analytics.

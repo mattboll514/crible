@@ -43,7 +43,7 @@
 //! most `k × passages_per_document` entries. No `dedup` and no regrouping ever
 //! crosses an index boundary (ADR-0110, decision 8).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -55,6 +55,7 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_search::api::{self, ReturnSelection};
 use crible_search::debug::DebugCapture;
+use crible_search::explain::{ExplainEntry, ExplainId};
 use crible_search::group::Grouping;
 use crible_search::pipeline::{Mode, RankedHit, ScoreType};
 use serde_json::{Map, Value, json};
@@ -68,8 +69,8 @@ use crate::http::RequestId;
 use crate::jobs::Published;
 use crate::limits;
 use crate::search::{
-    self, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS, Observed, ReturnSpec,
-    SearchRequest, json_object, optional_string, reject_unknown,
+    self, ExplainContext, ExplainTarget, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS,
+    Observed, ReturnSpec, SearchRequest, json_object, optional_string, reject_unknown,
 };
 
 /// Constant of the reciprocal rank fusion, shared with the fusion of the two
@@ -352,6 +353,8 @@ struct Plan {
     exact: bool,
     /// `debug` asks for the `debug` member of ADR-0119.
     debug: bool,
+    /// Ids of `explain_ids`, in the order of the request (ADR-0123).
+    explain: Vec<ExplainTarget>,
     /// Deadline of the whole request (ADR-0102, decision 3).
     deadline: Duration,
     /// Whether the request is recorded by the debug journal (ADR-0122).
@@ -454,6 +457,15 @@ fn parse_targets(object: &Map<String, Value>) -> Result<Vec<TargetRequest>, Crib
 
 /// Applies the order of ADR-0110, decision 7, and builds the plan.
 fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Plan, CribleError> {
+    // ADR-0123, decision 2: an entry of `explain_ids` must name one of the
+    // targets. The shape of the field was checked with the body, so this is still
+    // the validation step (a) of ADR-0110, before any index is read.
+    let names: BTreeSet<String> = request
+        .targets
+        .iter()
+        .map(|target| target.index.clone())
+        .collect();
+    request.common.check_explain_targets(&names)?;
     let common = request.common;
     // (a) bounds of the body, and the entries of an explicit mode, before any
     // index is read. `targets` was already checked by the parser.
@@ -554,6 +566,7 @@ fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Pl
         k: common.k,
         exact: common.exact,
         debug: common.debug,
+        explain: common.explain,
         deadline,
         // ADR-0122, decision 1: a `debug` request is always recorded when the
         // journal is on; the draw records the others.
@@ -655,6 +668,7 @@ fn run_multi(
         k,
         exact,
         debug,
+        explain,
         recording,
         ..
     } = plan;
@@ -738,6 +752,11 @@ fn run_multi(
         // `debug` or is recorded; without either, no vector is allocated.
         let mut capture =
             (debug || recording).then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
+        // ADR-0123, decision 4: the target keeps what its explanation reads when
+        // at least one id names it.
+        let explaining = explain
+            .iter()
+            .any(|entry| entry.index.as_deref() == Some(target.index.as_str()));
         let outcome = match search::search_index(
             state,
             &target.index,
@@ -752,6 +771,7 @@ fn run_multi(
                 k,
                 exact,
                 capture: capture.as_mut(),
+                explain: explaining,
             },
         ) {
             Ok(outcome) => outcome,
@@ -832,6 +852,15 @@ fn run_multi(
     } else {
         ScoreType::Rrf
     };
+    // ADR-0123, decision 4: the explanation of each target runs after the
+    // global `took_ms`, so its context leaves the outcome here, before the fusion
+    // consumes the rest.
+    let mut contexts: HashMap<String, ExplainContext> = HashMap::new();
+    for (target, outcome) in outcomes.iter_mut() {
+        if let Some(context) = outcome.explain.take() {
+            contexts.insert(target.index.clone(), context);
+        }
+    }
     let fusing = Instant::now();
     let entries = fuse(outcomes, mode, &grouping, k);
     // The fusion between indexes belongs to the global `fusion` of `debug` and
@@ -843,6 +872,21 @@ fn run_multi(
     // It is read once and shared with the `debug` member (ADR-0119, decisions 7
     // and 9) and with the journal (ADR-0121, decision 4).
     let total = started.elapsed();
+    // ADR-0123, decisions 1, 2 and 4: one flat list, in the order of the request,
+    // each entry naming its index, computed after `fetch` and under the deadline.
+    let explain = match explain_entries(
+        &explain,
+        &contexts,
+        &targets,
+        vector.as_deref(),
+        prepared.text.as_deref(),
+    ) {
+        Ok(rendered) => rendered,
+        Err(failure) => {
+            let payload = failure_payload(&failure, journal_request);
+            return (Err(failure), observers, payload);
+        }
+    };
     let (results, per_result) =
         match render_entries(entries, &targets, score_type, &selection, debug) {
             Ok(rendered) => rendered,
@@ -890,6 +934,7 @@ fn run_multi(
         Ok(MultiOutcome {
             results,
             debug,
+            explain,
             targets: summaries,
             truncated_query: prepared.truncated_query,
             took_ms: total.as_secs_f64() * 1_000.0,
@@ -897,6 +942,74 @@ fn run_multi(
         observers,
         journal,
     )
+}
+
+/// Explains the ids of a multi-index request, in the order of the request.
+///
+/// The ids are grouped by index, so one exact scan and one lexical ranking serve
+/// every id of a target (ADR-0123, decision 4). Each entry names its `index`, and
+/// the list is flat even though the computation is per target (decision 2).
+fn explain_entries(
+    requested: &[ExplainTarget],
+    contexts: &HashMap<String, ExplainContext>,
+    targets: &[ResolvedTarget],
+    vector: Option<&[f32]>,
+    text: Option<&str>,
+) -> Result<Option<Vec<Value>>, CribleError> {
+    if requested.is_empty() {
+        return Ok(None);
+    }
+    let mut computed: HashMap<(String, String), ExplainEntry> = HashMap::new();
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    for target in requested {
+        let Some(index) = target.index.as_ref() else {
+            return Err(error::internal(
+                "a multi-index explanation entry names no index, so no target can explain it",
+            ));
+        };
+        if !done.insert(index.clone()) {
+            continue;
+        }
+        let ids: Vec<ExplainId> = requested
+            .iter()
+            .filter(|entry| entry.index.as_deref() == Some(index.as_str()))
+            .map(|entry| entry.id.clone())
+            .collect();
+        let raw: Vec<&str> = requested
+            .iter()
+            .filter(|entry| entry.index.as_deref() == Some(index.as_str()))
+            .map(|entry| entry.raw.as_str())
+            .collect();
+        let context = contexts.get(index).ok_or_else(|| {
+            error::internal("a target asked for an explanation but kept no context for it")
+        })?;
+        let resolved = targets
+            .iter()
+            .find(|resolved| resolved.index == *index)
+            .ok_or_else(|| {
+                error::internal("an explanation names an index the request did not resolve")
+            })?;
+        let entries = context.explain(
+            &resolved.published.snapshot,
+            vector,
+            text,
+            &resolved.published.config.search,
+            &ids,
+        )?;
+        for (entry, raw) in entries.into_iter().zip(raw) {
+            computed.insert((index.clone(), raw.to_owned()), entry);
+        }
+    }
+    let rendered = requested
+        .iter()
+        .filter_map(|target| {
+            let index = target.index.as_ref()?;
+            computed
+                .get(&(index.clone(), target.raw.clone()))
+                .map(|entry| search::render_explain_entry(entry, Some(index)))
+        })
+        .collect();
+    Ok(Some(rendered))
 }
 
 /// Durations of one target, in the shape of `debug`.
@@ -1080,6 +1193,9 @@ struct MultiOutcome {
     /// `targets[]`, `timings_ms` and `per_result` of a `debug` request; absent
     /// without `debug` (ADR-0119, decision 9).
     debug: Option<Value>,
+    /// Entries of `explain_ids`, flat and in the order of the request; absent
+    /// without `explain_ids` (ADR-0123, decision 2).
+    explain: Option<Vec<Value>>,
     targets: Vec<Value>,
     truncated_query: bool,
     took_ms: f64,
@@ -1097,6 +1213,9 @@ impl MultiOutcome {
         });
         if let Some(debug) = self.debug {
             body["debug"] = debug;
+        }
+        if let Some(explain) = self.explain {
+            body["explain"] = Value::Array(explain);
         }
         body
     }

@@ -434,6 +434,9 @@ async fn the_payload_holds_the_query_text_and_the_filter_as_received() {
             "k": 10,
             "debug": true,
             "filter": filter.clone(),
+            // ADR-0123, decision 8: `explain_ids` enters neither the payload nor
+            // the capture, and the journal's member list stays closed.
+            "explain_ids": [DOC_ID],
         })),
     )
     .await;
@@ -462,6 +465,10 @@ async fn the_payload_holds_the_query_text_and_the_filter_as_received() {
             "the payload of a `debug` search carries `{member}`: {payload}"
         );
     }
+    assert!(
+        payload.get("explain").is_none() && payload["request"].get("explain_ids").is_none(),
+        "`explain_ids` enters neither the payload nor its request (ADR-0123, decision 8): {payload}"
+    );
     assert_eq!(
         payload["generation"], answer["generation"],
         "the generation of the payload is the one of the answer: {payload}"

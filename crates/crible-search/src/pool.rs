@@ -110,6 +110,24 @@ impl Pool {
     }
 }
 
+/// Whether `iid` satisfies `condition` on its own, nulls included (ADR-0035).
+///
+/// This is the leaf-by-leaf evaluation `excluded_by` of ADR-0123, decision 7,
+/// asks for: the condition is evaluated alone, over a domain of one identifier,
+/// so a value column scans that single row and a bitmap condition answers its
+/// membership directly. The enclosing nodes of the filter play no part here;
+/// the caller walks the AST and collects the leaves that fail.
+pub(crate) fn condition_holds(
+    filters: &FilterIndex,
+    condition: &Condition,
+    iid: Iid,
+) -> Result<bool, CribleError> {
+    let mut domain = RoaringBitmap::new();
+    domain.insert(iid.get());
+    let kept = evaluate_condition(filters, condition, Some(&domain))?;
+    Ok(kept.contains(iid.get()))
+}
+
 /// Evaluates one node of the AST.
 ///
 /// `domain` is the set the enclosing conjunction already kept. A value column

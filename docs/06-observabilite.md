@@ -96,14 +96,16 @@ La CLI `crible stats` affiche la même chose en tableau. La forme de la réponse
 ## Debug dans la réponse et explain
 
 - **`debug: true`** : plan, temps par étape, et rangs et scores de chaque résultat dans chaque branche (format dans `05-api.md`).
-- **`explain_ids`** : pour chaque document demandé, le moteur répond à « pourquoi il est, ou n'est pas, remonté » :
+- **`explain_ids`** : pour chaque document demandé, le moteur répond à « pourquoi il est, ou n'est pas, remonté » (ADR-0123 ; format dans `05-api.md`) :
   - existe-t-il ? est-il vivant ?
-  - est-il dans le pool ? sinon, quelles clauses du filtre l'excluent ? (on évalue chaque clause séparément pour ce document)
-  - son rang dense exact, son rang binaire, et s'il faisait partie des N candidats ;
-  - son rang et son score BM25, avec l'explication tantivy terme par terme ;
-  - son rang après fusion ;
-  - s'il a été absorbé par un regroupement.
-- Le rang dense exact impose un scan exact du pool, d'où un coût réservé au debug.
+  - est-il dans le pool ? sinon, quelles clauses du filtre l'excluent ? On évalue chaque clause séparément pour ce document et on ne nomme que des **feuilles**, par leur chemin JSON complet, jamais un nœud combinatoire (ADR-0123, décision 7).
+  - son rang dense exact, son rang binaire, et s'il faisait partie des N candidats ; le rang exact porte sur **tout le pool filtré** et reste indépendant de `k`, alors que les rangs de `debug` comptent les `candidates_per_branch` entrées de la branche : les deux échelles ne se comparent pas (ADR-0123, décision 5).
+  - son rang et son score BM25, avec la liste fermée `terms` — un terme analysé par entrée, `tf` et contribution, triée par score décroissant, dont la somme égale le score à `1e-4` près. Aucune `Explanation` tantivy brute n'est rendue (ADR-0123, décision 6).
+  - son rang après fusion, et la clé du passage qui l'a absorbé s'il a été absorbé par un regroupement.
+  - `explain` est un tableau frère de `results`, une entrée par id demandé, dans l'ordre de la requête ; les membres absents sont omis, jamais `null` ni `0` ; au plus 100 ids par requête, les doublons fusionnés (ADR-0123, décisions 1 à 3).
+  - en multi-index, chaque élément demandé est un couple `{ "index", "id" }` et la réponse est une liste plate dont chaque entrée porte `index` (ADR-0123, décision 2).
+- Le rang dense exact impose un scan exact du pool filtré, sous toute stratégie dense et seulement quand `explain_ids` est présent. L'explication se calcule **après `fetch`** : elle est hors de `took_ms` et hors des neuf clés de `03-recherche.md`, donc sans effet sur les analytics, mais elle reste **sous l'échéance** et rend `504` comme une recherche lente (ADR-0120, décision 1 ; ADR-0123, décision 4).
+- `explain_ids` ne change pas les résultats, ne dépend pas de `debug: true`, n'entre ni dans `debug.sqlite` ni dans les analytics, et ne rend aucun `iid` (INV-01 ; ADR-0121 ; ADR-0123, décisions 8 et 9).
 
 ## Éval : `crible eval`
 
