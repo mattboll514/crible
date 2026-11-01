@@ -54,6 +54,7 @@ mod test_encoding;
 
 pub use auth::{Auth, Client, protect};
 pub use config::Config;
+pub use debug::{TIMING_KEYS, round_ms};
 pub use http::{REQUEST_ID_HEADER, RequestId, accepted, build_router};
 pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};
 pub use logging::{DEFAULT_FILTER, effective_filter, init_logging, log_subscriber};

@@ -245,6 +245,22 @@ Précisions :
 - aucune dépendance nouvelle, ni Rust ni Python : `serde_json` (ADR-0027) et `clap` suffisent, et le convertisseur n'utilise que la bibliothèque standard ;
 - `docs/07:15` cite déjà `eval` dans le binaire ; cette décision ne change pas la liste des crates.
 
+## Complément du 2026-11-01 (relecture, tour 1)
+
+Ce complément répond au point C1 de la relecture du tour 1 de la tâche `COMMANDE-EVAL`. Il **ne réécrit aucune des dix-sept décisions** ci-dessus ; il en fixe l'interprétation sur un point que la relecture a montré ambigu. La règle est retenue par l'orchestrateur, par délégation du propriétaire pour la suite de P7, et porte le **même statut d'acceptation par anticipation** que l'ADR.
+
+### Dénominateur du recall@10 de fidélité (point C1)
+
+ADR-0076, décision 1, écrit le recall@10 au passage comme |top-10 BINARY ∩ top-10 EXACT| / 10, en supposant un pool d'au moins dix passages. Sur un pool plus petit, ce dénominateur fixe rendrait 0,6 pour un résultat identique à l'exact, donc un chiffre faux. `crible eval` divise par **|top-10 EXACT|**. Dès que le pool filtré compte au moins dix passages, ce dénominateur vaut 10 et la mesure est **identique** à celle d'ADR-0076 et de MES-01 ; sur un pool plus petit, elle reste juste. Le **recouvrement@10 au document** suit la même règle : il divise par le nombre de `doc_id` distincts du top-10 EXACT, qui vaut 10 dans le même cas.
+
+Précisions :
+
+- une requête dont la **liste exacte est vide** (pool vide) n'a pas de dénominateur : elle est **exclue** de la moyenne de fidélité et **comptée à part** dans le rapport, avec son `id`, pour que le lecteur sache sur quelle population la moyenne porte ;
+- la décision 6 disait « toutes les requêtes » ; cette expression désigne ici toutes les requêtes **dont la liste exacte n'est pas vide**, seule population où la métrique est définie ;
+- le rapport écrit le dénominateur par requête quand il diffère de 10, pour que la mesure reste vérifiable ;
+- la cible de 0,99 de `docs/08:86` continue de porter sur la moyenne, au N par défaut, sur les requêtes qui ont une liste exacte non vide ;
+- cette précision **ne modifie ni ADR-0076 ni les chiffres de MES-01** : elle fixe le calcul de `crible eval` là où ADR-0076 supposait un pool d'au moins dix passages.
+
 ## Conséquences
 
 - **Positives** :

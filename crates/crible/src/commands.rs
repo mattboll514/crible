@@ -934,6 +934,39 @@ fn encode_text_query(
     model: Option<&str>,
     text: &str,
 ) -> Result<(Vec<f32>, bool), CribleError> {
+    let encoder = text_encoder(models, index, model)?;
+    encoder.encode(text)
+}
+
+/// Query encoder of an index, built once for a series of queries.
+///
+/// One `crible search` encodes one text and [`encode_text_query`] builds the
+/// encoder for it; `crible eval` encodes the queries of a game, so it builds
+/// one encoder and reuses its cache (ADR-0051).
+pub(crate) struct TextEncoder {
+    /// Encoder holding the query cache of the process.
+    encoder: QueryEncoder,
+}
+
+impl TextEncoder {
+    /// Encodes one query text and reports whether it was truncated.
+    pub(crate) fn encode(&self, text: &str) -> Result<(Vec<f32>, bool), CribleError> {
+        let encoded = self.encoder.encode_query(text, DEFAULT_QUERY_PRECISION)?;
+        Ok((encoded.vector, encoded.truncated))
+    }
+}
+
+/// Builds the encoder of `text` for an index: the `onnx` model of the index, or
+/// the one named by `model`.
+///
+/// `crible eval` builds it once, on the first textual query of a game, so a
+/// game of `vector` queries needs no `--models` and no ONNX Runtime
+/// (ADR-0125, decision 2).
+pub(crate) fn text_encoder(
+    models: Option<&Path>,
+    index: &IndexConfig,
+    model: Option<&str>,
+) -> Result<TextEncoder, CribleError> {
     let models = models.ok_or_else(|| {
         invalid_request(
             "--query needs --models <dir>, the [paths] models root of crible.toml holding \
@@ -950,14 +983,13 @@ fn encode_text_query(
             index.name, name
         )));
     }
-
-    let encoder = QueryEncoder::new(
-        &directory,
-        Arc::new(ModelRegistry::new()),
-        DEFAULT_QUERY_CACHE_ENTRIES,
-    );
-    let encoded = encoder.encode_query(text, DEFAULT_QUERY_PRECISION)?;
-    Ok((encoded.vector, encoded.truncated))
+    Ok(TextEncoder {
+        encoder: QueryEncoder::new(
+            &directory,
+            Arc::new(ModelRegistry::new()),
+            DEFAULT_QUERY_CACHE_ENTRIES,
+        ),
+    })
 }
 
 /// `crible inspect --data <dir> [--index <i>]`.
@@ -1030,7 +1062,7 @@ fn index_directory(data: &Path, name: &str) -> PathBuf {
 ///
 /// The directory name and the `name` of the configuration must agree: a command
 /// that names `synth-small` must not open another index.
-fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleError> {
+pub(crate) fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleError> {
     let index_dir = index_directory(data, name);
     let path = index_dir.join(INDEX_CONFIG_FILE_NAME);
     let raw = fs::read_to_string(&path).map_err(|error| {
@@ -1124,12 +1156,12 @@ fn compact(value: &Value) -> Result<String, CribleError> {
 }
 
 /// Error raised when the request itself is malformed.
-fn invalid_request(message: impl Into<String>) -> CribleError {
+pub(crate) fn invalid_request(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::InvalidRequest, message)
 }
 
 /// Error raised when the process cannot carry out the request.
-fn internal(message: impl Into<String>) -> CribleError {
+pub(crate) fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message)
 }
 

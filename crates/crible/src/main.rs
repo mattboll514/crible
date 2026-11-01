@@ -9,6 +9,7 @@
 //! of `docs/05-api.md`, so a script reads the category without parsing prose.
 
 mod commands;
+mod eval;
 mod vector;
 
 use std::path::PathBuf;
@@ -211,6 +212,51 @@ enum Command {
         #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
         format: commands::SearchFormat,
     },
+    /// Evaluate one index against one game of queries, in local mode
+    /// (ADR-0125): fidelity against `exact`, quality against `expected`,
+    /// latencies, and a comparison to a previous report.
+    Eval {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+        /// JSONL game of queries, `{ "id", "query" | "vector", "filter"?,
+        /// "expected"? }`, one per line (ADR-0125, decision 3).
+        #[arg(long)]
+        queries: PathBuf,
+        /// Root models directory (`[paths] models` of `crible.toml`); required
+        /// by a game with a textual query.
+        #[arg(long)]
+        models: Option<PathBuf>,
+        /// Comma-separated branches to evaluate: `dense`, `lexical`, `hybrid`;
+        /// `dense` when absent.
+        #[arg(long, value_delimiter = ',', value_enum, default_value = "dense")]
+        modes: Vec<commands::SearchMode>,
+        /// Number of documents of the quality runs.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Directory of the two reports; they are never overwritten.
+        #[arg(long)]
+        out: PathBuf,
+        /// Replace `search.exact_threshold` in memory; `0` when absent, which
+        /// forces the binary strategy on a non-empty pool (ADR-0076).
+        #[arg(long)]
+        exact_threshold: Option<u32>,
+        /// Replace `search.rescore_candidates` in memory (ADR-0125,
+        /// decision 7).
+        #[arg(long)]
+        rescore_candidates: Option<u32>,
+        /// Counted repetitions of the game; one warmup pass precedes them and
+        /// enters no percentile (ADR-0125, decision 9).
+        #[arg(long, default_value_t = eval::DEFAULT_REPEAT)]
+        repeat: usize,
+        /// Reference report of a previous campaign; a mean that drops by more
+        /// than 0.005 makes the command exit 1 (ADR-0125, decision 12).
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+    },
     /// Report the state of one index or of every index of an instance.
     Inspect {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -291,7 +337,7 @@ enum KeyCommand {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             report(&error);
             ExitCode::FAILURE
@@ -300,7 +346,11 @@ fn main() -> ExitCode {
 }
 
 /// Runs one command, mapping every engine error to the printed report.
-fn run(cli: Cli) -> Result<(), CribleError> {
+///
+/// The exit code is [`ExitCode::SUCCESS`] for every command but `eval`, which
+/// answers `1` when its `--baseline` detects a regression (ADR-0125,
+/// decision 12).
+fn run(cli: Cli) -> Result<ExitCode, CribleError> {
     // The server journals on stdout, in JSON, at the level `RUST_LOG` asks for
     // (ADR-0096): its subscriber replaces the one of the commands, which stays
     // on stderr.
@@ -309,7 +359,44 @@ fn run(cli: Cli) -> Result<(), CribleError> {
     } else {
         init_logging()?;
     }
-    match cli.command {
+    let command = cli.command;
+    if let Command::Eval {
+        data,
+        index,
+        queries,
+        models,
+        modes,
+        k,
+        out,
+        exact_threshold,
+        rescore_candidates,
+        repeat,
+        baseline,
+    } = &command
+    {
+        return eval::run(&eval::EvalRequest {
+            data,
+            index,
+            queries,
+            models: models.as_deref(),
+            modes,
+            k: *k,
+            out,
+            exact_threshold: *exact_threshold,
+            rescore_candidates: *rescore_candidates,
+            repeat: *repeat,
+            baseline: baseline.as_deref(),
+        });
+    }
+    run_command(command)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs one command that answers `0` on success.
+fn run_command(command: Command) -> Result<(), CribleError> {
+    match command {
+        // Handled by [`run`], which returns the code `eval` decides.
+        Command::Eval { .. } => Ok(()),
         Command::Index { command } => match command {
             IndexCommand::Create { data, config } => commands::create_index(&data, &config),
         },
