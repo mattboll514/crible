@@ -39,13 +39,20 @@ use serde_json::{Map, Value, json};
 use crate::analytics::StageDurations;
 
 /// The nine timing keys of `docs/03-recherche.md`, in their order.
-pub(crate) const TIMING_KEYS: [&str; 9] = [
+///
+/// `crible eval` names its latency columns with them, so the per-stage
+/// percentiles of a campaign and the `timings_ms` of a search answer cannot
+/// drift apart (ADR-0125, decision 9).
+pub const TIMING_KEYS: [&str; 9] = [
     "validate", "encode", "filter", "dense", "lexical", "fusion", "group", "fetch", "total",
 ];
 
 /// Rounds a duration in milliseconds to three decimals (ADR-0119, decision 5).
+///
+/// `crible eval` calls it too, so the latencies of a report and the
+/// `debug.timings_ms` of a search answer round the same way.
 #[must_use]
-pub(crate) fn round_ms(value: f64) -> f64 {
+pub fn round_ms(value: f64) -> f64 {
     (value * 1_000.0).round() / 1_000.0
 }
 

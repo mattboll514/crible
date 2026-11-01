@@ -1,0 +1,414 @@
+{
+  "command": "crible eval --data data/j7-demo/data --index sarde --queries data/j7-demo/queries/sarde.jsonl --models data/models --modes dense,lexical,hybrid --k 10 --out docs/mesures --repeat 3",
+  "date": "2026-11-01",
+  "exact_threshold": 0,
+  "format_version": 1,
+  "game": "sarde",
+  "generation": 1,
+  "index": "sarde",
+  "k": 10,
+  "modes": {
+    "dense": {
+      "dense_strategy": {
+        "binary": 9
+      },
+      "fidelity": {
+        "n": 9,
+        "overlap_at_10": 1.0,
+        "recall_at_10": 1.0
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 1.365,
+          "p95": 1.859,
+          "p99": 1.901
+        },
+        "encode": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "fetch": {
+          "p50": 0.141,
+          "p95": 0.175,
+          "p99": 0.179
+        },
+        "filter": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "group": {
+          "p50": 0.003,
+          "p95": 0.003,
+          "p99": 0.003
+        },
+        "total": {
+          "p50": 1.522,
+          "p95": 2.014,
+          "p99": 2.08
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.5185185185185186,
+        "n": 9,
+        "recall_at_k": 0.6666666666666666
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q25",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q26",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q27",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C017",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C018",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C019",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C020",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C021",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C022",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.16666666666666666,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    },
+    "hybrid": {
+      "dense_strategy": {
+        "binary": 9
+      },
+      "fidelity": {
+        "n": 9,
+        "overlap_at_10": 0.9777777777777779,
+        "recall_at_10": 0.9777777777777779
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 1.378,
+          "p95": 1.518,
+          "p99": 1.817
+        },
+        "encode": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "fetch": {
+          "p50": 0.141,
+          "p95": 0.346,
+          "p99": 0.348
+        },
+        "filter": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "fusion": {
+          "p50": 0.017,
+          "p95": 0.025,
+          "p99": 0.026
+        },
+        "group": {
+          "p50": 0.005,
+          "p95": 0.006,
+          "p99": 0.006
+        },
+        "lexical": {
+          "p50": 0.615,
+          "p95": 0.955,
+          "p99": 0.977
+        },
+        "total": {
+          "p50": 1.558,
+          "p95": 1.872,
+          "p99": 2.032
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.537037037037037,
+        "n": 9,
+        "recall_at_k": 0.6666666666666666
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q25",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q26",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q27",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "C017",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C018",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C019",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C020",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C021",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "C022",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.3333333333333333,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    },
+    "lexical": {
+      "latency": {
+        "fetch": {
+          "p50": 0.109,
+          "p95": 0.119,
+          "p99": 0.127
+        },
+        "filter": {
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "group": {
+          "p50": 0.002,
+          "p95": 0.003,
+          "p99": 0.003
+        },
+        "lexical": {
+          "p50": 0.445,
+          "p95": 0.723,
+          "p99": 0.749
+        },
+        "total": {
+          "p50": 0.56,
+          "p95": 0.848,
+          "p99": 0.884
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.6111111111111112,
+        "n": 9,
+        "recall_at_k": 0.6666666666666666
+      },
+      "queries": [
+        {
+          "id": "Q25",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q26",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q27",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "C017",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "id": "C018",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "id": "C019",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "id": "C020",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "id": "C021",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "id": "C022",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    }
+  },
+  "pool_size": 50000,
+  "queries": 9,
+  "queries_with_expected": 9,
+  "repeat": 3,
+  "rescore_candidates": 1000,
+  "rescore_candidates_source": "configuration",
+  "version": "0.1.0"
+}
