@@ -22,6 +22,14 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+# Off by default: it turns on the failpoints of `crible-store` for the test
+# build only, so a plain `cargo test` exercises the build without them; the
+# tests that arm them live behind it (`search_lecteurs_denses.rs`, ADR-0126,
+# decisions 2 and 6). `crible` also depends on `crible-server`, whose own
+# `failpoints` feature stays off here: the CLI test reads the store hook alone.
+failpoints = ["crible-store/failpoints"]
+
 [dev-dependencies]
 # The `API = CLI` proof drives the axum router of the server in the test and
 # needs a tokio runtime; both crates are already the server's own stack

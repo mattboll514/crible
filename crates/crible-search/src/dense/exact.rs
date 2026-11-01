@@ -70,9 +70,11 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use crible_core::error::CribleError;
 use crible_core::ids::Iid;
+use crible_store::readers::DenseReaders;
 use crible_store::records::{DocumentRecord, PassageRecord, ReadPool};
 use crible_store::segment::{SegmentMeta, SegmentReader};
 use rayon::prelude::*;
@@ -124,9 +126,18 @@ pub struct Hit {
 
 /// Exact top-k cosine search over the segments of one generation.
 ///
-/// The searcher opens every segment once, at construction, so it serves many
-/// queries: [`SegmentReader::open`] verifies the blake3 checksum of the whole
-/// vector file, which must not be paid per query.
+/// The searcher **composes** from readers that are already open: it opens no
+/// vector file and no connection, so a server builds one per query from the
+/// cache of the published generation (ADR-0126, decisions 1 and 4). The blake3
+/// checksum of a segment is paid once per process, at the fill of that cache
+/// ([`DenseReaders::filled`]), never here.
+///
+/// [`DenseSearcher::open`] stays the opening of a **process**: it fills an empty
+/// cache from a directory and composes the searcher from it, which is what
+/// `crible search`, `crible eval` and the harnesses of the measurements do. It
+/// therefore serves many queries too: the readers it opened are kept for every
+/// later query, and only a caller that throws the searcher away pays the
+/// opening again.
 ///
 /// It owns what the dense branch reads from an epoch: the reference vectors of
 /// the segments, through their memory maps, and the read-only connections to
@@ -136,10 +147,10 @@ pub struct Hit {
 /// therefore serves either strategy, and both read the same bytes.
 #[derive(Debug)]
 pub struct DenseSearcher {
-    /// One reader per segment, sorted by `iid_start`.
-    segments: Vec<SegmentReader>,
-    /// Read-only connections used for the payloads.
-    records: ReadPool,
+    /// One reader per segment, sorted by `iid_start`, shared with the cache.
+    segments: Vec<Arc<SegmentReader>>,
+    /// Read-only connections used for the payloads, shared with the cache.
+    records: Arc<ReadPool>,
     /// Dimensionality of the vectors, shared by every segment.
     dims: u32,
 }
@@ -151,21 +162,50 @@ impl DenseSearcher {
     /// the metadata of the generation being served: the readers are opened
     /// from the two, at once, and kept for every later query. The
     /// `records_path` is the `records.sqlite` file of the same epoch.
+    ///
+    /// This is the opening of one **process**, not of one query: it runs the
+    /// fill of [`DenseReaders`] on an empty cache, so the CLI and the
+    /// measurements open each segment once, by the same code as the server
+    /// (ADR-0126, decision 3).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`DenseReaders::filled`], plus the ones of
+    /// [`DenseSearcher::compose`].
     pub fn open(
         segments_dir: &Path,
         segments: &[SegmentMeta],
         records_path: &Path,
     ) -> Result<Self, CribleError> {
-        let mut readers = Vec::with_capacity(segments.len());
+        let filled = DenseReaders::empty().filled(
+            segments_dir,
+            segments,
+            records_path,
+            read_connections(),
+        )?;
+        Self::compose(filled.readers(), filled.records()?)
+    }
+
+    /// Composes a searcher from readers and a payload pool already open.
+    ///
+    /// No file of vectors is read and no connection is opened: the call checks
+    /// that the readers describe one coherent generation — one dimensionality,
+    /// no overlapping range of identifiers — and keeps them. A server calls it
+    /// per query with the `Arc`s of its published cache (ADR-0126,
+    /// decision 1).
+    ///
+    /// # Errors
+    ///
+    /// `internal` when two segments disagree on the dimensionality, or when
+    /// their ranges overlap.
+    pub fn compose(
+        mut readers: Vec<Arc<SegmentReader>>,
+        records: Arc<ReadPool>,
+    ) -> Result<Self, CribleError> {
+        readers.sort_by_key(|reader| reader.meta().iid_start.get());
         let mut dims: Option<u32> = None;
-        for meta in segments {
-            let reader = SegmentReader::open(&segments_dir.join(&meta.segment_id))?;
-            if reader.meta() != meta {
-                return Err(internal(format!(
-                    "the segment directory '{}' does not match the metadata of the generation",
-                    meta.segment_id
-                )));
-            }
+        for reader in &readers {
+            let meta = reader.meta();
             if let Some(expected) = dims
                 && expected != meta.dims
             {
@@ -175,9 +215,7 @@ impl DenseSearcher {
                 )));
             }
             dims = Some(meta.dims);
-            readers.push(reader);
         }
-        readers.sort_by_key(|reader| reader.meta().iid_start.get());
         for pair in readers.windows(2) {
             let (left, right) = (pair[0].meta(), pair[1].meta());
             let left_end = u64::from(left.iid_start.get()) + u64::from(left.count);
@@ -188,12 +226,6 @@ impl DenseSearcher {
                 )));
             }
         }
-        let records = ReadPool::new(records_path, read_connections())?;
-        // `ReadPool` opens its connections lazily and SQLite does not validate
-        // the file header when a connection opens, so a wrong path or a foreign
-        // file would only fail at the first search. One trivial query is run
-        // here, through the pool, so `open` reports the fault instead.
-        records.verify()?;
         Ok(Self {
             segments: readers,
             records,
@@ -516,7 +548,7 @@ impl DenseSearcher {
                 "a passage of the pool falls outside the segments of the generation",
             ));
         }
-        Ok(reader)
+        Ok(reader.as_ref())
     }
 
     /// Key of `iid`, read from its identity columns only.

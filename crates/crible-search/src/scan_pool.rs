@@ -24,7 +24,11 @@
 //! must see: it sizes its read-only connection pool on the worker count of the
 //! current rayon pool, so opening the searcher inside `install` gives it the
 //! right capacity. Opening it outside and searching inside stays correct, but
-//! serialises the key reads on one connection.
+//! serialises the key reads on one connection. The **server** no longer opens a
+//! searcher per query: the writers fill the readers of a generation with
+//! `ScanPool::threads()` as the capacity of their payload pool, before they
+//! publish it, and a request composes its searcher from those readers without
+//! any I/O (ADR-0126, decision 1).
 
 use crible_core::error::{CribleError, ErrorCode};
 use rayon::ThreadPool;

@@ -42,6 +42,8 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crible_core::error::{CribleError, ErrorCode};
+
 /// Environment variable naming the barrier directory of a test.
 pub(crate) const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
 
@@ -151,6 +153,34 @@ const SEARCH_MULTI_ARMED: &str = "armed-search-multi";
 /// [`SEARCH_MULTI_ARMED`].
 pub(crate) fn wait_search_multi() {
     wait_armed(SEARCH_MULTI_ARMED, "search-multi");
+}
+
+/// Name of the file that names the index whose search must fail.
+///
+/// With the readers of a served generation cached, a search of that generation
+/// reads no file it has to open, so an epoch removed from disk makes no request
+/// fail any more (ADR-0126, decisions 1 and 4). A test that proves the events of
+/// a multi-index failure taken **inside** the loop (ADR-0124, decision 10) needs
+/// that failure, and the ADR names this seam as the way to produce it
+/// (ADR-0126, decision 6).
+const SEARCH_FAULT: &str = "fault-search-index";
+
+/// Returns the fault armed for the index `index`, when the file names it.
+///
+/// The fault is raised inside the search of one index, after its filter ran and
+/// before its branches: the point where the opening of the readers used to fail
+/// before ADR-0126. Without the variable, without the file or for another index,
+/// this returns `None`, so a build with the feature but no test armed behaves
+/// exactly like a normal one.
+pub(crate) fn fault_search(index: &str) -> Option<CribleError> {
+    let directory = std::env::var(BARRIER_ENV).ok()?;
+    let named = fs::read_to_string(Path::new(&directory).join(SEARCH_FAULT)).ok()?;
+    (named.trim() == index).then(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("the search of the index '{index}' fails at the armed fault"),
+        )
+    })
 }
 
 /// Name of the mark a test writes to arm the analytics writer's hold point.

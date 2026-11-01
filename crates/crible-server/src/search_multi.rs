@@ -812,7 +812,6 @@ fn run_multi(
             .any(|entry| entry.index.as_deref() == Some(target.index.as_str()));
         let outcome = match search::search_index(
             state,
-            &target.index,
             &target.published,
             IndexParams {
                 mode,

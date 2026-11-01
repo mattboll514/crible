@@ -850,6 +850,7 @@ impl AppState {
             config,
             loaded.writer_queue,
             Arc::clone(jobs),
+            Arc::clone(&loaded.scan_pool),
         )?);
         let handle = Arc::new(IndexHandle {
             name: name.clone(),
@@ -915,6 +916,10 @@ impl AppState {
         self.wait_timeout
             .get_or_init(|| Duration::from_millis(config.limits.wait_timeout_ms));
         let models = ModelRegistry::new();
+        // The scan pool is built before the writers: the fill of the dense
+        // readers sizes the payload pool on its worker count (ADR-0126,
+        // decision 1).
+        let scan_pool = Arc::new(ScanPool::new(config.server.search_threads)?);
         let mut indexes = Vec::new();
         for directory in index_directories(&config.paths.data.join("indexes"))? {
             let index = read_index_config(&directory)?;
@@ -932,6 +937,7 @@ impl AppState {
                 index,
                 config.limits.writer_queue,
                 Arc::clone(&jobs),
+                Arc::clone(&scan_pool),
             )?);
             indexes.push(Arc::new(IndexHandle { name, writer }));
         }
@@ -944,7 +950,7 @@ impl AppState {
             writer_queue: config.limits.writer_queue,
             creation: Mutex::new(()),
             search_limit: Arc::new(SearchLimit::new(config.server.max_concurrent_searches)),
-            scan_pool: Arc::new(ScanPool::new(config.server.search_threads)?),
+            scan_pool,
             default_timeout_ms: config.limits.default_timeout_ms,
             query_cache_entries: config.limits.query_cache_entries,
             query_precision: config.encoder.query_precision,

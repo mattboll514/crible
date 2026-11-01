@@ -35,6 +35,7 @@ use std::sync::mpsc;
 use axum::Router;
 use axum::http::{Method, StatusCode};
 use crible_core::config::IndexConfig;
+use crible_search::scan_pool::ScanPool;
 use crible_server::jobs::{IndexSummary, IndexWriter, JobBoard};
 use crible_store::generation::{GenerationStore, INITIAL_EPOCH, write_index_config};
 use serde_json::{Value, json};
@@ -91,8 +92,15 @@ fn a_reader_never_sees_a_configuration_beside_another_state_summary() {
             .expect("the job table of the fixture is open"),
     );
     let writer = Arc::new(
-        IndexWriter::new("atomic".to_owned(), store, base.clone(), 1, board)
-            .expect("the writer of the fixture starts"),
+        IndexWriter::new(
+            "atomic".to_owned(),
+            store,
+            base.clone(),
+            1,
+            board,
+            Arc::new(ScanPool::new(1).expect("the fixture scan pool is buildable")),
+        )
+        .expect("the writer of the fixture starts"),
     );
     let snapshot = writer
         .published()

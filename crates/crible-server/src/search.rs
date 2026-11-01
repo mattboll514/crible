@@ -57,7 +57,6 @@ use crible_search::pipeline::{
     self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType, Stages,
 };
 use crible_search::pool::Pool;
-use crible_store::generation::{epoch_records_path, epoch_segments_directory};
 use serde_json::{Map, Value, json};
 
 use crate::AppState;
@@ -275,7 +274,6 @@ async fn search_inner(
     // event (ADR-0117, decision 2).
     observed.validate_now();
     let holder = Arc::clone(&state);
-    let name = index.clone();
     // ADR-0123: the ids move into the blocking task, which runs the explanation
     // after `fetch`, under the deadline. A request without `explain_ids` carries
     // an empty list and allocates nothing for it.
@@ -296,7 +294,6 @@ async fn search_inner(
             crate::barriers::wait_search();
             run(
                 &holder,
-                &name,
                 &published,
                 mode,
                 inputs,
@@ -718,7 +715,6 @@ impl Attempt {
 #[allow(clippy::too_many_arguments)]
 fn run(
     state: &AppState,
-    index: &str,
     published: &Published,
     mode: Mode,
     inputs: Inputs,
@@ -760,7 +756,6 @@ fn run(
     let mut capture = collecting.then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
     let outcome = match search_index(
         state,
-        index,
         published,
         IndexParams {
             mode,
@@ -1019,7 +1014,6 @@ pub(crate) struct IndexOutcome {
 /// Runs the pipeline of one index on the blocking thread.
 pub(crate) fn search_index(
     state: &AppState,
-    index: &str,
     published: &Published,
     params: IndexParams<'_>,
 ) -> Result<IndexOutcome, CribleError> {
@@ -1032,18 +1026,21 @@ pub(crate) fn search_index(
     let filtering = Instant::now();
     let pool = Pool::evaluate(snapshot.filters(), params.filter)?;
     let filter = filtering.elapsed();
-    let index_dir = loaded.index_directory(index);
-    let segments_directory = epoch_segments_directory(&index_dir, snapshot.epoch());
-    let records_path = epoch_records_path(&index_dir, snapshot.epoch());
-    let segments = snapshot.segments().to_vec();
+    // ADR-0126, decision 6: a served generation opens no reader, so no fault of
+    // the disk can fail its search any more. The `failpoints` build can arm one
+    // anyway, for the tests that prove the events of a failure taken inside the
+    // loop of the multi-index route (ADR-0124, decision 10).
+    #[cfg(feature = "failpoints")]
+    if let Some(failure) = crate::barriers::fault_search(&published.config.name) {
+        return Err(failure);
+    }
     let scan = loaded.scan_pool();
-    // ADR-0120, decision 2: the opening of the segment and payload readers
-    // stays in `took_ms` and belongs to the `fetch` key, in every mode, until
-    // the per-generation cache replaces it.
-    let opening = Instant::now();
+    // ADR-0126, decisions 1 and 4: the readers of the generation were opened at
+    // its publication, so composing the searcher reads no vector file and opens
+    // no connection. `fetch` is back to the payload step of
+    // `docs/03-recherche.md` (decision 7).
     let searcher =
-        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
-    let open = opening.elapsed();
+        DenseSearcher::compose(published.readers.readers(), published.readers.records()?)?;
     let answer = scan.install(|| {
         pipeline::search_captured(
             &snapshot,
@@ -1063,8 +1060,9 @@ pub(crate) fn search_index(
             params.explain,
         )
     })?;
-    let mut stages = answer.stages;
-    stages.fetch += open;
+    let stages = answer.stages;
+    // ADR-0120, decisions 1 and 5: `took_ms` still ends at the end of `fetch`,
+    // and `fetch` carries the payload step alone (ADR-0126, decision 7).
     // ADR-0123, decision 4, and its complement of 2026-11-01: the only work of
     // the explanation inside `took_ms` is the capture of the ranks before the
     // regrouping, which the pipeline does. The context keeps the results by
