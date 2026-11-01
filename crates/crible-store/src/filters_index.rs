@@ -1221,8 +1221,8 @@ fn invalid_date(field: &str, text: &str) -> CribleError {
 ///
 /// The form is the one `attach` writes for a Parquet `date32`, so a value this
 /// function refuses contradicts the reference state. The conversion is
-/// Howard Hinnant's `days_from_civil`, the inverse of the `civil_from_days` the
-/// attach uses.
+/// [`crible_core::time::days_from_civil`], the inverse of the
+/// [`crible_core::time::civil_from_days`] the attach uses.
 ///
 /// Callers turn the date of a validated filter into the `i32` count of days a
 /// [`ValueColumn`] holds: comparing the two forms directly would compare a
@@ -1242,12 +1242,12 @@ pub fn date_days(text: &str) -> Option<i32> {
         return None;
     }
     let year: i64 = text[..4].parse().ok()?;
-    let month: i64 = text[5..7].parse().ok()?;
-    let day: i64 = text[8..].parse().ok()?;
+    let month: u32 = text[5..7].parse().ok()?;
+    let day: u32 = text[8..].parse().ok()?;
     if !(1..=12).contains(&month) || !(1..=days_in_month(year, month)).contains(&day) {
         return None;
     }
-    let days = days_from_civil(year, month, day);
+    let days = crible_core::time::days_from_civil(year, month, day);
     i32::try_from(days).ok()
 }
 
@@ -1256,7 +1256,7 @@ pub fn date_days(text: &str) -> Option<i32> {
 /// The Gregorian rule, applied to a year of the proleptic calendar: a year is a
 /// leap year when it is a multiple of 4, except a multiple of 100 that is not a
 /// multiple of 400.
-fn days_in_month(year: i64, month: i64) -> i64 {
+fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -1265,24 +1265,11 @@ fn days_in_month(year: i64, month: i64) -> i64 {
     }
 }
 
-/// Converts a civil date to a count of days since 1970-01-01.
-///
-/// Howard Hinnant's `days_from_civil`, exact over the whole `i32` range of a
-/// `date32` and independent of any platform clock or time zone.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_prime = if month > 2 { month - 3 } else { month + 9 };
-    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Column, Placement, Sentinel, date_days, days_from_civil};
+    use super::{Column, Placement, Sentinel, date_days};
     use crible_core::ids::Iid;
+    use crible_core::time::days_from_civil;
 
     /// The reference epoch, the leap day of a leap year, and the day before the
     /// epoch, which only a signed count can represent.

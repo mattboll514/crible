@@ -806,8 +806,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
-    let searcher =
-        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
+    let searcher = DenseSearcher::open_in(&scan, &segments_directory, &segments, &records_path)?;
     let answer = scan.install(|| {
         pipeline::search(
             &snapshot,
@@ -1271,35 +1270,19 @@ fn render_stats(stats: &Stats) -> String {
         .iter()
         .map(|bucket| {
             let mut row = vec![bucket.start.clone(), bucket.count.to_string()];
-            row.extend(aggregate_cells(
-                &bucket.errors,
-                bucket.zero_results_rate,
-                &bucket.latency_ms,
-            ));
+            row.extend(aggregate_cells(&bucket.errors, bucket.zero_results_rate));
             row
         })
         .collect();
     if let Some(totals) = &stats.totals {
         let mut row = vec!["totals".to_owned(), totals.count.to_string()];
-        row.extend(aggregate_cells(
-            &totals.errors,
-            totals.zero_results_rate,
-            &totals.latency_ms,
-        ));
+        row.extend(aggregate_cells(&totals.errors, totals.zero_results_rate));
         rows.push(row);
     }
-    out.push_str(&table(
-        &[
-            "start",
-            "count",
-            "errors",
-            "zero_results",
-            "p50_ms",
-            "p95_ms",
-            "p99_ms",
-        ],
-        &rows,
-    ));
+    // The percentiles live in the `latency (ms)` table below, per stage and for
+    // the total: repeating the three of `total` here said nothing more and made
+    // the row wider than its five columns of state (@relecteur, NETTOYER-P7).
+    out.push_str(&table(&["start", "count", "errors", "zero_results"], &rows));
 
     out.push_str("\nlatency (ms)\n");
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -1395,12 +1378,14 @@ fn latency_rows(start: &str, latency: &StatsLatency, rows: &mut Vec<Vec<String>>
     }
 }
 
-/// The four cells of an aggregate that follow its `start` and `count`: the
-/// errors by code, the zero-result rate and the three percentiles of the total.
+/// The two cells of an aggregate that follow its `start` and `count`: the
+/// errors by code and the zero-result rate.
+///
+/// The percentiles are not among them: the `latency (ms)` table renders them
+/// per stage and for the total, once (@relecteur, NETTOYER-P7).
 fn aggregate_cells(
     errors: &std::collections::BTreeMap<String, u64>,
     zero_results_rate: Option<f64>,
-    latency: &StatsLatency,
 ) -> Vec<String> {
     let errors = if errors.is_empty() {
         "-".to_owned()
@@ -1412,17 +1397,7 @@ fn aggregate_cells(
             .join(", ")
     };
     let rate = zero_results_rate.map_or_else(|| "-".to_owned(), |rate| format!("{rate:.4}"));
-    let total = latency.total;
-    let percentiles = total.map_or(["-".to_owned(), "-".to_owned(), "-".to_owned()], |p| {
-        [
-            format!("{:.3}", p.p50),
-            format!("{:.3}", p.p95),
-            format!("{:.3}", p.p99),
-        ]
-    });
-    let mut cells = vec![errors, rate];
-    cells.extend(percentiles);
-    cells
+    vec![errors, rate]
 }
 
 /// Renders one ASCII table: a header, a dashed rule, then one line per row.

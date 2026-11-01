@@ -19,27 +19,26 @@
 //! cargo test -p crible-server --test error_journal
 //! ```
 
-use std::io;
-use std::sync::{Arc, Mutex, OnceLock};
+mod common;
+
+use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Extension, Request};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{Method, StatusCode};
+use axum::extract::Extension;
+use axum::http::Method;
+use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::{get, post};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_server::auth::{Auth, protect, sha256_hex};
 use crible_server::config::{ApiKey, Role};
-use crible_server::http::{REQUEST_ID_HEADER, RequestId, with_common_layers};
+use crible_server::http::{RequestId, with_common_layers};
 use crible_server::limits;
-use crible_server::logging::log_subscriber;
 use serde_json::{Value, json};
-use tower::ServiceExt;
-use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::util::SubscriberInitExt;
+
+use common::{journal_at_level, send_raw};
 
 /// Key of the `read` role used by the test.
 const READ_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -57,60 +56,11 @@ const INTERNAL_CAUSE: &str = "the blocking task of a search did not finish norma
 /// The capture is global and lives in a `OnceLock`, like `common::journal()`
 /// does for the binaries that share it: a thread-local default does not bring
 /// back a callsite frozen as `never`, while the global registration rebuilds
-/// the interest of every callsite (`@relecteur`, NETTOYER-P7).
-static JOURNAL: OnceLock<Sink> = OnceLock::new();
-
-/// The sink of the binary, its subscriber installed on first use.
-fn journal() -> Sink {
-    JOURNAL
-        .get_or_init(|| {
-            let sink = Sink::default();
-            let subscriber =
-                log_subscriber(sink.clone(), "trace").expect("trace is a valid filter");
-            subscriber
-                .try_init()
-                .expect("no other test of this binary installs a journal");
-            sink
-        })
-        .clone()
-}
-
-/// In-memory writer that captures the journal of the process.
-#[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Vec<u8>>>);
-
-impl Sink {
-    /// Contents captured so far, lossily decoded.
-    fn contents(&self) -> String {
-        let bytes = self.0.lock().map(|bytes| bytes.clone()).unwrap_or_default();
-        String::from_utf8_lossy(&bytes).into_owned()
-    }
-}
-
-/// One write handle of the [`Sink`].
-struct SinkWriter(Sink);
-
-impl io::Write for SinkWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let shared = &self.0.0;
-        let mut bytes = shared
-            .lock()
-            .map_err(|_| io::Error::other("the journal sink is poisoned"))?;
-        bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Sink {
-    type Writer = SinkWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        SinkWriter(self.clone())
-    }
+/// the interest of every callsite (`@relecteur`, NETTOYER-P7). The level is
+/// `trace`, because axum journals a rejection on its own target (`@relecteur`,
+/// NETTOYER-P7).
+fn journal() -> common::Sink {
+    journal_at_level("trace")
 }
 
 /// Router of the test: one route per reachable code, plus a panic.
@@ -159,42 +109,16 @@ async fn fails(Extension(identifier): Extension<RequestId>) -> Response {
     limits::refusal(&failure, &identifier.0)
 }
 
-/// Sends one request through the router.
-async fn call(router: &Router, request: Request) -> Response {
-    router
-        .clone()
-        .oneshot(request)
-        .await
-        .expect("the router answers")
-}
-
-/// Sends one request without a body.
+/// Sends one request of the `read` key without a body.
 async fn send(router: &Router, method: Method, path: &str) -> Response {
-    send_request(router, method, path, None, Body::empty()).await
-}
-
-/// Sends one request of the `read` key, with an optional content type and a
-/// body.
-async fn send_request(
-    router: &Router,
-    method: Method,
-    path: &str,
-    content_type: Option<&str>,
-    body: Body,
-) -> Response {
-    let mut builder = Request::builder()
-        .method(method)
-        .uri(path)
-        .header(REQUEST_ID_HEADER, REQUEST_ID)
-        .header(AUTHORIZATION, format!("Bearer {READ_KEY}"));
-    if let Some(content_type) = content_type {
-        builder = builder.header(CONTENT_TYPE, content_type);
-    }
-    call(
+    send_raw(
         router,
-        builder
-            .body(body)
-            .expect("the request of the test is well formed"),
+        method,
+        path,
+        READ_KEY,
+        REQUEST_ID,
+        None,
+        Body::empty(),
     )
     .await
 }
@@ -214,10 +138,12 @@ fn the_journal_names_errors_without_any_client_message() {
         .expect("a runtime is startable");
     runtime.block_on(async {
         let router = router();
-        let refused = send_request(
+        let refused = send_raw(
             &router,
             Method::POST,
             "/echo",
+            READ_KEY,
+            REQUEST_ID,
             Some("application/json"),
             Body::from(r#"{"filter_value": "zz-4xx-zz", "#),
         )
@@ -225,10 +151,12 @@ fn the_journal_names_errors_without_any_client_message() {
         assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
         // A valid JSON body of the wrong type: serde quotes the value it
         // refused, and axum journals that text on its own target at `TRACE`.
-        let mistyped = send_request(
+        let mistyped = send_raw(
             &router,
             Method::POST,
             "/typed",
+            READ_KEY,
+            REQUEST_ID,
             Some("application/json"),
             Body::from(r#""zz-typed-value-zz""#),
         )

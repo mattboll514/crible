@@ -25,6 +25,7 @@
 //! | `an_identical_replay_regresses_nothing` | exit code 0 on a replay (decision 12) |
 //! | `the_command_writes_nothing_under_the_data_directory` | read-only, ADR-0116 (decision 1) |
 //! | `synth_small_regression_is_detected_by_the_baseline` | CI test of the regression on `synth-small` (decisions 8 and 14) |
+//! | `the_help_states_when_models_is_needed` | `--models` only for an encoding mode (decision 2) |
 //!
 //! The metric fixtures are built by hand: the binary codes of their vectors are
 //! chosen so that the scan of the fixture, its exact path and the grouped
@@ -761,6 +762,10 @@ fn an_empty_exact_answer_is_excluded_and_counted() {
         "the Markdown counts the excluded query: {markdown}"
     );
     assert!(
+        markdown.contains("sur les requêtes dont la liste exacte n'est pas vide"),
+        "the reading states the mean of the complemented C1: {markdown}"
+    );
+    assert!(
         !markdown.contains("ABSENT"),
         "the filter value never reaches the Markdown report"
     );
@@ -1209,5 +1214,26 @@ fn synth_small_regression_is_detected_by_the_baseline() {
             .unwrap_or_else(|| panic!("the lost queries are reported: {report}"))
             .is_empty(),
         "at least one query loses an expected document: {report}"
+    );
+}
+
+#[test]
+fn the_help_states_when_models_is_needed() {
+    // ADR-0125, decision 2: `--models` is required only when a `dense` or
+    // `hybrid` mode has to encode a textual query, never for a `lexical` run
+    // (`@relecteur`, NETTOYER-P7).
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_crible"))
+        .args(["eval", "--help"])
+        .output()
+        .expect("crible eval --help must run");
+    assert!(output.status.success(), "the help of eval must succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("dense") && stdout.contains("hybrid"),
+        "the help names the modes that encode, got {stdout}"
+    );
+    assert!(
+        stdout.contains("lexical"),
+        "the help says a lexical run needs no encoder, got {stdout}"
     );
 }

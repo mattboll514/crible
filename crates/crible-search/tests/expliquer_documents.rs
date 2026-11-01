@@ -14,6 +14,7 @@
 //! | `a_passage_excluded_by_the_filter_names_every_failing_leaf` | exclu par le filtre |
 //! | `a_document_in_the_pool_names_no_leaf_and_its_best_passage` | document dans le pool |
 //! | `a_document_out_of_the_pool_lists_the_union_of_the_leaves_that_fail` | `$or`, complément C2 |
+//! | `a_document_excluded_by_a_not_names_no_leaf` | `$not` de tête, décision 7 |
 //! | `a_passage_key_describes_its_passage_and_never_a_sibling` | clé de passage, complément C1/C2 |
 //! | `an_unknown_or_removed_document_has_no_alive_member` | mort, inconnu |
 //! | `a_passage_outside_the_binary_candidates_keeps_its_rank` | hors des N candidats binaires |
@@ -214,6 +215,37 @@ fn a_document_in_the_pool_names_no_leaf_and_its_best_passage() {
         .expect("the document is in the pool");
     assert_eq!(dense.key, "A#0", "the branch names the best-ranked passage");
     assert_eq!(dense.exact_rank, 1);
+}
+
+#[test]
+fn a_document_excluded_by_a_not_names_no_leaf() {
+    // ADR-0123, decision 7: no combinatory node of `excluded_by`. Under a
+    // leading `$not`, the leaves of the negated filter hold for the document the
+    // `$not` excludes, so no leaf fails and `excluded_by` is empty even though
+    // `in_pool` is false (`@relecteur`, NETTOYER-P7; the sentence of
+    // `docs/05-api.md` is qualified by the greffier).
+    let mut fixture = DenseFixture::create(4);
+    fixture.add_generation(&[
+        Sample::new("A", 0, query()),
+        Sample::new("B", 0, vec![0.5, 0.0, 0.0, 0.0]),
+    ]);
+    // `fonds` is the `doc_id`: the pool of the fixture excludes A by its
+    // leading `$not`, and the leaf inside the `$not` holds for A.
+    let filter = filter(serde_json::json!({ "$not": { "fonds": "A" } }));
+    let run = DenseRun::open(&fixture, &filter);
+    let ids = vec![
+        ExplainId::Doc(DocId::new("A").expect("A is a doc_id")),
+        ExplainId::Doc(DocId::new("B").expect("B is a doc_id")),
+    ];
+    let entries = run.explain(&filter, &exact_settings(), &ids);
+    assert!(!entries[0].in_pool, "A is out: the $not excludes it");
+    assert!(
+        entries[0].excluded_by.is_empty(),
+        "no leaf fails for A, so none is named: {:?}",
+        entries[0].excluded_by
+    );
+    assert!(entries[1].in_pool, "B satisfies the $not");
+    assert!(entries[1].excluded_by.is_empty());
 }
 
 #[test]

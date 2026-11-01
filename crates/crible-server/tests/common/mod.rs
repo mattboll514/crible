@@ -367,6 +367,36 @@ pub async fn send_with_headers(
     (status, headers, body)
 }
 
+/// Sends one request of raw bytes through the router, with its own identifier.
+///
+/// [`send`] carries a JSON value, so it cannot express a body that is not JSON
+/// at all: this is the sender of the malformed-body tests, and the
+/// `content_type` is omitted when the request declares none (`@relecteur`,
+/// NETTOYER-P7).
+pub async fn send_raw(
+    router: &Router,
+    method: Method,
+    path: &str,
+    secret: &str,
+    request_id: &str,
+    content_type: Option<&str>,
+    body: Body,
+) -> axum::response::Response {
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-request-id", request_id)
+        .header(AUTHORIZATION, format!("Bearer {secret}"));
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    router
+        .clone()
+        .oneshot(request.body(body).expect("the request is valid"))
+        .await
+        .expect("the router answers")
+}
+
 /// Creates the fixture index `alpha` and returns the instance, its state and
 /// its router.
 pub async fn instance_with_alpha() -> (Instance, Arc<AppState>, Router) {
@@ -615,11 +645,22 @@ impl<'a> MakeWriter<'a> for Sink {
 /// binary; every test that reads the journal goes through this function, which
 /// keeps a single subscriber whatever the number of readers.
 pub fn journal() -> Sink {
+    journal_at_level("info")
+}
+
+/// Journal of the test binary, installed once at `level`.
+///
+/// A binary installs a single subscriber: the first call wins, and a later call
+/// with another level keeps the level of the first. The error-journal binary
+/// asks for `trace`, so the rejections axum journals on its own target reach
+/// the sink (`@relecteur`, NETTOYER-P7).
+pub fn journal_at_level(level: &str) -> Sink {
     static JOURNAL: OnceLock<Sink> = OnceLock::new();
     JOURNAL
         .get_or_init(|| {
             let sink = Sink::default();
-            let subscriber = log_subscriber(sink.clone(), "info").expect("info is a valid filter");
+            let subscriber =
+                log_subscriber(sink.clone(), level).expect("the level is a valid filter");
             subscriber
                 .try_init()
                 .expect("no other test of this binary installs a journal");

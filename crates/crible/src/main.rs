@@ -227,7 +227,8 @@ enum Command {
         #[arg(long)]
         queries: PathBuf,
         /// Root models directory (`[paths] models` of `crible.toml`); required
-        /// by a game with a textual query.
+        /// when a `dense` or `hybrid` mode has to encode a textual query of the
+        /// game, and never for a `lexical` one.
         #[arg(long)]
         models: Option<PathBuf>,
         /// Comma-separated branches to evaluate: `dense`, `lexical`, `hybrid`;
