@@ -66,6 +66,7 @@
 
 pub mod analyzer;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -281,7 +282,40 @@ impl LexicalIndex {
     /// how its text was analysed.
     pub fn terms(&self, query: &str) -> Result<Vec<String>, CribleError> {
         let searcher = self.reader.searcher();
-        let mut analyzer = searcher
+        let mut analyzer = self.analyzer(&searcher)?;
+        let mut stream = analyzer.token_stream(query);
+        let mut terms: Vec<String> = Vec::new();
+        while let Some(token) = stream.next() {
+            if !terms.iter().any(|term| term == &token.text) {
+                terms.push(token.text.clone());
+            }
+        }
+        Ok(terms)
+    }
+
+    /// Term frequencies of `text` under the analysis chain of the index.
+    ///
+    /// The chain is the one [`LexicalIndex::terms`] reads, so the frequency of
+    /// a term here is the frequency tantivy indexed for a passage of that text.
+    /// The explanation of ADR-0123, decision 6, reports it as `tf`; the two
+    /// cannot drift apart.
+    pub fn term_frequencies(&self, text: &str) -> Result<HashMap<String, u32>, CribleError> {
+        let searcher = self.reader.searcher();
+        let mut analyzer = self.analyzer(&searcher)?;
+        let mut stream = analyzer.token_stream(text);
+        let mut frequencies: HashMap<String, u32> = HashMap::new();
+        while let Some(token) = stream.next() {
+            *frequencies.entry(token.text.clone()).or_insert(0) += 1;
+        }
+        Ok(frequencies)
+    }
+
+    /// Analysis chain registered under [`TOKENIZER_NAME`].
+    fn analyzer(
+        &self,
+        searcher: &Searcher,
+    ) -> Result<tantivy::tokenizer::TextAnalyzer, CribleError> {
+        searcher
             .index()
             .tokenizers()
             .get(TOKENIZER_NAME)
@@ -293,15 +327,7 @@ impl LexicalIndex {
                          '{TOKENIZER_NAME}'"
                     ),
                 )
-            })?;
-        let mut stream = analyzer.token_stream(query);
-        let mut terms: Vec<String> = Vec::new();
-        while let Some(token) = stream.next() {
-            if !terms.iter().any(|term| term == &token.text) {
-                terms.push(token.text.clone());
-            }
-        }
-        Ok(terms)
+            })
     }
 
     /// Key `doc_id#ord` of the passage `iid`, or `None` when the reference state

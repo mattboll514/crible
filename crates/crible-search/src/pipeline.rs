@@ -200,7 +200,21 @@ pub struct Answer {
     /// Strategy the dense branch actually ran, or `None` when no dense branch
     /// ran (`dense`, `hybrid`; ADR-0074).
     pub strategy: Option<Strategy>,
+    /// Ranking of the answer **before** the regrouping, as `(key, rank)` pairs
+    /// best first, or empty when the request asks for no explanation.
+    ///
+    /// `explain` reports the `fused.rank` of a passage that the regrouping may
+    /// have dropped (ADR-0123, decision 5), and only this list holds it: the
+    /// rank of a survivor travels on [`RankedHit`], but not the rank of a
+    /// candidate the regrouping removed. The pipeline keeps the keys it already
+    /// holds, so no store is read for it; a request without `explain_ids`
+    /// allocates nothing here.
+    pub pre_group_ranks: Vec<(String, u32)>,
 }
+
+/// Outcome of a single-mode pipeline: results, stages, the strategy the dense
+/// branch ran, and the ranking before the regrouping when it was asked for.
+type PreGrouped = (Vec<RankedHit>, Stages, Option<Strategy>, Vec<(String, u32)>);
 
 /// Duration of the timed steps of one pipeline run.
 ///
@@ -245,7 +259,7 @@ pub fn search(
     request: &Request<'_>,
     search: &SearchConfig,
 ) -> Result<Answer, CribleError> {
-    search_captured(snapshot, searcher, pool, request, search, None)
+    search_captured(snapshot, searcher, pool, request, search, None, false)
 }
 
 /// Runs the pipeline of `request` and fills `capture` when it is given.
@@ -254,6 +268,10 @@ pub fn search(
 /// entries of each branch for the journal of JOURNAL-DE-DEBUG. It is built by
 /// the caller **only** for a request that asks for `debug`; `None` allocates
 /// nothing and changes no result.
+///
+/// `explain` asks for the ranking before the regrouping
+/// ([`Answer::pre_group_ranks`]), which the explanation of ADR-0123 needs; false
+/// allocates nothing and changes no result.
 pub fn search_captured(
     snapshot: &Snapshot,
     searcher: &DenseSearcher,
@@ -261,24 +279,41 @@ pub fn search_captured(
     request: &Request<'_>,
     search: &SearchConfig,
     capture: Option<&mut DebugCapture>,
+    explain: bool,
 ) -> Result<Answer, CribleError> {
     request.grouping.validate()?;
-    // The over-sampling of ADR-0075 covers both branches and the fusion: each of
-    // them must be able to fill the regrouped answer.
-    let requested = candidates_per_branch(request.k, request.grouping);
-    let (results, stages, strategy) = match request.mode {
-        Mode::Dense => dense(snapshot, searcher, pool, request, search, capture)?,
-        Mode::Lexical => lexical(snapshot, searcher, pool, request, requested, capture)?,
-        Mode::Hybrid => hybrid(
-            snapshot, searcher, pool, request, search, requested, capture,
-        )?,
+    let (results, stages, strategy, pre_group_ranks) = match request.mode {
+        Mode::Dense => dense(snapshot, searcher, pool, request, search, capture, explain)?,
+        Mode::Lexical => lexical(snapshot, searcher, pool, request, capture, explain)?,
+        Mode::Hybrid => hybrid(snapshot, searcher, pool, request, search, capture, explain)?,
     };
     Ok(Answer {
         score_type: score_type(request.mode, request.fusion),
         results,
         stages,
         strategy,
+        pre_group_ranks,
     })
+}
+
+/// Ranking before the regrouping, as `(key, rank)` pairs best first.
+///
+/// The keys are already on the branch entries, so the capture reads no store;
+/// `explain` false returns an empty vector and allocates nothing.
+pub(crate) fn pre_group<C: Candidate>(branch: &[C], explain: bool) -> Vec<(String, u32)> {
+    if !explain {
+        return Vec::new();
+    }
+    branch
+        .iter()
+        .enumerate()
+        .map(|(position, candidate)| {
+            (
+                candidate.key().to_owned(),
+                u32::try_from(position + 1).unwrap_or(u32::MAX),
+            )
+        })
+        .collect()
 }
 
 /// Type of the score the mode produces, from the fusion of the request.
@@ -305,7 +340,8 @@ fn dense(
     request: &Request<'_>,
     search: &SearchConfig,
     capture: Option<&mut DebugCapture>,
-) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
+    explain: bool,
+) -> Result<PreGrouped, CribleError> {
     let vector = vector(request)?;
     let query = crate::dense::DenseQuery {
         vector,
@@ -314,8 +350,8 @@ fn dense(
         grouping: request.grouping,
     };
     let requested = candidates_per_branch(request.k, request.grouping);
-    let (ranks, kept, mut stages) =
-        grouped_candidates(snapshot, searcher, pool, &query, search, capture)?;
+    let (ranks, kept, mut stages, pre_group_ranks) =
+        grouped_candidates(snapshot, searcher, pool, &query, search, capture, explain)?;
     let fetch = Instant::now();
     let results = ranked_survivors(
         kept,
@@ -335,7 +371,7 @@ fn dense(
     .collect::<Result<Vec<_>, CribleError>>()?;
     stages.fetch = fetch.elapsed();
     let strategy = plan(search, pool.len(), requested, request.exact).strategy;
-    Ok((results, stages, Some(strategy)))
+    Ok((results, stages, Some(strategy), pre_group_ranks))
 }
 
 /// Pairs each survivor of a regrouping with the rank it had before it.
@@ -383,10 +419,11 @@ fn lexical(
     searcher: &DenseSearcher,
     pool: &Pool,
     request: &Request<'_>,
-    requested: usize,
     capture: Option<&mut DebugCapture>,
-) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
+    explain: bool,
+) -> Result<PreGrouped, CribleError> {
     let text = text(request)?;
+    let requested = candidates_per_branch(request.k, request.grouping);
     let branch_time = Instant::now();
     let branch = lexical::search(snapshot, pool, text, requested)?;
     let mut stages = Stages {
@@ -396,6 +433,7 @@ fn lexical(
     if let Some(capture) = capture {
         capture.capture_lexical(&branch);
     }
+    let pre_group_ranks = pre_group(&branch, explain);
     let ranks = ranks(&branch);
     let group_time = Instant::now();
     let kept = group(branch, request.k, request.grouping, |iid| {
@@ -420,7 +458,7 @@ fn lexical(
     })
     .collect::<Result<Vec<_>, CribleError>>()?;
     stages.fetch = fetch.elapsed();
-    Ok((results, stages, None))
+    Ok((results, stages, None, pre_group_ranks))
 }
 
 /// Runs both branches in parallel on the same pool, then fuses and regroups.
@@ -430,13 +468,14 @@ fn hybrid(
     pool: &Pool,
     request: &Request<'_>,
     search: &SearchConfig,
-    requested: usize,
     capture: Option<&mut DebugCapture>,
-) -> Result<(Vec<RankedHit>, Stages, Option<Strategy>), CribleError> {
+    explain: bool,
+) -> Result<PreGrouped, CribleError> {
     // Both inputs are checked before any branch runs: a malformed request pays
     // for no work.
     let vector = vector(request)?;
     let text = text(request)?;
+    let requested = candidates_per_branch(request.k, request.grouping);
     let (dense_branch, lexical_branch) = rayon::join(
         || {
             let started = Instant::now();
@@ -479,6 +518,7 @@ fn hybrid(
     let fusion_time = Instant::now();
     let fused = fusion::fuse(&dense_branch?, &lexical_branch?, request.fusion);
     stages.fusion = fusion_time.elapsed();
+    let pre_group_ranks = pre_group(&fused, explain);
     let group_time = Instant::now();
     let kept = group(fused, request.k, request.grouping, |iid| {
         searcher.passage_hash_of(iid)
@@ -512,7 +552,7 @@ fn hybrid(
     .collect::<Result<Vec<_>, CribleError>>()?;
     stages.fetch = fetch.elapsed();
     let strategy = plan(search, pool.len(), requested, request.exact).strategy;
-    Ok((results, stages, Some(strategy)))
+    Ok((results, stages, Some(strategy), pre_group_ranks))
 }
 
 /// Query vector the mode needs, or the `invalid_request` that names the mode.

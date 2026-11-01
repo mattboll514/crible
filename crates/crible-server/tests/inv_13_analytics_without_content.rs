@@ -214,12 +214,17 @@ async fn attach(
 }
 
 /// Body of a `lexical` search of one index.
-fn single_body(query: &str, filter: &str) -> Value {
+///
+/// The id of the document the search returns is asked for in `explain_ids`
+/// (ADR-0123): the explanation is a body of the engine, and the id it names must
+/// no more reach the analytics or the journal than the query text does.
+fn single_body(query: &str, filter: &str, doc_id: &str) -> Value {
     json!({
         "query": query,
         "mode": "lexical",
         "k": 5,
         "filter": { "numero": { "eq": filter } },
+        "explain_ids": [doc_id],
     })
 }
 
@@ -393,13 +398,21 @@ async fn inv_13_the_analytics_and_the_journal_hold_no_query_text_no_filter_value
                 Method::POST,
                 SEARCH_ALPHA,
                 READ_SECRET,
-                Some(single_body(&request.query, &request.filter)),
+                Some(single_body(
+                    &request.query,
+                    &request.filter,
+                    &request.doc_id,
+                )),
             )
             .await;
             assert_eq!(status, StatusCode::OK, "the search answers: {answer}");
             assert_eq!(
                 answer["results"][0]["doc_id"], request.doc_id,
                 "the search returns the document its markers name: {answer}"
+            );
+            assert_eq!(
+                answer["explain"][0]["doc_id"], request.doc_id,
+                "the explanation names the document its markers name: {answer}"
             );
             returned.push(request.doc_id.clone());
         } else if position < SINGLE + MULTI_REQUESTS {

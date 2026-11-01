@@ -12,7 +12,7 @@
 //! | `a_conforming_answer_carries_generation_pool_size_and_truncated_query` | answer of `docs/05` |
 //! | `an_unknown_index_is_a_404_unknown_index` | `404 unknown_index` |
 //! | `an_unknown_field_names_its_json_path_at_every_level` | ADR-0109, decision 1 |
-//! | `explain_is_refused_until_expliquer_documents` | ADR-0109, decision 1; ADR-0119, decision 10 |
+//! | `explain_ids_is_accepted_since_expliquer_documents` | ADR-0123, decisions 1 and 3 |
 //! | `timeout_ms_is_read_from_the_body_and_bounded` | ADR-0102, decision 3 |
 //! | `a_query_on_an_external_model_is_refused_naming_the_model` | `docs/05:235` |
 //! | `a_vector_of_the_wrong_length_is_refused` | `docs/05:235` |
@@ -231,15 +231,37 @@ async fn an_unknown_field_names_its_json_path_at_every_level() {
     }
 }
 
-/// `debug` and `explain_ids` are not silently ignored in P6: they are refused
-/// with a message that says they open in P7 (ADR-0109, decision 1).
+/// `explain_ids` opened with `EXPLIQUER-DOCUMENTS`: an empty list changes
+/// nothing, and a malformed id is refused by a message that names its path
+/// (ADR-0123, decisions 1 and 3).
 #[tokio::test]
-async fn explain_is_refused_until_expliquer_documents() {
+async fn explain_ids_is_accepted_since_expliquer_documents() {
     let (_instance, _state, router) = instance_with_alpha().await;
-    // `debug` is accepted since P7 (ADR-0119, decision 10); `explain_ids` keeps
-    // its P6 refusal until `EXPLIQUER-DOCUMENTS`.
-    let (status, answer) = search(&router, READ_SECRET, json!({ "explain_ids": [] })).await;
-    refused(status, &answer, "not supported yet");
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "explain_ids": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(answer.get("explain").is_none(), "{answer}");
+    // ADR-0123, complement of 2026-11-01: `A#x` is a `doc_id`, not a key, and an
+    // unknown `doc_id` is explained, not refused.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "explain_ids": ["A#x"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["explain"][0]["exists"], false, "{answer}");
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]), "explain_ids": ["#3"] }),
+    )
+    .await;
+    refused(status, &answer, "$.explain_ids[0]");
 }
 
 /// `timeout_ms` is read from the body, in the documented domain; the default is

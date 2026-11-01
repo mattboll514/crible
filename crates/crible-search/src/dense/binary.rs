@@ -58,7 +58,7 @@
 //! ([`ErrorCode::Internal`]), as is a pool identifier that no segment covers.
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::Iid;
@@ -283,6 +283,127 @@ impl<'a> SegmentCursor<'a> {
     }
 }
 
+/// Rank of each passage of `targets` in the order of the binary selection.
+///
+/// The rank is the position the passage would take in the list [`top_k`]
+/// builds with `n` equal to the pool size: ascending distance, then ascending
+/// internal identifier. The identifiers stay inside the engine; only the rank
+/// leaves it (INV-01). It is independent of the number of candidates a query
+/// keeps, which is what `dense.binary_rank` of ADR-0123, decision 5, reports.
+///
+/// The scan computes a histogram of the distances and, for the distances the
+/// targets take, the identifiers that share one: the tie-break then counts the
+/// identifiers that precede a target, without materialising the whole ranking.
+/// A target outside the pool has no rank and is absent from the result.
+pub(crate) fn ranks(
+    snapshot: &Snapshot,
+    pool: &Pool,
+    query_code: &[u64],
+    targets: &[Iid],
+) -> Result<HashMap<Iid, u32>, CribleError> {
+    let segments = prepare(snapshot, pool, query_code)?;
+    if pool.is_empty() || targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut wanted: Vec<(Iid, u64)> = Vec::new();
+    // One slot per possible distance: the scan then tests a target distance in
+    // constant time instead of scanning the list per passage.
+    let mut distances = vec![false; query_code.len() * 64 + 1];
+    for target in targets {
+        if !pool.bitmap().contains(target.get()) {
+            continue;
+        }
+        let code = code_of(&segments, *target, query_code.len())?;
+        let distance = (kernels::hamming_function())(query_code, code);
+        if let Ok(slot) = usize::try_from(distance)
+            && let Some(wanted_distance) = distances.get_mut(slot)
+        {
+            *wanted_distance = true;
+        }
+        wanted.push((*target, distance));
+    }
+    if wanted.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let scan = Scan {
+        segments: &segments,
+        words: query_code.len(),
+        query_code,
+        n: 0,
+        hamming: kernels::hamming_function(),
+    };
+    let ranges = windows(
+        pool.bitmap(),
+        pool.len(),
+        rayon::current_num_threads().max(1),
+    );
+    let buckets: Vec<DistanceBucket> = ranges
+        .par_iter()
+        .map(|&(from, to)| scan.bucket(pool.bitmap(), from, to, &distances))
+        .collect::<Result<Vec<_>, CribleError>>()?;
+
+    let mut histogram: Vec<u64> = Vec::new();
+    let mut shared: Vec<(u32, u64)> = Vec::new();
+    for bucket in buckets {
+        if histogram.len() < bucket.histogram.len() {
+            histogram.resize(bucket.histogram.len(), 0);
+        }
+        for (distance, count) in bucket.histogram.iter().enumerate() {
+            histogram[distance] += count;
+        }
+        shared.extend(bucket.shared);
+    }
+
+    let mut ranks: HashMap<Iid, u32> = HashMap::with_capacity(wanted.len());
+    for (iid, distance) in wanted {
+        let position = usize::try_from(distance)
+            .map_err(|_| internal("a Hamming distance does not fit the histogram of the scan"))?;
+        let before: u64 = histogram.get(..position).unwrap_or_default().iter().sum();
+        // The windows are contiguous in ascending identifier order, so `shared`
+        // is already sorted by identifier and the tie-break is a count.
+        let tied = shared
+            .iter()
+            .filter(|(candidate, tied_distance)| {
+                *tied_distance == distance && *candidate < iid.get()
+            })
+            .count();
+        let rank = before
+            .saturating_add(u64::try_from(tied).unwrap_or(u64::MAX))
+            .saturating_add(1);
+        ranks.insert(iid, u32::try_from(rank).unwrap_or(u32::MAX));
+    }
+    Ok(ranks)
+}
+
+/// One window of the rank scan: its distance histogram and the identifiers that
+/// share a distance a target takes.
+struct DistanceBucket {
+    /// Number of pool passages per distance, indexed by distance.
+    histogram: Vec<u64>,
+    /// `(identifier, distance)` of the passages whose distance is a target one,
+    /// in ascending identifier order.
+    shared: Vec<(u32, u64)>,
+}
+
+/// Code of a passage of the generation, or the corruption error when no segment
+/// covers it.
+fn code_of<'a>(
+    segments: &'a [SegmentCodes<'a>],
+    iid: Iid,
+    words: usize,
+) -> Result<&'a [u64], CribleError> {
+    let segment = segments
+        .iter()
+        .find(|segment| {
+            u64::from(iid.get()) >= u64::from(segment.iid_start)
+                && u64::from(iid.get()) < segment.end()
+        })
+        .ok_or_else(uncovered)?;
+    segment
+        .code(iid.get(), words)
+        .ok_or_else(|| internal("a live passage has no binary code in the generation"))
+}
+
 /// Runs the scan over the windows of the pool, then merges the window heaps.
 fn scan(
     segments: &[SegmentCodes<'_>],
@@ -337,21 +458,23 @@ impl<'a> Scan<'a> {
             self.n
                 .min(usize::try_from(pool.len()).unwrap_or(usize::MAX)),
         );
-        self.sparse_window(pool, from, to, &mut heap)?;
+        self.walk_window(pool, from, to, |iid, distance| {
+            offer(&mut heap, distance, iid, self.n);
+        })?;
         Ok(heap
             .into_iter()
             .map(|Reverse(candidate)| candidate)
             .collect())
     }
 
-    /// Walks the pool bitmap of the window and reads the code of each live
-    /// identifier, following the segments with a cursor.
-    fn sparse_window(
+    /// Walks the pool bitmap of the window and hands each live identifier and
+    /// its distance to `visit`, following the segments with a cursor.
+    fn walk_window(
         &self,
         pool: &RoaringBitmap,
         from: u32,
         to: u32,
-        heap: &mut BinaryHeap<Reverse<Candidate>>,
+        mut visit: impl FnMut(u32, u64),
     ) -> Result<(), CribleError> {
         let mut live = pool.iter();
         live.advance_to(from);
@@ -364,9 +487,39 @@ impl<'a> Scan<'a> {
             let code = segment
                 .code(iid, self.words)
                 .ok_or_else(|| internal("a live passage has no binary code in the generation"))?;
-            offer(heap, self.distance(code), iid, self.n);
+            visit(iid, self.distance(code));
         }
         Ok(())
+    }
+
+    /// Walks one window for the rank scan: counts the distances and keeps the
+    /// identifiers that share a distance of `wanted`, a lookup table indexed by
+    /// distance.
+    fn bucket(
+        &self,
+        pool: &RoaringBitmap,
+        from: u32,
+        to: u32,
+        wanted: &[bool],
+    ) -> Result<DistanceBucket, CribleError> {
+        let mut bucket = DistanceBucket {
+            histogram: vec![0; self.words * 64 + 1],
+            shared: Vec::new(),
+        };
+        self.walk_window(pool, from, to, |iid, distance| {
+            if let Some(slot) = bucket.histogram.get_mut(distance as usize) {
+                *slot += 1;
+            }
+            if usize::try_from(distance)
+                .ok()
+                .and_then(|slot| wanted.get(slot))
+                .copied()
+                .unwrap_or(false)
+            {
+                bucket.shared.push((iid, distance));
+            }
+        })?;
+        Ok(bucket)
     }
 
     /// Distance between the query code and one passage code.

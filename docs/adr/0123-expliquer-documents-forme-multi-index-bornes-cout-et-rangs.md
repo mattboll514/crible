@@ -242,6 +242,39 @@ Précisions :
 | Prouver « rang 70 / rang 2 » sur `data/legifacile-sample` | L'échantillon ne présente pas ce cas (MES-10 : dense 1, lexical 5) et un test local exclu serait le sixième de la liste fermée de `docs/07:148-150` |
 | Rouvrir ADR-0079 pour le départage `PassageKey::Ord` | Le départage textuel est déjà décidé (`:50`, `:117`) ; le rouvrir pour un diagnostic n'apporte rien |
 
+## Complément du 2026-11-01 (relecture, tour 1)
+
+Ce complément répond aux points 1, 2, 4, 5, 6 et 8 de la relecture du tour 1 de la tâche `EXPLIQUER-DOCUMENTS`. Il **ne réécrit aucune des douze décisions** ci-dessus ; il en fixe l'interprétation là où la relecture a montré une ambiguïté. Les règles sont retenues par l'orchestrateur, par délégation du propriétaire pour la suite de P7, et portent le **même statut d'acceptation par anticipation** que l'ADR.
+
+### Lecture d'un id : clé de passage ou `doc_id` (point 2)
+
+Un id demandé est une **clé de passage** quand il se termine par `#` suivi d'un entier décimal valide comme `ord` — même analyse que `PassageKey::from_str`, qui coupe au **dernier** `#` (`crates/crible-core/src/ids.rs:99-114`). **Tout autre id est un `doc_id`**, y compris quand il contient `#` : `A#x` est un `doc_id` et rend une entrée, jamais un `400`. Aucune interdiction de `#` dans un `doc_id` n'est ajoutée, ni au code (`crates/crible-core/src/ids.rs:56-58` admet ce caractère) ni à la conception (`docs/02:47` ne l'interdit pas).
+
+Précisions :
+
+- un id **vide** reste un `400 invalid_request` sur `$.explain_ids[i]` (décision 3), de même qu'un id dont la partie document d'une clé est vide (`#3`) ou dépasse la longueur maximale de `DocId` ;
+- « clé mal formée » au sens de la décision 3 se réduit donc à ces cas : un suffixe non numérique, ou absent, fait de l'id un `doc_id` et non une clé fautive ;
+- **conséquence assumée et écrite** : un document dont le `doc_id` se termine lui-même par `#<entier>` ne peut être expliqué que **passage par passage** (`A#3#0`), parce que `A#3` se lit comme la clé du passage 3 du document `A` ; la documentation le dit (`docs/05-api.md`, « Recherche : réponse ») ;
+- le membre `doc_id` d'une entrée de clé reste la partie document de la clé.
+
+### Périmètre des membres : le passage, jamais le document ni un frère (points 1 et 5)
+
+Pour une **clé**, `in_pool`, `excluded_by`, `dense`, `lexical`, `fused` et `grouped_under` décrivent **le passage lui-même**, jamais son document ni un passage frère. Pour un **`doc_id`**, `in_pool` et `excluded_by` portent sur le document (décisions 1 et 7), et chaque branche décrit le passage le mieux classé de ce document dans cette branche (décision 1).
+
+Pour un `doc_id` **hors du pool**, `excluded_by` est l'**union**, dans l'ordre du filtre, des feuilles qui échouent pour **au moins un** de ses passages vivants. Elle n'est donc jamais vide quand le document a des passages vivants et que `in_pool` est faux : le pool vaut vivants ∧ filtre, donc chaque passage vivant hors du pool échoue à au moins une feuille. Un document **sans** passage vivant n'a aucune feuille à nommer : le membre est alors omis, comme tout membre sans valeur (décision 1 ; ADR-0119, décision 3).
+
+### Coût : ce qui entre dans `took_ms` (point 4)
+
+Le **seul** travail lié à `explain_ids` compté dans `took_ms` est la **capture des rangs avant regroupement** dans le pipeline, nécessaire à `fused.rank` et à `grouped_under` : elle a lieu pendant la recherche, donc avant l'arrêt du total, et seulement quand `explain_ids` est présent. **Tout le reste** — calcul des passages absorbés, lectures des empreintes de contenu sous `dedup`, scans exacts, rangs binaires et lexicaux — se fait **après la lecture du total**, comme le dit la décision 4.
+
+### `grouped_under` sous `dedup` (point 8)
+
+Sous `dedup: "content"`, `grouped_under` nomme le passage **rendu** de **même empreinte de contenu** ; sous `group_by: "document"`, ou sous une déduplication par document, il nomme le passage **rendu du même document**. Quand les deux s'enchaînent (ADR-0075), on cherche **d'abord** le passage rendu de même empreinte, **puis**, à défaut, le passage rendu du même document.
+
+### À surveiller (point 6)
+
+Sous `explain_ids`, `lexical.rank` demande de scorer **tout le pool marqué par la requête**, et non les seuls candidats retenus. Son coût — mémoire et temps — à 8,58 M passages **n'est pas mesuré**. La mise en œuvre doit préférer un **comptage des scores supérieurs**, départage textuel compris, à un classement complet du pool ; une mesure devra précéder toute conclusion sur la tenue de la borne de 100 sous l'échéance.
+
 ## Références
 
 - Fiche : `docs/phases/P7-observabilite.md:86-101`.

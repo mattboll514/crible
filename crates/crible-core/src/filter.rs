@@ -108,6 +108,16 @@ pub struct Condition {
 }
 
 impl Condition {
+    /// JSON path of the condition in the body of the request.
+    ///
+    /// The parser builds it with the prefix it received, so it names the field
+    /// as the client wrote it (`$.filter.fonds`, `$.targets[0].filter.$or[1].fonds`).
+    /// `EXPLIQUER-DOCUMENTS` renders it in `excluded_by` (ADR-0123, decision 7).
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
     fn validate(&self, schema: &Schema) -> Result<(), CribleError> {
         let Some((spec, _level)) = schema.field(&self.field) else {
             return Err(self.unknown_field(schema));

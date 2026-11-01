@@ -30,10 +30,11 @@
 //!
 //! A field outside the fourteen of `docs/05-api.md` is an `invalid_request` that
 //! names its JSON path, at every level (`fusion`, `return`, `filter` keeps its
-//! `invalid_filter` code). `explain_ids` is still named as not supported yet:
-//! `EXPLIQUER-DOCUMENTS` opens it. `debug` is accepted since P7 (ADR-0119). No
-//! field is ignored in silence. A query text or a filter value never reaches a
-//! log (AGENTS.md, "Confidentialité").
+//! `invalid_filter` code). `explain_ids` is open since `EXPLIQUER-DOCUMENTS`
+//! (P7, ADR-0123): the route parses it, and the explanation runs after
+//! `took_ms`, inside the same blocking task, under the deadline. `debug` is
+//! accepted since P7 (ADR-0119). No field is ignored in silence. A query text or
+//! a filter value never reaches a log (AGENTS.md, "Confidentialité").
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -50,7 +51,8 @@ use crible_search::api::{self, ReturnSelection};
 use crible_search::debug::DebugCapture;
 use crible_search::dense::Strategy;
 use crible_search::dense::exact::DenseSearcher;
-use crible_search::group::Grouping;
+use crible_search::explain::{self, ExplainEntry, ExplainId, MAX_IDS, Survivor};
+use crible_search::group::{Grouping, candidates_per_branch};
 use crible_search::pipeline::{
     self, Answer, Mode, RankedHit, Request as PipelineRequest, ScoreType, Stages,
 };
@@ -124,7 +126,7 @@ pub(crate) const DEFAULT_K: usize = 10;
                    unknown field of the body is `400 invalid_request`; an unknown index is `404 \
                    unknown_index`; an insufficient role `403`; a saturated concurrency limit \
                    `503` with `Retry-After: 1`; a deadline `504 timeout`. `debug` adds the plan, the timings and the branch ranks \
-                   (ADR-0119); `explain_ids` is refused until `EXPLIQUER-DOCUMENTS`. Role: \
+                   (ADR-0119); `explain_ids` adds the explanation of the requested ids (ADR-0123). Role: \
                    `read`; `write` and `admin` include it (ADR-0095).",
     params(("index" = String, Path, description = "Name of the index")),
     request_body = crate::openapi::SearchRequest,
@@ -274,6 +276,10 @@ async fn search_inner(
     observed.validate_now();
     let holder = Arc::clone(&state);
     let name = index.clone();
+    // ADR-0123: the ids move into the blocking task, which runs the explanation
+    // after `fetch`, under the deadline. A request without `explain_ids` carries
+    // an empty list and allocates nothing for it.
+    let explained = request.explain;
     // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
     // decision 2). This instant is read just before the token, so the
     // acquisition and everything after it are covered.
@@ -302,6 +308,7 @@ async fn search_inner(
                 request.exact,
                 request.debug,
                 recording,
+                &explained,
                 started,
             )
         })
@@ -723,6 +730,7 @@ fn run(
     exact: bool,
     debug: bool,
     recording: bool,
+    explain_targets: &[ExplainTarget],
     started: Instant,
 ) -> Attempt {
     let mut stages = StageDurations::default();
@@ -764,6 +772,7 @@ fn run(
             k,
             exact,
             capture: capture.as_mut(),
+            explain: !explain_targets.is_empty(),
         },
     ) {
         Ok(outcome) => outcome,
@@ -773,6 +782,36 @@ fn run(
     // JSON rendering of the results. The deadline and the token still cover the
     // whole request.
     let total = started.elapsed();
+    // ADR-0123, decision 4: the explanation runs after `fetch` and out of
+    // `took_ms`, but under the deadline and the token, which stay taken until the
+    // blocking task really ends.
+    let explain = match outcome.explain.as_ref() {
+        Some(context) if !explain_targets.is_empty() => {
+            let ids: Vec<ExplainId> = explain_targets
+                .iter()
+                .map(|target| target.id.clone())
+                .collect();
+            match context.explain(
+                &published.snapshot,
+                vector.as_deref(),
+                prepared.text.as_deref(),
+                &published.config.search,
+                &ids,
+            ) {
+                Ok(entries) => Some(entries),
+                Err(failure) => {
+                    return Attempt::failed(
+                        failure,
+                        StageDurations {
+                            encode: stages.encode,
+                            ..measure(mode, &outcome)
+                        },
+                    );
+                }
+            }
+        }
+        _ => None,
+    };
     // Step 3 to 8 of `docs/03-recherche.md`, read from the outcome: a step the
     // mode did not run produces no sample (ADR-0117, decision 2).
     let measured = measure(mode, &outcome);
@@ -809,6 +848,7 @@ fn run(
             results: outcome.hits,
             stages: outcome.stages,
             strategy: outcome.strategy,
+            pre_group_ranks: Vec::new(),
         },
         &published.config.schema,
         selection,
@@ -817,6 +857,7 @@ fn run(
         result: Ok(SearchOutcome {
             results,
             debug,
+            explain,
             pool_size: outcome.pool_size,
             generation: outcome.generation,
             truncated_query: prepared.truncated_query,
@@ -890,6 +931,69 @@ pub(crate) struct IndexParams<'a> {
     /// Capture of the branch tops, built only for a `debug` request
     /// (ADR-0119, decision 8).
     pub(crate) capture: Option<&'a mut DebugCapture>,
+    /// Whether the request asks for `explain_ids` (ADR-0123). It makes the
+    /// pipeline keep its ranking before the regrouping, and the outcome carry
+    /// what the explanation reads after `fetch`.
+    pub(crate) explain: bool,
+}
+
+/// What the explanation of one index reads after `took_ms`, kept beside the
+/// answer by [`search_index`] (ADR-0123, decision 4).
+///
+/// It holds what the pipeline already computed — the pool, the searcher, the
+/// ranking before the regrouping, the survivors — so the explanation runs after
+/// `fetch` without reopening a reader or running a branch again.
+pub(crate) struct ExplainContext {
+    pub(crate) pool: Pool,
+    pub(crate) searcher: DenseSearcher,
+    pub(crate) filter: Filter,
+    pub(crate) mode: Mode,
+    pub(crate) requested: usize,
+    pub(crate) exact: bool,
+    pub(crate) strategy: Option<Strategy>,
+    pub(crate) pre_group_ranks: Vec<(String, u32)>,
+    /// Results that survived the regrouping, without their content digest: the
+    /// digest reads happen after `took_ms`, in [`ExplainContext::explain`].
+    pub(crate) survivors: Vec<Survivor>,
+    /// Whether the request deduplicates on content, so the digests are needed.
+    pub(crate) dedup: bool,
+}
+
+impl ExplainContext {
+    /// Explains `ids` against this context (ADR-0123, decisions 1 and 4).
+    pub(crate) fn explain(
+        &self,
+        snapshot: &crible_store::generation::Snapshot,
+        vector: Option<&[f32]>,
+        text: Option<&str>,
+        search: &crible_core::config::SearchConfig,
+        ids: &[ExplainId],
+    ) -> Result<Vec<ExplainEntry>, CribleError> {
+        // ADR-0123, complement of 2026-11-01: the digest reads of `dedup` are
+        // part of the explanation, so they happen here, after the total.
+        let mut survivors = self.survivors.clone();
+        if self.dedup {
+            explain::fill_hashes(&self.searcher, &mut survivors)?;
+        }
+        explain::explain(
+            snapshot,
+            &explain::ExplainInput {
+                pool: &self.pool,
+                searcher: &self.searcher,
+                filter: &self.filter,
+                mode: self.mode,
+                vector,
+                text,
+                search,
+                requested: self.requested,
+                exact: self.exact,
+                strategy: self.strategy,
+                pre_group_ranks: &self.pre_group_ranks,
+                survivors: &survivors,
+            },
+            ids,
+        )
+    }
 }
 
 /// Answer of one index, before the envelope of a search route.
@@ -908,6 +1012,8 @@ pub(crate) struct IndexOutcome {
     pub(crate) strategy: Option<Strategy>,
     /// Duration of the pool, step 3, measured here and not by the pipeline.
     pub(crate) filter: Duration,
+    /// What the explanation reads, when the request asks for one.
+    pub(crate) explain: Option<ExplainContext>,
 }
 
 /// Runs the pipeline of one index on the blocking thread.
@@ -954,18 +1060,43 @@ pub(crate) fn search_index(
             },
             &published.config.search,
             params.capture,
+            params.explain,
         )
     })?;
     let mut stages = answer.stages;
     stages.fetch += open;
+    // ADR-0123, decision 4, and its complement of 2026-11-01: the only work of
+    // the explanation inside `took_ms` is the capture of the ranks before the
+    // regrouping, which the pipeline does. The context keeps the results by
+    // their key and document; the digest reads of `dedup` happen after the
+    // total, in `ExplainContext::explain`.
+    let pool_size = pool.len();
+    let explanation = if params.explain {
+        let survivors = explain::survivors(&searcher, &answer.results, false)?;
+        Some(ExplainContext {
+            pool,
+            searcher,
+            filter: params.filter.clone(),
+            mode: params.mode,
+            requested: candidates_per_branch(params.k, params.grouping),
+            exact: params.exact,
+            strategy: answer.strategy,
+            pre_group_ranks: answer.pre_group_ranks,
+            survivors,
+            dedup: params.grouping.dedup_content,
+        })
+    } else {
+        None
+    };
     Ok(IndexOutcome {
         hits: answer.results,
         score_type: answer.score_type,
-        pool_size: pool.len(),
+        pool_size,
         generation: snapshot.generation().get(),
         stages,
         strategy: answer.strategy,
         filter,
+        explain: explanation,
     })
 }
 
@@ -1054,6 +1185,9 @@ pub(crate) struct SearchOutcome {
     results: Vec<Value>,
     /// Plan and ranks of a `debug` request; absent without `debug`.
     debug: Option<crate::debug::SearchDebug>,
+    /// Entries of `explain_ids`, in the order of the request; absent without
+    /// `explain_ids` (ADR-0123, decision 1).
+    explain: Option<Vec<ExplainEntry>>,
     pool_size: u32,
     generation: u64,
     truncated_query: bool,
@@ -1078,8 +1212,78 @@ impl SearchOutcome {
         if let Some(debug) = self.debug {
             body["debug"] = debug.render(stages);
         }
+        // ADR-0123, decision 1: `explain` is a sibling of `results`, present only
+        // when `explain_ids` was present and non-empty, never in an error body.
+        if let Some(explain) = self.explain {
+            body["explain"] = Value::Array(render_explain(&explain, None));
+        }
         body
     }
+}
+
+/// Renders one entry of `explain`, omitting every member without a value
+/// (ADR-0119, division 3; ADR-0123, decision 1).
+///
+/// `index` is set on the multi-index route only (ADR-0123, decision 2).
+pub(crate) fn render_explain_entry(entry: &ExplainEntry, index: Option<&str>) -> Value {
+    let mut object = Map::new();
+    if let Some(index) = index {
+        object.insert("index".to_owned(), json!(index));
+    }
+    object.insert("id".to_owned(), json!(entry.id));
+    object.insert("doc_id".to_owned(), json!(entry.doc_id));
+    object.insert("exists".to_owned(), json!(entry.exists));
+    if let Some(alive) = entry.alive {
+        object.insert("alive".to_owned(), json!(alive));
+    }
+    object.insert("in_pool".to_owned(), json!(entry.in_pool));
+    if !entry.excluded_by.is_empty() {
+        object.insert("excluded_by".to_owned(), json!(entry.excluded_by));
+    }
+    if let Some(dense) = &entry.dense {
+        let mut branch = Map::new();
+        branch.insert("key".to_owned(), json!(dense.key));
+        branch.insert("exact_rank".to_owned(), json!(dense.exact_rank));
+        if let Some(rank) = dense.binary_rank {
+            branch.insert("binary_rank".to_owned(), json!(rank));
+        }
+        if let Some(kept) = dense.in_binary_candidates {
+            branch.insert("in_binary_candidates".to_owned(), json!(kept));
+        }
+        object.insert("dense".to_owned(), Value::Object(branch));
+    }
+    if let Some(lexical) = &entry.lexical {
+        let mut branch = Map::new();
+        branch.insert("key".to_owned(), json!(lexical.key));
+        branch.insert("rank".to_owned(), json!(lexical.rank));
+        branch.insert("score".to_owned(), json!(lexical.score));
+        branch.insert("terms".to_owned(), json!(render_terms(&lexical.terms)));
+        object.insert("lexical".to_owned(), Value::Object(branch));
+    }
+    if let Some(fused) = entry.fused {
+        object.insert("fused".to_owned(), json!({ "rank": fused.rank }));
+    }
+    if let Some(under) = &entry.grouped_under {
+        object.insert("grouped_under".to_owned(), json!(under));
+    }
+    Value::Object(object)
+}
+
+/// Renders the per-term contributions of the lexical branch, a closed list of
+/// `{ term, tf, score }` (ADR-0123, decision 6).
+fn render_terms(terms: &[crible_search::lexical::TermScore]) -> Vec<Value> {
+    terms
+        .iter()
+        .map(|term| json!({ "term": term.term, "tf": term.tf, "score": term.score }))
+        .collect()
+}
+
+/// Renders a whole `explain` list, in the order of the request.
+fn render_explain(entries: &[ExplainEntry], index: Option<&str>) -> Vec<Value> {
+    entries
+        .iter()
+        .map(|entry| render_explain_entry(entry, index))
+        .collect()
 }
 
 /// Inputs the mode runs on, already parsed from the body.
@@ -1206,6 +1410,8 @@ pub(crate) struct SearchRequest {
     pub(crate) vector: Option<String>,
     pub(crate) mode: Option<Mode>,
     filter: Option<Filter>,
+    /// Ids of `explain_ids`, deduplicated in the order of the request.
+    pub(crate) explain: Vec<ExplainTarget>,
     pub(crate) k: usize,
     pub(crate) fusion: Option<FusionConfig>,
     pub(crate) by_document: bool,
@@ -1215,6 +1421,91 @@ pub(crate) struct SearchRequest {
     pub(crate) exact: bool,
     pub(crate) debug: bool,
     pub(crate) timeout_ms: Option<u64>,
+}
+
+/// One id of `explain_ids`, with the index it names in the multi-index form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplainTarget {
+    /// Target of the entry; absent on the simple route (ADR-0123, decision 2).
+    pub(crate) index: Option<String>,
+    /// The id itself, `doc_id` or passage key.
+    pub(crate) id: ExplainId,
+    /// Identifier as requested, rendered back in `explain[].id`.
+    pub(crate) raw: String,
+}
+
+impl SearchRequest {
+    /// Checks that every entry of the multi-index form names a target
+    /// (ADR-0123, decision 2), before the existence of the indexes is read.
+    pub(crate) fn check_explain_targets(
+        &self,
+        targets: &BTreeSet<String>,
+    ) -> Result<(), CribleError> {
+        for (position, target) in self.explain.iter().enumerate() {
+            let Some(index) = &target.index else {
+                continue;
+            };
+            if !targets.contains(index) {
+                return Err(error::invalid(format!(
+                    "'$.explain_ids[{position}].index' names an index which is not one of the targets"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Parses `explain_ids`, in the simple form or in the multi-index form.
+///
+/// Duplicates are merged keeping the first occurrence, and the bound of
+/// [`MAX_IDS`] applies after that merge (ADR-0123, decision 3). An empty id, a
+/// malformed key or a wrong shape is an `invalid_request` that names the JSON
+/// path of the fault and never the value of the id.
+fn parse_explain(
+    object: &Map<String, Value>,
+    multi: bool,
+) -> Result<Vec<ExplainTarget>, CribleError> {
+    let Some(value) = object.get("explain_ids") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    let items = value
+        .as_array()
+        .ok_or_else(|| error::invalid("'$.explain_ids' must be an array of ids"))?;
+    let mut seen: BTreeSet<(Option<String>, String)> = BTreeSet::new();
+    let mut parsed = Vec::with_capacity(items.len());
+    for (position, item) in items.iter().enumerate() {
+        let path = format!("$.explain_ids[{position}]");
+        let (index, raw) = if multi {
+            let entry = json_object(item, &path)?;
+            reject_unknown(entry, &path, &["index", "id"])?;
+            let index = optional_string(entry, &path, "index")?
+                .ok_or_else(|| error::invalid(format!("'{path}.index' is required")))?;
+            let raw = optional_string(entry, &path, "id")?
+                .ok_or_else(|| error::invalid(format!("'{path}.id' is required")))?;
+            (Some(index), raw)
+        } else {
+            let Value::String(raw) = item else {
+                return Err(error::invalid(format!(
+                    "'{path}' must be a string, a doc_id or a passage key"
+                )));
+            };
+            (None, raw.clone())
+        };
+        let id = ExplainId::parse_at(&raw, &path)?;
+        if seen.insert((index.clone(), raw.clone())) {
+            parsed.push(ExplainTarget { index, id, raw });
+        }
+    }
+    if parsed.len() > MAX_IDS {
+        return Err(error::invalid(format!(
+            "'$.explain_ids' asks for {} ids, above the bound of {MAX_IDS}",
+            parsed.len()
+        )));
+    }
+    Ok(parsed)
 }
 
 /// `return` of the request.
@@ -1304,13 +1595,10 @@ impl SearchRequest {
     pub(crate) fn parse_with(body: &Value, allowed: &[&str]) -> Result<Self, CribleError> {
         let object = json_object(body, "$")?;
         reject_unknown(object, "$", allowed)?;
-        // `explain_ids` is the only field the server parses and then refuses:
-        // it opens with EXPLIQUER-DOCUMENTS, after P7 (ADR-0109, ADR-0119).
-        if object.contains_key("explain_ids") {
-            return Err(error::invalid(
-                "the field '$.explain_ids' is not supported yet; it opens in P7",
-            ));
-        }
+        // `explain_ids` opened with EXPLIQUER-DOCUMENTS (ADR-0123). Its form is
+        // checked with the body, before any index is read (ADR-0110, decision
+        // 2): the multi-index route names each entry `{ "index", "id" }`.
+        let explain = parse_explain(object, allowed.contains(&"targets"))?;
         let query = optional_string(object, "$", "query")?;
         let vector = optional_string(object, "$", "vector")?;
         let mode = match optional_string(object, "$", "mode")? {
@@ -1353,6 +1641,7 @@ impl SearchRequest {
             vector,
             mode,
             filter,
+            explain,
             k,
             fusion,
             by_document,
@@ -1612,7 +1901,7 @@ pub(crate) fn unknown_index(index: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{BODY_FIELDS, SearchRequest};
+    use super::{BODY_FIELDS, MAX_IDS, SearchRequest};
     use crible_search::pipeline::Mode;
     use serde_json::json;
 
@@ -1643,15 +1932,59 @@ mod tests {
     }
 
     #[test]
-    fn only_explain_is_refused_as_not_supported_yet() {
-        // ADR-0119, decision 10: `debug` is accepted since P7, `explain_ids`
-        // waits for `EXPLIQUER-DOCUMENTS`.
-        let failure = parse(json!({ "explain_ids": [] }));
+    fn explain_ids_is_parsed_with_its_bounds() {
+        // ADR-0123, decisions 1 to 3: an absent or null list explains nothing,
+        // the entries keep the order of the request, duplicates are merged, a
+        // malformed id and a list above 100 entries are refused.
+        let absent = SearchRequest::parse(&json!({})).expect("the body parses");
+        assert!(absent.explain.is_empty());
+        let null = SearchRequest::parse(&json!({ "explain_ids": null })).expect("null is absent");
+        assert!(null.explain.is_empty());
+        let parsed = SearchRequest::parse(&json!({
+            "explain_ids": ["A", "A#2", "A", "B"]
+        }))
+        .expect("the list parses");
+        assert_eq!(parsed.explain.len(), 3, "the duplicate is merged");
+        assert_eq!(parsed.explain[0].raw, "A");
+        assert_eq!(parsed.explain[1].raw, "A#2");
+        assert_eq!(parsed.explain[2].raw, "B");
+        assert!(parsed.explain[0].index.is_none());
+
+        let not_a_list = parse(json!({ "explain_ids": "A" }));
         assert!(
-            failure.message().contains("not supported yet"),
+            not_a_list.message().contains("$.explain_ids"),
+            "{}",
+            not_a_list.message()
+        );
+        for body in [
+            json!({ "explain_ids": [""] }),
+            json!({ "explain_ids": ["#3"] }),
+            json!({ "explain_ids": [1] }),
+        ] {
+            let failure = parse(body);
+            assert!(
+                failure.message().contains("$.explain_ids[0]"),
+                "{}",
+                failure.message()
+            );
+        }
+        // ADR-0123, complement of 2026-11-01: `A#x` is a `doc_id`, not a key.
+        let hash_doc =
+            SearchRequest::parse(&json!({ "explain_ids": ["A#x"] })).expect("A#x is a doc_id");
+        assert_eq!(hash_doc.explain[0].raw, "A#x");
+        let too_many: Vec<String> = (0..=MAX_IDS).map(|index| format!("D{index}")).collect();
+        let failure = parse(json!({ "explain_ids": too_many }));
+        assert!(
+            failure.message().contains("$.explain_ids"),
             "{}",
             failure.message()
         );
+    }
+
+    #[test]
+    fn debug_is_parsed_and_refused_outside_a_boolean() {
+        // ADR-0119, decision 10: `debug` is accepted since P7 and is independent
+        // of `explain_ids`.
         let asked = SearchRequest::parse(&json!({ "debug": true })).expect("debug is accepted");
         assert!(asked.debug);
         let omitted = SearchRequest::parse(&json!({})).expect("the body parses");

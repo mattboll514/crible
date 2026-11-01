@@ -254,6 +254,9 @@ async fn exercise(
             // The `debug` member of ADR-0119 is a body of the engine too, and
             // its ranks (INV-01) are documented numbers, not internal ids.
             "debug": true,
+            // ADR-0123, decision 9: `explain` is a body of the engine too, and
+            // both forms of id are exercised.
+            "explain_ids": [DOC_ID, format!("{DOC_ID}#1"), "absent"],
         })),
     )
     .await;
@@ -263,6 +266,11 @@ async fn exercise(
             .as_array()
             .is_some_and(|results| !results.is_empty()),
         "the search returns the passages of the fixture: {answer}"
+    );
+    assert_eq!(
+        answer["explain"].as_array().map(Vec::len),
+        Some(3),
+        "the explanation renders one entry per id: {answer}"
     );
     seen.push(("search answer".to_owned(), answer));
 
