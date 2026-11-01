@@ -405,6 +405,14 @@ pub struct SegmentReader {
     segment_dir: PathBuf,
     data: Option<Mmap>,
     codes: OnceLock<Vec<u64>>,
+    /// Log of the reader hook, captured at `open` in the `failpoints` build.
+    ///
+    /// Capturing it once, instead of reading the environment at each event,
+    /// makes a release land in the log that was armed when the reader opened — a
+    /// test never sees the release of another test's reader (ADR-0126,
+    /// decision 6).
+    #[cfg(feature = "failpoints")]
+    hook: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for SegmentReader {
@@ -455,8 +463,10 @@ impl SegmentReader {
     /// caller that never asks for codes never pays for them. The loaded snapshot
     /// of the process already holds the codes of every segment, including for
     /// `crible export`, which builds the full snapshot of the generation.
-    /// Deferring the verification itself (once per generation, or only on
-    /// recovery) stays an open question for a later decision.
+    /// Deferring the verification itself stays an open question for a later
+    /// decision; ADR-0126, decision 2, answers only the frequency: the cache of
+    /// [`crate::readers::DenseReaders`] opens each segment once per process, so
+    /// the check is paid at the fill, never on the path of a query.
     pub fn open(segment_dir: &Path) -> Result<Self, CribleError> {
         let meta = read_meta(segment_dir)?;
         let precision = meta.precision;
@@ -470,6 +480,16 @@ impl SegmentReader {
                     meta.segment_id
                 ),
             ));
+        }
+        // The hook of ADR-0126 names the segment once the metadata is known and
+        // before the file is read: a test counts the openings of a generation
+        // without reading the code path. The log is the one armed now, and the
+        // reader keeps it for its release.
+        #[cfg(feature = "failpoints")]
+        let hook = crate::testhooks::armed_log();
+        #[cfg(feature = "failpoints")]
+        if let Some(log) = hook.as_deref() {
+            crate::testhooks::record_to(log, crate::testhooks::Kind::Open, &meta.segment_id);
         }
         let expected_len = meta.vectors_len()?;
         let actual_len = fs::metadata(&vectors_path)
@@ -489,6 +509,10 @@ impl SegmentReader {
             ));
         }
         check_checksum(&vectors_path, &meta)?;
+        #[cfg(feature = "failpoints")]
+        if let Some(log) = hook.as_deref() {
+            crate::testhooks::record_to(log, crate::testhooks::Kind::Seal, &meta.segment_id);
+        }
 
         let file = File::open(&vectors_path)
             .map_err(|error| io_error("open the vector file", &vectors_path, &error))?;
@@ -530,6 +554,8 @@ impl SegmentReader {
             segment_dir: segment_dir.to_path_buf(),
             data,
             codes: OnceLock::new(),
+            #[cfg(feature = "failpoints")]
+            hook,
         })
     }
 
@@ -801,6 +827,22 @@ impl SegmentReader {
             return None;
         }
         usize::try_from(offset).ok()
+    }
+}
+
+/// Releases a reader: with the `failpoints` feature only, the hook records the
+/// segment the last owner let go (ADR-0126, decision 5).
+///
+/// The readers of a generation in the cache of [`crate::readers::DenseReaders`]
+/// are `Arc`s: this implementation runs when the cache and every request that
+/// held the reader are gone, which is exactly the release the reference count
+/// decides.
+#[cfg(feature = "failpoints")]
+impl Drop for SegmentReader {
+    fn drop(&mut self) {
+        if let Some(log) = self.hook.as_deref() {
+            crate::testhooks::record_to(log, crate::testhooks::Kind::Drop, &self.meta.segment_id);
+        }
     }
 }
 

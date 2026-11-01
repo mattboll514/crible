@@ -15,12 +15,16 @@
 //! | `a_refused_vector_records_one_event_per_target` | a refusal taken at the single encoding/vector step spreads over the resolved targets |
 //! | `a_search_refused_at_the_token_records_one_event_per_target` | `503 overloaded` before any target answers: one event per target |
 //!
-//! The mid-loop failure is driven from the disk, without a failpoint: the epoch
-//! directory of one target is removed after the state loaded its snapshot, so
-//! the dense open of that target fails while the others still answer.
+//! The two mid-loop failures exist **only with the `failpoints` feature**: a
+//! served generation opens no reader, so removing the epoch of an index from the
+//! disk fails no request any more (ADR-0126, decisions 1 and 4). The fault of
+//! ADR-0126, decision 6 is raised inside the search of one target, after its
+//! filter ran and before its branches, which is where the opening of the readers
+//! used to fail.
 //!
 //! ```text
 //! cargo test -p crible-server --test search_multi_failure
+//! cargo test -p crible-server --features failpoints --test search_multi_failure
 //! ```
 
 mod common;
@@ -36,6 +40,8 @@ use crible_server::state::AppState;
 use crible_store::analytics::{ANALYTICS_FILE_NAME, MinuteEvent, read_minute_events};
 use serde_json::{Value, json};
 
+#[cfg(feature = "failpoints")]
+use common::lock_barrier_environment;
 use common::{
     ADMIN_SECRET, Instance, READ_SECRET, WRITE_SECRET, base64_vector, index_config, send,
     terminal_job,
@@ -114,20 +120,61 @@ async fn instance_with_targets(
     (instance, state, router)
 }
 
-/// Removes the epoch directory of `index`, so that its next dense open fails
-/// while the snapshot of the state still names that epoch.
-fn break_index(instance: &Instance, index: &str) {
-    let epochs = instance
-        .root()
-        .join("data")
-        .join("indexes")
-        .join(index)
-        .join("epochs");
-    assert!(
-        epochs.is_dir(),
-        "the index {index} has an epoch: {epochs:?}"
-    );
-    std::fs::remove_dir_all(&epochs).expect("the epoch directory is removable");
+/// An instance that serves [`TARGETS`], with the search of `faulty` failing.
+///
+/// ADR-0126, decision 6: the readers of a served generation are cached, so no
+/// per-query read of the disk fails any more. The fault is armed through the
+/// `failpoints` build of the server, and raised inside the search of one target,
+/// after its filter ran — the point where the opening of the readers used to
+/// fail.
+#[cfg(feature = "failpoints")]
+async fn instance_with_fault(faulty: &str) -> (Armed, Instance, Arc<AppState>, Router) {
+    let armed = Armed::arm(faulty).await;
+    let (instance, state, router) = instance_with_targets(0).await;
+    (armed, instance, state, router)
+}
+
+/// The process-global barrier variable of one test, cleared by `Drop`.
+///
+/// The variable is set for the whole process, so an assertion that panics before
+/// the end of the test must not leave it naming a directory that `Drop` of the
+/// `TempDir` then removes: the other tests of the binary would read a stale
+/// value. The guard clears it first, as `dense_reader_cache` and
+/// `inv_02_dense_readers` do.
+#[cfg(feature = "failpoints")]
+struct Armed {
+    /// Directory the variable names, kept alive until the guard drops.
+    _barrier: tempfile::TempDir,
+    /// Serialises the tests of this binary that arm the variable.
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(feature = "failpoints")]
+impl Armed {
+    /// Sets the variable on a fresh directory and names `index` as the failing
+    /// target.
+    async fn arm(index: &str) -> Self {
+        let guard = lock_barrier_environment().await;
+        let barrier = tempfile::tempdir().expect("a barrier directory is creatable");
+        // SAFETY: the guard is held, so no other test of this binary arms or reads
+        // the variable until the guard is released, after `Drop` removed it.
+        unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+        std::fs::write(barrier.path().join("fault-search-index"), index)
+            .expect("the fault of one index is armable");
+        Self {
+            _barrier: barrier,
+            _guard: guard,
+        }
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl Drop for Armed {
+    fn drop(&mut self) {
+        // SAFETY: the guard is still held here, so no test of this binary reads
+        // the variable while it is removed.
+        unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };
+    }
 }
 
 /// The `search_multi` rows of the analytics file, after a forced flush.
@@ -179,15 +226,15 @@ fn assert_empty_steps(row: &MinuteEvent) {
 /// A failure of the **first** target leaves no earlier event to keep: every
 /// resolved target still records one event, all carrying the code of the
 /// answer, with empty steps (ADR-0124, decision 10).
+#[cfg(feature = "failpoints")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failure_on_the_first_target_records_one_event_per_target() {
-    let (instance, state, router) = instance_with_targets(0).await;
-    break_index(&instance, "alpha");
+    let (_armed, instance, state, router) = instance_with_fault("alpha").await;
 
     let (status, answer) = send(&router, Method::POST, MULTI, READ_SECRET, Some(body())).await;
     assert!(
         status.is_server_error(),
-        "the broken target fails the request: {answer}"
+        "the faulty target fails the request: {answer}"
     );
 
     let rows = flushed_rows(&instance, &state).await;
@@ -211,15 +258,15 @@ async fn a_failure_on_the_first_target_records_one_event_per_target() {
 /// A failure in the middle of the loop keeps the event of the targets that
 /// answered — their `ok` and their own steps — and gives the code of the answer
 /// to the faulty target and to those that never ran (ADR-0124, decision 10).
+#[cfg(feature = "failpoints")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failure_on_a_later_target_keeps_the_earlier_events() {
-    let (instance, state, router) = instance_with_targets(0).await;
-    break_index(&instance, "beta");
+    let (_armed, instance, state, router) = instance_with_fault("beta").await;
 
     let (status, answer) = send(&router, Method::POST, MULTI, READ_SECRET, Some(body())).await;
     assert!(
         status.is_server_error(),
-        "the broken target fails the request: {answer}"
+        "the faulty target fails the request: {answer}"
     );
 
     let rows = flushed_rows(&instance, &state).await;

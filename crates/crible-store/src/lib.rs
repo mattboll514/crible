@@ -15,7 +15,13 @@ pub mod jobs;
 pub mod lexical;
 pub mod online;
 pub mod patch;
+pub mod readers;
 pub mod records;
 pub mod segment;
 pub mod snapshot;
 mod sqlite;
+// The observable hook of the segment readers of ADR-0126, decisions 2 and 6. It
+// is compiled only in the `failpoints` build, so a production binary carries
+// neither the module nor the calls that feed it.
+#[cfg(feature = "failpoints")]
+pub mod testhooks;
