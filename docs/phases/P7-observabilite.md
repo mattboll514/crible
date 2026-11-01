@@ -122,6 +122,8 @@
 - **Critères d'acceptation** :
   - le rapport sur l'échantillon est lisible sans contexte ;
   - une régression injectée (N réduit) est bien détectée par `--baseline`.
+- **Note du 2026-11-01** (ADR-0125, décision 1) : le mode « contre une instance via l'API » (`:118`) est **reporté**. `docs/07:29-50` ne porte aucun client HTTP : ce mode demanderait une dépendance et un ADR, à proposer au propriétaire avec P8 ou P9 (instance déployée). En P7, `crible eval` fonctionne **en local seulement**, sur un dossier de données ouvert en lecture (ADR-0116), y compris à côté d'un serveur en service.
+- **Note du 2026-11-01** (ADR-0125, décisions 8 et 14) : la « régression injectée (N réduit) » (`:124`) vaut `--rescore-candidates 20` avec `k = 10`, et les tests d'`eval` tournent en CI sur `synth-small` avec des requêtes à `vector`. Le rapport de l'échantillon est produit **en local par `@dev`** dans `docs/mesures/`, et la démo de J7 le rejoue. Aucun nouveau test local n'est exclu de la CI (ADR-0062).
 
 ### REUTILISER-LECTEURS-DENSES
 - **Origine** : hors plan initial, décision du propriétaire du 2026-11-01 sur recommandation de l'orchestrateur, en application de la décision 3 d'ADR-0120 (cache du `DenseSearcher` par génération retenu en principe). Le constat vient de REPONSE-DEBUG : chaque recherche dense ouvre ses lecteurs de segments (`DenseSearcher::open`), pour 0,6 ms à 4 000 passages et 2,3 ms à 20 000 passages, un coût qui croît avec le corpus ; `crates/crible-search/src/dense/exact.rs:148-153` dit pourtant les lecteurs « kept for every later query ». Ce coût n'est pas mesuré à 8,58 M passages.

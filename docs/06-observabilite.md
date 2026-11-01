@@ -124,24 +124,34 @@ La CLI `crible stats` affiche la même chose en tableau (ADR-0124, décisions 13
 ## Éval : `crible eval`
 
 ```
-crible eval --index articles --queries golden.jsonl --modes dense,lexical,hybrid --k 10 --out docs/mesures/
+crible eval --data data/legifacile-sample --index articles --queries golden.jsonl \
+  --modes dense,lexical,hybrid --k 10 --out docs/mesures/ \
+  [--exact-threshold <n>] [--rescore-candidates <n>] [--repeat <R>] [--baseline <rapport.json>]
 ```
 
-**Format du jeu de requêtes**, en JSONL :
+La commande fonctionne **en local seulement** : elle ouvre un dossier de données **en lecture**, comme `crible search`, et cette lecture reste permise à côté d'un serveur en service (ADR-0116). Elle n'écrit rien sous le dossier de données. Le mode « contre une instance via l'API » est **reporté** : `docs/07` ne porte aucun client HTTP, et il demandera une dépendance et un ADR (ADR-0125, décision 1).
+
+**Format du jeu de requêtes**, en JSONL, normatif et fermé (ADR-0125, décisions 2 et 3) :
 
 ```json
 {"id": "q-001", "query": "responsabilité du fait des choses", "filter": {"fonds": "LEGI"}, "expected": ["LEGIARTI…"]}
 ```
 
-`expected` est facultatif.
+Chaque ligne porte `id`, puis **exactement un** de `query` ou `vector` ; `filter` et `expected` sont facultatifs. `query` est encodé par le modèle de l'index ; `vector` le remplace, et c'est le seul chemin pour un index à modèle `external` (ADR-0109). Une ligne invalide arrête la commande avec son numéro de ligne. Un convertisseur Python dans `tools/bench/` produit ce format depuis `data/legifacile-sample/queries.jsonl` ; les fichiers d'entrée restent dans `data/`.
+
+`expected` est une liste de **`doc_id`**. La qualité se mesure **au document**, sur des résultats regroupés par document, avec `k = 10` par défaut (ADR-0125, décision 4).
 
 **Mesures produites, pour chaque mode** :
-- **fidélité de l'approximation** : recall@k et recouvrement@k du pipeline normal contre le même pipeline en `exact: true` ; les deux définitions — recall@k au niveau du passage, recouvrement@k au niveau du document — sont fixées par ADR-0076 et s'appliquent ici comme aux mesures de P4 ;
-- **qualité** : si `expected` est fourni, recall@k, MRR et nDCG@k ;
-- **latence** : p50, p95 et p99 par étape ;
+- **fidélité de l'approximation** : recall@10 au **passage** contre le même pipeline en `exact: true`, en moyenne sur **toutes** les requêtes, et recouvrement@10 au **document**, sans cible ; les définitions sont celles d'ADR-0076, décision 1, et la cible de 0,99 de `docs/08` est rappelée dans le rapport (ADR-0125, décision 6) ;
+- **qualité** : sur les requêtes dont `expected` est non vide, recall@k et MRR@k au document, par requête et en moyenne, avec leur `n` (ADR-0092, décision 2 ; ADR-0125, décision 5). nDCG@k n'est pas calculé : aucun jugement gradué n'existe ;
+- **latence** : p50, p95 et p99 par étape et pour `total`, au rang le plus proche (ADR-0117, décision 4), après une passe d'échauffement non comptée et `--repeat` répétitions (`3` par défaut). `eval` pose `debug: true` en interne et lit `timings_ms` (ADR-0119). Les latences sont **indicatives** ;
 - les requêtes qui régressent par rapport à un rapport précédent (option `--baseline`).
 
-**Sorties** : un JSON brut et un rapport Markdown dans `docs/mesures/`. C'est l'instrument principal du propriétaire pour valider sans lire le code.
+**Surcharges** (ADR-0125, décision 7). `--exact-threshold` et `--rescore-candidates` remplacent, pour la durée de la commande et **sans aucune écriture**, les valeurs de `search` de la configuration de l'index ; le rapport les reprend, avec `dense_strategy` lu dans le plan. La fidélité est mesurée par défaut avec `exact_threshold = 0`, ce qui force la stratégie binaire (ADR-0076, décision 4).
+
+**Régression** (ADR-0125, décisions 8 et 12). `--baseline <rapport.json>` compare, par mode, les moyennes de recall@k, de MRR@k et de recall@10 de fidélité. Une baisse de plus de **0,005 en valeur absolue** est une régression ; le code de sortie vaut alors **1**, sinon **0**. Le rapport liste aussi les requêtes qui ont perdu un attendu trouvé par la référence. Les latences sont comparées et rapportées (écart relatif des p50 et p95), sans changer le code de sortie. Une référence de `format_version` inconnue ou d'un autre `k` est refusée avec un message clair.
+
+**Sorties** (ADR-0125, décisions 11 à 13, 16). Un JSON **fermé**, `format_version: 1`, qui reprend la commande, l'index, la génération, `k`, les modes, N, `exact_threshold`, la version du binaire et le commit s'il est connu, puis les mesures par mode ; et un Markdown lisible sans contexte, au modèle de `docs/mesures/README.md`. Les noms sont `eval-<jeu>-<AAAA-MM-JJ>.json` et `eval-<jeu>-<AAAA-MM-JJ>.md`. `--out <dossier>` est obligatoire ; la commande refuse d'écraser un fichier existant et n'écrit jamais ailleurs. Le rapport n'identifie les requêtes que par leur `id`, sans texte de requête ni valeur de filtre. C'est l'instrument principal du propriétaire pour valider sans lire le code.
 
 ## Santé et logs
 
