@@ -40,11 +40,16 @@
 //! the minute of the flush that writes it, up to one flush interval away from
 //! the instant it happened.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 
 use crible_core::error::{CribleError, ErrorCode};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use crible_core::path::path_component;
+use crible_core::time::{format_minute, parse_iso8601};
+use rusqlite::types::Value;
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter};
+use serde::{Deserialize, Serialize};
 
 use crate::sqlite::{check_format_version, configure_busy_timeout, enable_wal};
 
@@ -1059,6 +1064,806 @@ fn count_u64(value: i64, column: &str) -> Result<u64, CribleError> {
             format!("{ANALYTICS_FILE_NAME}: column {column} is negative ({value})"),
         )
     })
+}
+
+/// Number of entries of the two rankings (ADR-0124, decisions 6 and 7).
+pub const TOP_ENTRIES: usize = 10;
+
+/// The ten operations of `docs/06-observabilite.md` (ADR-0118, decision 6).
+///
+/// The list is closed: a request that names another operation is refused
+/// (ADR-0124, decision 2). The names are the ones [`MinuteEvent::operation`]
+/// stores.
+pub const OPERATIONS: [&str; 10] = [
+    "search",
+    "search_multi",
+    "get_document",
+    "online_batch",
+    "attach_batch",
+    "patch_documents",
+    "compact",
+    "export",
+    "snapshot",
+    "index_admin",
+];
+
+/// The two search operations, the denominator of `zero_results_rate`
+/// (ADR-0124, decision 5).
+const SEARCH_OPERATIONS: [&str; 2] = ["search", "search_multi"];
+
+/// Width of the buckets of a statistics answer (ADR-0124, decision 2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsGroupBy {
+    /// One bucket per stored minute, all keys of the minute together.
+    Minute,
+    /// One bucket per hour, the default.
+    #[default]
+    Hour,
+    /// One bucket per UTC day.
+    Day,
+}
+
+impl StatsGroupBy {
+    /// Wire name of the width, the one `GET /v1/stats` echoes.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minute => "minute",
+            Self::Hour => "hour",
+            Self::Day => "day",
+        }
+    }
+
+    /// Reads a wire name; `None` when it is outside the closed domain.
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "minute" => Some(Self::Minute),
+            "hour" => Some(Self::Hour),
+            "day" => Some(Self::Day),
+            _ => None,
+        }
+    }
+
+    /// The SQL expression that renders the start of a bucket.
+    fn sql(self) -> &'static str {
+        match self {
+            Self::Minute => "minute",
+            Self::Hour => "substr(minute, 1, 13) || ':00:00Z'",
+            Self::Day => "substr(minute, 1, 10) || 'T00:00:00Z'",
+        }
+    }
+}
+
+/// The five parameters of the statistics read, checked and normalised
+/// (ADR-0124, decision 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatsFilter {
+    /// Lower bound, included, in the `minute` form SQLite stores.
+    pub from: Option<String>,
+    /// Upper bound, included, in the `minute` form SQLite stores.
+    pub to: Option<String>,
+    /// Index whose events are kept.
+    pub index: Option<String>,
+    /// Operation whose events are kept, from [`OPERATIONS`].
+    pub operation: Option<String>,
+    /// Width of the buckets.
+    pub group_by: StatsGroupBy,
+}
+
+impl StatsFilter {
+    /// Reads the five parameters of `GET /v1/stats` and of `crible stats`.
+    ///
+    /// A date is an ISO 8601 date with its offset, read at the resolution of a
+    /// minute because a row counts a whole minute; both bounds are included. The
+    /// window defaults to the whole retention, which [`read_stats`] resolves
+    /// from the file. Every refusal is [`ErrorCode::InvalidRequest`] and names
+    /// the parameter (ADR-0122, decision 9; ADR-0124, decision 2).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::InvalidRequest`] for a date outside ISO 8601, a `from` after
+    /// the `to`, an `index` outside the naming rules, an `operation` outside
+    /// [`OPERATIONS`] and a `group_by` outside its closed domain.
+    pub fn parse(
+        from: Option<&str>,
+        to: Option<&str>,
+        index: Option<&str>,
+        operation: Option<&str>,
+        group_by: Option<&str>,
+    ) -> Result<Self, CribleError> {
+        let from = from.map(|raw| minute_bound(raw, "from")).transpose()?;
+        let to = to.map(|raw| minute_bound(raw, "to")).transpose()?;
+        if let (Some(from), Some(to)) = (&from, &to)
+            && from > to
+        {
+            return Err(CribleError::new(
+                ErrorCode::InvalidRequest,
+                "'from' must not be after 'to'".to_owned(),
+            ));
+        }
+        let index = match index {
+            Some(raw) => {
+                path_component(raw, "the parameter 'index'")?;
+                Some(raw.to_owned())
+            }
+            None => None,
+        };
+        let operation = match operation {
+            Some(raw) if OPERATIONS.contains(&raw) => Some(raw.to_owned()),
+            Some(raw) => {
+                return Err(CribleError::new(
+                    ErrorCode::InvalidRequest,
+                    format!(
+                        "'operation' is not one of {}: '{raw}'",
+                        OPERATIONS.join(", ")
+                    ),
+                ));
+            }
+            None => None,
+        };
+        let group_by = match group_by {
+            Some(raw) => StatsGroupBy::parse(raw).ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("'group_by' must be 'minute', 'hour' or 'day': '{raw}'"),
+                )
+            })?,
+            None => StatsGroupBy::default(),
+        };
+        Ok(Self {
+            from,
+            to,
+            index,
+            operation,
+            group_by,
+        })
+    }
+}
+
+/// Reads one ISO 8601 bound at the resolution of a minute.
+fn minute_bound(raw: &str, parameter: &str) -> Result<String, CribleError> {
+    let instant = parse_iso8601(raw, parameter)?;
+    Ok(format_minute(instant.floor_to_minute()))
+}
+
+/// The answer of `GET /v1/stats`, without `analytics_dropped`, which belongs to
+/// a running process and not to the file (ADR-0124, decisions 1 and 9).
+///
+/// A member without a value is omitted, never rendered `null` nor filled with an
+/// invented `0` (ADR-0119, decision 3). The four lists are always present, even
+/// empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Stats {
+    /// Lower bound applied, in UTC; absent when the file holds no row and no
+    /// bound was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Upper bound applied, in UTC; absent for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Width of the buckets, echoed.
+    pub group_by: StatsGroupBy,
+    /// Buckets that hold at least one event, in chronological order.
+    pub buckets: Vec<StatsBucket>,
+    /// The same aggregate over the whole window, without `start`; absent when
+    /// the window holds no event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub totals: Option<StatsTotals>,
+    /// At most ten indexes, by count descending then name.
+    pub top_indexes: Vec<StatsIndexCount>,
+    /// At most ten filter forms, by count descending then form.
+    pub top_filter_shapes: Vec<StatsFilterShape>,
+    /// The last daily row of each index in the window, by name.
+    pub indexes: Vec<StatsIndexState>,
+}
+
+/// One bucket of a statistics answer (ADR-0124, decision 1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatsBucket {
+    /// Start of the bucket in UTC, truncated to the width.
+    pub start: String,
+    /// Number of events of the bucket.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, u64>,
+    /// Share of the successful searches that returned nothing; omitted when no
+    /// successful search ran (ADR-0124, decision 5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage; a stage without a sample is omitted.
+    #[serde(skip_serializing_if = "StatsLatency::is_empty")]
+    pub latency_ms: StatsLatency,
+}
+
+/// The aggregate of the whole window, the shape of a bucket without `start`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatsTotals {
+    /// Number of events of the window.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, u64>,
+    /// Share of the successful searches that returned nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage over the window.
+    #[serde(skip_serializing_if = "StatsLatency::is_empty")]
+    pub latency_ms: StatsLatency,
+}
+
+/// The three percentiles of one stage, in milliseconds (ADR-0124, decision 4).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StatsPercentiles {
+    /// Nearest-rank median.
+    pub p50: f64,
+    /// Nearest-rank 95th percentile.
+    pub p95: f64,
+    /// Nearest-rank 99th percentile.
+    pub p99: f64,
+}
+
+/// The percentiles of the nine stages of `StageDurations`.
+///
+/// The fields keep the order of the stages, so the serialised object is stable.
+/// A stage without a sample in the window is omitted.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct StatsLatency {
+    /// Step 1, validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate: Option<StatsPercentiles>,
+    /// Step 2, encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encode: Option<StatsPercentiles>,
+    /// Step 3, pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<StatsPercentiles>,
+    /// Step 4, dense branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense: Option<StatsPercentiles>,
+    /// Step 5, lexical branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical: Option<StatsPercentiles>,
+    /// Step 6, fusion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<StatsPercentiles>,
+    /// Step 7, regrouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<StatsPercentiles>,
+    /// Step 8, payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<StatsPercentiles>,
+    /// Total of the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<StatsPercentiles>,
+}
+
+impl StatsLatency {
+    /// True when no stage has a sample, so the member is omitted.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.validate.is_none()
+            && self.encode.is_none()
+            && self.filter.is_none()
+            && self.dense.is_none()
+            && self.lexical.is_none()
+            && self.fusion.is_none()
+            && self.group.is_none()
+            && self.fetch.is_none()
+            && self.total.is_none()
+    }
+}
+
+/// One entry of `top_indexes` (ADR-0124, decision 7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsIndexCount {
+    /// Name of the index.
+    pub index: String,
+    /// Events of that index on the window.
+    pub count: u64,
+}
+
+/// One entry of `top_filter_shapes` (ADR-0124, decision 6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatsFilterShape {
+    /// Canonical form of ADR-0117, decision 6: field names and operators only.
+    pub shape: String,
+    /// Searches that carried that form on the window.
+    pub count: u64,
+}
+
+/// One entry of `indexes`: the last daily row of an index in the window
+/// (ADR-0124, decision 8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StatsIndexState {
+    /// Day of the row, `AAAA-MM-JJ`.
+    pub day: String,
+    /// Index the row describes.
+    pub index: String,
+    /// Documents of the reference state.
+    pub documents: u64,
+    /// Passages alive at the generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at the generation or an earlier one.
+    pub dead_passages: u64,
+    /// Derived `dead_passages / (live_passages + dead_passages)`, never stored.
+    pub dead_ratio: f64,
+    /// Bytes the index directory occupies.
+    pub disk_bytes: u64,
+    /// Published generation.
+    pub generation: u64,
+    /// Batches the reference state applied.
+    pub batches: u64,
+}
+
+/// Aggregation of a window or a bucket, histograms included.
+///
+/// The counters and the histograms are accumulated in the same pass, and the
+/// histograms are merged bucket by bucket, so a percentile of the aggregate is
+/// the percentile of the raw events at one bucket's resolution (ADR-0117,
+/// decision 4; ADR-0124, decision 12).
+#[derive(Debug, Clone)]
+struct Aggregate {
+    /// Number of events.
+    count: u64,
+    /// Events of the successful searches that returned nothing.
+    zero_results: u64,
+    /// Events of the successful searches, the denominator of the rate.
+    searches: u64,
+    /// Events that failed, by error code.
+    errors: BTreeMap<String, u64>,
+    /// Merged histograms, in the order of `STAGE_COLUMNS`.
+    histograms: [Vec<u32>; STAGES],
+}
+
+impl Default for Aggregate {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            zero_results: 0,
+            searches: 0,
+            errors: BTreeMap::new(),
+            histograms: std::array::from_fn(|_| vec![0; LATENCY_BUCKETS]),
+        }
+    }
+}
+
+impl Aggregate {
+    /// Adds the counters and the histograms of `other`, saturating.
+    fn merge(&mut self, other: &Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.zero_results = self.zero_results.saturating_add(other.zero_results);
+        self.searches = self.searches.saturating_add(other.searches);
+        for (status, count) in &other.errors {
+            let entry = self.errors.entry(status.clone()).or_insert(0);
+            *entry = entry.saturating_add(*count);
+        }
+        for (left, right) in self.histograms.iter_mut().zip(other.histograms.iter()) {
+            merge_histogram(left, right);
+        }
+    }
+
+    /// Share of the successful searches that returned nothing, or `None` when
+    /// no successful search ran (ADR-0124, decision 5).
+    fn rate(&self) -> Option<f64> {
+        if self.searches == 0 {
+            return None;
+        }
+        Some(self.zero_results as f64 / self.searches as f64)
+    }
+
+    /// The percentiles of the nine stages, an empty stage omitted.
+    fn latency(&self) -> StatsLatency {
+        let stage = |position: usize| percentiles(&self.histograms[position]);
+        StatsLatency {
+            validate: stage(0),
+            encode: stage(1),
+            filter: stage(2),
+            dense: stage(3),
+            lexical: stage(4),
+            fusion: stage(5),
+            group: stage(6),
+            fetch: stage(7),
+            total: stage(8),
+        }
+    }
+}
+
+/// The three percentiles of one histogram, or `None` when it is empty.
+fn percentiles(buckets: &[u32]) -> Option<StatsPercentiles> {
+    Some(StatsPercentiles {
+        p50: latency_percentile(buckets, 50)?,
+        p95: latency_percentile(buckets, 95)?,
+        p99: latency_percentile(buckets, 99)?,
+    })
+}
+
+/// Reads the aggregated analytics of `path` over the window of `filter`.
+///
+/// It opens the file **read-only** on its own connection, so a read never waits
+/// for a flush and never blocks the writer; it writes nothing (ADR-0116,
+/// decision 1; ADR-0124, decision 12). The aggregation is done by SQL for the
+/// counters and by merging the stored histograms for the percentiles, which
+/// SQLite cannot add.
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] for a file of another format, a row this build
+/// cannot read or a BLOB of another length (INV-15), and the SQLite failure
+/// otherwise.
+pub fn read_stats(path: &Path, filter: &StatsFilter) -> Result<Stats, CribleError> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| crate::records::database_error("open the analytics database", &error))?;
+    configure_busy_timeout(&connection)?;
+    check_format_version(&connection, FORMAT_VERSION, "analytics")?;
+
+    let (oldest, newest) = retained_bounds(&connection)?;
+    let from = filter.from.clone().or(oldest);
+    let to = filter.to.clone().or(newest);
+
+    let mut buckets: BTreeMap<String, Aggregate> = BTreeMap::new();
+    let mut total = Aggregate::default();
+    read_counters(
+        &connection,
+        filter,
+        from.as_deref(),
+        to.as_deref(),
+        &mut buckets,
+        &mut total,
+    )?;
+    read_histograms(
+        &connection,
+        filter,
+        from.as_deref(),
+        to.as_deref(),
+        &mut buckets,
+        &mut total,
+    )?;
+
+    let buckets = buckets
+        .into_iter()
+        .map(|(start, aggregate)| StatsBucket {
+            start,
+            count: aggregate.count,
+            zero_results_rate: aggregate.rate(),
+            latency_ms: aggregate.latency(),
+            errors: aggregate.errors,
+        })
+        .collect();
+    let totals = (total.count > 0).then(|| StatsTotals {
+        count: total.count,
+        zero_results_rate: total.rate(),
+        latency_ms: total.latency(),
+        errors: total.errors,
+    });
+    let top_indexes = read_top_indexes(&connection, filter, from.as_deref(), to.as_deref())?;
+    let top_filter_shapes = read_top_shapes(&connection, filter, from.as_deref(), to.as_deref())?;
+    let indexes = read_index_states(&connection, filter, from.as_deref(), to.as_deref())?;
+    Ok(Stats {
+        from,
+        to,
+        group_by: filter.group_by,
+        buckets,
+        totals,
+        top_indexes,
+        top_filter_shapes,
+        indexes,
+    })
+}
+
+/// The oldest and the newest stored minute, the default window (ADR-0124,
+/// decision 2).
+fn retained_bounds(
+    connection: &Connection,
+) -> Result<(Option<String>, Option<String>), CribleError> {
+    connection
+        .query_row(
+            "SELECT MIN(minute), MAX(minute) FROM minute_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| crate::records::database_error("read the retained window", &error))
+}
+
+/// Accumulates the counters and the error codes of each bucket and of the whole
+/// window.
+fn read_counters(
+    connection: &Connection,
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+    buckets: &mut BTreeMap<String, Aggregate>,
+    total: &mut Aggregate,
+) -> Result<(), CribleError> {
+    let (clause, values) = minute_conditions(filter, from, to, true);
+    let sql = format!(
+        "SELECT {bucket} AS bucket, status, SUM(count),
+                SUM(CASE WHEN operation IN ({searches}) AND status = 'ok'
+                         THEN zero_results ELSE 0 END),
+                SUM(CASE WHEN operation IN ({searches}) AND status = 'ok'
+                         THEN count ELSE 0 END)
+         FROM minute_events WHERE {clause}
+         GROUP BY bucket, status
+         ORDER BY bucket",
+        bucket = filter.group_by.sql(),
+        searches = quoted(SEARCH_OPERATIONS),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| crate::records::database_error("prepare the statistics", &error))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|error| crate::records::database_error("query the statistics", &error))?;
+    for row in rows {
+        let (start, status, count, zero_results, searches) =
+            row.map_err(|error| crate::records::database_error("read the statistics", &error))?;
+        let mut aggregate = Aggregate {
+            count: count_u64(count, "count")?,
+            zero_results: count_u64(zero_results, "zero_results")?,
+            searches: count_u64(searches, "count")?,
+            ..Aggregate::default()
+        };
+        if status != "ok" {
+            aggregate.errors.insert(status, aggregate.count);
+        }
+        buckets.entry(start).or_default().merge(&aggregate);
+        total.merge(&aggregate);
+    }
+    Ok(())
+}
+
+/// Merges the nine latency histograms of each bucket and of the whole window.
+fn read_histograms(
+    connection: &Connection,
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+    buckets: &mut BTreeMap<String, Aggregate>,
+    total: &mut Aggregate,
+) -> Result<(), CribleError> {
+    let (clause, values) = minute_conditions(filter, from, to, true);
+    let columns = STAGE_COLUMNS.join(", ");
+    let sql = format!(
+        "SELECT {bucket} AS bucket, {columns} FROM minute_events WHERE {clause} ORDER BY bucket",
+        bucket = filter.group_by.sql(),
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| crate::records::database_error("prepare the histograms", &error))?;
+    let mut rows = statement
+        .query(params_from_iter(values))
+        .map_err(|error| crate::records::database_error("query the histograms", &error))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|error| crate::records::database_error("read the histograms", &error))?
+    {
+        let start: String = row.get(0).map_err(|error| {
+            crate::records::database_error("read the bucket of a histogram", &error)
+        })?;
+        let bucket = buckets.entry(start).or_default();
+        for (position, column) in STAGE_COLUMNS.iter().enumerate() {
+            let bytes: Vec<u8> = row
+                .get(1 + position)
+                .map_err(|error| crate::records::database_error("read a histogram", &error))?;
+            let decoded = decode_latency(&bytes, column)?;
+            merge_histogram(&mut bucket.histograms[position], &decoded);
+            merge_histogram(&mut total.histograms[position], &decoded);
+        }
+    }
+    Ok(())
+}
+
+/// The ten busiest indexes of the window (ADR-0124, decision 7).
+fn read_top_indexes(
+    connection: &Connection,
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<StatsIndexCount>, CribleError> {
+    let (clause, values) = minute_conditions(filter, from, to, true);
+    let sql = format!(
+        "SELECT \"index\", SUM(count) AS total FROM minute_events WHERE {clause}
+         GROUP BY \"index\" ORDER BY total DESC, \"index\" ASC LIMIT {TOP_ENTRIES}"
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| crate::records::database_error("prepare the top indexes", &error))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| crate::records::database_error("query the top indexes", &error))?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (index, count) =
+            row.map_err(|error| crate::records::database_error("read the top indexes", &error))?;
+        entries.push(StatsIndexCount {
+            index,
+            count: count_u64(count, "count")?,
+        });
+    }
+    Ok(entries)
+}
+
+/// The ten busiest filter forms of the window (ADR-0124, decision 6).
+fn read_top_shapes(
+    connection: &Connection,
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<StatsFilterShape>, CribleError> {
+    let (clause, values) = minute_conditions(filter, from, to, false);
+    let sql = format!(
+        "SELECT shape, SUM(count) AS total FROM filter_shapes WHERE {clause}
+         GROUP BY shape ORDER BY total DESC, shape ASC LIMIT {TOP_ENTRIES}"
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| crate::records::database_error("prepare the top shapes", &error))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| crate::records::database_error("query the top shapes", &error))?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let (shape, count) =
+            row.map_err(|error| crate::records::database_error("read the top shapes", &error))?;
+        entries.push(StatsFilterShape {
+            shape,
+            count: count_u64(count, "count")?,
+        });
+    }
+    Ok(entries)
+}
+
+/// The last daily row of each index in the window (ADR-0124, decision 8).
+fn read_index_states(
+    connection: &Connection,
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<StatsIndexState>, CribleError> {
+    let (clause, values) = day_conditions(filter, from, to);
+    let sql = format!(
+        "SELECT day, \"index\", documents, live_passages, dead_passages, disk_bytes,
+                generation, batches
+         FROM day_indexes WHERE {clause} ORDER BY \"index\" ASC, day DESC"
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| crate::records::database_error("prepare the index states", &error))?;
+    let rows = statement
+        .query_map(params_from_iter(values), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })
+        .map_err(|error| crate::records::database_error("query the index states", &error))?;
+    let mut entries: Vec<StatsIndexState> = Vec::new();
+    for row in rows {
+        let (day, index, documents, live, dead, disk_bytes, generation, batches) =
+            row.map_err(|error| crate::records::database_error("read the index states", &error))?;
+        // The rows arrive by index then by day descending: the first of each
+        // index is its last line of the window, and a missing day is never
+        // filled (ADR-0118, decision 5).
+        if entries.last().is_some_and(|entry| entry.index == index) {
+            continue;
+        }
+        let live = count_u64(live, "live_passages")?;
+        let dead = count_u64(dead, "dead_passages")?;
+        let passages = live.saturating_add(dead);
+        entries.push(StatsIndexState {
+            day,
+            index,
+            documents: count_u64(documents, "documents")?,
+            live_passages: live,
+            dead_passages: dead,
+            dead_ratio: if passages == 0 {
+                0.0
+            } else {
+                dead as f64 / passages as f64
+            },
+            disk_bytes: count_u64(disk_bytes, "disk_bytes")?,
+            generation: count_u64(generation, "generation")?,
+            batches: count_u64(batches, "batches")?,
+        });
+    }
+    Ok(entries)
+}
+
+/// The conditions of the `minute_events` and `filter_shapes` reads.
+///
+/// `with_operation` adds the `operation` filter; `filter_shapes` has no such
+/// column, and ADR-0124, decision 2, gives `operation` only to the events.
+fn minute_conditions(
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+    with_operation: bool,
+) -> (String, Vec<Value>) {
+    let mut conditions = Vec::new();
+    let mut values = Vec::new();
+    if let Some(from) = from {
+        conditions.push("minute >= ?".to_owned());
+        values.push(Value::Text(from.to_owned()));
+    }
+    if let Some(to) = to {
+        conditions.push("minute <= ?".to_owned());
+        values.push(Value::Text(to.to_owned()));
+    }
+    if let Some(index) = &filter.index {
+        conditions.push("\"index\" = ?".to_owned());
+        values.push(Value::Text(index.clone()));
+    }
+    if with_operation && let Some(operation) = &filter.operation {
+        conditions.push("operation = ?".to_owned());
+        values.push(Value::Text(operation.clone()));
+    }
+    (clause(conditions), values)
+}
+
+/// The conditions of the `day_indexes` read, at the resolution of a day.
+fn day_conditions(
+    filter: &StatsFilter,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> (String, Vec<Value>) {
+    let mut conditions = Vec::new();
+    let mut values = Vec::new();
+    if let Some(day) = from.and_then(day_of) {
+        conditions.push("day >= ?".to_owned());
+        values.push(Value::Text(day.to_owned()));
+    }
+    if let Some(day) = to.and_then(day_of) {
+        conditions.push("day <= ?".to_owned());
+        values.push(Value::Text(day.to_owned()));
+    }
+    if let Some(index) = &filter.index {
+        conditions.push("\"index\" = ?".to_owned());
+        values.push(Value::Text(index.clone()));
+    }
+    (clause(conditions), values)
+}
+
+/// The `AAAA-MM-JJ` day of a stored minute.
+fn day_of(minute: &str) -> Option<&str> {
+    minute.get(..10)
+}
+
+/// Joins the conditions, or yields an always-true one when there is none.
+fn clause(conditions: Vec<String>) -> String {
+    if conditions.is_empty() {
+        "1 = 1".to_owned()
+    } else {
+        conditions.join(" AND ")
+    }
+}
+
+/// The SQL list of `names`, quoted, for a closed list interpolated in a query.
+fn quoted(names: [&str; 2]) -> String {
+    names
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

@@ -136,15 +136,14 @@ async fn search_inner(
     sampled: bool,
 ) -> (Response, Vec<Record>, Option<Deposit>) {
     let entry = Instant::now();
-    // A request refused before its targets are resolved carries the first name
-    // the body declares, and an empty index when it declares none: the name of
-    // a target is never invented (ADR-0118, decision 6).
-    let claimed = first_target_name(&body);
+    // A request refused before its targets are resolved has no target: its one
+    // event carries an empty index, and the first name of the body is never
+    // reused, since that name was not resolved (ADR-0124, decision 10).
     let plan =
         match MultiRequest::parse(&body).and_then(|request| validate(&state, request, sampled)) {
             Ok(plan) => plan,
             Err(failure) => {
-                let answered = Observed::new_at(claimed, Operation::SearchMulti, entry)
+                let answered = Observed::new_at(String::new(), Operation::SearchMulti, entry)
                     .refused(&failure, &identifier.0);
                 let deposit = sampled.then(|| failure_deposit(&failure, None, &identifier.0));
                 return (answered.0, answered.1, deposit);
@@ -155,13 +154,29 @@ async fn search_inner(
     // are built only for a recorded request.
     let recording = plan.recording;
     let request = recording.then(|| request_payload_of(&body, &plan));
+    // The targets that reached the token, kept for a refusal taken at the token
+    // and for a deadline that expires before any of them answers (ADR-0124,
+    // decision 10).
+    let resolved: Vec<(String, Option<String>)> = plan
+        .targets
+        .iter()
+        .map(|target| {
+            (
+                target.index.clone(),
+                analytics::filter_shape(&target.filter),
+            )
+        })
+        .collect();
     let limit = match state.search_limit() {
         Ok(limit) => limit,
         Err(failure) => {
-            let answered = Observed::new_at(claimed, Operation::SearchMulti, entry)
-                .refused(&failure, &identifier.0);
+            // The targets were resolved: the refusal is spread over them
+            // (ADR-0124, decision 10).
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            let records = refused_targets(&resolved, None, plan.mode, entry, &status);
             let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
-            return (answered.0, answered.1, deposit);
+            return (answer, records, deposit);
         }
     };
     let index = plan
@@ -196,7 +211,7 @@ async fn search_inner(
         .await;
 
     match outcome {
-        Ok((Ok(outcome), observers, journal)) => {
+        Ok((Ok(outcome), records, journal)) => {
             let took_ms = Some(outcome.took_ms);
             let payload = journal;
             let answer = (
@@ -206,23 +221,26 @@ async fn search_inner(
                 .into_response();
             let deposit =
                 payload.map(|payload| multi_deposit(&identifier.0, mode, "ok", took_ms, payload));
-            (answer, events_of(observers, "ok"), deposit)
+            (answer, records, deposit)
         }
-        Ok((Err(failure), observers, journal)) => {
+        Ok((Err(failure), records, journal)) => {
             let answer = error::rendered(&failure, &identifier.0);
             let status = analytics::status(&answer);
             let payload = journal.or_else(|| failure_payload(&failure, request));
             let deposit =
                 payload.map(|payload| multi_deposit(&identifier.0, mode, &status, None, payload));
-            (answer, events_of(observers, &status), deposit)
+            (answer, records, deposit)
         }
         // The deadline expired before the blocking thread answered: no target
-        // reported anything, so the single event carries the first target the
-        // plan resolved, without inventing a faulty one.
+        // reported anything, so every resolved target carries the deadline, with
+        // empty steps, and `mode` is kept because it was resolved (ADR-0124,
+        // decision 10).
         Err(failure) => {
-            let answered = reported.refused(&failure, &identifier.0);
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            let records = refused_targets(&resolved, Some(reported), mode, entry, &status);
             let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
-            (answered.0, answered.1, deposit)
+            (answer, records, deposit)
         }
     }
 }
@@ -319,18 +337,34 @@ fn events_of(observers: Vec<Observed>, last_status: &str) -> Vec<Record> {
     records
 }
 
-/// Name the body claims as its first target, without validating the body.
+/// One event per resolved target, every one of them carrying `status`.
 ///
-/// It is read only for the event of a request refused before its targets are
-/// resolved; the route never uses it to serve anything.
-fn first_target_name(body: &Value) -> String {
-    body.get("targets")
-        .and_then(Value::as_array)
-        .and_then(|targets| targets.first())
-        .and_then(|target| target.get("index"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
+/// It serves the failures that happen **after** the targets were resolved and
+/// before any of them answered: the request has targets, so each of them reports
+/// the refusal, with the steps that ran left empty rather than invented
+/// (ADR-0124, decision 10). `targets` holds the name and the filter shape of each
+/// resolved target, in the order of the request; `first` keeps what the route
+/// measured before the token — the validation, and the encoding when it
+/// happened.
+fn refused_targets(
+    targets: &[(String, Option<String>)],
+    first: Option<Observed>,
+    mode: Mode,
+    entry: Instant,
+    status: &str,
+) -> Vec<Record> {
+    let mut records = Vec::with_capacity(targets.len());
+    for (position, (index, shape)) in targets.iter().enumerate() {
+        let observed = match (&first, position) {
+            (Some(observed), 0) => observed.clone(),
+            _ => Observed::new_at(index.clone(), Operation::SearchMulti, entry),
+        };
+        let mut observed = observed;
+        observed.mode(mode);
+        observed.shape(shape.clone());
+        records.extend(observed.events(status.to_owned()));
+    }
+    records
 }
 
 /// A multi-index request, validated far enough to take the token.
@@ -638,15 +672,17 @@ fn check_common_model(state: &AppState, targets: &[ResolvedTarget]) -> Result<()
 /// Runs every target, one after the other, then fuses their answers.
 ///
 /// It returns the events of the targets **with** the answer, successful or not:
-/// one event per target that ran, never a consolidated row (ADR-0117,
-/// decision 5). The first target carries the validation and the single encoding
+/// one event per resolved target, never a consolidated row (ADR-0117,
+/// decision 5; ADR-0124, decision 10). The first target carries the validation
+/// and the single encoding
 /// of the request, which happen once and must not be counted again on the
 /// others. Each target closes its own total, so a request of three targets does
 /// not add its whole duration three times (decision 2).
 ///
-/// A failure after the targets were resolved keeps the observers of the targets
-/// that ran, the last one being the faulty target: the caller gives it the code
-/// of the answer and the earlier ones `ok`.
+/// A failure after the targets were resolved records **one event per resolved
+/// target** (ADR-0124, decision 10): the targets that ran keep their status and
+/// their own steps, the faulty one carries the code of the answer, and the
+/// targets that were never reached carry that code too, with empty steps.
 fn run_multi(
     state: &AppState,
     plan: Plan,
@@ -655,7 +691,7 @@ fn run_multi(
     journal_request: Option<Value>,
 ) -> (
     Result<MultiOutcome, CribleError>,
-    Vec<Observed>,
+    Vec<Record>,
     Option<Value>,
 ) {
     let Plan {
@@ -672,6 +708,18 @@ fn run_multi(
         recording,
         ..
     } = plan;
+    // The name and the filter shape of each resolved target, in the order of the
+    // request: a refusal that leaves no target to report spreads over them
+    // (ADR-0124, decision 10).
+    let resolved: Vec<(String, Option<String>)> = targets
+        .iter()
+        .map(|target| {
+            (
+                target.index.clone(),
+                analytics::filter_shape(&target.filter),
+            )
+        })
+        .collect();
 
     // The single encoding point of the request, whatever the number of targets
     // (ADR-0110, decisions 8 and 11).
@@ -680,7 +728,8 @@ fn run_multi(
         None => {
             let failure = error::invalid("'$.targets' must name at least one index");
             let payload = failure_payload(&failure, journal_request);
-            return (Err(failure), vec![first], payload);
+            let status = failure.code().as_str().to_owned();
+            return (Err(failure), first.events(status), payload);
         }
     };
     let encodes = inputs.encodes();
@@ -688,11 +737,13 @@ fn run_multi(
     let prepared =
         match inputs.prepare(|query| search::encode_query(state, &first_target.published, query)) {
             Ok(prepared) => prepared,
-            // No target ran: the one event of the request is the first target the
-            // plan resolved (decision 5).
+            // No target ran, and every target was resolved: each of them
+            // reports the refusal (ADR-0124, decision 10).
             Err(failure) => {
                 let payload = failure_payload(&failure, journal_request);
-                return (Err(failure), vec![first], payload);
+                let status = failure.code().as_str().to_owned();
+                let records = refused_targets(&resolved, Some(first), mode, started, &status);
+                return (Err(failure), records, payload);
             }
         };
     let encoding = encodes.then(|| encoding.elapsed());
@@ -702,7 +753,9 @@ fn run_multi(
                 Ok(vector) => Some(vector),
                 Err(failure) => {
                     let payload = failure_payload(&failure, journal_request);
-                    return (Err(failure), vec![first], payload);
+                    let status = failure.code().as_str().to_owned();
+                    let records = refused_targets(&resolved, Some(first), mode, started, &status);
+                    return (Err(failure), records, payload);
                 }
             }
         }
@@ -776,16 +829,22 @@ fn run_multi(
         ) {
             Ok(outcome) => outcome,
             Err(failure) => {
-                // One event for every target that ran, the faulty one included:
-                // the targets that answered keep their `ok` and their own
-                // durations, and the targets that never ran produce nothing
-                // (ADR-0117, decision 5).
+                // One event per resolved target (ADR-0124, decision 10): the
+                // targets that answered keep their `ok` and their own steps, the
+                // faulty one carries the code of the answer, and the targets that
+                // were never reached carry the same code with empty steps — no
+                // duration and no pool size is invented for work that did not
+                // happen.
                 if let Some(observed) = observers.get_mut(position) {
                     observed.finish_at(target_started);
                 }
                 observers.truncate(position + 1);
                 let payload = failure_payload(&failure, journal_request);
-                return (Err(failure), observers, payload);
+                let status = failure.code().as_str().to_owned();
+                let mut records = events_of(observers, &status);
+                let unreached = resolved.get(position + 1..).unwrap_or_default();
+                records.extend(refused_targets(unreached, None, mode, started, &status));
+                return (Err(failure), records, payload);
             }
         };
         // One reading of the target's total, shared by the event and by the
@@ -884,7 +943,8 @@ fn run_multi(
         Ok(rendered) => rendered,
         Err(failure) => {
             let payload = failure_payload(&failure, journal_request);
-            return (Err(failure), observers, payload);
+            let status = failure.code().as_str().to_owned();
+            return (Err(failure), events_of(observers, &status), payload);
         }
     };
     let (results, per_result) =
@@ -894,7 +954,8 @@ fn run_multi(
             // carries the code of the failure (ADR-0117, decision 5).
             Err(failure) => {
                 let payload = failure_payload(&failure, journal_request);
-                return (Err(failure), observers, payload);
+                let status = failure.code().as_str().to_owned();
+                return (Err(failure), events_of(observers, &status), payload);
             }
         };
     let stages = StageDurations {
@@ -939,7 +1000,7 @@ fn run_multi(
             truncated_query: prepared.truncated_query,
             took_ms: total.as_secs_f64() * 1_000.0,
         }),
-        observers,
+        events_of(observers, "ok"),
         journal,
     )
 }
