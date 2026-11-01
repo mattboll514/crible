@@ -371,3 +371,7 @@ La CI distante n'a pas encore été rejouée sur les commits du 2026-10-31. La b
 ### 9.8. Verdict
 
 Le critère « le scénario J6 passe en entier via Swagger UI » est désormais tenu. J6 est `PRET-POUR-VALIDATION`, sous réserve de la CI distante.
+
+## 10. Erratum du 2026-11-01 : machine de MES-16
+
+La ligne MES-16 de la section 4 décrit la campagne comme jouée sur un « Mac mini M4 8 cœurs ». La machine de cette campagne est le MacBook Air M3 de développement, modèle `Mac15,12`, 8 cœurs et 24 Gio de mémoire : `sysctl` le confirme sur la machine, et le propriétaire l'a confirmé le 2026-11-01. La ligne du tableau garde son texte d'origine, et aucun chiffre de la section 4 ne change ; le rapport `docs/mesures/MES-16-charge-concurrente.md` porte le même erratum.

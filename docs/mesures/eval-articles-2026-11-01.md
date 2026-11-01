@@ -85,3 +85,5 @@ Mesurer, sur l'index évalué, la fidélité de la recherche rapide contre la re
 - La machine est décrite par son système, son architecture et ses cœurs : un rapport de mesure MES-xx, lui, nomme le processeur et la RAM.
 - Les chiffres portent sur cette génération et ce jeu : ils ne valent pas preuve à 8,58 M passages, où la fidélité se confirme en P9 (ADR-0076).
 - Une régression de `--baseline` est une baisse de plus de 0,005 en valeur absolue d'une moyenne de qualité ou de fidélité ; le code de sortie vaut alors 1. Les latences sont comparées et rapportées, jamais bloquantes.
+
+**Erratum du 2026-11-01.** La première puce dit que la cible de fidélité se lit « en moyenne sur toutes les requêtes » : elle se lit en réalité sur les requêtes **dont la liste exacte n'est pas vide**. Une requête dont le pool est vide n'a pas de dénominateur ; elle est exclue de la moyenne et comptée à part, comme la deuxième puce le dit déjà (ADR-0125, complément du 2026-11-01, point C1). Seule la lecture de cette puce est corrigée ici : les chiffres de ce rapport restent ceux de la campagne.

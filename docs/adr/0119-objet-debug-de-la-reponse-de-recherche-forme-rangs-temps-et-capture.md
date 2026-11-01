@@ -206,6 +206,16 @@ Précisions :
 - aucun crate de schéma n'est ajouté pour OpenAPI : `utoipa` est déjà la dépendance d'ADR-0111 ;
 - `DebugCapture` n'utilise que `Vec`, `String` et les types existants du moteur.
 
+## Complément du 2026-11-01 (relecture du tour 1 du passage B de NETTOYER-P7)
+
+Ce complément répond à un point mineur de la relecture du **tour 1 du passage B** de la tâche `NETTOYER-P7`, tranché par l'orchestrateur : la lecture du test automatique de la décision 6. Il **ne change pas le critère** et ne réécrit aucune décision.
+
+### Lecture de la borne de 10 % sur la médiane, dans les tests automatiques (note à la décision 6)
+
+Les deux tests de la borne (`crates/crible-server/tests/search_debug.rs`) lisent la borne sur la **médiane** des écarts de la série, et non sur chaque requête : `the_critical_path_stays_within_ten_percent_of_the_total` par mode, `the_multi_index_debug_carries_targets_and_target_rank` par mode **et par cible**. Les échantillons hors borne restent comptés et imprimés, avec le tour, le mode, le total et le chemin critique.
+
+La raison est un fait observé pendant NETTOYER-P7 : sous la charge d'un passage complet du workspace, une requête isolée dépassait la borne environ une fois sur vingt tours par bruit d'ordonnancement, sans étape oubliée. Une étape systématiquement oubliée déplace la médiane et reste détectée ; la médiane mesurée vaut environ 0,13 %. La propriété que la décision 6 protège est donc l'exactitude de la comptabilité d'une requête représentative, pas l'absence de toute préemption, et le critère de 10 %, le seuil et l'objet de la mesure restent ceux de la décision.
+
 ## Conséquences
 
 - **Positives** :
