@@ -1,6 +1,6 @@
 # ADR-0117 — Analytics : stockage et calcul (schéma, histogrammes, percentile, formes de filtre)
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01)
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche AGREGER-ANALYTICS (phase P7), sur les options recommandées par `@architecte` et retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7

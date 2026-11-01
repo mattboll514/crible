@@ -1,6 +1,6 @@
 # ADR-0121 — Journal de debug : stockage (`debug.sqlite`, schéma, payload, protections)
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31 ; délégation du propriétaire pour la série de P7, validation officielle en fin de série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01 ; délégation du propriétaire pour la série de P7)
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche JOURNAL-DE-DEBUG (phase P7), sur les options recommandées par `@architecte` et retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7

@@ -121,3 +121,21 @@
 - **Critères d'acceptation** :
   - le rapport sur l'échantillon est lisible sans contexte ;
   - une régression injectée (N réduit) est bien détectée par `--baseline`.
+
+### REUTILISER-LECTEURS-DENSES
+- **Origine** : hors plan initial, décision du propriétaire du 2026-11-01 sur recommandation de l'orchestrateur, en application de la décision 3 d'ADR-0120 (cache du `DenseSearcher` par génération retenu en principe). Le constat vient de REPONSE-DEBUG : chaque recherche dense ouvre ses lecteurs de segments (`DenseSearcher::open`), pour 0,6 ms à 4 000 passages et 2,3 ms à 20 000 passages, un coût qui croît avec le corpus ; `crates/crible-search/src/dense/exact.rs:148-153` dit pourtant les lecteurs « kept for every later query ». Ce coût n'est pas mesuré à 8,58 M passages.
+- **Objectif** : supprimer l'ouverture des lecteurs denses du chemin de chaque requête, si elle compte à l'échelle de Legifacile.
+- **Dépend de** : REPONSE-DEBUG
+- **À lire** : `adr/0119-objet-debug-de-la-reponse-de-recherche-forme-rangs-temps-et-capture.md` (objet `debug`) ; `adr/0120-fin-de-took-ms-attribution-de-l-ouverture-des-lecteurs-et-rendu-hors-chronometre.md` (décisions 2 et 3 : attribution provisoire à `fetch`, cache cible) ; les ADR sur l'accès aux vecteurs et sur les générations ou époques : `adr/0080-acces-aux-vecteurs-fp16-au-rescoring.md`, `adr/0084-quel-froid-fait-foi-pour-le-rescoring-jusqua-p8.md`, `adr/0006-segments-pierres-tombales-compaction.md`, `adr/0017-compaction-suspend-les-ecritures.md`, `adr/0065-instantane-hors-ligne-epoque-de-restauration-et-retention.md` (rétention), `adr/0105-administration-des-index-par-l-api.md` (`Published`, configuration et instantané publiés ensemble), `adr/0108-coherence-de-l-epoque-apres-une-compaction-en-echec.md` ; `03-recherche.md:14` (clé `fetch`) ; `02-architecture.md` (générations et publication de l'instantané).
+- **Livrables** :
+  1. **d'abord une mesure**, par `@mesureur`, du coût d'ouverture des lecteurs denses à 8,58 M passages (index `synth-large` de `data/`, `--release`), p50 et p95 sur une série, consignée dans un court rapport sous `docs/mesures/` ;
+  2. si ce coût est **négligeable** (p95 sous 1 ms), la tâche se ferme **sans code**, avec le rapport comme preuve et la décision 2 d'ADR-0120 maintenue ;
+  3. sinon, les lecteurs denses sont ouverts **une fois par génération publiée** et réutilisés par les requêtes de cette génération, puis libérés quand la génération n'est plus servie ; un ADR, à rédiger au démarrage si la conception ne tranche pas, fixe la durée de vie, l'interaction avec la compaction, la rétention des époques et la mémoire ; la clé `fetch` retrouve son sens de `03-recherche.md:14`, la décision 2 d'ADR-0120 devient sans objet et `docs/03` est mis à jour.
+- **Critères d'acceptation** :
+  - la mesure existe ;
+  - si le cache est fait : aucune ouverture de lecteur dense sur le chemin d'une requête d'une génération déjà servie (test) ;
+  - si le cache est fait : INV-02 vert (lectures pendant les écritures) ;
+  - si le cache est fait : aucun lecteur d'une génération retirée n'est gardé au-delà de sa rétention ;
+  - si le cache est fait : le critère des 10 % de REPONSE-DEBUG est toujours vert ;
+  - si le cache est fait : la latence avant/après est mesurée.
+- **Invariants** : INV-02 (si le cache est fait).

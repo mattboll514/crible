@@ -1,6 +1,6 @@
 # ADR-0119 — Objet `debug` de la réponse de recherche : forme, rangs, temps et capture
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01)
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche REPONSE-DEBUG (phase P7), sur les options recommandées par `@architecte` et retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7

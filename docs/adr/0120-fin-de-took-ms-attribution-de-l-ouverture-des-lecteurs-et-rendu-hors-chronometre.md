@@ -1,6 +1,6 @@
 # ADR-0120 — Fin de `took_ms`, attribution de l'ouverture des lecteurs et rendu hors chronomètre
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01)
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche REPONSE-DEBUG (phase P7), sur une `QUESTION-CONCEPTION` de `@dev` et le verdict ECART + NON-COUVERT de `@architecte`, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7
