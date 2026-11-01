@@ -72,12 +72,12 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction ; sans corps → `202` avec un job `compact` (ADR-0107) |
 | `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` ; sans corps → `202` avec un job `export` (ADR-0107) |
 | `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` ; sans corps → `202` avec un job `snapshot` ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065, ADR-0107) |
-| `GET /v1/stats` | admin | Analytics agrégées (voir `06-observabilite.md`) |
+| `GET /v1/stats` | admin | Analytics agrégées ; paramètres `from`, `to`, `index`, `operation`, `group_by`, réponse fermée (voir « Statistiques » ; ADR-0124) |
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé ; `200` avec `enabled: false` et `queries: []` quand il est désactivé (ADR-0121, ADR-0122) |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
 
-La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite : en P6, `GET /v1/stats` (`ROUTE-STATS`), cité dans le test avec la tâche qui le livre. `GET /v1/debug/queries` est déclarée dans la spécification par JOURNAL-DE-DEBUG, et son exception a quitté le test dans le même changement (ADR-0122, décision 9). Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
+La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite. `GET /v1/debug/queries` est déclarée dans la spécification par JOURNAL-DE-DEBUG, et son exception a quitté le test dans le même changement (ADR-0122, décision 9). `GET /v1/stats` est déclarée par ROUTE-STATS, et son exception nommée quitte le test dans le même changement (ADR-0124, décision 16). Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
 
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
 
@@ -477,6 +477,85 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 - `dropped` est le compteur de pertes de file du processus, `debug_journal_dropped` (ADR-0122, décision 6).
 - Un paramètre **inconnu** ou **invalide** (`limit` hors de `[1, 1 000]`, `before_id` négatif, date qui n'est pas ISO 8601, `min_total_ms` négatif ou non numérique) rend `400 invalid_request`, avec un message qui nomme le paramètre (ADR-0109 ; ADR-0122, décision 9).
 - La route est déclarée dans la spécification OpenAPI et son exception nommée est retirée du test des routes dans le même changement (ADR-0111, complément du 2026-10-30).
+
+## Statistiques
+
+`GET /v1/stats` lit les analytics agrégées, **réservé au rôle `admin`** : une clé `read` ou `write` reçoit `403 forbidden` (ADR-0095 ; ADR-0124, décision 16). Les chiffres portent sur ce qui est **vidé** dans `analytics.sqlite` : une requête de la dernière seconde peut manquer, et le décalage est borné par l'intervalle de vidage de 10 s (ADR-0118, décision 3 ; ADR-0124, décision 11).
+
+| Paramètre | Type | Défaut | Rôle |
+|---|---|---|---|
+| `from` | chaîne ISO 8601 | plus ancienne ligne conservée | borne basse **incluse**, normalisée en UTC |
+| `to` | chaîne ISO 8601 | plus récente ligne conservée | borne haute **incluse**, normalisée en UTC |
+| `index` | chaîne | — | filtre d'égalité sur le nom d'index ; porte sur les noms présents dans les analytics, jamais sur les index vivants |
+| `operation` | chaîne | — | filtre d'égalité sur une opération de la liste fermée de `06-observabilite.md` |
+| `group_by` | `minute` · `hour` · `day` | `hour` | largeur des seaux |
+
+<!-- openapi: StatsResponse -->
+```json
+{
+  "from": "2026-10-31T00:00:00Z",
+  "to": "2026-10-31T23:59:59Z",
+  "group_by": "hour",
+  "buckets": [
+    { "start": "2026-10-31T08:00:00Z",
+      "count": 4120,
+      "errors": { "invalid_filter": 3, "timeout": 1 },
+      "zero_results_rate": 0.0612,
+      "latency_ms": {
+        "validate": { "p50": 0.1, "p95": 0.14, "p99": 0.17 },
+        "encode":   { "p50": 30.0, "p95": 47.5, "p99": 59.4 },
+        "filter":   { "p50": 0.6, "p95": 1.0, "p99": 1.25 },
+        "dense":    { "p50": 9.8, "p95": 15.3, "p99": 19.1 },
+        "lexical":  { "p50": 6.1, "p95": 9.5, "p99": 11.9 },
+        "fusion":   { "p50": 0.1, "p95": 0.13, "p99": 0.16 },
+        "group":    { "p50": 0.1, "p95": 0.13, "p99": 0.16 },
+        "fetch":    { "p50": 1.2, "p95": 1.5, "p99": 1.9 },
+        "total":    { "p50": 41.7, "p95": 59.4, "p99": 74.3 }
+      } }
+  ],
+  "totals": {
+    "count": 4120,
+    "errors": { "invalid_filter": 3, "timeout": 1 },
+    "zero_results_rate": 0.0612,
+    "latency_ms": {
+      "validate": { "p50": 0.1, "p95": 0.14, "p99": 0.17 },
+      "encode":   { "p50": 30.0, "p95": 47.5, "p99": 59.4 },
+      "filter":   { "p50": 0.6, "p95": 1.0, "p99": 1.25 },
+      "dense":    { "p50": 9.8, "p95": 15.3, "p99": 19.1 },
+      "lexical":  { "p50": 6.1, "p95": 9.5, "p99": 11.9 },
+      "fusion":   { "p50": 0.1, "p95": 0.13, "p99": 0.16 },
+      "group":    { "p50": 0.1, "p95": 0.13, "p99": 0.16 },
+      "fetch":    { "p50": 1.2, "p95": 1.5, "p99": 1.9 },
+      "total":    { "p50": 41.7, "p95": 59.4, "p99": 74.3 }
+    }
+  },
+  "top_indexes": [
+    { "index": "articles", "count": 3800 },
+    { "index": "decisions", "count": 320 }
+  ],
+  "top_filter_shapes": [
+    { "shape": "date_debut:lte,fonds:eq", "count": 2140 }
+  ],
+  "indexes": [
+    { "day": "2026-10-31", "index": "articles", "documents": 412000,
+      "live_passages": 8580000, "dead_passages": 12400, "dead_ratio": 0.00144,
+      "disk_bytes": 21474836480, "generation": 1288, "batches": 932 }
+  ],
+  "analytics_dropped": 0
+}
+```
+
+- La réponse est un **objet à membres fixes** : `from`, `to`, `group_by`, `buckets`, `totals`, `top_indexes`, `top_filter_shapes`, `indexes`, `analytics_dropped`. Un membre **sans valeur est omis**, jamais `null` ni `0` inventé (ADR-0119, décision 3 ; ADR-0124, décision 1). `from` et `to` sont les échos **normalisés** des bornes appliquées, en UTC, et `group_by` vaut `minute`, `hour` ou `day`.
+- `buckets` est **chronologique** et ne porte que les seaux qui ont au moins un événement : `start` est le début du seau tronqué à la minute, à l'heure ou au jour, `count` la somme des événements du seau. `errors` est un objet **code → nombre**, les seuls codes présents, et il est **omis** quand le seau ne porte aucune erreur. `totals` a la même forme qu'un seau, sur toute la fenêtre, **sans `start`**.
+- `zero_results_rate` est la somme des `zero_results` divisée par la somme des `count` des événements de recherche (`search` et `search_multi`) de statut `ok`, par seau et sur la fenêtre ; il est **omis** quand le dénominateur est nul. Une recherche multi-index **pèse une fois par cible**, parce qu'elle produit un événement par cible (ADR-0117, décision 5 ; ADR-0124, décision 5).
+- `latency_ms` porte, pour **chaque étape de `StageDurations`** (`validate`, `encode`, `filter`, `dense`, `lexical`, `fusion`, `group`, `fetch`, `total`) qui a au moins un échantillon dans le seau, `p50`, `p95` et `p99` en millisecondes : la valeur est la **borne haute** du seau d'histogramme qui contient le rang le plus proche, donc exacte sur la somme des seaux et sur-estimée à la résolution d'un seau (ADR-0117, décision 4 ; ADR-0124, décision 4). Une étape sans échantillon est **omise** : une branche qui n'a pas tourné n'a pas de percentile. Les percentiles de taille de pool ne sont pas rendus.
+- `top_filter_shapes` rend **au plus 10** formes `{ "shape", "count" }` sur la fenêtre, par `count` décroissant, l'égalité étant départagée par l'ordre lexicographique croissant de la forme. La forme ne contient que des noms de champs et d'opérateurs, jamais une valeur (INV-13 ; ADR-0117, décision 6 ; ADR-0124, décision 6). `top_indexes` rend **au plus 10** `{ "index", "count" }`, par `count` décroissant, départagé par le nom croissant (ADR-0124, décision 7). Les deux bornes sont des constantes, sans clé de configuration.
+- `indexes` porte **une entrée par index**, avec la **dernière** ligne de `day_indexes` de la fenêtre : `day`, `index`, `documents`, `live_passages`, `dead_passages`, `dead_ratio` (dérivé, jamais stocké), `disk_bytes`, `generation`, `batches`. Les jours absents ne sont **pas comblés** : un trou dit la vérité (ADR-0118, décision 5 ; ADR-0124, décision 8).
+- `analytics_dropped` est le compteur de pertes de file **du processus serveur depuis son démarrage**, par processus et jamais persisté (ADR-0118, décision 2 ; ADR-0124, décision 9). `debug_journal_dropped` n'est pas ici : il reste rendu par `GET /v1/debug/queries`.
+- Un paramètre **inconnu ou invalide** rend `400 invalid_request` avec un message qui **nomme le paramètre** : `group_by` hors de `minute`, `hour` et `day`, `operation` hors de la liste fermée, date qui n'est pas ISO 8601, `from` postérieur à `to`. Aucune borne de fenêtre ne s'ajoute à la rétention (ADR-0124, décision 2).
+- Le filtre `index` porte sur les noms **présents dans `analytics.sqlite`**, sans contrôle contre les index vivants : l'historique d'un index supprimé reste lisible, et un nom sans aucun événement rend `200` avec une réponse vide, membres omis et listes vides, jamais `404`. Un nom invalide au sens des règles de nommage des index rend `400 invalid_request` nommant le paramètre (ADR-0124, décision 2).
+- Aucun autre filtre ni aucune répartition n'est offert : ni `status`, ni `client`, ni `mode` (ADR-0124, décision 3).
+- La route est déclarée dans la spécification OpenAPI, avec des composants fermés, et son exception nommée est retirée du test des routes dans le même changement (ADR-0111, complément du 2026-10-30 ; ADR-0124, décision 16).
 
 ## Limites par défaut (configurables)
 
