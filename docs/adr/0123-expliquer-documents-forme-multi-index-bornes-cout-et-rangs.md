@@ -1,6 +1,6 @@
 # ADR-0123 — Route d'explication `explain_ids` : forme de la réponse, multi-index, bornes, coût et rangs
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-01, délégation du propriétaire pour la suite de P7 ; validation officielle à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-01, confirmé par le propriétaire le 2026-11-01, délégation du propriétaire pour la suite de P7 ; validation officielle à la fin de la série)
 - **Date** : 2026-11-01
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche EXPLIQUER-DOCUMENTS (phase P7), sur l'analyse de `@architecte` et les décisions retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-01 pour la série EXPLIQUER-DOCUMENTS, ROUTE-STATS, COMMANDE-EVAL, REUTILISER-LECTEURS-DENSES

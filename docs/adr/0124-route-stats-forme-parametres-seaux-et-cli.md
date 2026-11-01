@@ -1,6 +1,6 @@
 # ADR-0124 — Route de statistiques `GET /v1/stats` : forme de la réponse, paramètres, seaux et commande `crible stats`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-01, délégation du propriétaire pour la suite de P7 ; validation officielle à la fin de la série)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-01, confirmé par le propriétaire le 2026-11-01, délégation du propriétaire pour la suite de P7 ; validation officielle à la fin de la série)
 - **Date** : 2026-11-01
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche ROUTE-STATS (phase P7), sur l'analyse de `@architecte` et les décisions retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-01 pour la série EXPLIQUER-DOCUMENTS, ROUTE-STATS, COMMANDE-EVAL, REUTILISER-LECTEURS-DENSES
