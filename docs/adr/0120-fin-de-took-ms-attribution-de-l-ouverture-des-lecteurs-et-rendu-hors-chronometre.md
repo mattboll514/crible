@@ -5,6 +5,7 @@
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche REPONSE-DEBUG (phase P7), sur une `QUESTION-CONCEPTION` de `@dev` et le verdict ECART + NON-COUVERT de `@architecte`, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7
 - **Remplace** : — (ne remplace aucune décision : comble une lacune d'ADR-0119, qui ne dit ni où `took_ms` s'arrête exactement ni à quelle clé appartient l'ouverture des lecteurs, sans modifier le corps d'aucun ADR accepté)
+- **Note du 2026-11-01** : la **décision 3** de cet ADR est **remplacée par ADR-0126** (lecteurs par segment et pool de charges utiles par époque, remplissage avant publication), et sa **décision 2** — l'ouverture des lecteurs rattachée à `fetch` — devient **sans objet** avec ce cache. Les décisions 1, 4 et 5 restent en vigueur. Le corps de cet ADR n'est pas modifié ; voir ADR-0126 pour la suite.
 
 ## Contexte
 
