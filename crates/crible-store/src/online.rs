@@ -63,7 +63,7 @@
 //! from a leftover: it deletes only what it can lock.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, File, TryLockError};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -95,6 +95,7 @@ use crate::attach::attach;
 #[cfg(feature = "failpoints")]
 use crate::attach::attach_with_observer;
 use crate::batch_reader::{parquet_type, vector_width};
+use crate::file_lock::{LockAttempt, lock_exclusive};
 use crate::filters_index::date_days;
 use crate::generation::{CommitStep, GenerationStore};
 use crate::records;
@@ -616,8 +617,8 @@ fn attached(
 /// - on `WouldBlock`, a writer holds it: it is left untouched.
 ///
 /// The lock is taken on the file the path currently names (see
-/// `lock_presence`), so a path replaced under the caller never yields a lock
-/// on a vanished inode.
+/// [`crate::file_lock::lock_exclusive`]), so a path replaced under the caller
+/// never yields a lock on a vanished inode.
 ///
 /// Two kinds of residue are handled: the usual pair
 /// `online-<batch_id>/` + `online-<batch_id>.lock`, and an **orphan lock
@@ -706,7 +707,7 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
         } else {
             continue;
         };
-        let _lock = match lock_presence(&lock_path) {
+        let _lock = match lock_exclusive(&lock_path, "presence lock of the online batch") {
             Ok(LockAttempt::Locked(lock)) => lock,
             Ok(LockAttempt::Busy) => {
                 tracing::debug!(
@@ -736,7 +737,7 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
             }
         }
         // Cleaning up deletes the lock file only while holding its lock, and
-        // `lock_presence` has just checked that this handle is the file the
+        // `lock_exclusive` has just checked that this handle is the file the
         // path names. Since no one but a lock holder unlinks the path, it still
         // names this file here: the two deletions (directory, then lock) cannot
         // leave a lock on a vanished inode behind them.
@@ -1182,93 +1183,6 @@ fn names_at(schema: &Schema, level: FieldLevel) -> String {
     }
 }
 
-/// Highest number of times the lock is reopened when the path is replaced
-/// under the caller. A single replacement is expected; more means something
-/// keeps deleting the lock file, and guessing is worse than failing.
-const LOCK_ATTEMPTS: usize = 8;
-
-/// Outcome of [`lock_presence`] on one lock path.
-enum LockAttempt {
-    /// The exclusive lock is held on the file the path currently names.
-    Locked(File),
-    /// Another writer holds the lock: the caller must wait and retry.
-    Busy,
-}
-
-/// Opens `path` (creating it) and takes an exclusive lock on the **current**
-/// file of that path.
-///
-/// A lock is not enough on its own: the path may have been unlinked and
-/// recreated between the open and the `try_lock`, so the handle would hold a
-/// lock on a file no name points at any more, and two writers would each hold a
-/// lock they believe exclusive (ADR-0056). After a successful `try_lock`, the
-/// identity of the open file is therefore compared with the identity of the
-/// path; on a mismatch the handle is dropped and the open is retried.
-///
-/// # Errors
-///
-/// [`ErrorCode::Internal`] when the lock file cannot be opened or locked, or
-/// when the path keeps being replaced.
-fn lock_presence(path: &Path) -> Result<LockAttempt, CribleError> {
-    for _ in 0..LOCK_ATTEMPTS {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|error| {
-                io_error("open the presence lock of the online batch", path, &error)
-            })?;
-        match file.try_lock() {
-            Ok(()) => {
-                if names_same_file(&file, path) {
-                    return Ok(LockAttempt::Locked(file));
-                }
-                // The path was replaced under this handle: retry, and let the
-                // handle drop at the end of the iteration.
-            }
-            Err(TryLockError::WouldBlock) => return Ok(LockAttempt::Busy),
-            Err(TryLockError::Error(error)) => {
-                return Err(internal(format!(
-                    "cannot lock the presence lock {} of the online batch: {error}",
-                    path.display()
-                )));
-            }
-        }
-    }
-    Err(internal(format!(
-        "the presence lock {} was replaced {LOCK_ATTEMPTS} times while it was being taken; \
-         refusing to guess which file it protects",
-        path.display()
-    )))
-}
-
-/// Tells whether `file` is still the file `path` names.
-///
-/// The identity is the pair (device, inode) of the two metadata reads, which is
-/// how a Unix kernel designates a file. `false` on any fault, including a path
-/// that no longer exists, so the caller retries instead of locking a vanished
-/// file.
-#[cfg(unix)]
-fn names_same_file(file: &File, path: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let (Ok(held), Ok(current)) = (file.metadata(), fs::metadata(path)) else {
-        return false;
-    };
-    held.dev() == current.dev() && held.ino() == current.ino()
-}
-
-/// On a platform without a portable file identity, the check is skipped.
-///
-/// Crible is deployed on Linux (`docs/07-stack-et-deploiement.md`, Docker), and
-/// its tests run on Linux and macOS, where the Unix check above applies.
-#[cfg(not(unix))]
-fn names_same_file(_file: &File, _path: &Path) -> bool {
-    true
-}
-
 /// Exclusive presence lock of one internal batch (ADR-0056).
 ///
 /// The lock is the neighbour file `<data_dir>/tmp/online-<batch_id>.lock`, held
@@ -1297,7 +1211,7 @@ impl BatchLock {
         fs::create_dir_all(&root)
             .map_err(|error| io_error("create the temporary directory", &root, &error))?;
         let path = root.join(format!("{batch_id}{LOCK_SUFFIX}"));
-        match lock_presence(&path)? {
+        match lock_exclusive(&path, "presence lock of the online batch")? {
             LockAttempt::Locked(file) => Ok(Self { _file: file, path }),
             LockAttempt::Busy => Err(CribleError::new(
                 ErrorCode::Overloaded,
@@ -2049,6 +1963,8 @@ mod tests {
     #![allow(clippy::panic)]
 
     use super::*;
+    use crate::file_lock::names_same_file;
+    use std::fs::TryLockError;
 
     #[test]
     fn base64_decodes_the_standard_alphabet() {

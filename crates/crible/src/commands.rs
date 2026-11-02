@@ -497,21 +497,29 @@ fn print_report(name: &str, report: &AttachReport) {
     }
 }
 
-/// Opens an index for a **write** command: the leftover online batches of
-/// `<data>/tmp` are removed first, under the presence lock that protects a live
-/// lot (ADR-0056, decision 4), then the store runs its recovery (INV-04).
+/// Opens an index for a **write** command: the store takes the writer lock of the
+/// index and runs its recovery (INV-04), then the leftover online batches of
+/// `<data>/tmp` are removed, under the presence lock that protects a live lot
+/// (ADR-0056, decision 4).
+///
+/// The writer lock is held by the returned store, so it lives for the whole
+/// command (ADR-0116, decision 2). A served index refuses the command at once, in
+/// `overloaded`, before anything is written — not even a stale batch of
+/// `<data>/tmp` is removed, which is why the purge comes after the open.
 ///
 /// A read command calls [`GenerationStore::open_read_only`] directly: `search`,
-/// `inspect` and `export` never modify `<data>/tmp`, so they cannot delete a lot
-/// another index is ingesting, and they write nothing under the index directory,
-/// not even a `codes.bin` (ADR-0056; ADR-0069, decision 2; ADR-0116, decision 1).
+/// `inspect` and `export` never modify `<data>/tmp`, take no writer lock, so they
+/// cannot refuse beside a live instance, and they write nothing under the index
+/// directory, not even a `codes.bin` (ADR-0056; ADR-0069, decision 2; ADR-0116,
+/// decisions 1 and 2).
 fn open_store_for_write(
     data: &Path,
     index_dir: &Path,
     schema: &crible_core::config::Schema,
 ) -> Result<GenerationStore, CribleError> {
+    let store = GenerationStore::open(index_dir, schema)?;
     online::remove_stale_batches(data)?;
-    GenerationStore::open(index_dir, schema)
+    Ok(store)
 }
 
 /// One `crible search` invocation.

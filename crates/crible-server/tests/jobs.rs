@@ -280,28 +280,46 @@ async fn jobs_of_one_index_run_in_arrival_order() {
     assert_eq!(order, ["first", "second", "third"], "the queue is FIFO");
 }
 
-#[tokio::test]
-async fn a_finished_job_is_read_after_a_restart() {
+#[test]
+fn a_finished_job_is_read_after_a_restart() {
     // Acceptance criterion: a finished job remains readable after a restart.
+    //
+    // A restart is a new process: the writer task of the first instance holds
+    // its store, and with it the writer lock of the index (ADR-0116, decision 2),
+    // until its runtime goes away. The first phase therefore runs in a runtime of
+    // its own, dropped before the second instance opens the same data root, as
+    // the death of the process would do it.
     let instance = Instance::new(16, 60_000);
-    let (state, _shutdown) = instance.state();
-    let job = state
-        .submit_job(
-            "alpha",
-            JobKind::Compact,
-            Box::new(|_store, _progress, _writer| {
-                Ok(JobOutcome {
-                    generation: Some(7),
-                    result: Some(json!({"report": "kept"})),
-                })
-            }),
-        )
-        .await
-        .expect("the job is accepted");
-    state.jobs().expect("the board is open").drained().await;
-    let finished = state.job(&job.id).expect("the job is kept");
-    assert_eq!(finished.state, JobState::Succeeded);
-    drop(state);
+    let job = {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime is creatable");
+        let (state, _shutdown) = {
+            let _entered = runtime.enter();
+            instance.state()
+        };
+        let job = runtime.block_on(async {
+            let job = state
+                .submit_job(
+                    "alpha",
+                    JobKind::Compact,
+                    Box::new(|_store, _progress, _writer| {
+                        Ok(JobOutcome {
+                            generation: Some(7),
+                            result: Some(json!({"report": "kept"})),
+                        })
+                    }),
+                )
+                .await
+                .expect("the job is accepted");
+            state.jobs().expect("the board is open").drained().await;
+            job
+        });
+        let finished = state.job(&job.id).expect("the job is kept");
+        assert_eq!(finished.state, JobState::Succeeded);
+        job
+    };
 
     let restarted = Arc::new(AppState::new());
     restarted

@@ -106,7 +106,11 @@ pub(crate) fn record_to(log: &Path, kind: Kind, segment_id: &str) {
     let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log) else {
         return;
     };
-    let _ = writeln!(file, "{} {segment_id}", kind.as_str());
+    // One line, built first and written in one call: `write_fmt` may issue one
+    // write per piece of the format, and two readers of the same binary append to
+    // the same log concurrently, so a torn line would be read as a foreign one.
+    let line = format!("{} {segment_id}\n", kind.as_str());
+    let _ = file.write_all(line.as_bytes());
 }
 
 /// Reads the events of the log at `path`.
@@ -188,21 +192,31 @@ mod tests {
     fn the_hook_reads_back_the_events_it_writes() {
         let (serial, _directory, path) = armed_log_file();
         let log = armed_log().expect("the hook names its log");
-        record_to(&log, Kind::Open, "c0-0");
-        record_to(&log, Kind::Seal, "c0-0");
-        record_to(&log, Kind::Drop, "c0-0");
+        // The log is process-global, and the other tests of this binary open
+        // segments while this file is armed: their readers append their own lines
+        // concurrently (`segment` tests). The assertion therefore keeps the events
+        // of its own segment, which the other tests never name, and checks they
+        // come in the order they were written.
+        let segment = "hook-unit";
+        record_to(&log, Kind::Open, segment);
+        record_to(&log, Kind::Seal, segment);
+        record_to(&log, Kind::Drop, segment);
         let events = read_events(&path).expect("the log is readable");
+        let own: Vec<ReaderEvent> = events
+            .into_iter()
+            .filter(|event| event.segment_id() == segment)
+            .collect();
         assert_eq!(
-            events,
+            own,
             vec![
                 ReaderEvent::Open {
-                    segment_id: "c0-0".to_owned()
+                    segment_id: segment.to_owned()
                 },
                 ReaderEvent::Seal {
-                    segment_id: "c0-0".to_owned()
+                    segment_id: segment.to_owned()
                 },
                 ReaderEvent::Drop {
-                    segment_id: "c0-0".to_owned()
+                    segment_id: segment.to_owned()
                 },
             ]
         );

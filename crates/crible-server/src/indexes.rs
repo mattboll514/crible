@@ -430,7 +430,7 @@ async fn delete_index_inner(
     let holder = Arc::clone(&state);
     let name = index.clone();
     let work = Box::new(
-        move |_store: &mut GenerationStore, progress: &JobProgress, writer: &IndexWriter| {
+        move |store: &mut GenerationStore, progress: &JobProgress, writer: &IndexWriter| {
             let source = data.join("indexes").join(&name);
             let tmp = data.join("tmp");
             let target = tmp.join(format!("deleted-{name}-{}", progress.job_id()));
@@ -444,6 +444,14 @@ async fn delete_index_inner(
             // snapshot finishes on it (the files it mapped stay valid), and a
             // read of the detail answers `404` because the directory is gone.
             rename_to_quarantine(&source, &target)?;
+            // ADR-0116, decision 2: the server releases the writer lock of an
+            // index once it deleted it. The release comes **after** the rename,
+            // so a rename that fails keeps the index locked while it stays
+            // registered and served: a CLI write command must not slip in and run
+            // its recovery on a served index. The rename moves the directory with
+            // the open `WRITER_LOCK` descriptor, which keeps the lock valid until
+            // this release (the engines run on Linux, `docs/07`).
+            store.release_writer_lock();
             if holder.remove_index(&name)?.is_none() {
                 return Err(CribleError::new(
                     ErrorCode::UnknownIndex,

@@ -470,9 +470,16 @@ pub fn restore(data: &Path, snapshot_directory: &Path) -> Result<RestoreReport, 
     // batches of `<data>/tmp` are removed first, as in every other write command
     // (ADR-0056): a lot a writer holds under its presence lock is left alone. The
     // refusal paths above therefore leave `<data>/tmp` untouched as well.
-    crate::online::remove_stale_batches(data)?;
+    //
+    // The writer lock comes before that cleanup: a restore writes an existing
+    // index, so it is refused at once, before writing anything, while an instance
+    // serves it (ADR-0116, decision 2). The directory it locks may not exist yet;
+    // a restore of an absent index creates it here, which the write path below
+    // would have done anyway.
     fs::create_dir_all(&index_dir)
         .map_err(|error| io_error("create the index directory", &index_dir, &error))?;
+    let writer_lock = crate::writer_lock::WriterLock::acquire(&index_dir, &attestation.index)?;
+    crate::online::remove_stale_batches(data)?;
     if !complete {
         write_file_synced(&index_dir.join(INDEX_CONFIG_FILE_NAME), &declared)?;
     }
@@ -543,8 +550,12 @@ pub fn restore(data: &Path, snapshot_directory: &Path) -> Result<RestoreReport, 
     write_current_epoch(&index_dir, new_epoch)?;
 
     // Opening runs the recovery of the target and rebuilds the derived manifest
-    // of the restored generation, then publishes it (INV-04).
-    let store = GenerationStore::open(&index_dir, &index_config.schema)?;
+    // of the restored generation, then publishes it (INV-04). The writer lock
+    // taken before the first write changes hands: a second acquisition in this
+    // process would be refused, and the lock must stay held across the recovery
+    // (ADR-0116, decision 2).
+    let store =
+        GenerationStore::open_holding_writer_lock(&index_dir, &index_config.schema, writer_lock)?;
     let state = store.state()?;
     if state.generation != Generation::new(attestation.generation) {
         return Err(CribleError::new(
