@@ -308,6 +308,17 @@ async fn the_table_format_is_the_default_and_renders_the_sections() {
             "the latency table renders the stage '{stage}':\n{printed}"
         );
     }
+    // The percentiles live in the `latency (ms)` table only: the buckets table
+    // carries the state of the window, never a repeated `total`
+    // (`@relecteur`, NETTOYER-P7).
+    let header = printed
+        .lines()
+        .find(|line| line.starts_with("start") && line.contains("zero_results"))
+        .unwrap_or_else(|| panic!("the buckets table has its header:\n{printed}"));
+    assert!(
+        !header.contains("p50_ms"),
+        "the buckets table leaves the percentiles to the latency table: {header}"
+    );
     assert!(
         !printed.contains("analytics_dropped"),
         "the CLI does not render a per-process counter:\n{printed}"

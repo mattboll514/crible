@@ -11,6 +11,21 @@ Rapport attaché à la tâche `REUTILISER-LECTEURS-DENSES` (phase P7, livrable 2
 - Mémoire : `vm_stat` en cours de campagne donne 22 Gio utilisés sur 24, dont 5,9 Gio de compresseur, et environ 1 Gio libre ; le navigateur Arc en occupe 6,9 Gio. Le fichier de vecteurs de 13,2 Go **ne tient donc pas dans le cache de pages**. C'est une réserve de premier ordre, chiffrée plus bas : chaque relecture intégrale repart du SSD.
 - Espace disque : 66 GiB libres avant la campagne, 64 GiB après. Le dossier de construction « avant » pèse 1,1 Gio et n'a pas été supprimé (seuil de 5 Gio non atteint).
 
+### Note du 2026-11-01 (relecture, tour 2)
+
+L'arbre « après » mesuré est celui qui a été commité ensuite sous `ebe0d6d`
+(« feat(store): cache dense segment readers per segment and payload pool per
+epoch »), sur la base de `9ae150d`. Il est donc antérieur aux corrections du
+tour 2 de la relecture de cette tâche, qui ne touchent pas le chemin d'une
+requête.
+
+Deux écarts au protocole d'ADR-0126, décision 8, sont acceptés par
+l'orchestrateur, et la ligne `REUTILISER-LECTEURS-DENSES` du tableau « Tâches »
+de `docs/suivi.md` les nomme : la série « avant » mesure 100 requêtes au lieu de
+300 (8 à 13 s par requête), et le cache de pages n'est pas atteint (13,2 Go de
+vecteurs pour 24 Gio de mémoire). Le rejeu à 300 requêtes sur un cache de pages
+chaud est renvoyé au conteneur, en P8.
+
 ### Jeu de données
 
 Point unique, celui sur lequel porte la décision : index **`synth-large`**, `data/synth-large/indexes/synth-large`.

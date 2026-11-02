@@ -209,20 +209,48 @@ pub fn ranks(
              identifier",
         ));
     }
-    let target_keys: Vec<String> = scores
-        .iter()
-        .map(|(iid, _)| {
-            index
-                .passage_key(*iid)?
-                .map(|key| key.to_string())
+    let count = slots.len();
+    // The keys of the targets are read for the ties only: the rank of a target
+    // is the number of passages strictly above it, plus the tied passages whose
+    // key sorts first, so a target without a tie never needs its key
+    // (ADR-0123, complement of 2026-11-01, "À surveiller"). `target_keys` is
+    // filled on the first tie that names a slot: the score of a target is its
+    // slot, so the key of that slot is read once for all its tied passages.
+    let mut target_keys: Vec<Option<String>> = vec![None; count];
+    let mut tied_smaller = vec![0_u64; count];
+    for (slot, iid) in counts.tied {
+        if target_keys.get(slot).is_some_and(Option::is_none) {
+            let target = scores
+                .get(slot)
+                .map(|(iid, _)| *iid)
+                .ok_or_else(|| internal("a tie names a slot no target occupies"))?;
+            let key = index
+                .passage_key(target)?
                 .ok_or_else(|| {
                     internal("a passage of the pool has no passage row in the reference state")
-                })
-        })
-        .collect::<Result<Vec<_>, CribleError>>()?;
+                })?
+                .to_string();
+            if let Some(entry) = target_keys.get_mut(slot) {
+                *entry = Some(key);
+            }
+        }
+        let key = index
+            .passage_key(Iid::new(iid))?
+            .ok_or_else(|| {
+                internal("a passage of the pool has no passage row in the reference state")
+            })?
+            .to_string();
+        if target_keys
+            .get(slot)
+            .and_then(Option::as_deref)
+            .is_some_and(|target| key.as_str() < target)
+            && let Some(tied) = tied_smaller.get_mut(slot)
+        {
+            *tied = tied.saturating_add(1);
+        }
+    }
     // `above[slot]` counts the passages scoring strictly above the target of
     // `slot`; `greater_at[p]` counts those that outscore exactly `p` targets.
-    let count = slots.len();
     let mut above = vec![0_u64; count];
     // The passages that outscore every target are the first to count, at slot
     // `count`, and they precede every target.
@@ -230,20 +258,6 @@ pub fn ranks(
     for slot in (0..count).rev() {
         above[slot] = running;
         running = running.saturating_add(counts.greater_at.get(slot).copied().unwrap_or(0));
-    }
-    let mut tied_smaller = vec![0_u64; count];
-    for (slot, iid) in counts.tied {
-        let key = index
-            .passage_key(Iid::new(iid))?
-            .ok_or_else(|| {
-                internal("a passage of the pool has no passage row in the reference state")
-            })?
-            .to_string();
-        if target_keys.get(slot).is_some_and(|target| key < *target)
-            && let Some(tied) = tied_smaller.get_mut(slot)
-        {
-            *tied = tied.saturating_add(1);
-        }
     }
     let mut ranks = HashMap::with_capacity(count);
     for (slot, (iid, score)) in scores.iter().enumerate() {

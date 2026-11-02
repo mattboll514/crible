@@ -31,18 +31,21 @@ use common::{Journal, READ_SECRET, base64_vector, instance_with_alpha_and_journa
 /// Path of the search route of the fixture index.
 const SEARCH: &str = "/v1/indexes/alpha/search";
 
-/// Waits for the barrier to signal that the search reached it.
-fn wait_ready(directory: &Path, scope: &str) {
-    let ready = directory.join(format!("ready-{scope}"));
+/// Waits for the barrier to write the mark `name` of `directory`.
+///
+/// The loop is bounded: a test that waits for a mark its job never writes fails
+/// with the path it wanted, instead of hanging the suite.
+fn wait_mark(directory: &Path, name: &str) {
+    let mark = directory.join(name);
     for _ in 0..2_000 {
-        if ready.exists() {
+        if mark.exists() {
             return;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
     panic!(
-        "the search never reached the barrier at {}",
-        ready.display()
+        "the search never reached the barrier mark at {}",
+        mark.display()
     );
 }
 
@@ -80,7 +83,7 @@ async fn a_timeout_records_the_steps_it_measured() {
         )
         .await
     });
-    wait_ready(barrier.path(), "search");
+    wait_mark(barrier.path(), "ready-search");
 
     let (status, answer) = held.await.expect("the request task finishes");
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{answer}");
@@ -135,10 +138,11 @@ async fn a_timeout_records_the_steps_it_measured() {
     );
 
     // The held search is released, and the test outlives the wake-up of its
-    // barrier: the directory stays alive until the work has left it, so the
-    // release is never read after the directory is gone.
+    // barrier: it waits for the mark the job writes once it has left the hold
+    // point, so the directory stays alive until the work has left it, whatever
+    // the load of the machine (NETTOYER-P7).
     std::fs::write(barrier.path().join("go-search"), b"").expect("the barrier is released");
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    wait_mark(barrier.path(), "left-search");
 
     // SAFETY: the test owns the variable until its end, as for `set_var`.
     unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };

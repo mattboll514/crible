@@ -528,8 +528,9 @@ fn document(
     // One connection per request, never a pool: the read route opens the
     // `records.sqlite` of one epoch for one document, closes it with the pool,
     // and the process never holds a connection it does not use. The cost is one
-    // open per GET and it is measured in P7 (MES-04), where a pool per epoch can
-    // replace this line if the measurement asks for it.
+    // open per GET, and it is not measured: no measurement covers this route.
+    // A pool per epoch can replace this line if a later measurement asks for
+    // it.
     let pool = ReadPool::new(&path, 1)?;
     let Some(record) = pool.read_document(doc_id)? else {
         return Err(document_not_found());

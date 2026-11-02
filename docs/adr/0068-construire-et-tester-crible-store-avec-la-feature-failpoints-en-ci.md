@@ -99,6 +99,60 @@ Le `cargo test` simple reste construit **sans** `failpoints`. `docs/07-stack-et-
 
 **Raison.** La décision 2 nomme une propriété vérifiable — la feature n'est active que là où elle sert — et une unification par le résolveur la rendait fausse sans qu'aucun test ne le signale. Une feature de paquet, éteinte par défaut et activée par la seule ligne de commande qui la demande, rend la propriété vraie à nouveau, sans crate nouvelle, sans second chemin de test et sans toucher au binaire de production. Elle permet en outre de garder les tests du serveur dans le paquet qui les porte, plutôt que de les déplacer dans `crible-store` où ils n'auraient pas accès au routeur ni à l'écrivain.
 
+## Complément du 2026-11-01 (espace disque du runner)
+
+**Statut du complément** : `Accepté` (décidé par le propriétaire le 2026-11-01). La décision vient de la conversation du propriétaire avec l'orchestrateur, sur les deux options présentées : « tu peux faire les correctif a et b maintenant si ça fait du sens ? ». Elle est appliquée dans le passage A de `NETTOYER-P7`. Ce complément ne change ni le statut ni les décisions ci-dessus.
+
+**Constat.** Le run `41343484760`, sur le commit `97e18b7`, branche `phase/P7-observabilite`, est rouge. Le job `Rust` échoue à l'étape « Test the server failpoint build », c'est-à-dire sur :
+
+```
+cargo test -p crible-server -p crible --locked --features failpoints
+```
+
+Cette commande a été étendue à `-p crible` par la tâche `REUTILISER-LECTEURS-DENSES` et par ADR-0126. L'erreur observée est :
+
+```
+collect2: fatal error: ld terminated with signal 7 [Bus error]
+```
+
+Elle touche quatre binaires de test et **aucun test n'échoue**. Les étapes précédentes du job sont vertes : lint, test par défaut, tests de `crible-store` sous `failpoints`, lint du serveur sous `failpoints`. Un signal 7 est `SIGBUS` : le processus `ld` a été tué par une erreur de bus, c'est-à-dire un accès mémoire invalide au niveau matériel, typiquement lors d'une écriture sur un fichier mappé en mémoire quand l'espace manque. La cause probable, **non prouvée**, est un disque du runner plein après les compilations successives de plusieurs jeux de features dans un même `target/`.
+
+**Décision (a) : la CI ne conserve pas les informations de débogage.** Le fichier `.github/workflows/ci.yml` déclare `CARGO_PROFILE_DEV_DEBUG: 0` dans son `env:` de workflow, donc pour **tous** les jobs. Les profils `dev` et `test` posés par la CI produisent des binaires sans tables de débogage : `target/` est plus petit et l'édition de liens plus rapide, ce qui réduit directement la pression sur le disque du runner.
+
+**Décision (b) : le job `Rust` libère et mesure l'espace disque.** Une étape au **début** du job `Rust` supprime des SDK préinstallés dans l'image du runner que le projet n'emploie pas : .NET, Android, GHC, CodeQL. La suppression est **tolérante** : un dossier absent ne fait pas échouer l'étape. L'espace libre est affiché avec `df -h` **au début et à la fin** du job, pour que le prochain run confirme ou infirme le diagnostic.
+
+**Ce que ce complément ne change pas.** Les décisions 1 et 2 restent entières : les quatre étapes `failpoints` et leur périmètre ne bougent pas. La décision 3 (« rien d'autre ne change dans le workflow ») est seulement complétée par les deux éléments ci-dessus ; aucun autre paramètre du workflow n'est modifié : ni `timeout-minutes`, ni le cache, ni les autres étapes, ni les tests laissés locaux. Aucun `continue-on-error` n'est ajouté, et aucune étape n'est retirée.
+
+**Raison.** Le diagnostic désigne une ressource d'exécution, pas un défaut de code : quatre binaires de test ne se lient pas, et aucun test ne tombe. La cause la moins coûteuse à écarter est le volume de `target/`, que ces deux mesures réduisent sans retirer de preuve : moins de données écrites (a), plus d'espace libre (b). Si `df -h` montre que le disque n'était pas plein, le diagnostic est faux et la réponse devra passer par un nouveau complément.
+
+**Alternatives écartées.**
+
+| Alternative | Pourquoi écartée |
+|---|---|
+| Un job séparé pour les constructions `failpoints`, avec son propre `target/` | Un runner complet et un démarrage de plus pour éviter un manque d'espace, sans rien prouver sur la cause ; c'est l'alternative (c) déjà écartée par la décision 1. |
+| `cargo clean` entre les étapes, ou avant l'étape `failpoints` | Chaque étape devient plus lente et le cache de compilation est jeté à chaque run ; la mesure masque le problème au lieu de le rendre visible dans `df -h`. |
+| Retirer des tests ou des étapes `failpoints`, ou poser `continue-on-error` | Cela supprimerait la preuve que cet ADR protège, pour un défaut d'infrastructure ; la CI tient déjà ce type de repli pour interdit (ADR-0059). |
+| Choisir un runner avec plus de disque | Coût permanent, opaque, décidé sans mesure ; les deux mesures retenues coûtent quelques minutes et rendent le diagnostic vérifiable. |
+
+**Conséquences.**
+
+- **Positives** :
+  - le job `Rust` écrit moins dans `target/` et se lie plus vite, ce qui profite aussi au job `rust-onnx` ;
+  - les journaux du job donnent l'espace libre au début et à la fin, donc le diagnostic est vérifiable sur le run suivant, chiffres en main ;
+  - aucun test n'est retiré, et aucune étape de test n'est rendue tolérante à l'échec : seule la suppression d'un dossier absent est tolérée.
+- **Négatives / coûts** :
+  - les traces de panique du code Rust perdent leurs numéros de ligne en CI, et `rustc` produit des messages de débogage moins précis ; ce coût ne touche **ni** les constructions locales **ni** la version de release, qui gardent leur profil de débogage ou de symboles ;
+  - l'étape de libération d'espace ajoute de une à trois minutes par exécution et dépend du contenu de l'image du runner : si GitHub retire un de ces SDK, l'étape devient un no-op silencieux, ce qui est accepté ;
+  - le gain d'espace dépend de l'image : il n'est ni garanti ni mesuré par un rapport `@mesureur`, il est seulement observé dans les journaux du run.
+- **À surveiller** : les valeurs de `df -h` au début et à la fin du job `Rust`, et la durée du job. Si le disque s'avère largement libre au moment de l'échec, le diagnostic de cet ADR est faux : la réponse passe par un nouveau complément qui cherche la cause ailleurs (mémoire du runner, version de `ld`, binaires trop gros), jamais par un `continue-on-error` ni par le retrait d'une étape ou d'un test.
+
+**Documents mis en cohérence à l'acceptation.**
+
+1. **`docs/07-stack-et-deploiement.md`, section « CI (GitHub Actions) »** : la première puce, qui énumère les étapes de chaque push et PR, reçoit la variable `CARGO_PROFILE_DEV_DEBUG=0` (tous les jobs) et l'étape de libération d'espace avec `df -h` au début et à la fin du job `Rust`. Application faite dans le passage A de `NETTOYER-P7`, avec cet ADR cité.
+2. **`docs/adr/README.md`** : la ligne d'index d'ADR-0068 nomme ce complément avec le statut `Accepté (décidé par le propriétaire le 2026-11-01)`.
+
+Rien d'autre n'est modifié.
+
 ## Références
 
 - `docs/07-stack-et-deploiement.md`, section « CI (GitHub Actions) ».
@@ -106,3 +160,5 @@ Le `cargo test` simple reste construit **sans** `failpoints`. `docs/07-stack-et-
 - `.github/workflows/ci.yml`, job Rust, étapes `Lint the failpoint build` et `Test the failpoint build`.
 - ADR-0057 (job `rust-onnx`, ONNX Runtime en CI ; corps inchangé), ADR-0059 (cache et téléchargement de l'artefact), ADR-0032 (aucun contenu de production en CI), ADR-0062 et ADR-0063 (tests laissés locaux, nommés un par un).
 - `crates/crible-store/Cargo.toml`, section `[features]` : feature `failpoints`, `CRIBLE_FAILPOINT`.
+- Run `41343484760` (commit `97e18b7`, branche `phase/P7-observabilite`), job `Rust`, étape « Test the server failpoint build » : `collect2: fatal error: ld terminated with signal 7 [Bus error]` sur quatre binaires de test, sans échec de test (constat du complément du 2026-11-01).
+- ADR-0126 (la commande de l'étape « Test the server failpoint build » est étendue à `-p crible` par `REUTILISER-LECTEURS-DENSES`).

@@ -261,6 +261,18 @@ Précisions :
 - la cible de 0,99 de `docs/08:86` continue de porter sur la moyenne, au N par défaut, sur les requêtes qui ont une liste exacte non vide ;
 - cette précision **ne modifie ni ADR-0076 ni les chiffres de MES-01** : elle fixe le calcul de `crible eval` là où ADR-0076 supposait un pool d'au moins dix passages.
 
+## Complément du 2026-11-01 (relecture, tour 2)
+
+Ce complément répond au point de la relecture du tour 2 de la tâche `COMMANDE-EVAL` sur les modes possibles d'un index à modèle `external`. Il **ne réécrit pas la décision 2** ; il en précise le domaine. La règle est retenue par l'orchestrateur, par délégation du propriétaire pour la suite de P7, et porte le **même statut d'acceptation par anticipation** que l'ADR.
+
+### `--models` et les modes d'un index `external` (note à la décision 2)
+
+La décision 2 écrit qu'un index à modèle `external` « exige `vector` pour chaque élément, et `query` y est refusé ». Cette règle est celle de la **branche dense** : c'est la route de recherche qui refuse un mode dense qui devrait encoder sur un modèle sans encodeur (ADR-0109, décision 4), et `crible eval` reprend le même contrôle. Une campagne `lexical` n'encode rien : elle **accepte** donc `query` sur un index `external`.
+
+Une campagne `hybrid`, en revanche, n'a **aucune forme possible** sur un index `external` : elle demande un texte pour la branche lexicale **et** un vecteur dense, une ligne du jeu ne porte que l'un des deux, et le refus tombe dans les deux cas — une ligne à `query` faute de vecteur dense, dont l'encodage est refusé par un modèle sans encodeur, une ligne à `vector` plus tôt, faute de texte (`crates/crible/src/eval.rs:594-601`). Le format d'entrée actuel ne l'exprime pas ; le supporter demanderait une décision sur le format.
+
+Il s'ensuit que `--models` n'est obligatoire que lorsqu'une branche dense doit encoder une requête textuelle du jeu ; il est inutile pour une campagne `lexical`, et pour une campagne dense dont toutes les requêtes portent leur `vector`. Le synopsis de `docs/06`, la description du format d'entrée et l'aide de `crible eval` (`crates/crible/src/main.rs`) disent ce domaine ; aucune décision ne change.
+
 ## Conséquences
 
 - **Positives** :

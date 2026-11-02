@@ -15,7 +15,6 @@
 //! are proved on a test router, as ADR-0095 asks, and the search routes will
 //! call the same [`SearchLimit`] and [`limits::refusal`].
 
-use std::io;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -32,11 +31,8 @@ use crible_server::auth::{Auth, protect, sha256_hex};
 use crible_server::config::{ApiKey, Role};
 use crible_server::http::{REQUEST_ID_HEADER, RequestId, with_common_layers};
 use crible_server::limits::{self, MAX_BODY_BYTES, SearchLimit};
-use crible_server::logging::log_subscriber;
 use serde_json::{Value, json};
 use tower::ServiceExt;
-use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::util::SubscriberInitExt;
 
 /// Key of the `read` role used by the tests.
 const READ_KEY: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -103,6 +99,15 @@ impl TestState {
 /// `Barrier` would wait for a partner that does not exist when the route answers
 /// before the work runs, which is the other half of the defect
 /// (`@relecteur`, second pass of NETTOYER-P6).
+///
+/// The same rendezvous stands in the unit tests of `src/limits.rs`, and the two
+/// cannot share one: that module is built only with `#[cfg(test)]`, so an
+/// integration test that links the crate as an external library sees none of it.
+/// A `pub` module gated on the `failpoints` feature would be invisible to this
+/// binary in a plain build, and a module compiled in every build would add test
+/// code to the public surface of the server. The fixture is thirty lines and
+/// both copies are pinned by their tests, so the duplication is kept and named
+/// here and there (`@relecteur`, NETTOYER-P6; NETTOYER-P7).
 struct Rendezvous {
     release: mpsc::Sender<()>,
     wait: Mutex<Option<mpsc::Receiver<()>>>,
@@ -160,43 +165,6 @@ impl ReleaseOnDrop {
 impl Drop for ReleaseOnDrop {
     fn drop(&mut self) {
         self.release();
-    }
-}
-
-/// In-memory writer that captures the journal of a test.
-#[derive(Clone, Default)]
-struct Sink(Arc<Mutex<Vec<u8>>>);
-
-impl Sink {
-    fn contents(&self) -> String {
-        let bytes = self.0.lock().map(|bytes| bytes.clone()).unwrap_or_default();
-        String::from_utf8_lossy(&bytes).into_owned()
-    }
-}
-
-/// One write handle of the [`Sink`].
-struct SinkWriter(Sink);
-
-impl io::Write for SinkWriter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let shared = &self.0.0;
-        let mut bytes = shared
-            .lock()
-            .map_err(|_| io::Error::other("the journal sink is poisoned"))?;
-        bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for Sink {
-    type Writer = SinkWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        SinkWriter(self.clone())
     }
 }
 
@@ -623,96 +591,5 @@ async fn an_internal_of_a_route_keeps_its_cause_out_of_the_body() {
     assert!(
         !error.to_string().contains("zz-cause-zz"),
         "the cause of an internal never reaches the body: {error}"
-    );
-}
-
-#[test]
-fn the_journal_names_errors_without_any_client_message() {
-    // ADR-0101, decision 4: one line per error, with its code, its status and
-    // its `request_id`; the message of a `4xx` is never journalised, and the
-    // cause of an `internal` is, because it is the diagnostic of that code.
-    // ADR-0096: no value the client sent reaches the journal, whatever the
-    // target of the line.
-    let sink = Sink::default();
-    let subscriber = log_subscriber(sink.clone(), "trace").expect("trace is a valid filter");
-    // A global subscriber, as `init_logging` installs it in the server: a
-    // thread-local default would not see the events of a request served on
-    // another thread, and `tracing` caches the interest of a callsite for the
-    // whole process until a global subscriber is set.
-    subscriber
-        .try_init()
-        .expect("no other test of this binary installs a journal");
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime is startable");
-    runtime.block_on(async {
-        let router = router(Arc::new(TestState::new(2)));
-        let refused = send_json(
-            &router,
-            "/echo",
-            Some(READ_KEY),
-            Some("application/json"),
-            r#"{"filter_value": "zz-4xx-zz", "#,
-        )
-        .await;
-        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
-        // A valid JSON body of the wrong type: serde quotes the value it
-        // refused, and axum journals that text on its own target at `TRACE`.
-        let mistyped = send_json(
-            &router,
-            "/typed",
-            Some(READ_KEY),
-            Some("application/json"),
-            r#""zz-typed-value-zz""#,
-        )
-        .await;
-        assert_eq!(mistyped.status(), StatusCode::BAD_REQUEST);
-        let unknown = send(&router, Method::GET, "/no-such-route", None).await;
-        assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-        let panicked = send(&router, Method::GET, "/panic", None).await;
-        assert_eq!(panicked.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let failed = send(&router, Method::GET, "/internal", None).await;
-        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    });
-
-    let text = sink.contents();
-    let ours: Vec<&str> = text
-        .lines()
-        .filter(|line| line.contains("crible_server::error"))
-        .collect();
-    assert!(!ours.is_empty(), "the lines of the server: {text}");
-    for line in &ours {
-        assert!(
-            !line.contains("zz-4xx-zz"),
-            "a message of a 4xx reached the journal: {line}"
-        );
-    }
-    // No filter on the target here: the check covers every line the process
-    // wrote, axum's rejection journal included (ADR-0096).
-    assert!(
-        !text.contains("zz-typed-value-zz"),
-        "a value the client sent reached the journal: {text}"
-    );
-    assert!(
-        ours.iter()
-            .any(|line| line.contains("\"request_id\":\"errors-test-1\"")),
-        "the identifier is journalised: {text}"
-    );
-    assert!(
-        ours.iter()
-            .any(|line| line.contains("\"code\":\"invalid_request\"")),
-        "the code of a 4xx is journalised: {text}"
-    );
-    assert!(
-        ours.iter()
-            .any(|line| line.contains("\"code\":\"internal\"") && line.contains("zz-boom-zz")),
-        "the cause of a panic is journalised with the code: {text}"
-    );
-    assert!(
-        ours.iter()
-            .any(|line| line.contains("\"code\":\"internal\"") && line.contains("zz-cause-zz")),
-        "the cause of an internal of a route is journalised too: {text}"
     );
 }

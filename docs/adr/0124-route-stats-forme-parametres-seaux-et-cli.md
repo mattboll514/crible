@@ -244,6 +244,16 @@ Précisions :
 
 La réponse, le seau, les deux classements et l'entrée journalière deviennent des **composants fermés** (`additionalProperties: false`), conformément à ADR-0111. La route perd son exception dans le test qui compare `docs/05` à la spécification, et l'exemple de `docs/05` porte son association `<!-- openapi: … -->`.
 
+## Complément du 2026-11-01 (relecture, tour 1)
+
+Ce complément répond au point de la relecture du tour 1 de la tâche `ROUTE-STATS` sur le classement des formes. Il **ne réécrit aucune des seize décisions** ci-dessus ; il précise la portée du paramètre `operation` là où la décision 2 le laissait entendre plus large. La règle est retenue par l'orchestrateur, par délégation du propriétaire pour la suite de P7, et porte le **même statut d'acceptation par anticipation** que l'ADR.
+
+### `top_filter_shapes` ignore `operation` (note à la décision 2)
+
+La décision 2 fait de `operation` un filtre d'égalité de la route, et la décision 6 décrit le classement des formes sans dire sur quoi il porte. Le code tranche aujourd'hui autrement : `read_top_shapes` lit la table `filter_shapes` sans condition d'opération (`crates/crible-store/src/analytics.rs:1705`, `minute_conditions(filter, from, to, false)`), et cette table n'a pas de colonne d'opération, seules les recherches y écrivant une forme.
+
+`top_filter_shapes` porte donc sur les **recherches de la fenêtre, quel que soit `operation`** : `?operation=compact` restreint les comptes, les erreurs, les percentiles, le taux sans résultat et `top_indexes`, mais rend toujours les formes des recherches. Le comportement est écrit tel quel dans `docs/05` et `docs/06` ; il n'est pas changé ici, et l'omettre quand `operation` n'est pas une recherche demanderait une décision de conception, donc un autre ADR.
+
 ## Conséquences
 
 - **Positives** :

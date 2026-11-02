@@ -286,6 +286,74 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
             .any(|window| window == needle)
 }
 
+/// Column names of `table`, read from the schema SQLite keeps in the files.
+///
+/// SQLite stores the `CREATE TABLE` statement it received in its schema table,
+/// with its whitespace normalised and its trailing semicolon dropped; the body
+/// is a list of column definitions separated by top-level commas, and the
+/// `PRIMARY KEY (...)` entry of that list is not a column. Reading it here makes
+/// the structure of the aggregates testable without a SQLite dependency in the
+/// test crate (ADR-0117, decision 5).
+fn columns_of(files: &[(String, Vec<u8>)], table: &str) -> Vec<String> {
+    let opening = format!("CREATE TABLE {table} (");
+    let (name, bytes) = files
+        .iter()
+        .find(|(_, bytes)| contains(bytes, opening.as_bytes()))
+        .unwrap_or_else(|| panic!("the schema of {table} is in the analytics files: {opening}"));
+    let start = bytes
+        .windows(opening.len())
+        .position(|window| window == opening.as_bytes())
+        .unwrap_or_default()
+        + opening.len();
+    let body = &bytes[start..];
+    // The body ends at the parenthesis that closes the one of the statement:
+    // the schema of another table may follow the record in the same file.
+    let mut depth = 1_usize;
+    let mut quoted = false;
+    let mut end = None;
+    for (position, byte) in body.iter().enumerate() {
+        match *byte {
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end = Some(position);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.unwrap_or_else(|| panic!("the schema of {table} is closed in {name}"));
+    let body = std::str::from_utf8(&body[..end])
+        .unwrap_or_else(|error| panic!("the schema of {table} is text: {error}"));
+    let mut columns = Vec::new();
+    let mut depth = 0_usize;
+    let mut quoted = false;
+    let mut start = 0_usize;
+    for (position, character) in body
+        .char_indices()
+        .chain(std::iter::once((body.len(), ',')))
+    {
+        match character {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth = depth.saturating_sub(1),
+            ',' if !quoted && depth == 0 => {
+                let segment = body[start..position].trim();
+                start = position + 1;
+                let column = segment.split_whitespace().next().unwrap_or_default();
+                if !column.is_empty() && column != "PRIMARY" {
+                    columns.push(column.trim_matches('"').to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    columns
+}
+
 /// Asserts that neither the analytics files nor the journal hold `marker`.
 ///
 /// `kind` names what the marker is, so a failure says which half of INV-13 is
@@ -541,9 +609,16 @@ async fn inv_13_the_analytics_and_the_journal_hold_no_query_text_no_filter_value
             .any(|(_, bytes)| contains(bytes, ALPHA.as_bytes())),
         "the analytics bytes hold the name of the index, so the scan reads the rows"
     );
+    // The journal witness is a line of the search itself and not one of the load:
+    // the refusals of the run write the `request refused` line of ADR-0101,
+    // decision 4, at `warn`, so the capture reached the requests whose content it
+    // must never hold.
     assert!(
-        journal_text.contains(ALPHA),
-        "the journal of the test holds the name of the index"
+        journal_text
+            .lines()
+            .any(|line| line.contains("\"code\":\"invalid_filter\"")
+                && line.contains("\"message\":\"request refused\"")),
+        "the journal holds the line of the refused searches: {journal_text:?}"
     );
     // The canonical form of the filters of the answered searches is written by
     // the writer itself (`numero:eq`): finding it proves the scan reaches the
@@ -551,6 +626,45 @@ async fn inv_13_the_analytics_and_the_journal_hold_no_query_text_no_filter_value
     assert!(
         files.iter().any(|(_, bytes)| contains(bytes, b"numero:eq")),
         "the analytics bytes hold the shape of the filters of the searches"
+    );
+    // ADR-0117, decision 5: the aggregates have fixed columns, and no free one.
+    // A scan for markers cannot see a hash of the content; the structure can:
+    // every column of `minute_events` and of `filter_shapes` is a count, a
+    // duration, a closed enumeration or the canonical shape of a filter, so a
+    // hash of the query would need a column that this list refuses (INV-13).
+    assert_eq!(
+        columns_of(&files, "minute_events"),
+        vec![
+            "minute",
+            "index",
+            "operation",
+            "status",
+            "client",
+            "mode",
+            "dense_strategy",
+            "count",
+            "zero_results",
+            "truncated",
+            "dense_only",
+            "lexical_only",
+            "both",
+            "latency_validate",
+            "latency_encode",
+            "latency_filter",
+            "latency_dense",
+            "latency_lexical",
+            "latency_fusion",
+            "latency_group",
+            "latency_fetch",
+            "latency_total",
+            "pool",
+        ],
+        "the aggregates hold their fixed columns only"
+    );
+    assert_eq!(
+        columns_of(&files, "filter_shapes"),
+        vec!["minute", "index", "shape", "count"],
+        "the shapes hold their fixed columns only"
     );
 
     for (request, position) in requests.iter().zip(0..) {
@@ -621,9 +735,15 @@ async fn inv_13_a_refused_search_leaks_neither_its_query_text_nor_its_filter_val
         path.display()
     );
     let journal_text = journal.contents();
+    // The witness is a line of the search itself: the refusal writes the
+    // `request refused` line of ADR-0101, decision 4, so the capture is not the
+    // empty journal the positive control already covers.
     assert!(
-        !journal_text.is_empty(),
-        "the journal of the test holds the lines of the server"
+        journal_text
+            .lines()
+            .any(|line| line.contains("\"code\":\"invalid_filter\"")
+                && line.contains("\"message\":\"request refused\"")),
+        "the journal holds the line of the refused searches: {journal_text:?}"
     );
 
     for (query, filter) in &requests {

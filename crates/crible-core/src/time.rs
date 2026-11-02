@@ -187,8 +187,11 @@ fn split_offset(raw: &str) -> Option<(&str, i32)> {
 /// Number of days from 1970-01-01 to `year-month-day`, Gregorian calendar.
 ///
 /// Howard Hinnant's `days_from_civil`, with the year starting in March so that
-/// the leap day is the last day of the year.
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+/// the leap day is the last day of the year. `crible-store` reads its `date32`
+/// values and its `YYYY-MM-DD` filters through it, so one arithmetic serves the
+/// analytics and the store (ADR-0124, decision 14).
+#[must_use]
+pub fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
     let year_of_era = year - era * 400;
@@ -199,7 +202,11 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 }
 
 /// The Gregorian date `year-month-day` of a number of days from 1970-01-01.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+///
+/// The inverse of [`days_from_civil`], exact over the whole `i32` range of a
+/// `date32` and independent of any platform clock or time zone.
+#[must_use]
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let shifted = days + 719_468;
     let era = if shifted >= 0 {
         shifted

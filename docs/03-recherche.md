@@ -16,6 +16,8 @@
 
 Les étapes ne s'exécutent que si le mode les demande : `dense`, `lexical` ou `hybrid`. Le cache d'encodage reste en RAM et n'est jamais persisté.
 
+Le total part de la prise du jeton de concurrence et couvre le dispatch de la recherche sur la tâche bloquante : ces deux coûts n'ont pas de clé propre parmi les neuf étapes, donc `total` dépasse légèrement la somme du chemin critique. Ce résidu reste très inférieur à la tolérance de 10 % du test de cohérence, dont les corpus sont dimensionnés pour que les étapes mesurées dominent (ADR-0109, décision 2 ; ADR-0119, décision 6).
+
 ## Filtres → pool
 
 La grammaire est décrite dans `05-api.md`. Côté structures de données :

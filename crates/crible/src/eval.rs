@@ -107,7 +107,8 @@ pub struct EvalRequest<'a> {
     pub index: &'a str,
     /// JSONL game of queries (ADR-0125, decision 3).
     pub queries: &'a Path,
-    /// Root models directory; required by a game with a textual query.
+    /// Root models directory; required when a `dense` or `hybrid` mode has to
+    /// encode a textual query of the game (ADR-0125, decision 2).
     pub models: Option<&'a Path>,
     /// Branches to evaluate; `dense` when absent.
     pub modes: &'a [SearchMode],
@@ -278,8 +279,7 @@ pub fn run(request: &EvalRequest<'_>) -> Result<ExitCode, CribleError> {
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
     let scan = ScanPool::new(0)?;
-    let searcher =
-        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
+    let searcher = DenseSearcher::open_in(&scan, &segments_directory, &segments, &records_path)?;
 
     let mut campaign = Campaign {
         config,
@@ -1409,7 +1409,8 @@ fn markdown(report: &Value) -> String {
     out.push_str("## Lecture\n\n");
     out.push_str(
         "- La cible de fidélité est 0,99 de recall@10 au passage, **au N par défaut de 5000** et \
-         en moyenne sur toutes les requêtes (ADR-0076, ADR-0078). Une campagne à un autre N \
+         en moyenne sur les requêtes dont la liste exacte n'est pas vide (ADR-0076, ADR-0078, \
+         ADR-0125 complément C1). Une campagne à un autre N \
          éclaire ce réglage : elle ne se compare pas directement à la cible. Le recouvrement@10 \
          n'a pas de cible, il dépend du nombre de passages par document.\n\
          - Le dénominateur du recall@10 de fidélité est la taille du top-10 EXACT : il vaut 10 \

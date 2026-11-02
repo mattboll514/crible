@@ -353,22 +353,20 @@ fn dense(
     let (ranks, kept, mut stages, pre_group_ranks) =
         grouped_candidates(snapshot, searcher, pool, &query, search, capture, explain)?;
     let fetch = Instant::now();
-    let results = ranked_survivors(
+    let results = map_ranked(
         kept,
         |candidate: &Scored| ranks.get(&candidate.iid()).map(|branch| branch.rank),
         request.grouping.by_document,
-    )?
-    .into_iter()
-    .map(|(candidate, fused_rank)| {
-        let dense = ranks.get(&candidate.iid()).copied();
-        Ok(RankedHit {
-            hit: searcher.payload(candidate)?,
-            dense,
-            lexical: None,
-            fused_rank,
-        })
-    })
-    .collect::<Result<Vec<_>, CribleError>>()?;
+        |candidate, fused_rank| {
+            let dense = ranks.get(&candidate.iid()).copied();
+            Ok(RankedHit {
+                hit: searcher.payload(candidate)?,
+                dense,
+                lexical: None,
+                fused_rank,
+            })
+        },
+    )?;
     stages.fetch = fetch.elapsed();
     let strategy = plan(search, pool.len(), requested, request.exact).strategy;
     Ok((results, stages, Some(strategy), pre_group_ranks))
@@ -382,11 +380,16 @@ fn dense(
 /// best passage, which is the first entry of the document in the survivors,
 /// because the grouping writes the entries of one document consecutively and
 /// best first.
-fn ranked_survivors<C: Candidate>(
+///
+/// No allocation beyond the result: `map` runs in the same walk that computes
+/// the rank, so a search builds neither an intermediate vector of ranked
+/// survivors nor a second pass over it (ADR-0119, decision 8).
+fn map_ranked<C: Candidate, T>(
     kept: Vec<C>,
     rank_of: impl Fn(&C) -> Option<u32>,
     by_document: bool,
-) -> Result<Vec<(C, u32)>, CribleError> {
+    mut map: impl FnMut(C, u32) -> Result<T, CribleError>,
+) -> Result<Vec<T>, CribleError> {
     let mut ranked = Vec::with_capacity(kept.len());
     let mut current: Option<(String, u32)> = None;
     for candidate in kept {
@@ -408,7 +411,7 @@ fn ranked_survivors<C: Candidate>(
         } else {
             rank
         };
-        ranked.push((candidate, effective));
+        ranked.push(map(candidate, effective)?);
     }
     Ok(ranked)
 }
@@ -441,22 +444,20 @@ fn lexical(
     })?;
     stages.group = group_time.elapsed();
     let fetch = Instant::now();
-    let results = ranked_survivors(
+    let results = map_ranked(
         kept,
         |candidate: &Scored| ranks.get(&candidate.iid()).map(|branch| branch.rank),
         request.grouping.by_document,
-    )?
-    .into_iter()
-    .map(|(candidate, fused_rank)| {
-        let lexical = ranks.get(&candidate.iid()).copied();
-        Ok(RankedHit {
-            hit: searcher.payload(candidate)?,
-            dense: None,
-            lexical,
-            fused_rank,
-        })
-    })
-    .collect::<Result<Vec<_>, CribleError>>()?;
+        |candidate, fused_rank| {
+            let lexical = ranks.get(&candidate.iid()).copied();
+            Ok(RankedHit {
+                hit: searcher.payload(candidate)?,
+                dense: None,
+                lexical,
+                fused_rank,
+            })
+        },
+    )?;
     stages.fetch = fetch.elapsed();
     Ok((results, stages, None, pre_group_ranks))
 }
@@ -527,29 +528,27 @@ fn hybrid(
     let fetch = Instant::now();
     // The rank of the fusion travels inside each entry, written before the
     // regrouping reorders the list (ADR-0119, decision 2).
-    let results = ranked_survivors(
+    let results = map_ranked(
         kept,
         |entry: &Fused| Some(entry.rank),
         request.grouping.by_document,
-    )?
-    .into_iter()
-    .map(|(entry, fused_rank)| {
-        let Fused {
-            iid,
-            key,
-            score,
-            dense,
-            lexical,
-            ..
-        } = entry;
-        Ok(RankedHit {
-            hit: searcher.payload(Scored { iid, key, score })?,
-            dense,
-            lexical,
-            fused_rank,
-        })
-    })
-    .collect::<Result<Vec<_>, CribleError>>()?;
+        |entry, fused_rank| {
+            let Fused {
+                iid,
+                key,
+                score,
+                dense,
+                lexical,
+                ..
+            } = entry;
+            Ok(RankedHit {
+                hit: searcher.payload(Scored { iid, key, score })?,
+                dense,
+                lexical,
+                fused_rank,
+            })
+        },
+    )?;
     stages.fetch = fetch.elapsed();
     let strategy = plan(search, pool.len(), requested, request.exact).strategy;
     Ok((results, stages, Some(strategy), pre_group_ranks))

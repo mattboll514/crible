@@ -83,20 +83,23 @@ use serde_json::{Map, Value};
 use super::{Scored, cosine, internal, invalid_request, normalise, windows};
 use crate::pool::Pool;
 
-/// Number of read-only connections the searcher keeps.
+/// Number of read-only connections a searcher opened outside a [`ScanPool`]
+/// keeps.
+///
+/// [`ScanPool`]: crate::scan_pool::ScanPool
 ///
 /// Key reads happen inside the rayon windows, so the pool is sized on the rayon
 /// workers serving the scan: one connection per worker lets every window read
-/// its key without queueing on the `Condvar` behind a single connection. The
-/// value is a bound on connections, not a measured optimum, and no measurement
-/// backs it. The capacity is fixed when the searcher opens; a searcher opened
-/// inside a one-thread pool and used from a wider one would serialise its key
-/// reads, which is correct but slower.
+/// its key without queueing on the `Condvar` behind a single connection. Called
+/// inside [`ScanPool::install`](crate::scan_pool::ScanPool::install), this is
+/// exactly `ScanPool::threads()`, the rule the server applies when it fills a
+/// generation; [`DenseSearcher::open_in`] applies it without relying on the
+/// ambient pool. The value is a bound on connections, not a measured optimum,
+/// and no measurement backs it. The capacity is fixed when the searcher opens;
+/// a searcher opened inside a one-thread pool and used from a wider one would
+/// serialise its key reads, which is correct but slower.
 ///
-/// The searcher owns this pool privately in P1: no other branch shares it. A
-/// later design that shares one read pool between two branches (the lexical
-/// branch of `docs/03-recherche.md`, step 5) would have to revisit the capacity
-/// with a measurement.
+/// The searcher owns this pool privately in P1: no other branch shares it.
 ///
 /// **Nesting rule.** A caller must not call [`DenseSearcher::top_k`] while it
 /// already holds a connection of this same [`ReadPool`]: `checkout` is never
@@ -168,6 +171,12 @@ impl DenseSearcher {
     /// measurements open each segment once, by the same code as the server
     /// (ADR-0126, decision 3).
     ///
+    /// The payload pool takes one connection per worker of the rayon pool
+    /// installed on the calling thread. [`DenseSearcher::open_in`] states that
+    /// pool, so a caller holding a [`ScanPool`](crate::scan_pool::ScanPool)
+    /// should prefer it: opening this function outside `ScanPool::install`
+    /// sizes the pool on the workers of the ambient rayon pool instead.
+    ///
     /// # Errors
     ///
     /// The errors of [`DenseReaders::filled`], plus the ones of
@@ -183,6 +192,34 @@ impl DenseSearcher {
             records_path,
             read_connections(),
         )?;
+        Self::compose(filled.readers(), filled.records()?)
+    }
+
+    /// Opens the searcher of a process **inside** `scan`, on its worker count.
+    ///
+    /// The payload pool takes one read-only connection per scan worker, which
+    /// is [`ScanPool::threads`](crate::scan_pool::ScanPool::threads): that is
+    /// the rule the server applies when it fills the readers of a generation
+    /// (ADR-0126, decision 1), and the CLI applies it here rather than reading
+    /// the ambient rayon pool. The scan of every later query runs on the same
+    /// pool, so no window waits on the `Condvar` of the pool for a connection.
+    ///
+    /// The fill itself runs no `rayon` code — neither `crible-store`'s
+    /// `readers.rs` nor its `segment.rs` has a `par_iter` — so the call stays
+    /// outside [`ScanPool::install`](crate::scan_pool::ScanPool::install) and
+    /// owes it no `Send` bound.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`DenseSearcher::open`].
+    pub fn open_in(
+        scan: &crate::scan_pool::ScanPool,
+        segments_dir: &Path,
+        segments: &[SegmentMeta],
+        records_path: &Path,
+    ) -> Result<Self, CribleError> {
+        let filled =
+            DenseReaders::empty().filled(segments_dir, segments, records_path, scan.threads())?;
         Self::compose(filled.readers(), filled.records()?)
     }
 

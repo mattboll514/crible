@@ -575,12 +575,14 @@ impl Observed {
         self.stages.total = Some(total);
     }
 
-    /// Validation and encoding durations, measured once for the request.
+    /// Duration of the validation, measured once for the request.
     ///
-    /// The multi-index route renders them in its global `timings_ms` and
-    /// `0.0` in each target (ADR-0119, decision 9).
-    pub(crate) fn request_stages(&self) -> (Option<Duration>, Option<Duration>) {
-        (self.stages.validate, self.stages.encode)
+    /// The multi-index route renders it in its global `timings_ms` and `0.0` in
+    /// each target (ADR-0119, decision 9). The encoding has its own reading:
+    /// the route measures it around the single encoding point, so it does not
+    /// come from this accessor (`@relecteur`, REPONSE-DEBUG).
+    pub(crate) fn validate_step(&self) -> Option<Duration> {
+        self.stages.validate
     }
 
     /// Renders `failure` and yields its event and its journal row.

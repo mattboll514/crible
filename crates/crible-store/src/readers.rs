@@ -94,8 +94,11 @@ impl DenseReaders {
     ///
     /// The payload pool is opened on `records_path` when none is open, or when
     /// the epoch changed; it is reused otherwise. `connections` is the capacity
-    /// of that pool, the number of the scan workers as the searcher has always
-    /// sized it.
+    /// of that pool: the caller passes the number of scan workers,
+    /// `ScanPool::threads()` in `crible-search`, one read-only connection per
+    /// worker as the searcher has always sized it (ADR-0126, decision 1). This
+    /// module holds no rule of its own: sizing belongs to the caller that owns
+    /// the scan pool.
     ///
     /// # Errors
     ///

@@ -17,6 +17,9 @@
 //!
 //! - `CRIBLE_TEST_BARRIER` names a directory the test owns;
 //! - the job writes `<dir>/ready-<scope>` and waits for `<dir>/go-<scope>`;
+//! - once it has observed `go-<scope>`, the job writes `<dir>/left-<scope>`, so
+//!   a test that must outlive the wake-up waits on that mark instead of on a
+//!   fixed duration (NETTOYER-P7);
 //! - the attach steps need one more mark: a test that arms
 //!   `attach-before-commit` or `attach-after-sqlite-commit` also writes
 //!   `<dir>/armed-attach`, so an attach started by a test that only arms the
@@ -264,7 +267,12 @@ pub(crate) fn wait(scope: &str) {
     hold(&directory, scope);
 }
 
-/// Writes `<dir>/ready-<scope>` and waits for `<dir>/go-<scope>`.
+/// Writes `<dir>/ready-<scope>`, waits for `<dir>/go-<scope>`, then writes
+/// `<dir>/left-<scope>`.
+///
+/// The mark of the release observed is what lets a test wait until the job has
+/// really left the barrier, instead of sleeping for a duration that a loaded
+/// machine may outlast (NETTOYER-P7).
 fn hold(directory: &str, scope: &str) {
     let directory = Path::new(directory);
     let ready = directory.join(format!("ready-{scope}"));
@@ -279,4 +287,7 @@ fn hold(directory: &str, scope: &str) {
         }
         thread::sleep(Duration::from_millis(POLL_MILLIS));
     }
+    // A failure is not reported: the test owns the directory, and a mark it
+    // cannot read only brings its own bounded wait to its deadline.
+    let _ = fs::write(directory.join(format!("left-{scope}")), b"");
 }
