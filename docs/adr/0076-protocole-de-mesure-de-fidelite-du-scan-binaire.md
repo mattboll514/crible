@@ -1,6 +1,6 @@
 # ADR-0076 — Protocole de mesure de fidélité du scan binaire : métriques, centrage, pools et requêtes
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27 ; note du 2026-11-02, configurations de l'échantillon à N = 5000, confirmée par le propriétaire le 2026-11-02)
 - **Date** : 2026-10-27 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série REGROUPER-RESULTATS, MESURER-FIDELITE-BINAIRE, MESURER-LATENCE-DENSE, puis confirmé par le propriétaire le 2026-10-27. Les six décisions sont retenues telles que proposées, sans erratum : recall@10 au niveau du passage et recouvrement@10 au niveau du document, avec la cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près, sans changement du moteur ni du format ; mesure sur l'échantillon, BINARY forcé par `search.exact_threshold = 0` ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée ; levier proposé, non codé, si la cible manque.
