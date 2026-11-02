@@ -60,11 +60,13 @@
 //! (`ADR-0088`, decision 4), repairs the lexical index against the committed
 //! generation (`docs/02`, "Reprise au démarrage"; ADR-0087, ADR-0088), rewrites
 //! the manifest of the current generation when it is missing, then publishes the
-//! snapshot. The schema completion, the lexical repair and the `codes.bin`
+//! snapshot. The `tmp-*` cleanup, the unreferenced-segment removal, the manifest
+//! rewrite, the schema completion, the lexical repair and the `codes.bin`
 //! rebuild are the **write**-open steps: a read-only open writes nothing under
-//! the epoch, opens no `IndexWriter` and takes a lexical reader only when the
-//! state is up to date (`M ≤ Gt ≤ G`); otherwise the snapshot names the state
-//! found and the lexical branch of a query refuses (`ADR-0087`, `ADR-0088`).
+//! the index directory (`ADR-0116`, decision 1), opens no `IndexWriter` and takes
+//! a lexical reader only when the state is up to date (`M ≤ Gt ≤ G`); otherwise
+//! the snapshot names the state found and the lexical branch of a query refuses
+//! (`ADR-0087`, `ADR-0088`).
 //!
 //! # Fault injection
 //!
@@ -723,8 +725,9 @@ impl GenerationStore {
     /// when it is missing, and rebuilds every `codes.bin` a segment is missing
     /// (`ADR-0069`, decision 1). It is idempotent: a second open changes
     /// nothing. A caller that only reads uses
-    /// [`GenerationStore::open_read_only`], which does the same recovery without
-    /// writing a `codes.bin`.
+    /// [`GenerationStore::open_read_only`], which writes nothing under the index
+    /// directory and leaves those repairs to the next write open (`ADR-0116`,
+    /// decision 1).
     ///
     /// `schema` is the schema of the index configuration, as for
     /// [`GenerationStore::create`]: the filter structures of the committed
@@ -742,29 +745,36 @@ impl GenerationStore {
         Self::open_index(index_dir, schema, true)
     }
 
-    /// Opens an existing index for a **read**: same recovery as
-    /// [`GenerationStore::open`], but no derived **segment** file is written
-    /// under the epoch.
+    /// Opens an existing index for a **read** and publishes the snapshot of the
+    /// committed generation, without running any repair under the index directory
+    /// (`ADR-0116`, decision 1).
     ///
-    /// The only difference is the reconstruction of `codes.bin`
-    /// (`ADR-0069`, decision 1), which only a write open runs: here a missing
-    /// file stays missing, and `crate::codes::load_codes` quantizes the codes
-    /// from the reference vectors into RAM. A read therefore never writes a
-    /// segment file of the epoch it reads (`ADR-0056`; `ADR-0069`, decision 2),
-    /// which is what `crible search` and `crible inspect` require. Recovery still
-    /// removes the `tmp-*` entries and the unreferenced segments, and still
-    /// rewrites a **missing manifest**, as it does for the write open (the
-    /// manifest is a derived file of the generation, not of a segment): that
-    /// behaviour is not changed here.
+    /// No recovery runs: a `tmp-*` entry, a segment directory SQLite does not
+    /// reference and a missing manifest are left as they are, and the repair
+    /// belongs to the next **write** open ([`GenerationStore::open`]). A missing
+    /// `codes.bin` also stays missing: `crate::codes::load_codes` quantizes the
+    /// codes from the reference vectors into RAM (`ADR-0069`, decision 2).
+    ///
+    /// A read writes nothing itself; the files SQLite manages in WAL mode are its
+    /// own business (`ADR-0038`). One nuance: `RecordStore::open` opens the
+    /// database for read and write, so a `-wal` left by a crash is rolled into
+    /// `records.sqlite` at the checkpoint of the last connection close. That
+    /// behaviour predates `ADR-0116` and is tracked outside this task.
+    ///
+    /// This is what `crible search`, `crible inspect` and `crible export`
+    /// require: a read command leaves an index served by a live instance
+    /// untouched.
     pub fn open_read_only(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
         Self::open_index(index_dir, schema, false)
     }
 
     /// Shared body of [`GenerationStore::open`] and
     /// [`GenerationStore::open_read_only`]: `for_write` is the only difference
-    /// between the two. It governs every reconstruction of a derived file the
-    /// recovery runs — `codes.bin`, the `passage_change_generation` marker and
-    /// the lexical index — so it names the mode of the open, not one of them.
+    /// between the two. It governs every repair or reconstruction the recovery
+    /// runs — `recover`, `ensure_manifest`, `codes.bin`, the
+    /// `passage_change_generation` marker and the lexical index — so it names
+    /// the mode of the open, not one of them. A read open writes nothing under
+    /// the index directory (`ADR-0116`, decision 1).
     fn open_index(index_dir: &Path, schema: &Schema, for_write: bool) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
         let config = declared_config(index_dir)?;
@@ -786,8 +796,10 @@ impl GenerationStore {
             ));
         }
 
-        recover(&records, index_dir, &epoch_dir)?;
         let observed = if for_write {
+            // Every repair of INV-04 belongs to the write open (ADR-0116,
+            // decision 1): a read must leave the index directory untouched.
+            recover(&records, index_dir, &epoch_dir)?;
             rebuild_missing_codes(&records, &epoch_dir)?;
             // The marker an epoch written before P5 lacks is completed here,
             // before the recovery compares it with the lexical index: a
@@ -817,7 +829,9 @@ impl GenerationStore {
             PublishedLexical::from_observation(observed),
             Arc::clone(&lease),
         )?;
-        ensure_manifest(&epoch_dir, epoch, &snapshot)?;
+        if for_write {
+            ensure_manifest(&epoch_dir, epoch, &snapshot)?;
+        }
 
         Ok(Self {
             index_dir: index_dir.to_path_buf(),

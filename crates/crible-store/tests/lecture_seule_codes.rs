@@ -8,9 +8,9 @@
 //! states that a read no longer modifies the disk. `GenerationStore::open` is
 //! the write open: it rebuilds every missing `codes.bin`
 //! (`ADR-0069`, decision 1). `GenerationStore::open_read_only` skips that
-//! rebuild, which `crible search` and `crible inspect` use. It still rewrites a
-//! missing manifest, as recovery always did; that file belongs to the
-//! generation, not to a segment.
+//! rebuild, which `crible search`, `crible inspect` and `crible export` use. It
+//! writes neither a `codes.bin` nor a missing manifest: every repair belongs to
+//! `GenerationStore::open` (`ADR-0116`, decision 1).
 //!
 //! The test removes `codes.bin` of a committed segment, opens the index in read
 //! mode, and checks three things: the file is still absent, the snapshot serves
