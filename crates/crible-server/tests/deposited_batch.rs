@@ -24,8 +24,8 @@ use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use common::{
-    ADMIN_SECRET, DOC_ID, INDEX, Instance, WRITE_SECRET, export_index, index_config,
-    instance_with_alpha, online_batch, post_documents, send, terminal_job,
+    ADMIN_SECRET, DOC_ID, INDEX, Instance, WRITE_SECRET, assert_attach_duration_line, export_index,
+    index_config, instance_with_alpha, online_batch, post_documents, send, terminal_job,
 };
 
 /// Creates the fixture index on `router`.
@@ -104,25 +104,7 @@ async fn an_exported_batch_attaches_into_another_instance() {
         .as_str()
         .expect("the job carries its id")
         .to_owned();
-    let text = journal.contents();
-    let line = text
-        .lines()
-        .find(|line| line.contains(id.as_str()) && line.contains("attach durations"))
-        .unwrap_or_else(|| panic!("the attach job logs its durations: {text}"));
-    for field in [
-        "\"kind\":\"attach_batch\"",
-        "\"validation_ms\":",
-        "\"snapshot_ms\":",
-    ] {
-        assert!(
-            line.contains(field),
-            "the duration line carries '{field}': {line}"
-        );
-    }
-    assert!(
-        !line.contains("le contrat fait la loi") && !line.contains("1240"),
-        "the duration line carries no batch content (INV-13): {line}"
-    );
+    assert_attach_duration_line(&journal.contents(), &id, "attach_batch", INDEX);
 
     let (status, document) = send(
         &second_router,
