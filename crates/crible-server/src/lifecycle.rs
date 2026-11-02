@@ -306,6 +306,10 @@ pub async fn serve_bound(listener: TcpListener, config: Config) -> Result<StopRe
         .local_addr()
         .map_err(|error| internal(format!("cannot read the bound address: {error}")))?;
     info!(address = %address, "the server is bound");
+    // `docs/07`, section "Docker": `/data` is a named volume because a memory
+    // map through the file sharing of macOS is slow. When an operator mounts a
+    // host directory over it instead, the startup says so once.
+    crate::mounts::warn_if_host_share(&config.paths.data);
     let state = Arc::new(AppState::new());
     let shutdown = Shutdown::new();
     state.set_shutdown(shutdown.clone())?;

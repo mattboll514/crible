@@ -60,23 +60,45 @@ L'image est autosuffisante : elle ne reçoit ni données ni modèle.
 
 ## Lancer
 
-Préparer les volumes nommés, puis monter la configuration et les données :
+La configuration d'une instance est écrite par l'exploitant ; elle n'est jamais
+dans l'image. `docker/crible.example.toml` est le modèle complet : il porte
+toutes les clés exigées par `docs/07`, et ses `[paths]` désignent `/data`,
+`/models` et `/exchange`. Pour un déploiement réel, copiez-le hors du dépôt,
+remplissez `[auth.keys]` avec les empreintes de `crible key generate`
+(ADR-0100), puis montez votre copie en lecture seule. Les commandes ci-dessous
+montent le modèle tel quel : l'instance démarre sans clé, donc toutes les
+routes authentifiées répondent `401`, et `/ready` répond normalement.
+
+Préparer les volumes nommés et le dossier d'échange, puis lancer :
 
 ```
+mkdir -p exchange
 docker volume create crible-data
 docker volume create crible-models
 
 docker run -d --name crible -p 8080:8080 \
+  --stop-timeout 65 \
   -v crible-data:/data \
   -v crible-models:/models \
   -v "$PWD/exchange:/exchange" \
-  -v "$PWD/crible.toml:/etc/crible/crible.toml:ro" \
+  -v "$PWD/docker/crible.example.toml:/etc/crible/crible.toml:ro" \
   crible:dev
 ```
 
-`/data` et `/models` sont des volumes nommés : un mmap à travers le partage de
-fichiers de macOS est lent. `/exchange` est monté depuis l'hôte : les lots, les
-exports et les instantanés s'y lisent et s'y écrivent de façon séquentielle.
+| Montage | Type | Pourquoi |
+|---|---|---|
+| `/data` | volume nommé | un mmap à travers le partage de fichiers de macOS est lent |
+| `/models` | volume nommé | modèles ONNX et tokenizers, vérifiés par hash au démarrage |
+| `/exchange` | dossier monté depuis l'hôte | lots, exports et instantanés : lectures et écritures séquentielles |
+| `/etc/crible/crible.toml` | fichier monté, en lecture seule | configuration |
+
+Sous Docker Desktop, un dossier de l'hôte arrive dans la VM par le partage de
+fichiers (type `virtiofs`, `fakeowner`, `fuse.*`), alors qu'un volume nommé est
+le système de fichiers de la VM (`ext4`). Le serveur lit
+`/proc/self/mountinfo` au démarrage et écrit un avertissement quand `/data` est
+un dossier monté depuis l'hôte, car le mmap des segments y est lent ; un volume
+nommé n'en produit pas. `docker logs crible 2>&1 | grep "shared from the host"`
+le montre.
 
 Les chemins de `[paths]` de `crible.toml` désignent `/data`, `/models` et
 `/exchange`. Le serveur refuse de démarrer sur des valeurs par défaut
@@ -99,10 +121,10 @@ Un index doit pouvoir être ouvert en écriture : recopier l'index dans le volum
 docker volume create crible-test-data
 docker run --rm -u 0 -v crible-test-data:/data debian:bookworm-slim \
   mkdir -p /data/indexes
-docker create --name crible-test -p 18080:8080 \
+docker create --name crible-test -p 18080:8080 --stop-timeout 65 \
   -v crible-test-data:/data \
   -v "$PWD/data/models:/models:ro" \
-  -v "$PWD/test.toml:/etc/crible/crible.toml:ro" \
+  -v "$PWD/docker/crible.example.toml:/etc/crible/crible.toml:ro" \
   crible:dev
 docker cp data/indexes/synth-small crible-test:/data/indexes/synth-small
 docker run --rm -u 0 -v crible-test-data:/data debian:bookworm-slim \
@@ -113,14 +135,20 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/ready   # 200
 curl -sS http://127.0.0.1:18080/ready                                    # {"status":"ready"}
 ```
 
+Le volume `crible-test-data` est neuf à chaque essai sur une machine vierge ;
+`docker rm crible-test`, puis `docker volume rm crible-test-data`, le remettent
+à zéro (le volume ne se supprime pas tant qu'un conteneur l'utilise).
+
 `/health` répond `200` dès la liaison du port ; `/ready` répond `503` jusqu'à ce
 que les modèles soient chargés et que chaque index soit ouvert (ADR-0099). Le
 `HEALTHCHECK` interroge `/health`, une condition de vie et non de démarrage.
 
-Arrêter le conteneur par `SIGTERM` (`docker stop`) : le serveur retire `/ready`,
-draine les requêtes en vol et attend les jobs d'écriture au plus
+Arrêter le conteneur par `SIGTERM` (`docker stop -t 65`) : le serveur retire
+`/ready`, draine les requêtes en vol et attend les jobs d'écriture au plus
 `[limits].wait_timeout_ms` (ADR-0099, ADR-0104). Le délai d'arrêt doit rester
-au-dessus de cette valeur.
+au-dessus de cette valeur : `--stop-timeout 65` à la création du conteneur, ou
+`docker stop -t 65`. Le délai par défaut de Docker (10 s) tuerait le processus
+au milieu du drainage.
 
 ## Taille de l'image
 
