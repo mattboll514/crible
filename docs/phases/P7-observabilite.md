@@ -165,4 +165,5 @@
 
   `cargo fmt`, `clippy -D warnings` et `cargo test` verts.
 - **Invariants** : aucun (pas d'INV-18 : décision 9 d'ADR-0128).
+- **Note du 2026-11-02 (application d'ADR-0128)** : l'ADR est `Accepté` et sa décision 10 est appliquée par `@greffier`. Les documents cités sont à jour : dans `docs/07-stack-et-deploiement.md`, la politique ORT est au paragraphe du **:56** (elle était attendue près de `:54`), la note de l'environnement de développement Mac au **:61** (près de `:59`), et la section Docker va du **:116** au **:126**, avec `ENV ORT_DISABLE_TELEMETRY=1` dans la liste ; `docs/06-observabilite.md:13` porte la phrase sur l'absence de télémétrie tierce ; la fiche `CONSTRUIRE-IMAGE-DOCKER` porte le livrable et le critère `docker image inspect` ; `tools/README.md` porte la note documentaire sur la roue ORT. Le livrable 5 et le critère 6 de cette fiche restent une **vérification** : la tâche ne réécrit aucun de ces documents, seul le code change.
 - **Hors périmètre** : `clients/python/` (HTTP seulement) et tout code dans `tools/` ; la réouverture de la télémétrie ; la mesure d'un gain de latence à la sortie.

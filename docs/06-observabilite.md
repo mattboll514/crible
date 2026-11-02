@@ -10,6 +10,8 @@ L'observabilité a deux composants, avec deux politiques différentes :
 | Fichier | `data/analytics.sqlite` | `data/debug.sqlite` |
 | Accès | `admin` | `admin` |
 
+Crible n'émet **aucune télémétrie vers un tiers** (ADR-0128) : ses seules sorties sont ses analytics et son journal de debug, tous deux internes au projet, et la télémétrie embarquée par ONNX Runtime 1.31.0 est coupée partout où Crible charge ORT, production comprise. INV-13 et ADR-0014 restent la règle propre à Crible pour les analytics ; ADR-0128 traite le composant tiers, qui n'est pas couvert par cette règle.
+
 ## Analytics
 
 ### Ce qu'on agrège

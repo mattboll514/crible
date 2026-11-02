@@ -103,10 +103,12 @@
   - la bibliothèque ONNX Runtime CPU de la bonne architecture, avec `ORT_DYLIB_PATH` ;
   - un utilisateur non-root ;
   - un `HEALTHCHECK` ;
+  - `ENV ORT_DISABLE_TELEMETRY=1` dans l'image (ADR-0128), pour que la télémétrie du client 1DS d'ONNX Runtime reste coupée en conteneur ;
   - `docker/README.md`.
 - **Critères d'acceptation** :
   - `docker buildx build --platform linux/arm64,linux/amd64` réussit ;
   - l'image démarre et `/ready` répond 200 avec un modèle et un index de test montés ;
+  - `docker image inspect` montre `ORT_DISABLE_TELEMETRY=1` dans l'environnement de l'image (ADR-0128) ;
   - la taille de l'image est rapportée.
 
 ### DEFINIR-VOLUMES-ET-CONFIG

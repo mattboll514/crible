@@ -109,6 +109,18 @@ ORT_DYLIB_PATH=/chemin/absolu/libonnxruntime.dylib \
 Version mesurée le 2026-10-23 sur un Mac arm64 : ONNX Runtime **1.31.0**, celle
 de la roue Python et du champ `export` de `model.json`.
 
+**Télémétrie de la roue ONNX Runtime (ADR-0128).** La roue `onnxruntime` que
+`tools/` installe — groupe `export` comme groupe `ci` — embarque le même client
+de télémétrie Microsoft 1DS que la bibliothèque utilisée par les tests Rust : il
+crée un identifiant d'appareil et envoie des données d'usage à un service tiers
+quand l'environnement n'est pas reconnu comme une CI. Crible coupe cette
+télémétrie dans ses propres processus (variable forcée au début de `main`,
+`with_telemetry(false)` et `[env]` de `.cargo/config.toml`, ADR-0128), et
+`docs/07-stack-et-deploiement.md` porte la politique. Cette section est
+**documentaire seulement** : aucun script de `tools/` n'est modifié, et un
+script lancé seul, hors du dépôt, doit recevoir `ORT_DISABLE_TELEMETRY=1` s'il
+ne doit rien émettre (ADR-0128, décision 7).
+
 ## Générer `synth-small`
 
 Depuis `tools/` :

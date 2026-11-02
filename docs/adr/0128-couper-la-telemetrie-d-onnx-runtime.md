@@ -1,7 +1,7 @@
 # ADR-0128 — Couper la télémétrie d'ONNX Runtime dans Crible
 
-- **Statut** : Proposé
-- **Date** : 2026-11-02
+- **Statut** : Accepté
+- **Date** : 2026-11-02 (proposition et acceptation ; décision du propriétaire le 2026-11-02 : « ADR-0128 accepté, lance la tâche »)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire du 2026-11-02 (« oui vas-y pour 1 et 2 »), pour la préparation de J7 et d'après l'analyse de `@architecte` du 2026-11-02 (verdict `NON-COUVERT`, session `ses_e646075a7ffe9elNLW7GZaq5yZ`)
 - **Remplace** : —

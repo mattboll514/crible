@@ -53,10 +53,12 @@ Les versions sont à épingler dans `INITIALISER-WORKSPACE-RUST`, en prenant la 
 
 Un second groupe, `ci`, sert aux jobs `rust-onnx` et `tools` (ADR-0057). Il contient ONNX Runtime, en version exacte (`onnxruntime==1.31.0`), et **pas** `torch` : c'est le runtime d'exécution dont les tests Rust ont besoin, pas la chaîne d'export. Il peut aussi recevoir `tokenizers` si c'est la seule dépendance qui manque aux tests de `tools/bench/mes04/`. Il s'installe avec `uv sync --group ci`, et `ORT_DYLIB_PATH` désigne la bibliothèque de la roue (`onnxruntime/capi/libonnxruntime.so.1.31.0`), jamais un chemin de poste de développement. La feature `download-binaries` d'`ort` n'est pas utilisée : elle ferait entrer un binaire non contrôlé dans le build, hors du mode `load-dynamic` retenu ci-dessus. La version d'`onnxruntime` du groupe `ci` et celle du champ `export` de `model.json` doivent rester alignées.
 
+**Télémétrie d'ONNX Runtime (ADR-0128).** La bibliothèque ONNX Runtime 1.31.0 embarque le client de télémétrie Microsoft 1DS, actif par défaut : il crée un identifiant d'appareil et envoie des données d'usage vers un service tiers. Crible le coupe partout où il charge ORT, sans opt-in. Trois mécanismes, complémentaires : le binaire `crible` force `ORT_DISABLE_TELEMETRY=1` au tout début de `main`, avant `Cli::parse()` et avant tout fil ; l'`EnvironmentBuilder` de `crible-encode` reçoit `with_telemetry(false)`, seconde barrière sans garantie de sûreté ; un `.cargo/config.toml` porte une section `[env]` avec `ORT_DISABLE_TELEMETRY = { value = "1", force = true }`, qui couvre les binaires de test chargeant ORT dans leur propre processus. `crible-encode` ne pose jamais la variable : une bibliothèque appelée après le démarrage de tokio ou de rayon ferait la course avec des `getenv` concurrents. Aucune clé de configuration ni variable lue par Crible ne rouvre la télémétrie ; un nouvel ADR serait nécessaire.
+
 ## Environnement de développement (Mac)
 
 - **Rust en natif** pour le développement et les tests : `cargo build`, `cargo test`. Docker ne sert qu'à l'image de déploiement.
-- **ONNX Runtime pour `ort` en local** : la bibliothèque dynamique, installée par Homebrew ou téléchargée, est indiquée par `ORT_DYLIB_PATH`. La procédure est à documenter dans `CHARGER-MODELE`.
+- **ONNX Runtime pour `ort` en local** : la bibliothèque dynamique, installée par Homebrew ou téléchargée, est indiquée par `ORT_DYLIB_PATH`. La procédure est à documenter dans `CHARGER-MODELE`. Cette bibliothèque embarque la même télémétrie 1DS que celle du groupe `ci` : elle est coupée par les mécanismes d'ADR-0128 (variable forcée au début de `main`, `[env]` de `.cargo/config.toml` pour les binaires de test), donc un `cargo test` ou un `crible search` lancé depuis la racine du dépôt n'envoie rien à un tiers. Un binaire lancé hors du dépôt doit recevoir `ORT_DISABLE_TELEMETRY=1`.
 - **Python** : `uv sync` dans `clients/python/` et `tools/`.
 - **Données volumineuses** (jeux synthétiques, échantillons Legifacile, modèles) : dans `data/`, gitignoré.
 
@@ -117,6 +119,7 @@ Les variables `CRIBLE_*` documentées **hors configuration** sont exclues de ce 
 - étapes `cargo-chef` (cache des dépendances) puis build en release ;
 - image d'exécution `debian:bookworm-slim` avec la bibliothèque ONNX Runtime CPU de l'architecture visée ;
 - `ORT_DYLIB_PATH` positionné ;
+- `ENV ORT_DISABLE_TELEMETRY=1` dans l'image (ADR-0128) : la télémétrie du client 1DS d'ONNX Runtime reste coupée même si le binaire est lancé hors de `main` de Crible, et l'environnement du conteneur dit la politique ;
 - utilisateur non-root ;
 - port 8080 ;
 - `HEALTHCHECK` sur `/health` ;
