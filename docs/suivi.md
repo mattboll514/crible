@@ -18,11 +18,12 @@ Mis à jour par les agents à chaque changement d'état d'une tâche, et par le 
 | J6 | P6 — Serveur et API | VALIDE 2026-10-31 | [J6-rapport.md](jalons/J6-rapport.md) |
 | J7 | P7 — Observabilité | VALIDE 2026-11-02 | [J7-rapport.md](jalons/J7-rapport.md) |
 | J8 | P8 — Docker et déploiement | EN-ATTENTE | |
-| J9 | P9 — Migration Legifacile (v1) | EN-ATTENTE | |
+| J9 | P9 — Tableau de bord (ADR-0130) | EN-ATTENTE | |
+| J10 | P10 — Validation à l'échelle réelle (v1, ADR-0129) | EN-ATTENTE | |
 
 ## Cibles
 
-Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du propriétaire, qui a posé le principe : **le rappel prime, la latence est indicative**, car les mesures de Crible se font sur une machine de développement. La règle de latence de `docs/08` ne vaut que pour une mesure sur le Mac mini en conteneur ; ailleurs, l'écart à pgvector est rapporté, sans bloquer un jalon. Les propositions du §8 du rapport MES-00 sont remplacées par ce tableau.
+Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du propriétaire, qui a posé le principe : **le rappel prime, la latence est indicative**, car les mesures de Crible se font sur une machine de développement. La règle de latence de `docs/08` ne vaut que pour une mesure sur le Mac mini en conteneur, c'est-à-dire `MESURER-SUR-MAC-MINI` en P10 (ADR-0129) ; ailleurs, l'écart à pgvector est rapporté, sans bloquer un jalon. Les propositions du §8 du rapport MES-00 sont remplacées par ce tableau.
 
 | Cible | Valeur | Nature | Source |
 |---|---|---|---|
@@ -31,7 +32,7 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | Latence chaude mono-corpus `k = 10` | p95 ≤ **698 ms** (pgvector : p50 279, p95 698, p99 1 112 ms) | Contraignante seulement sur le Mac mini en conteneur (`docs/08`) ; indicative ailleurs | MES-00 §4.1 |
 | Latence froide | référence pgvector : p95 1 163 ms après 10 min d'inactivité (8 mesures, borne basse du froid réel) | Indicative, pas de cible | MES-00 §4.1 |
 | Latence de fusion | aucune référence valable (fusion du 20 biaisée à la baisse, passe `--perimeter-first` non rejouée) | Pas de cible | MES-00 §4.2 |
-| Fidélité binaire contre exact (recall@10) | ≥ 0,99 en moyenne sur toutes les requêtes, au N par défaut (5000, ADR-0078) ; atteinte sur l'échantillon : 0,9977 sans filtre, 0,9989 en filtrée (MES-01, ADR-0076) ; confirmation à 8,58 M en P9 | Contraignante | `08-invariants-et-tests.md` |
+| Fidélité binaire contre exact (recall@10) | ≥ 0,99 en moyenne sur toutes les requêtes, au N par défaut (5000, ADR-0078) ; atteinte sur l'échantillon : 0,9977 sans filtre, 0,9989 en filtrée (MES-01, ADR-0076) ; confirmation à 8,58 M en P10 (ADR-0129) | Contraignante | `08-invariants-et-tests.md` |
 
 ## Tâches
 
@@ -136,17 +137,21 @@ Fixées le 2026-10-20 d'après MES-00, par l'orchestrateur sur délégation du p
 | P8 | VERIFIER-ARRET-PROPRE | A-FAIRE | | |
 | P8 | COMPOSE-EXEMPLE | A-FAIRE | | |
 | P8 | PUBLIER-IMAGE | A-FAIRE | | |
-| P8 | MESURER-EN-CONTENEUR-MAC | A-FAIRE | | |
-| P9 | DEFINIR-INDEX-LEGIFACILE | A-FAIRE | | |
-| P9 | ADAPTER-PRODUCTEUR-LEGIFACILE | A-FAIRE | | |
-| P9 | IMPORTER-BASE-COMPLETE | A-FAIRE | | |
-| P9 | CONSTITUER-JEU-DE-REFERENCE | A-FAIRE | | |
-| P9 | COMPARER-AVEC-PGVECTOR | A-FAIRE | | |
-| P9 | BRANCHER-MCP | A-FAIRE | | |
-| P9 | MODE-OMBRE | A-FAIRE | | |
-| P9 | BRANCHER-TACHE-QUOTIDIENNE | A-FAIRE | | |
-| P9 | BASCULER-PRODUCTION | A-FAIRE | | |
-| P9 | BILAN-V1 | A-FAIRE | | |
+| P8 | MESURER-EN-CONTENEUR-MAC | A-FAIRE | | Portée ramenée le 2026-11-02 à la machine de développement, sous Docker Desktop, mesure indicative ; la latence contraignante passe à `MESURER-SUR-MAC-MINI` (P10) (ADR-0129, décision 4) |
+| P9 | MAQUETTE-TABLEAU-DE-BORD | A-FAIRE | | Ajoutée le 2026-11-02 par ADR-0130 (décision 13) ; se fait avec le propriétaire, qui valide la maquette |
+| P9 | SERVIR-UI-STATIQUE | A-FAIRE | | ADR-0130 (décision 13) |
+| P9 | ROUTE-LISTER-DOCUMENTS | A-FAIRE | | ADR-0130 (décision 13) |
+| P9 | PAGE-DONNEES | A-FAIRE | | ADR-0130 (décision 13) |
+| P9 | PAGE-RECHERCHE | A-FAIRE | | ADR-0130 (décision 13) |
+| P9 | PAGE-ANALYTICS | A-FAIRE | | ADR-0130 (décision 13) |
+| P9 | EPROUVER-UI | A-FAIRE | | ADR-0130 (décision 13) |
+| P10 | DEFINIR-INDEX-LEGIFACILE | A-FAIRE | | Ancienne tâche de P9, déplacée en P10 par ADR-0129 |
+| P10 | EXPORTER-BASE-LEGIFACILE | A-FAIRE | | Ajoutée le 2026-11-02 par ADR-0129 (décision 6) : le mode « migration » de l'ancienne `ADAPTER-PRODUCTEUR-LEGIFACILE`, script ponctuel dans `legifacile-sandbox`, fait avec le propriétaire |
+| P10 | IMPORTER-BASE-COMPLETE | A-FAIRE | | Ancienne tâche de P9 ; sur la machine de développement, contrôle d'espace disque avant la campagne (ADR-0129) |
+| P10 | CONSTITUER-JEU-DE-REFERENCE | A-FAIRE | | Ancienne tâche de P9 (ADR-0129) |
+| P10 | COMPARER-AVEC-PGVECTOR | A-FAIRE | | Ancienne tâche de P9 ; rappel et fidélité contraignants, latence indicative (ADR-0129) |
+| P10 | MESURER-SUR-MAC-MINI | A-FAIRE | | Ajoutée le 2026-11-02 par ADR-0129 (décision 6) : après l'installation de Crible sur le Mac mini par le propriétaire (instantané restauré), latence contraignante comparée à MES-00 |
+| P10 | BILAN-V1 | A-FAIRE | | Ancienne tâche de P9 : bilan de Crible (ADR-0129) |
 
 ## Contenu de NETTOYER-P2
 
@@ -549,6 +554,8 @@ ADR au statut `Proposé`, à trancher par le propriétaire. La liste à jour est
 
 ## Idées hors périmètre
 
+> Depuis ADR-0129 (2026-11-02), « P9 » et « J9 » dans les lignes antérieures à cette date désignent P10 et J10 ; les tâches `ADAPTER-PRODUCTEUR-LEGIFACILE` (mode quotidien), `BRANCHER-MCP`, `MODE-OMBRE`, `BRANCHER-TACHE-QUOTIDIENNE` et `BASCULER-PRODUCTION` sont dans `docs/passation-legifacile.md`, hors du plan de Crible.
+
 Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le note ici.
 
 | Date | Origine (tâche) | Idée |
@@ -654,7 +661,7 @@ Ce qui est utile mais hors de la fiche en cours. On ne l'implémente pas : on le
 | 2026-10-28 | RECHERCHER-BM25-DANS-LE-POOL (`@relecteur`) | Pour FUSIONNER-HYBRIDE : les critères de refus (`docs/phases/P5-lexical-et-hybride.md:73-75`) valent pour « `lexical` ou `hybride` », et seuls les cas `lexical` sont testés (`crates/crible-search/tests/lexical_refusal_without_reader.rs`) ; ajouter les cas `hybrid` (six refus `overloaded`, branche désactivée en `invalid_request`, sans dégradation silencieuse vers le dense) |
 | 2026-10-28 | RECHERCHER-BM25-DANS-LE-POOL (`@dev`) | Pour la tâche multi-index (P6) : appliquer ADR-0089 décision 4 (une cible au lexical désactivé fait refuser toute la requête `lexical`/`hybrid` en `invalid_request`, en nommant l'index) |
 | 2026-10-28 | FUSIONNER-HYBRIDE (`@dev`) | Aucun test CLI `hybrid` de bout en bout : le mode demande `--query` (texte pour la branche lexicale et pour l'encodeur), donc ONNX Runtime ; `--query` et `--vector-file` ensemble sont refusés. Un test `#[ignore]` avec le vrai modèle (comme les tests ORT existants) prouverait la chaîne complète ; MESURER-HYBRIDE l'exercera de toute façon sur l'échantillon Legifacile |
-| 2026-10-28 | MESURER-LEXICAL (`@mesureur`, MES-06 § 8.3.1) | **Décision du propriétaire du 2026-10-29 : attendre la première mesure réelle en P9 avant tout ADR** ; ligne « À relever » ajoutée à la fiche `IMPORTER-BASE-COMPLETE` (`docs/phases/P9-migration-legifacile.md`). La reconstruction lexicale extrapolée à 8,58 M passages vaut 325 s (49 à 762 s selon la composition) contre la cible de 60 s d'ADR-0047 pour le temps de démarrage (rappel d'ADR-0088 « À surveiller ») ; elle ne survient qu'à la reprise (lexical absent ou illisible), à la compaction et sur `crible rebuild-lexical`. Options : relever la cible pour ce cas de reprise, ou paralléliser l'écriture (`WRITER_THREADS` = 1 par ADR-0087) ; la mesure ne tranche pas, confirmation à la première occurrence réelle en P9 ; ADR à rédiger si le propriétaire le décide |
+| 2026-10-28 | MESURER-LEXICAL (`@mesureur`, MES-06 § 8.3.1) | **Décision du propriétaire du 2026-10-29 : attendre la première mesure réelle en P9 avant tout ADR** ; ligne « À relever » ajoutée à la fiche `IMPORTER-BASE-COMPLETE` (`docs/phases/P10-validation-a-l-echelle-reelle.md` depuis ADR-0129). La reconstruction lexicale extrapolée à 8,58 M passages vaut 325 s (49 à 762 s selon la composition) contre la cible de 60 s d'ADR-0047 pour le temps de démarrage (rappel d'ADR-0088 « À surveiller ») ; elle ne survient qu'à la reprise (lexical absent ou illisible), à la compaction et sur `crible rebuild-lexical`. Options : relever la cible pour ce cas de reprise, ou paralléliser l'écriture (`WRITER_THREADS` = 1 par ADR-0087) ; la mesure ne tranche pas, confirmation à la première occurrence réelle en P9 ; ADR à rédiger si le propriétaire le décide |
 | 2026-10-28 | MESURER-LEXICAL (`@mesureur`, MES-06 § 8.3.2) | Pire cas synthétique (`df` = 100 %, `synth-large`) : la branche lexicale coûte 2,1 s à 537 500 passages et 21,6 s à 7,74 M, 37 fois le reste du budget (581 ms), le collecteur du pool visitant tous les correspondants (pas de block-WAND). En P9, mesurer à l'échelle de Legifacile les termes les plus fréquents (`df` réel) ; si un terme courant dépasse le reste du budget, instruire le repli d'ADR-0007 (index inversé maison par segment) par un nouvel ADR |
 | 2026-10-28 | MESURER-LEXICAL (`@mesureur`, MES-06 § 8.3.3) | Le job `rebuild_lexical` ne fusionne pas les segments qu'il produit (l'`IndexWriter` est abandonné après le `commit`) : 9 segments sur `synth-large`, une dizaine attendue à 8,58 M. Vérifier en P9 l'effet sur la latence de requête avant tout ADR sur la politique de fusion |
 | 2026-10-28 | MESURER-LEXICAL (`@mesureur`, MES-06 § 8.3.4) | La fourchette de taille et de durée extrapolées (×6,9 à ×11,4 entre les bornes) vient de la composition par structure, inconnue ; obtenir la composition de production par structure avant P9 si une décision de dimensionnement doit être prise d'ici là |
@@ -1148,3 +1155,5 @@ Une ligne par événement notable : début et fin de tâche, blocage, validation
 | 2026-11-02 | Décisions du propriétaire sur les points du rapport de J7 (« ok pour garder les données, ajoute la tâche en P8. tu peux rejouer la demo si tout est correct ty peux push pour valider la CI distante et si tout est bon valide j7 ») : `data/j7-demo/`, `data/mes16-journal/` et `data/mes-lecteurs-denses/` sont gardés. `@greffier` rédige la fiche hors plan EVALUER-PAR-API en P8, après DEFINIR-VOLUMES-ET-CONFIG : mode API de `crible eval`, ADR sur le client HTTP préalable. Il ajoute aussi un renvoi daté dans la note de COMMANDE-EVAL |
 | 2026-11-02 | Rejeu de la démo corrigée de J7 par `@jalon`, sur `2a67754`, à la demande du propriétaire (« tu peux rejouer la demo »). Verdict **CONFORME** en 12 min 32 s, du préambule (état propre) à l'étape 6 : attaches en 8 min 57 s, cosinus ≥ 0,999975 ; 30 valeurs d'éval identiques aux rapports de `docs/mesures/` ; régression détectée (exit 1) ; journal de debug en `200`, avec une entrée après l'attente de 11 s ; serveur arrêté par `SIGINT`, exit 0. Un premier bloc serveur n'avait rendu que des `401`, à cause d'une erreur de script de l'agent en extrayant les clés ; il a été rejoué correctement. Section 9 ajoutée à `J7-rapport.md`. `data/j7-demo/` est gardé |
 | 2026-11-02 | Jalon J7 validé sur instruction explicite du propriétaire (« tu peux rejouer la demo si tout est correct ty peux push pour valider la CI distante et si tout est bon valide j7 »). Conditions réunies : démo corrigée rejouée `CONFORME` ; branche poussée `3ca63b7..3b1e32a`, sans force ; CI distante **verte** sur `3b1e32a` (run `41450934832` : jobs `Rust`, `Rust with ONNX Runtime`, `Tools` et `Python` verts). Rapport `docs/jalons/J7-rapport.md`. Suite : fusion de `phase/P7-observabilite` dans `main` et tag `jalon-J7` par `@git fin-phase`, puis `cargo clean` (règle de fin de phase) ; push de `main` et du tag soumis à la confirmation du propriétaire |
+| 2026-11-02 | Nettoyage des branches à la demande du propriétaire (« fais un nettoyage de branches, local et sur github ») : `@git` supprime `phase/P7-observabilite` en local et sur `origin`, et `tache/NETTOYER-P7` sur `origin`, toutes fusionnées dans `main` ; tags `jalon-J0` à `jalon-J7` intacts. Il ne reste que `main` |
+| 2026-11-02 | Replanification sur décisions du propriétaire : découpage inchangé (vecteurs de pgvector, pas de GPU) ; tout sur la machine de développement jusqu'à l'installation de Crible sur le Mac mini par le propriétaire ; Crible et Legifacile séparés (nouveau dépôt Legifacile avec Firebase Auth) ; tableau de bord ajouté. `@architecte` puis `@greffier` : ADR-0129 (replanification, résout Q-07) et ADR-0130 (tableau de bord intégré) proposés (`da72b16`, `e780a9f`), acceptés par le propriétaire (« ADR-0129 et ADR-0130 acceptés »), puis appliqués : P9 = tableau de bord (7 tâches), P10 = validation à l'échelle réelle (7 tâches, dont `EXPORTER-BASE-LEGIFACILE` et `MESURER-SUR-MAC-MINI`), J10 = v1 ; cinq tâches côté Legifacile dans `docs/passation-legifacile.md` (`57f4706` pour ADR-0129) |
