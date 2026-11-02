@@ -635,7 +635,11 @@ fn environment() -> Result<&'static ort::environment::Environment, CribleError> 
             path.display()
         ))
     })?;
-    let environment = builder.build().map_err(|error| {
+    // Second barrier of ADR-0128 (decision 3): the binary sets
+    // `ORT_DISABLE_TELEMETRY` before any thread, and that variable is the
+    // proof. This call is not one, since `ort` issues it after `CreateEnv`;
+    // it keeps a loading path that bypasses `main` from sending usage data.
+    let environment = builder.with_telemetry(false).build().map_err(|error| {
         internal(format!(
             "cannot build the ONNX Runtime environment from {}: {error}",
             path.display()

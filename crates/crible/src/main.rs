@@ -335,7 +335,38 @@ enum KeyCommand {
     Generate,
 }
 
+/// Cuts the telemetry of ONNX Runtime for the whole process.
+///
+/// ONNX Runtime 1.31.0 carries the Microsoft 1DS client: it writes a device id
+/// and a SQLite store under the home directory, sends usage data to a third
+/// party, and can block the exit of the process on a stalled upload (ADR-0128).
+/// The variable is the only switch it reads at creation, and it also stops the
+/// client for every session the process builds, `serve` included.
+///
+/// The value is forced to `1`: the caller cannot reopen the telemetry, and
+/// ADR-0128 (decision 1) makes any reopening a new decision.
+///
+/// # Safety
+///
+/// [`std::env::set_var`] is unsafe in edition 2024 because another thread could
+/// read the environment concurrently. The contract is therefore on the caller:
+/// it guarantees that no other thread reads the environment while this function
+/// writes it. `main` satisfies it trivially, since it calls the function before
+/// `Cli::parse` and before any thread is spawned. The unit test that pins the
+/// forced value satisfies it the same way: no other test of the binary reads
+/// `ORT_DISABLE_TELEMETRY`, and the journal tests pass their filter as an
+/// argument.
+fn disable_ort_telemetry() {
+    // SAFETY: the caller guarantees that no thread reads the environment; see
+    // the doc of this function. `main` has spawned none, and the test that
+    // writes the variable is the only reader of it in this binary.
+    unsafe {
+        std::env::set_var("ORT_DISABLE_TELEMETRY", "1");
+    }
+}
+
 fn main() -> ExitCode {
+    disable_ort_telemetry();
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
@@ -668,5 +699,27 @@ mod tests {
             failure.code(),
             crible_core::error::ErrorCode::InvalidRequest
         );
+    }
+
+    #[test]
+    fn the_ort_telemetry_is_disabled_and_forced() {
+        // ADR-0128, decision 2: the value is forced to `1`, so an environment
+        // that asks for the telemetry (`0`) or for another value (`anything`)
+        // is overridden. The variable set here is the one `main` sets, which is
+        // also the one the process passes to every ONNX Runtime session.
+        // SAFETY: this test writes the process environment, and no other test
+        // of this binary reads `ORT_DISABLE_TELEMETRY`; the journal tests read
+        // `RUST_LOG` only through `effective_filter`, which takes its argument.
+        for raw in ["0", "anything", ""] {
+            unsafe {
+                std::env::set_var("ORT_DISABLE_TELEMETRY", raw);
+            }
+            super::disable_ort_telemetry();
+            assert_eq!(
+                std::env::var("ORT_DISABLE_TELEMETRY").as_deref(),
+                Ok("1"),
+                "`{raw}` must be overridden by `1`"
+            );
+        }
     }
 }
