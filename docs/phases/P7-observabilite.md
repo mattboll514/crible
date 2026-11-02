@@ -122,7 +122,7 @@
 - **Critères d'acceptation** :
   - le rapport sur l'échantillon est lisible sans contexte ;
   - une régression injectée (N réduit) est bien détectée par `--baseline`.
-- **Note du 2026-11-01** (ADR-0125, décision 1) : le mode « contre une instance via l'API » (`:118`) est **reporté**. `docs/07:29-50` ne porte aucun client HTTP : ce mode demanderait une dépendance et un ADR, à proposer au propriétaire avec P8 ou P9 (instance déployée). En P7, `crible eval` fonctionne **en local seulement**, sur un dossier de données ouvert en lecture (ADR-0116), y compris à côté d'un serveur en service.
+- **Note du 2026-11-01** (ADR-0125, décision 1) : le mode « contre une instance via l'API » (`:118`) est **reporté**. `docs/07:29-50` ne porte aucun client HTTP : ce mode demanderait une dépendance et un ADR, à proposer au propriétaire avec P8 ou P9 (instance déployée). En P7, `crible eval` fonctionne **en local seulement**, sur un dossier de données ouvert en lecture (ADR-0116), y compris à côté d'un serveur en service. **Renvoi du 2026-11-02** : le mode API est placé en P8 par le propriétaire (« ajoute la tâche en P8 »), dans la fiche `EVALUER-PAR-API` (`docs/phases/P8-docker-et-deploiement.md`), après `DEFINIR-VOLUMES-ET-CONFIG`.
 - **Note du 2026-11-01** (ADR-0125, décisions 8 et 14) : la « régression injectée (N réduit) » (`:124`) vaut `--rescore-candidates 20` avec `k = 10`, et les tests d'`eval` tournent en CI sur `synth-small` avec des requêtes à `vector`. Le rapport de l'échantillon est produit **en local par `@dev`** dans `docs/mesures/`, et la démo de J7 le rejoue. Aucun nouveau test local n'est exclu de la CI (ADR-0062).
 
 ### REUTILISER-LECTEURS-DENSES

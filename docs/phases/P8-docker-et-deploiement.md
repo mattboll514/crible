@@ -122,6 +122,30 @@
   - au démarrage, un avertissement si `/data` est un dossier monté depuis l'hôte (détection du système de fichiers), car le mmap y serait lent.
 - **Critères d'acceptation** : la procédure du README fonctionne de bout en bout sur une machine vierge (vérifiée sur le Mac du propriétaire).
 
+### EVALUER-PAR-API
+- **Origine** : tâche hors plan ajoutée par le propriétaire le 2026-11-02, au rapport de J7, d'après ADR-0125, décision 1, qui reporte le mode « contre une instance via l'API » de COMMANDE-EVAL (`docs/phases/P7-observabilite.md:118`) : « ajoute la tâche en P8 ». Le propriétaire place la tâche en P8, une fois une instance en conteneur disponible.
+- **Objectif** : `crible eval` contre une instance en service, par `POST /v1/search`, avec les **mêmes** métriques que le mode local (ADR-0125) : fidélité contre `exact`, qualité contre `expected`, latence. Le format d'entrée JSONL et le schéma de rapport restent ceux du mode local, pour que les rapports restent comparables. La latence est mesurée **côté client** et doit être distinguée de celle du mode local.
+- **Dépend de** : DEFINIR-VOLUMES-ET-CONFIG.
+- **Préalable** : un ADR à proposer et à faire accepter **avant `@dev`**. Il tranche :
+  - le client HTTP : crate, ou feature de `hyper-util`, et son coût (ADR-0124, décision 13, a refusé une telle dépendance pour `crible stats`) ;
+  - TLS ou HTTP seul, selon la cible de déploiement (Q-07) ;
+  - le passage de la clé `read` sans l'écrire dans un fichier versionné ni dans un log (ADR-0032) ;
+  - les délais et les erreurs réseau.
+- **À lire** : ADR-0125 (décisions 1 et suivantes), ADR-0124 (décision 13), ADR-0116, ADR-0032, `docs/06-observabilite.md:124-144`, `docs/05-api.md` (« Recherche : requête » et champ `exact`), `docs/07:29-50`.
+- **Livrables** :
+  - le mode API de `crible eval` : chaque requête du jeu part en `POST /v1/search` sur l'instance visée, avec les mêmes modes, `k` et surcharges qu'en local, et `exact` porté par le corps de la requête (`05-api.md:269`) ;
+  - la réutilisation du format d'entrée et du schéma de rapport d'ADR-0125, sans duplication des métriques ;
+  - dans le rapport, la distinction explicite entre latence du mode API et latence du mode local, et l'URL de l'instance sans la clé ;
+  - le test de bout en bout contre un serveur lancé par le test.
+- **Critères d'acceptation** :
+  - sur le même dossier et le même jeu, les rapports du mode API et du mode local donnent les mêmes chiffres de fidélité et de qualité ;
+  - la latence du mode API est mesurée côté client et nommée comme telle dans le rapport, sans être confondue avec celle du mode local ;
+  - aucun texte de requête et aucune clé n'apparaissent dans les logs ni dans le rapport (INV-13) ;
+  - une erreur réseau ou un dépassement du délai rend une erreur nommée et un code de sortie non nul, sans panique ;
+  - le test tourne contre un serveur lancé par le test.
+- **Invariants** : INV-13.
+- **Hors périmètre** : un mode API pour `crible stats` (ADR-0124, décision 13) ; recopier les métriques en Python dans le client, ce qui rendrait les rapports non comparables (ADR-0125) ; modifier le mode local ; une interface web ; un démon ou une reprise automatique des requêtes.
+
 ### VERIFIER-ARRET-PROPRE
 - **Objectif** : aucune perte lors d'un `docker stop`.
 - **Dépend de** : CONSTRUIRE-IMAGE-DOCKER, AGREGER-ANALYTICS
