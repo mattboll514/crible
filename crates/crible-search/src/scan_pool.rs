@@ -11,8 +11,10 @@
 //! tokio worker would therefore run the scan on the async runtime's threads,
 //! and a CPU-bound scan would starve the reactor the way
 //! `docs/02-architecture.md` forbids. [`ScanPool`] is that dedicated pool: the
-//! caller builds one for the process and runs every scan and every searcher
-//! opening inside [`ScanPool::install`].
+//! caller builds one for the process and runs every scan inside
+//! [`ScanPool::install`]. A searcher opening does no `rayon` work, so
+//! [`DenseSearcher::open_in`](crate::dense::exact::DenseSearcher::open_in) does
+//! not enter the pool: it takes the worker count as an explicit argument.
 //!
 //! The type is deliberately thin: it owns the `rayon::ThreadPool` and offers
 //! only its installation. The CLI of P1 builds one per command; the server of

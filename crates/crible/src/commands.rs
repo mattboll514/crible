@@ -1281,7 +1281,7 @@ fn render_stats(stats: &Stats) -> String {
     }
     // The percentiles live in the `latency (ms)` table below, per stage and for
     // the total: repeating the three of `total` here said nothing more and made
-    // the row wider than its five columns of state (@relecteur, NETTOYER-P7).
+    // the row wider than its four columns of state (@relecteur, NETTOYER-P7).
     out.push_str(&table(&["start", "count", "errors", "zero_results"], &rows));
 
     out.push_str("\nlatency (ms)\n");

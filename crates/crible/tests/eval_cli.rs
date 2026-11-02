@@ -1228,12 +1228,13 @@ fn the_help_states_when_models_is_needed() {
         .expect("crible eval --help must run");
     assert!(output.status.success(), "the help of eval must succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // The help wraps its text at the terminal width, so the assertion runs on
+    // the words: a fragment copied from the `--models` paragraph proves that
+    // the sentence is the one of ADR-0125, decision 2, not the vocabulary of
+    // `--modes` (`dense`, `lexical`, `hybrid`), which the help already held.
+    let help = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        stdout.contains("dense") && stdout.contains("hybrid"),
-        "the help names the modes that encode, got {stdout}"
-    );
-    assert!(
-        stdout.contains("lexical"),
-        "the help says a lexical run needs no encoder, got {stdout}"
+        help.contains("never for a `lexical` one"),
+        "the `--models` help says a lexical run needs no encoder, got {stdout}"
     );
 }

@@ -204,6 +204,11 @@ impl DenseSearcher {
     /// the ambient rayon pool. The scan of every later query runs on the same
     /// pool, so no window waits on the `Condvar` of the pool for a connection.
     ///
+    /// The fill itself runs no `rayon` code — neither `crible-store`'s
+    /// `readers.rs` nor its `segment.rs` has a `par_iter` — so the call stays
+    /// outside [`ScanPool::install`](crate::scan_pool::ScanPool::install) and
+    /// owes it no `Send` bound.
+    ///
     /// # Errors
     ///
     /// The errors of [`DenseSearcher::open`].
@@ -213,15 +218,9 @@ impl DenseSearcher {
         segments: &[SegmentMeta],
         records_path: &Path,
     ) -> Result<Self, CribleError> {
-        scan.install(|| {
-            let filled = DenseReaders::empty().filled(
-                segments_dir,
-                segments,
-                records_path,
-                scan.threads(),
-            )?;
-            Self::compose(filled.readers(), filled.records()?)
-        })
+        let filled =
+            DenseReaders::empty().filled(segments_dir, segments, records_path, scan.threads())?;
+        Self::compose(filled.readers(), filled.records()?)
     }
 
     /// Composes a searcher from readers and a payload pool already open.
