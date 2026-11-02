@@ -119,6 +119,7 @@ use crate::filters_index::{CommitDelta, CreatedPassage, FilterIndex, FilterMemor
 use crate::lexical::{self, LexicalIndex, LexicalObservation, LexicalStatus};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
 use crate::segment::{self, SegmentMeta, io_error, sync_directory, write_file_synced};
+use crate::writer_lock::WriterLock;
 
 /// Version of the derived manifest format (INV-15).
 pub const MANIFEST_FORMAT_VERSION: u32 = 1;
@@ -601,6 +602,14 @@ pub struct GenerationStore {
     /// lock (`ADR-0069`, `ADR-0087`). The flag is what lets
     /// [`rebuild_lexical`] refuse a store a read command opened.
     writable: bool,
+    /// Writer lock of the index, held when the store was opened for writing
+    /// (ADR-0116, decision 2).
+    ///
+    /// The lock lives as long as the store, so a write command of the CLI holds
+    /// it for its whole duration, and the server holds it while it serves the
+    /// index. The server's `delete_index` job releases it before the directory is
+    /// renamed and removed. A read-only open takes none.
+    writer_lock: Option<WriterLock>,
     lease: Arc<EpochLease>,
     retained: Mutex<Vec<Weak<EpochLease>>>,
 }
@@ -658,6 +667,13 @@ impl GenerationStore {
         }
         let config = declared_config(index_dir)?;
         check_declared_schema(&config, schema, index_dir)?;
+        fs::create_dir_all(index_dir)
+            .map_err(|error| io_error("create the index directory", index_dir, &error))?;
+        // The creator writes the index, so it takes the writer lock before it
+        // creates the epoch: a server that already serves a directory this
+        // creation would fill refuses it, and the creation refuses a served one
+        // (ADR-0116, decision 2).
+        let writer_lock = Some(WriterLock::acquire(index_dir, &config.name)?);
 
         let epoch_dir = epoch_directory(index_dir, epoch);
         let segments = segments_directory(&epoch_dir);
@@ -712,6 +728,7 @@ impl GenerationStore {
             snapshot: ArcSwap::from(Arc::new(snapshot)),
             lexical: config.lexical,
             writable: true,
+            writer_lock,
             lease,
             retained: Mutex::new(Vec::new()),
         })
@@ -742,7 +759,7 @@ impl GenerationStore {
     /// and is refused with [`ErrorCode::InvalidRequest`], before anything is
     /// removed from it.
     pub fn open(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
-        Self::open_index(index_dir, schema, true)
+        Self::open_index(index_dir, schema, true, None)
     }
 
     /// Opens an existing index for a **read** and publishes the snapshot of the
@@ -765,20 +782,55 @@ impl GenerationStore {
     /// require: a read command leaves an index served by a live instance
     /// untouched.
     pub fn open_read_only(index_dir: &Path, schema: &Schema) -> Result<Self, CribleError> {
-        Self::open_index(index_dir, schema, false)
+        Self::open_index(index_dir, schema, false, None)
+    }
+
+    /// Opens an existing index for writing whose writer lock the caller already
+    /// holds.
+    ///
+    /// `crate::snapshot::restore` takes the lock before its first write and must
+    /// keep it across the recovery that follows: a store that took it a second
+    /// time would be refused by its own process, because `flock` is held per open
+    /// file description (ADR-0116, decision 2). The lock changes hands instead, and
+    /// lives as long as the returned store.
+    pub(crate) fn open_holding_writer_lock(
+        index_dir: &Path,
+        schema: &Schema,
+        writer_lock: WriterLock,
+    ) -> Result<Self, CribleError> {
+        Self::open_index(index_dir, schema, true, Some(writer_lock))
     }
 
     /// Shared body of [`GenerationStore::open`] and
     /// [`GenerationStore::open_read_only`]: `for_write` is the only difference
-    /// between the two. It governs every repair or reconstruction the recovery
+    /// between the two, `held` a writer lock the caller already took. It governs every repair or reconstruction the recovery
     /// runs — `recover`, `ensure_manifest`, `codes.bin`, the
     /// `passage_change_generation` marker and the lexical index — so it names
     /// the mode of the open, not one of them. A read open writes nothing under
     /// the index directory (`ADR-0116`, decision 1).
-    fn open_index(index_dir: &Path, schema: &Schema, for_write: bool) -> Result<Self, CribleError> {
+    fn open_index(
+        index_dir: &Path,
+        schema: &Schema,
+        for_write: bool,
+        held: Option<WriterLock>,
+    ) -> Result<Self, CribleError> {
         let epoch = read_current_epoch(index_dir)?;
         let config = declared_config(index_dir)?;
         check_declared_schema(&config, schema, index_dir)?;
+        // The writer lock comes before the recovery: a write opening repairs the
+        // index, so it must own it first, and a refusal leaves the index
+        // untouched (ADR-0116, decision 2). A read-only open takes none: the
+        // commands that read pass beside a served index (docs/02, "Concurrence").
+        // A write open whose caller already took the lock adopts it instead of
+        // taking it again (`snapshot::restore`).
+        let writer_lock = if for_write {
+            Some(match held {
+                Some(held) => held,
+                None => WriterLock::acquire(index_dir, &config.name)?,
+            })
+        } else {
+            None
+        };
         let epoch_dir = epoch_directory(index_dir, epoch);
         let mut records = RecordStore::open(&epoch_dir.join(RECORDS_FILE_NAME))?;
 
@@ -839,6 +891,7 @@ impl GenerationStore {
             snapshot: ArcSwap::from(Arc::new(snapshot)),
             lexical: config.lexical,
             writable: for_write,
+            writer_lock,
             lease,
             retained: Mutex::new(Vec::new()),
         })
@@ -854,6 +907,22 @@ impl GenerationStore {
     #[must_use]
     pub fn generation(&self) -> Generation {
         self.snapshot.load().generation()
+    }
+
+    /// Releases the writer lock of the index, when this store holds one.
+    ///
+    /// The `delete_index` job calls it before it renames the index directory and
+    /// removes it (ADR-0116, decision 2): the directory leaves the tree while a
+    /// descriptor of this process is still open on its `WRITER_LOCK`, and
+    /// dropping the handle first is what keeps the rename and the removal
+    /// independent of the platform's rules on an open file. A store opened for
+    /// reading holds no lock, so the call does nothing there.
+    ///
+    /// The lock file itself stays on disk: it belongs to the directory the job is
+    /// about to remove. Nothing else is released, and the store keeps writing to
+    /// the epoch it had already published, which the job does not use.
+    pub fn release_writer_lock(&mut self) {
+        self.writer_lock = None;
     }
 
     /// Takes the snapshot of the published generation.

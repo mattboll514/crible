@@ -13,13 +13,14 @@
 //! | Test | Criterion of the fiche |
 //! |---|---|
 //! | `an_index_created_by_the_route_is_served_without_a_restart` | creation, `201` with the detail body, the index is served |
+//! | `an_index_created_by_the_route_holds_its_writer_lock` | a created index holds its `WRITER_LOCK` (ADR-0116, decision 2) |
 //! | `a_creation_with_a_taken_name_is_refused_with_400` | name already taken, in the registry then on disk |
 //! | `a_creation_with_an_absent_model_leaves_no_directory` | the model is read before any write |
 //! | `the_list_is_sorted_by_name_and_the_detail_exposes_no_internal_id` | envelope, order, `segments` is a count (INV-01) |
 //! | `a_lexical_language_patch_queues_a_rebuild_lexical_job` | the `kind` of the `PATCH` |
 //! | `a_search_patch_is_applied_at_the_end_of_its_job` | `search.*` takes effect after the job |
 //! | `two_patches_queued_before_the_first_job_ran_compose` | the patches run in the order of their arrival |
-//! | `a_failed_quarantine_leaves_the_index_registered_and_served` | a failed delete leaves the index intact |
+//! | `a_failed_quarantine_leaves_the_index_registered_and_served` | a failed delete leaves the index intact, registered, served and locked |
 //! | `a_delete_without_or_with_a_wrong_confirm_is_refused` | `DELETE` requires `confirm` |
 //! | `a_detail_read_between_the_rename_and_the_deregistration_is_a_404` | a read that interleaves a delete answers `404`, never `500` |
 //! | `a_delete_removes_the_index_and_keeps_its_job_history` | delete protocol, `404`, folder gone, history kept |
@@ -39,11 +40,13 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, Method, StatusCode};
+use crible_core::error::{CribleError, ErrorCode};
 use crible_server::config::Config;
 use crible_server::http::build_router;
 use crible_server::jobs::JobOutcome;
 use crible_server::state::AppState;
 use crible_server::{Auth, Shutdown};
+use crible_store::generation::GenerationStore;
 use crible_store::jobs::JobKind;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -274,6 +277,32 @@ async fn instance_with_alpha() -> (Instance, Router) {
     (instance, router)
 }
 
+/// Opens the index `alpha` for writing from this process, as a CLI write command
+/// does, and returns the refusal.
+///
+/// The schema is read from the `index.json` of the index, like
+/// `GenerationStore::open` compares it with the declared one. A second open of the
+/// same directory in one process is a second open file description, so the kernel
+/// refuses it while the served store holds its `WRITER_LOCK` (ADR-0116,
+/// decision 2).
+fn refused_write_open(instance: &Instance) -> CribleError {
+    let directory = instance.data().join("indexes").join(INDEX);
+    let path = directory.join("index.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+    let config = crible_core::config::IndexConfig::from_json_str(&raw).unwrap_or_else(|failure| {
+        panic!(
+            "{} must be a valid configuration: {}",
+            path.display(),
+            failure.message()
+        )
+    });
+    match GenerationStore::open(&directory, &config.schema) {
+        Ok(_) => panic!("the writer lock of a served index must refuse this open"),
+        Err(refusal) => refusal,
+    }
+}
+
 #[tokio::test]
 async fn an_index_created_by_the_route_is_served_without_a_restart() {
     // ADR-0105, decisions 1 and 2: the index is created at runtime, served by
@@ -315,6 +344,40 @@ async fn an_index_created_by_the_route_is_served_without_a_restart() {
         send(&router, Method::GET, "/v1/indexes/alpha", READ_SECRET, None).await;
     assert_eq!(status, StatusCode::OK, "the detail serves the new index");
     assert_eq!(detail["name"], INDEX);
+}
+
+#[tokio::test]
+async fn an_index_created_by_the_route_holds_its_writer_lock() {
+    // ADR-0116, decision 2: an index created by the API is served by the process
+    // that created it, so it holds its `WRITER_LOCK` from its creation. Without
+    // it, a CLI write command would open the new index, run its recovery and
+    // commit beside the server that serves it.
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+    assert!(
+        instance
+            .data()
+            .join("indexes")
+            .join(INDEX)
+            .join("WRITER_LOCK")
+            .is_file(),
+        "the created index carries its lock file (ADR-0116, decision 2)"
+    );
+
+    let refusal = refused_write_open(&instance);
+    assert_eq!(
+        refusal.code(),
+        ErrorCode::Overloaded,
+        "a write open of an index created by the route is refused: {}",
+        refusal.message()
+    );
+    assert!(
+        refusal.message().contains(INDEX),
+        "the refusal names the index: {}",
+        refusal.message()
+    );
 }
 
 #[tokio::test]
@@ -801,6 +864,16 @@ async fn a_failed_quarantine_leaves_the_index_registered_and_served() {
     assert!(
         instance.data().join("indexes").join(INDEX).is_dir(),
         "the directory stays in place"
+    );
+    // ADR-0116, decision 2: the index stays served **with** its writer lock. A
+    // release before the rename would let a CLI write command slip in on the
+    // failure path and run its recovery on a served index.
+    let refusal = refused_write_open(&instance);
+    assert_eq!(
+        refusal.code(),
+        ErrorCode::Overloaded,
+        "the failed delete keeps the writer lock: {}",
+        refusal.message()
     );
     let (status, _headers, answer) = send(
         &router,
