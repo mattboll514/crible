@@ -237,3 +237,7 @@ La tâche hors plan **`PLAFONNER-JOURNAL-DE-DEBUG`** est retenue, en P8, **avant
 | `docs/adr/README.md` | ligne d'index de cet ADR |
 
 Sont **non modifiés** : `docs/01` à `docs/04`, `docs/08`, le corps d'ADR-0121 et d'ADR-0122, et `docs/suivi.md` (tenu par l'orchestrateur). Le code n'est pas touché par cet ADR : il est livré par `PLAFONNER-JOURNAL-DE-DEBUG`, ouverte en P8.
+
+## Note d'application du 2026-11-02
+
+Aucune décision de cet ADR ne change. Sur décision du propriétaire du 2026-11-02, l'**exemple JSON** de `GET /v1/debug/queries` dans `docs/05-api.md` ne porte pas encore `capped`, `rows`, `bytes` ni `trimmed` : ces membres entrent dans l'exemple avec leur implémentation, par `PLAFONNER-JOURNAL-DE-DEBUG` (P8). La raison est le test `json_examples_conform_to_the_specification` du crate `crible-server`, qui compare chaque exemple de `docs/05` à la spécification OpenAPI produite par le code : un exemple en avance sur le composant `DebugQueryList` fait échouer le test. La prose de `docs/05` (description des membres, objet fermé) reste en place, la ligne du tableau ci-dessus vaut pour la fin de la tâche, et une note datée dans `docs/05` et dans la fiche de la tâche rappelle la remise en place.

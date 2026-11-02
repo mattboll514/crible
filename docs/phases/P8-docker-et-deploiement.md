@@ -56,7 +56,7 @@
   - `max_bytes` mesuré sur la taille **utilisée**, `(page_count - freelist_count) × page_size` ; `file_bytes` pour l'opérateur, absent de la route (ADR-0127, décision 2) ;
   - `auto_vacuum = INCREMENTAL` à la création du fichier, puis `incremental_vacuum` borné à 256 pages par vidage, hors de la transaction ; aucun `VACUUM` complet ; procédure de `VACUUM` hors ligne, journal désactivé, documentée dans `docs/06` (ADR-0127, décision 5) ;
   - `warn` de plafond au plus une fois par intervalle de purge, avec `rows`, `bytes`, `file_bytes` et `trimmed` seulement (ADR-0122, décision 10) ;
-  - les membres `capped`, `rows`, `bytes` et `trimmed` de `GET /v1/debug/queries`, dans la réponse, le composant `DebugQueryList` et l'exemple de `docs/05` (ADR-0127, décision 6) ;
+  - les membres `capped`, `rows`, `bytes` et `trimmed` de `GET /v1/debug/queries`, dans la réponse, le composant `DebugQueryList` et l'exemple de `docs/05` ; l'exemple avait été vidé de ces membres le 2026-11-02 pour laisser le test des exemples vert, et la tâche les y remet avec l'implémentation (ADR-0127, décision 6) ;
   - rétention effective = **minimum** de `ttl_days` et de ce que les plafonds laissent tenir, la purge de durée précédant le trim (ADR-0127, décision 7).
 - **Critères d'acceptation** :
   - `max_rows` atteint : les lignes les plus anciennes sont supprimées et les plus récentes gardées ; même contrôle sur `max_bytes`, y compris une ligne plus grosse que `max_bytes`, supprimée par le trim ;
@@ -65,6 +65,7 @@
   - le contrôle à l'ouverture ramène sous les bornes un fichier laissé au-dessus (arrêt brutal, baisse de configuration, fichier d'un binaire sans plafond) ;
   - sur un fichier neuf, `PRAGMA auto_vacuum` vaut `2` et `incremental_vacuum` fait baisser `freelist_count` sans changer le nombre de lignes ; le budget de 256 pages par vidage est respecté ;
   - `capped`, `rows`, `bytes` et `trimmed` sont justes, le schéma `DebugQueryList` reste fermé et le test des routes d'ADR-0111 passe ;
+  - l'exemple JSON de `GET /v1/debug/queries` dans `docs/05-api.md` porte de nouveau `capped`, `rows`, `bytes` et `trimmed`, et le test `json_examples_conform_to_the_specification` du crate `crible-server` passe ;
   - `format_version` reste `1`, et un fichier écrit par la version bornée est relu par la version précédente, et inversement (INV-15) ;
   - le `warn` de plafond ne porte aucun texte de requête, aucun filtre et aucune clé ;
   - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` passent.
