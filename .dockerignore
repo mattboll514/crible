@@ -1,0 +1,41 @@
+# Build context of the Crible image (docs/07, section "Docker").
+#
+# The context must never carry a secret. `.env.prod` holds the production
+# accesses (ADR-0032) and it is not versioned: it must not travel to the
+# builder either. Every `.env*` file is excluded, the example included, so a
+# new file of that family can never leak by omission.
+.env*
+
+# Data, models and exchanges live in `data/`, `models/` and `exchange/` and are
+# never part of the image (AGENTS.md, rule 14). The image mounts them.
+data/
+models/
+exchange/
+target/
+.pytest_cache/
+*.onnx
+*.parquet
+*.f16
+*.f32
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# The image needs the workspace manifests, `crates/`, `rust-toolchain.toml` and
+# `docker/` only.
+.git/
+.gitignore
+.claude/
+.opencode/
+.github/
+ci/
+clients/
+tools/
+docs/
+.claude/runs/
+.DS_Store
+CLAUDE.md
+AGENTS.md
+README.md
+Makefile
+opencode.json
