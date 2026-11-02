@@ -31,6 +31,19 @@
 //! child complete the operation and exit with code 41, so the test fails with
 //! the name of the point and of the step to implement. No test sleeps.
 //!
+//! # Why the tests of this binary are serialised
+//!
+//! A `fork` duplicates every open file description of the process, and the
+//! writer lock is an `flock` held by such a description (ADR-0116, decision 2):
+//! while a child is forked and has not exec'd yet, it holds every `WRITER_LOCK`
+//! the process has open, so a reopen in another test thread is refused with
+//! `overloaded` for a writer that does not exist. `lsof` shows no holder, which
+//! is what makes the flake look like a lock that outlives its store. The
+//! `O_CLOEXEC` flag does not help: it closes the descriptor at `exec`, not
+//! between `fork` and `exec`. Every test of this file therefore holds
+//! [`common::SerialGuard`] for its whole body, so no fork runs while another
+//! test holds a writer lock, and no test waits or retries.
+//!
 //! # Injection points
 //!
 //! | Protocol | Step | `CRIBLE_FAILPOINT` | Position |
@@ -826,31 +839,49 @@ fn assert_attach_crash(step: &str, expected: &ExpectedState) {
 
 #[test]
 fn inv_04_crash_after_attach_validation_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("attach_validated", &attach_old_state());
 }
 
 #[test]
 fn inv_04_crash_after_attach_segment_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("after_attach_segment", &attach_old_state());
 }
 
 #[test]
 fn inv_04_crash_before_sqlite_commit_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("before_sqlite_commit", &attach_old_state());
 }
 
 #[test]
 fn inv_04_crash_after_sqlite_commit_keeps_new_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("after_sqlite_commit", &attach_new_state());
 }
 
 #[test]
 fn inv_04_crash_after_manifest_keeps_new_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("after_manifest", &attach_new_state());
 }
 
 #[test]
 fn inv_04_crash_after_publish_keeps_new_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_attach_crash("after_publish", &attach_new_state());
 }
 
@@ -908,6 +939,9 @@ fn deletion_fixture() -> (tempfile::TempDir, PathBuf) {
 /// the dense branch already sees (INV-04, "Gt < G" of "Reprise au démarrage").
 #[test]
 fn inv_04_crash_before_lexical_commit_recovers_the_lexical_to_the_committed_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index, batch) = lexical_attach_fixture();
     let outcome = spawn_child("after_sqlite_commit", ATTACH_SCENARIO, &index, Some(&batch));
     assert_child_was_killed("after_sqlite_commit", &outcome);
@@ -936,6 +970,9 @@ fn inv_04_crash_before_lexical_commit_recovers_the_lexical_to_the_committed_gene
 /// keep the generation whole (INV-04: the state is the committed generation).
 #[test]
 fn inv_04_crash_after_lexical_commit_keeps_the_committed_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index, batch) = lexical_attach_fixture();
     let outcome = spawn_child(
         "after_lexical_commit",
@@ -966,6 +1003,9 @@ fn inv_04_crash_after_lexical_commit_keeps_the_committed_generation() {
 /// re-indexes the passages created after `Gt` and removes those dead after it).
 #[test]
 fn inv_04_crash_after_deletion_commit_recovers_the_lexical_to_the_committed_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     let (_temp, index) = deletion_fixture();
     let outcome = spawn_child("after_sqlite_commit", DELETION_SCENARIO, &index, None);
     assert_child_was_killed("after_sqlite_commit", &outcome);
@@ -995,6 +1035,9 @@ fn inv_04_crash_after_deletion_commit_recovers_the_lexical_to_the_committed_gene
 /// rows) is (0, 0) at G and (2, 2) at G+1; anything else is half a generation.
 #[test]
 fn inv_03_a_crashed_attach_never_exposes_half_a_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     for (step, committed) in ATTACH_POINTS {
         let (_temp, index, _batch) = crash_attach_at(step);
         let expected = if committed {
@@ -1056,30 +1099,48 @@ fn assert_compaction_crash(step: &str, expected: &ExpectedState, replay: bool) {
 
 #[test]
 fn inv_04_crash_after_compaction_writer_suspended_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("compaction_writer_suspended", &compaction_old_state(), true);
 }
 
 #[test]
 fn inv_04_crash_after_compaction_passages_read_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("compaction_passages_read", &compaction_old_state(), true);
 }
 
 #[test]
 fn inv_04_crash_after_compaction_epoch_written_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("compaction_epoch_written", &compaction_old_state(), true);
 }
 
 #[test]
 fn inv_04_crash_before_epoch_switch_keeps_old_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("before_epoch_switch", &compaction_old_state(), true);
 }
 
 #[test]
 fn inv_04_crash_after_epoch_switch_keeps_new_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("after_epoch_switch", &compaction_new_state(), false);
 }
 
 #[test]
 fn inv_04_crash_after_compaction_publish_keeps_new_generation() {
+    // Serialised: a forked child would inherit another test's writer lock
+    // until it execs (see "Why the tests of this binary are serialised").
+    let _serial = common::SerialGuard::acquire();
     assert_compaction_crash("after_compaction_publish", &compaction_new_state(), false);
 }
