@@ -947,6 +947,7 @@ dependencies = [
  "crible-store",
  "getrandom 0.4.3",
  "jsonschema",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

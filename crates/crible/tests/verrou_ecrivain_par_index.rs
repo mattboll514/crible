@@ -626,6 +626,8 @@ retention_days = 90
 enabled = false
 sample_rate = 0.0
 ttl_days = 7
+max_rows = 500000
+max_bytes = 2147483648
 
 [encoder]
 query_precision = "fp32"

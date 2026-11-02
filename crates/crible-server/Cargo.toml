@@ -41,6 +41,10 @@ tower = { workspace = true, features = ["util"] }
 # feature is a test need, so the server build keeps the list of ADR-0096.
 tokio = { workspace = true, features = ["io-util"] }
 tempfile.workspace = true
+# The tests of the debug journal read the pragmas of `debug.sqlite` on a second
+# connection, so the four counters of the cap are compared to an independent
+# measurement of the file (ADR-0127, decision 6). Test build only.
+rusqlite.workspace = true
 
 # The tests validate the examples of `docs/05-api.md` against the generated
 # specification, with every default feature off so no test resolves a remote

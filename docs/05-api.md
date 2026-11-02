@@ -466,6 +466,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 <!-- openapi: DebugQueryList -->
 ```json
 { "enabled": true, "dropped": 0,
+  "capped": false, "rows": 1, "bytes": 65536, "trimmed": 0,
   "queries": [
     { "id": 42, "created_at": "2026-10-31T10:00:00.123Z", "request_id": "…",
       "index": "decisions", "client": "legifacile-mcp", "mode": "hybrid",
@@ -475,7 +476,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
                    "generation": 1287 } } ] }
 ```
 
-- Note du 2026-11-02 : l'exemple ci-dessus ne porte pas encore `capped`, `rows`, `bytes` et `trimmed`. Ces membres apparaîtront dans l'exemple avec `PLAFONNER-JOURNAL-DE-DEBUG` (P8, ADR-0127), en même temps que leur implémentation et le composant `DebugQueryList` qui les déclare.
+- Note du 2026-11-02 : les quatre membres `capped`, `rows`, `bytes` et `trimmed`, annoncés dans la prose ci-dessous, ont été rétablis dans cet exemple par `PLAFONNER-JOURNAL-DE-DEBUG` (P8, ADR-0127), en même temps que leur implémentation et le composant `DebugQueryList` qui les déclare.
 - L'ordre est `created_at DESC, id DESC`, un ordre total : deux lignes du même vidage partagent `created_at`, et `id` les départage. Le client reprend le dernier `id` reçu pour la page suivante ; il n'y a pas d'`OFFSET` (ADR-0122, décision 9).
 - `payload` est rendu comme un **objet JSON**, jamais comme une chaîne ; sa forme est celle d'ADR-0121, décision 4. Un `payload` illisible rend `internal`.
 - En multi-index, `index` vaut `null` et `payload.targets[]` porte les cibles, avec leur filtre, leur génération et leur capture (ADR-0122, décision 4).

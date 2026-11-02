@@ -77,6 +77,13 @@ pub struct Journal {
     /// `debug_journal.ttl_days`; `0` is refused at the startup (ADR-0122,
     /// decision 8).
     pub ttl_days: usize,
+    /// `debug_journal.max_rows`; `0` is refused at the startup, and a flush
+    /// above it trims the oldest rows (ADR-0127, decisions 1 and 3).
+    pub max_rows: usize,
+    /// `debug_journal.max_bytes`, compared to the **used** size of
+    /// `debug.sqlite`, `(page_count - freelist_count) × page_size`
+    /// (ADR-0127, decision 2).
+    pub max_bytes: usize,
 }
 
 impl Default for Journal {
@@ -85,6 +92,8 @@ impl Default for Journal {
             enabled: false,
             sample_rate: 0.0,
             ttl_days: 7,
+            max_rows: 500_000,
+            max_bytes: 2_147_483_648,
         }
     }
 }
@@ -96,6 +105,20 @@ impl Journal {
         Self {
             enabled: true,
             sample_rate,
+            ..Self::default()
+        }
+    }
+
+    /// The journal enabled, with `sample_rate` and `max_rows` rows kept.
+    ///
+    /// `max_bytes` keeps its documented default, which is inert on a fixture of
+    /// a few small rows (ADR-0127, decision 1).
+    #[must_use]
+    pub fn with_max_rows(sample_rate: f64, max_rows: usize) -> Self {
+        Self {
+            enabled: true,
+            sample_rate,
+            max_rows,
             ..Self::default()
         }
     }
@@ -260,6 +283,8 @@ retention_days = 90
 enabled = {enabled}
 sample_rate = {sample_rate:?}
 ttl_days = {ttl_days}
+max_rows = {max_rows}
+max_bytes = {max_bytes}
 
 [encoder]
 query_precision = "fp32"
@@ -279,6 +304,8 @@ query_cache_entries = 1024
         enabled = journal.enabled,
         sample_rate = journal.sample_rate,
         ttl_days = journal.ttl_days,
+        max_rows = journal.max_rows,
+        max_bytes = journal.max_bytes,
     )
 }
 
