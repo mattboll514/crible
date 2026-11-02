@@ -1849,6 +1849,40 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
+/// Encodes bytes in the standard base64 alphabet of `docs/05-api.md`.
+///
+/// The inverse of [`decode_base64`], written by hand for the same reason: the
+/// crate list of `docs/07-stack-et-deploiement.md` holds no base64 encoder.
+/// `crible eval` encodes the `vector` of a query of its game with it, so the
+/// server decodes exactly the bytes this process wrote (ADR-0131, decision 8).
+#[must_use]
+pub fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let first = group[0];
+        let second = group.get(1).copied().unwrap_or(0);
+        let third = group.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        encoded.push(char::from(
+            ALPHABET[usize::from((first & 0x03) << 4 | second >> 4)],
+        ));
+        if group.len() > 1 {
+            encoded.push(char::from(
+                ALPHABET[usize::from((second & 0x0f) << 2 | third >> 6)],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if group.len() > 2 {
+            encoded.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
 /// Value of one base64 character, or the fault that names its position.
 fn sextet(byte: u8) -> Result<u8, String> {
     match byte {
@@ -1993,6 +2027,33 @@ mod tests {
             assert!(
                 decode_base64(text).is_err(),
                 "'{text}' must be refused as base64"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_encodes_the_standard_alphabet() {
+        // The canonical vectors of RFC 4648, section 10, then every length and
+        // every byte value: `decode_base64` reads back exactly what
+        // `encode_base64` wrote, padding and canonical bits included.
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+        assert_eq!(encode_base64(b"foob"), "Zm9vYg==");
+        assert_eq!(encode_base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(encode_base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(encode_base64(&[0, 1, 2, 3, 4]), "AAECAwQ=");
+        for length in 0..=32_usize {
+            let bytes: Vec<u8> = (0..length)
+                .map(|index| u8::try_from(index * 37 % 256).unwrap_or_default())
+                .collect();
+            let encoded = encode_base64(&bytes);
+            assert_eq!(encoded.len() % 4, 0, "'{encoded}' is a multiple of four");
+            assert_eq!(
+                decode_base64(&encoded),
+                Ok(bytes),
+                "'{encoded}' must read back what it encoded"
             );
         }
     }
