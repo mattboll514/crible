@@ -106,7 +106,7 @@
   - MES-14 est rejouée avec les mêmes fixtures (`fixture-1m`, `fixture-8m58`, mêmes distributions) et les mêmes cas ; le rapport donne le p50 et le p95 avant et après, et le coût par iid lu ;
   - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` et `cargo test` passent.
 - **Invariants / mesures** : INV-07, MES-14.
-- **Hors périmètre** : les bitmaps par tranche (index de plage), écarté par ADR-0046 jusqu'à la mesure de P9 ; le parcours de la colonne lui-même (accès épars d'un domaine creux) ; le changement de `N` ou de `exact_threshold`.
+- **Hors périmètre** : les bitmaps par tranche (index de plage), écarté par ADR-0046 jusqu'à la mesure de P10 (ADR-0129) ; le parcours de la colonne lui-même (accès épars d'un domaine creux) ; le changement de `N` ou d'`exact_threshold`.
 
 ### ACCELERER-RECETTE
 - **Ajoutée par** : ADR-0067, hors plan. Elle vient de la tâche `MESURER-CYCLE-DE-VIE` et du verdict `NON-COUVERT` de `@architecte` du 2026-10-26.

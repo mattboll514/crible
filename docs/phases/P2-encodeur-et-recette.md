@@ -39,7 +39,7 @@
 - **Critères d'acceptation** :
   - 100 % des textes recomposés correspondent à `src_hash`, ou les écarts sont listés et expliqués ;
   - les lots sont lus par `LIRE-LOT-PARQUET`.
-- **Hors périmètre** : les schémas définitifs (P9).
+- **Hors périmètre** : les schémas définitifs (P10, ADR-0129).
 
 ### REEXPORTER-MODELE-TRANSFORMERS-5
 - **Objectif** : ré-exporter l'ONNX de mDenseOn sous `transformers==5.14.1`, la version qui a produit les vecteurs de production de Legifacile, et prouver la fidélité contre ces vecteurs.

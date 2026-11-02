@@ -2,7 +2,7 @@
 
 ## Règles du jeu
 
-1. **Dix phases, de P0 à P9.** Chaque phase se termine par un **jalon** (J0 à J9) que **seul le propriétaire valide**.
+1. **Onze phases, de P0 à P10.** Chaque phase se termine par un **jalon** (J0 à J10) que **seul le propriétaire valide** (ADR-0129).
 2. **Une phase ne commence que si le jalon précédent est validé** (voir `docs/suivi.md`).
 3. **Chaque phase se découpe en tâches** nommées `NOM-EN-MAJUSCULE`.
    - Une tâche est petite : idéalement moins de 500 lignes de diff.
@@ -75,17 +75,21 @@ Les sous-agents ne s'appellent pas entre eux : c'est l'orchestrateur qui enchaî
 | P5 | `phases/P5-lexical-et-hybride.md` | tantivy, analyse française, BM25 dans le pool, fusion | **J5** : hybride sur l'échantillon (cas « article 1240 ») ; MES-06, 10, 11 ; fusion par défaut choisie |
 | P6 | `phases/P6-serveur-et-api.md` | Serveur axum, auth, erreurs, écrivain et jobs, routes, multi-index, OpenAPI, client Python | **J6** : démo par Swagger et le client Python ; INV-02 sous charge ; INV-16 |
 | P7 | `phases/P7-observabilite.md` | Analytics, journal, debug, explain, stats, éval | **J7** : `crible eval` produit un rapport ; `explain_ids` explique un document absent ; INV-13 et INV-17 verts |
-| P8 | `phases/P8-docker-et-deploiement.md` | Image multi-arch, volumes, arrêt propre, compose, mesures en conteneur | **J8** : l'image tourne sur le Mac mini ; MES-02, 05 et 09 refaites en conteneur |
-| P9 | `phases/P9-migration-legifacile.md` | Six index Legifacile, producteur, import complet, comparaison, MCP, mode ombre, quotidien, bascule | **J9 = v1** : critères de `01-vision-et-perimetre.md` remplis |
+| P8 | `phases/P8-docker-et-deploiement.md` | Image multi-arch, volumes, arrêt propre, compose, mesures en conteneur sur la machine de développement | **J8** : l'image tourne sur la machine de développement (arm64) et se construit en amd64 ; MES-02, MES-05 et MES-09 refaites en conteneur, à titre indicatif ; arrêt propre vérifié (`VERIFIER-ARRET-PROPRE`) |
+| P9 | `phases/P9-tableau-de-bord.md` | Tableau de bord ; contenu défini par **ADR-0130** | **J9** : critères définis par ADR-0130 |
+| P10 | `phases/P10-validation-a-l-echelle-reelle.md` | Six index Legifacile, export de migration, import complet, jeu de référence, comparaison avec pgvector, mesure sur le Mac mini, bilan | **J10** : critères de la décision 7 d'ADR-0129 |
 
 ## Dépendances entre phases
 
 ```
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9
-              └── l'échantillon Legifacile (P2) sert à P4, P5 et P7
+P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10
+              ├── l'échantillon Legifacile (P2) sert à P4, P5 et P7
+              └── le jeu de référence de P10 sert au projet Legifacile (nouveau dépôt)
 ```
 
-L'ordre est strictement séquentiel en v1, pour garder une seule phase ouverte à la fois. Le serveur (P6) arrive tard exprès : jusqu'à P5, tout se valide par la CLI et les tests, sur un cœur stable.
+L'ordre est strictement séquentiel jusqu'à J10, pour garder une seule phase ouverte à la fois. ADR-0129 fixe cet ordre : le tableau de bord (P9) passe **avant** la validation à l'échelle réelle (P10). Le serveur (P6) arrive tard exprès : jusqu'à P5, tout se valide par la CLI et les tests, sur un cœur stable.
+
+**Lecture des documents antérieurs au 2026-11-02 (ADR-0129, décision 3).** Dans un document écrit avant ADR-0129, `P9` se lit `P10`, `J9` se lit `J10`, et « la v1 » désigne l'horizon J10. La règle est bornée : elle ne touche ni le format de lot v1, ni l'API REST v1, ni les titres d'ADR portant « v1 » (voir `adr/README.md`).
 
 ## Valider un jalon (propriétaire)
 

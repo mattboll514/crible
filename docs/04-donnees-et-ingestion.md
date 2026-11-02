@@ -313,6 +313,7 @@ Un patch passe la même file d'écriture que les autres écritures de l'index. C
   - il réutilise le compositeur et le découpeur existants, et sort des lots grâce à `BatchWriter` ;
   - le quotidien tourne en natif sur le Mac (MPS), les campagnes sur OVH (CUDA) ;
   - pour la migration, il réutilise les vecteurs déjà dans pgvector, sans GPU. Les textes sont recomposés, puis vérifiés contre le sha256 `src_hash` existant.
+  - **Répartition après ADR-0129.** Le producteur quotidien appartient au **projet Legifacile** (nouveau dépôt), avec ses propres ADR : sa fiche part dans `docs/passation-legifacile.md`, hors du plan de Crible. Le **mode migration** ne reste pas dans ce producteur : il devient le script ponctuel `EXPORTER-BASE-LEGIFACILE` de la phase P10, écrit dans `legifacile-sandbox` avec le propriétaire, en lecture seule sur le Mac mini. Le découpage reste chez le producteur (ADR-0010) et Crible ne gagne aucun mode « import pgvector ».
 - **Piste qualité, côté producteur** : répéter un en-tête court en tête de chaque passage (« Code civil, art. 1240 », « Cass. civ. 2e, 12/03/2020 — motifs »), puis le mesurer.
 
 ## Export, instantanés, restauration
@@ -376,4 +377,6 @@ Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, s
 | Encode les passages | Vérifie les longueurs et fait la recette |
 | Déclare `chunker` et `template` dans le manifeste | Trace le découpeur de chaque lot ; regroupe par document ; dédoublonne par contenu |
 
-Plus tard, le découpeur générique de Legifacile (`decouper` : 1 024 tokens, 15 % de chevauchement) pourra devenir le découpeur par défaut du moteur, pour les projets qui n'ont pas de pipeline à eux. Ce n'est pas prévu en v1.
+Plus tard, le découpeur générique de Legifacile (`decouper` : 1 024 tokens, 15 % de chevauchement) pourra devenir le découpeur par défaut du moteur, pour les projets qui n'ont pas de pipeline à eux. Ce n'est pas prévu d'ici J10 (ADR-0129).
+
+L'export de migration de P10 (`EXPORTER-BASE-LEGIFACILE`) suit la même répartition : il **recompose** les textes avec le compositeur de Legifacile, les vérifie contre `src_hash`, reprend les vecteurs de pgvector et n'introduit aucun découpage dans le moteur (ADR-0010, ADR-0129).

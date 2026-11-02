@@ -115,7 +115,7 @@ Les variables `CRIBLE_*` documentées **hors configuration** sont exclues de ce 
 
 ## Docker
 
-**Une seule image serveur, CPU, multi-architecture** (`linux/arm64` pour le Mac mini, `linux/amd64`). La construction suit le modèle de NextPlaid :
+**Une seule image serveur, CPU, multi-architecture** (`linux/arm64` pour les deux Mac — machine de développement et Mac mini —, `linux/amd64` pour la cible future ; ADR-0129). La construction suit le modèle de NextPlaid :
 - étapes `cargo-chef` (cache des dépendances) puis build en release ;
 - image d'exécution `debian:bookworm-slim` avec la bibliothèque ONNX Runtime CPU de l'architecture visée ;
 - `ORT_DYLIB_PATH` positionné ;
@@ -138,8 +138,8 @@ Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 
 **Compose d'exemple** (Legifacile) : le service `crible` et le MCP de Legifacile partagent un réseau interne. Crible n'est **jamais exposé publiquement** : seul le MCP lui parle.
 
-**Contraintes propres au Mac** :
-- la RAM disponible est celle de la VM Docker (~8 Go aujourd'hui), pas les 16 Go de la machine ;
+**Contraintes propres au Mac** (ADR-0129) :
+- la RAM disponible est celle de la VM Docker, pas celle de la machine : environ **8 Go** sur le Mac mini M1 16 Go aujourd'hui ; sur la machine de développement (MacBook Air M3, 24 Gio), la RAM allouée à Docker Desktop est indiquée dans chaque rapport de mesure. À 8,58 M passages, environ 13,2 Go de vecteurs fp16 sont attendus ;
 - pas d'accès au GPU Apple ;
 - le SIMD NEON est disponible.
 

@@ -42,7 +42,7 @@ Le nom vient de « passer au crible » : **filtrer** avant de chercher, et **exa
 - Analytics, journal de debug, explain, éval.
 - Image Docker CPU multi-architecture (arm64 et amd64).
 
-## Hors périmètre de la v1
+## Hors périmètre de la v1 (J10, ADR-0129)
 
 | Hors v1 | Pourquoi / quand |
 |---|---|
@@ -56,20 +56,24 @@ Le nom vient de « passer au crible » : **filtrer** avant de chercher, et **exa
 | Encodage GPU dans le serveur | Les producteurs encodent ; le serveur n'encode que les requêtes (et les petits lots en ligne) |
 | Champs multivalués | Question ouverte Q-03 |
 
-## Critère de réussite de la v1 (jalon J9)
+## Critère de réussite de la v1 (jalon J10)
 
-La recherche de Legifacile est servie par Crible, sur le Mac mini M1 16 Go en Docker, avec 6 index : `articles`, `jorf`, `decisions`, `titres`, `sarde`, `dole`. Quatre conditions :
+ADR-0129 sépare la validation de Crible de la mise en service de Legifacile. La recherche de Legifacile est servie par Crible, avec six index : `articles`, `jorf`, `decisions`, `titres`, `sarde`, `dole`. Six conditions, toutes portées par la phase P10 « Validation à l'échelle réelle » :
 
-- **Rappel** au moins égal à celui de pgvector sur le jeu de référence. La base de comparaison est la mesure MES-00, faite en phase 0.
-- **Latence p95** au plus égale à celle de pgvector.
-- **Tâche quotidienne** branchée et stable pendant 14 jours consécutifs.
-- **Retour arrière** vers pgvector possible pendant toute la période de bascule.
+- **Configs** : les six configs d'index sont définies et validées par le propriétaire.
+- **Import** : les 8,58 M passages sont importés ; les comptes par index sont égaux à ceux de pgvector ou les écarts sont expliqués ; MES-07 et MES-09 sont faites à l'échelle réelle.
+- **Jeu de référence** : il est validé et identique pour pgvector et Crible.
+- **Rappel et fidélité** : rappel d'au moins **0,482** sur les 56 questions satisfaisables (`Q30` à part) et cibles par corpus (`juri_texte_integral` ≥ 0,290, `textes_vigueur` ≥ 0,750) ; fidélité d'au moins **0,99** à 8,58 M passages, au N par défaut (5000, ADR-0078). La base de comparaison est la mesure MES-00, faite en phase 0.
+- **Latence p95** : contraignante, au plus égale à celle de pgvector, **seulement** sur le Mac mini M1 16 Go en conteneur, par `MESURER-SUR-MAC-MINI` ; indicative ailleurs, machine de développement comprise.
+- **Bilan** : le bilan de Crible est écrit et validé.
+
+La **tâche quotidienne stable 14 jours** et le **retour arrière testé** ne conditionnent plus ce jalon : ils appartiennent au projet Legifacile et à son propre bilan (`docs/passation-legifacile.md`).
 
 ## Contraintes
 
 | Contrainte | Valeur |
 |---|---|
-| Machine de production | Mac mini M1 16 Go. Docker tourne dans une VM Linux (~8 Go alloués aujourd'hui), sans accès au GPU |
+| Machines (ADR-0129) | **Développement** : MacBook Air M3 (`Mac15,12`, 8 cœurs, 24 Gio), sous Docker Desktop ; import de la base complète et comparaison avec pgvector, mesures indicatives. **Latence contraignante** : Mac mini M1 16 Go, en conteneur (VM Linux, ~8 Go alloués aujourd'hui, sans accès au GPU) ; le propriétaire y installe Crible après confirmation de l'absence de régression. **Production officielle** : non actée, probablement un serveur OVH, hors v1 |
 | Base de référence | 8,58 M passages, 768 dimensions, mDenseOn. Prompts `query: ` et `document: `, pooling CLS + normalisation L2 |
 | Bases futures | Plus grosses que Legifacile |
 | Mises à jour | Quotidiennes : ~1 000 à 3 000 passages par nuit, ~1 % de passages morts par mois. Des campagnes de ré-encodage ponctuelles |

@@ -1,10 +1,10 @@
 # ADR-0130 — Tableau de bord intégré (phase P9)
 
-- **Statut** : Proposé
-- **Date** : 2026-11-02
+- **Statut** : Accepté — décidé par le propriétaire le 2026-11-02 (« ADR-0129 et ADR-0130 acceptés »)
+- **Date** : 2026-11-02 (proposition et décision le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire du 2026-11-02 (conversation avec l'orchestrateur), à partir de l'analyse de `@architecte` du 2026-11-02 ; travail hors tâche, aucune tâche du plan ne le porte
-- **Remplace** : — (ne remplace aucun ADR ; **dépend d'ADR-0129**, `Proposé`, qui réserve P9 au tableau de bord et renvoie son contenu au présent ADR. Les deux ADR s'acceptent ensemble : ADR-0130 sans ADR-0129 laisserait le tableau de bord dans une phase P9 qui est encore la migration de Legifacile, et ADR-0129 sans ADR-0130 laisserait P9 sans contenu ni jalon)
+- **Remplace** : — (ne remplace aucun ADR ; **dépend d'ADR-0129**, `Accepté` le 2026-11-02, qui réserve P9 au tableau de bord et renvoie son contenu au présent ADR. Les deux ADR s'acceptent ensemble : ADR-0130 sans ADR-0129 laisserait le tableau de bord dans une phase P9 qui est encore la migration de Legifacile, et ADR-0129 sans ADR-0130 laisserait P9 sans contenu ni jalon)
 
 ## Contexte
 

@@ -144,7 +144,7 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 
 ## Budget de latence indicatif
 
-À remplacer par les mesures. Échelle Legifacile, Mac mini.
+À remplacer par les mesures. Échelle Legifacile. La latence **contraignante** (p95 ≤ 698 ms, MES-00) ne vaut que sur le Mac mini en conteneur, portée par `MESURER-SUR-MAC-MINI` (P10) ; les mesures prises sur la machine de développement sont **indicatives** (ADR-0129).
 
 | Étape | Estimation | Mesure |
 |---|---|---|
@@ -163,7 +163,7 @@ Ces chiffres du scan sont **natifs**, mesurés sur une machine de développement
 
 ADR-0046 sépare les deux lignes : la valeur d'intervalle est **mesurée, pas une cible**, et le dépassement est assumé dans les budgets de bout en bout.
 
-Les deux lignes de rescoring remplacent le budget indicatif « < 1 ms à chaud, ~10 ms à froid » par les mesures de MES-03 sur la variante livrée, `grouped` (ADR-0080), à N = 1000 et au défaut N = 5000 (ADR-0078). Le dépassement est **assumé au profit de la fidélité** : à N = 5000 à chaud, 2,1 ms de p50 dépasse encore « < 1 ms ». La cible réelle est la latence de `08-invariants-et-tests.md`, p95 au plus égal à pgvector, mesurée en P8 et P9. Les chiffres à froid partiel ne jugent aucun budget : ils portent leur résidence de pages, et le froid vrai est renvoyé à P8 (ADR-0084). Le coût des clés au rescoring, distinct des produits scalaires, relève d'un ADR séparé.
+Les deux lignes de rescoring remplacent le budget indicatif « < 1 ms à chaud, ~10 ms à froid » par les mesures de MES-03 sur la variante livrée, `grouped` (ADR-0080), à N = 1000 et au défaut N = 5000 (ADR-0078). Le dépassement est **assumé au profit de la fidélité** : à N = 5000 à chaud, 2,1 ms de p50 dépasse encore « < 1 ms ». La cible réelle est la latence de `08-invariants-et-tests.md`, p95 au plus égal à pgvector, mesurée en P8 à titre indicatif sur la machine de développement, puis portée par `MESURER-SUR-MAC-MINI` en P10 sur le Mac mini (ADR-0129). Les chiffres à froid partiel ne jugent aucun budget : ils portent leur résidence de pages, et le froid vrai est renvoyé à P8 (ADR-0084). Le coût des clés au rescoring, distinct des produits scalaires, relève d'un ADR séparé.
 
 Le protocole des deux lignes de la recherche dense (scan binaire et rescoring) est fixé par ADR-0077, accepté par anticipation le 2026-10-27 : N ∈ {1000, 2000, 5000}, pools construits à 1 k, 10 k, 100 k, 1 M et 7,74 M passages vivants, contigus et dispersés, et froid mesuré par copies non cachées pour le rescoring seul. Les trois lignes du scan binaire ne sont pas touchées par ADR-0078 : leur protocole est celui d'ADR-0077 et leurs chiffres ceux de MES-02, vérifiés en conteneur en P8.
 

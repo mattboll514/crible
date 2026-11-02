@@ -1,7 +1,7 @@
 # ADR-0129 — Replanification de la fin du plan
 
-- **Statut** : Proposé
-- **Date** : 2026-11-02
+- **Statut** : Accepté — décidé par le propriétaire le 2026-11-02 (« ADR-0129 et ADR-0130 acceptés »)
+- **Date** : 2026-11-02 (proposition et décision le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire du 2026-11-02 (conversation avec l'orchestrateur), à partir de l'analyse de `@architecte` du 2026-11-02 ; travail hors tâche, aucune tâche du plan ne le porte
 - **Remplace** : — (ne remplace aucun ADR ; complète ADR-0032 sans toucher à son corps et résout Q-07)

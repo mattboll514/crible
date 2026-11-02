@@ -40,7 +40,7 @@ Découpage validé pour Legifacile (cas réel de la v1) :
 | `sarde` | sarde | bloc | thème |
 | `dole` | dole | dossier | type, dates |
 
-Le schéma exact de chaque index est l'objet de la tâche `DEFINIR-INDEX-LEGIFACILE` (P9).
+Le schéma exact de chaque index est l'objet de la tâche `DEFINIR-INDEX-LEGIFACILE` (P10, ADR-0129).
 
 ## Identifiants
 
