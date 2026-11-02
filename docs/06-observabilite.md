@@ -154,7 +154,7 @@ crible eval --data data/legifacile-sample --index articles --queries golden.json
   [--repeat <R>] [--baseline <rapport.json>]
 ```
 
-La commande fonctionne **en local seulement** : elle ouvre un dossier de données **en lecture**, comme `crible search`, et cette lecture reste permise à côté d'un serveur en service (ADR-0116). Elle n'écrit rien sous le dossier de données. Le mode « contre une instance via l'API » est **reporté** : `docs/07` ne porte aucun client HTTP, et il demandera une dépendance et un ADR (ADR-0125, décision 1).
+La commande fonctionne **en local** sur un dossier de données, ou **contre une instance par l'API** (ADR-0131, accepté par anticipation le 2026-11-02) : en local, elle ouvre le dossier **en lecture**, comme `crible search`, et cette lecture reste permise à côté d'un serveur en service (ADR-0116). Elle n'écrit rien sous le dossier de données. En mode API, elle se choisit par `--url <base>` et vise `POST /v1/indexes/{index}/search` (ADR-0131).
 
 **Format du jeu de requêtes**, en JSONL, normatif et fermé (ADR-0125, décisions 2 et 3) :
 

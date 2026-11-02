@@ -131,6 +131,7 @@
   - le passage de la clé `read` sans l'écrire dans un fichier versionné ni dans un log (ADR-0032) ;
   - les délais et les erreurs réseau.
 - **À lire** : ADR-0125 (décisions 1 et suivantes), ADR-0124 (décision 13), ADR-0116, ADR-0032, `docs/06-observabilite.md:124-144`, `docs/05-api.md` (« Recherche : requête » et champ `exact`), `docs/07:29-50`.
+- **Note du 2026-11-02 (ADR-0131).** Le préalable est tranché : ADR-0131 accepte un mode API par `--url <base>` qui vise `POST /v1/indexes/{index}/search` (route simple), et non `POST /v1/search` (multi-index) comme l'écrit la fiche : la réponse multi-index n'a pas de `generation` scalaire (`docs/05:384`). Deux références de la fiche sont périmées : `docs/06-observabilite.md:124-144` est en réalité `:148-179` (chapitre « Éval »), et `05-api.md:269` est `:273` (champ `exact`).
 - **Livrables** :
   - le mode API de `crible eval` : chaque requête du jeu part en `POST /v1/search` sur l'instance visée, avec les mêmes modes, `k` et surcharges qu'en local, et `exact` porté par le corps de la requête (`05-api.md:269`) ;
   - la réutilisation du format d'entrée et du schéma de rapport d'ADR-0125, sans duplication des métriques ;
