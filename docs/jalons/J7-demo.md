@@ -149,19 +149,14 @@ regression: none
 
 Les deux campagnes versionnées de `docs/mesures/` ont été produites par la
 **même** commande, avec `--out docs/mesures` : celle du 2026-11-01 à N = 1000 et
-celle du 2026-11-02 à N = 5000. Seuls les rapports régénérés à N = 5000
-partagent la fidélité et la qualité du rejeu ; ceux du 2026-11-01 en diffèrent
-par la fidélité et par les latences (la qualité n'y bouge qu'à la marge :
-`decisions` hybride, 0,5563 contre 0,5638). La commande refuse d'écraser un rapport
+celle du 2026-11-02 à N = 5000. La commande refuse d'écraser un rapport
 existant, ce qui interdit de rejouer une campagne dans `docs/mesures/` sans
-supprimer les fichiers avant ; un rejeu d'essai s'écrit donc sous `data/`.
-
-La campagne antérieure du 2026-11-01, produite à N = 1000, reste dans
-`docs/mesures/` ; la campagne à N = 5000 y est écrite sous un nouveau nom daté,
-sans écraser l'ancien (ADR-0125, décision 13). Les deux campagnes portent la
-même commande et les mêmes données ; N, la date du rapport et, par
-conséquent, la fidélité et les latences changent, la qualité ne bougeant qu'à
-la marge sur `decisions` hybride. La note
+supprimer les fichiers avant ; un rejeu d'essai s'écrit donc sous `data/`, et la
+campagne à N = 5000 est écrite sous un nouveau nom daté, sans écraser l'ancienne
+(ADR-0125, décision 13). Seuls les rapports régénérés à N = 5000 partagent la
+fidélité et la qualité du rejeu ; sur ceux du 2026-11-01, N, la date, la fidélité
+et les latences changent, la qualité ne bougeant qu'à la marge : `decisions`
+hybride, 0,5563 contre 0,5638. La note
 `docs/mesures/eval-n5000-2026-11-02.md` met les deux campagnes en regard.
 
 Les chiffres de la campagne à N = 5000 ci-dessous sont ceux des six rapports
@@ -368,18 +363,26 @@ Attendu, dans `explain` (tableau frère de `results`) :
 Le diagnostic nomme la feuille du filtre par son chemin JSON complet, ce qui dit
 pourquoi le document n'est pas remonté.
 
-Le journal de debug garde la requête `debug: true`, et seulement elle :
+Le journal de debug garde la requête `debug: true`, et seulement elle. Il est
+vidé toutes les 10 s (ADR-0122, décision 7) : une lecture faite juste après une
+recherche `debug: true` rend `200` avec `enabled: true`, `dropped: 0` et une
+liste vide. Le bloc attend donc le vidage avant de lire le journal.
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $ADMIN" \
+# Le journal de debug est vidé toutes les 10 s (ADR-0122, décision 7) :
+# attendre le vidage avant de le lire, sinon la liste est encore vide.
+sleep 11
+curl -s -H "Authorization: Bearer $ADMIN" \
      'http://127.0.0.1:8080/v1/debug/queries?limit=5'
+echo
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $READ" \
      'http://127.0.0.1:8080/v1/debug/queries?limit=5'
 ```
 
 Attendu : `200`, puis `403`. La réponse `200` porte `enabled: true`, `dropped: 0`
 et une entrée avec `index: "decisions"`, `mode: "hybrid"`, `status: "ok"`,
-`total_ms` et `payload.capture` (les vingt premiers rangs par branche).
+`total_ms` et `payload.capture` (les vingt premiers rangs par branche) : le
+journal a été vidé pendant l'attente.
 
 `GET /v1/stats` est réservé à `admin` (ADR-0095) :
 
