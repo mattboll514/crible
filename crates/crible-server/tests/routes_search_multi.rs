@@ -22,6 +22,7 @@
 //! | `return_fields_serve_heterogeneous_schemas` | ADR-0110, decision 6 |
 //! | `a_target_without_lexical_is_refused_but_does_not_change_the_default` | ADR-0089, decision 4 |
 //! | `the_answer_carries_the_index_of_each_result_and_one_summary_per_target` | ADR-0110, decision 10 |
+//! | `a_refusal_before_the_targets_are_resolved_counts_one_event_without_index` | ADR-0124, decision 10 |
 //!
 //! The instance serves two `external` models of four dimensions, so no ONNX
 //! Runtime is loaded; the requests carry their vectors in base64. The `504` of
@@ -41,6 +42,7 @@ use axum::Router;
 use axum::http::{Method, StatusCode};
 use crible_server::http::build_router;
 use crible_server::state::AppState;
+use crible_store::analytics::{ANALYTICS_FILE_NAME, MinuteEvent, read_minute_events};
 use serde_json::{Map, Value, json};
 
 use common::{
@@ -1449,4 +1451,68 @@ async fn the_answer_carries_the_index_of_each_result_and_one_summary_per_target(
         assert!(result["index"].is_string(), "{answer}");
     }
     assert_eq!(answer["truncated_query"], false, "{answer}");
+}
+
+/// The multi-index rows of the analytics file, after a forced flush.
+async fn multi_rows(instance: &Instance, state: &Arc<AppState>) -> Vec<MinuteEvent> {
+    state
+        .flush_analytics()
+        .await
+        .expect("the analytics are flushed");
+    let path = instance.root().join("data").join(ANALYTICS_FILE_NAME);
+    read_minute_events(&path)
+        .expect("the analytics file is readable")
+        .into_iter()
+        .filter(|row| row.operation == "search_multi")
+        .collect()
+}
+
+/// A request refused **before** its targets are resolved has no target: its one
+/// event carries an empty index, and the first name the body declares is never
+/// reused, since that name was not resolved (ADR-0124, decision 10).
+#[tokio::test]
+async fn a_refusal_before_the_targets_are_resolved_counts_one_event_without_index() {
+    let (instance, state, router) = instance();
+    create_simple(&router, "alpha", "m", false, "numero", "texte").await;
+
+    // An unknown index stops the resolution: the `404` comes first.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+            "targets": [ { "index": "inconnu" } ],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+
+    // An empty list of targets is refused by the body, before any resolution.
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({
+            "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
+            "mode": "dense",
+            "targets": [],
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+
+    let rows = multi_rows(&instance, &state).await;
+    assert_eq!(rows.len(), 2, "one event per refusal: {rows:?}");
+    for row in &rows {
+        assert_eq!(
+            row.index, "",
+            "the unresolved index is never named: {rows:?}"
+        );
+        assert_eq!(row.count, 1, "{rows:?}");
+    }
+    let statuses: Vec<&str> = rows.iter().map(|row| row.status.as_str()).collect();
+    assert!(
+        statuses.contains(&"unknown_index") && statuses.contains(&"invalid_request"),
+        "{rows:?}"
+    );
 }

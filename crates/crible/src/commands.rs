@@ -52,6 +52,7 @@ use crible_search::pipeline::{
 };
 use crible_search::pool::Pool;
 use crible_search::scan_pool::ScanPool;
+use crible_store::analytics::{ANALYTICS_FILE_NAME, Stats, StatsFilter, StatsLatency, read_stats};
 use crible_store::attach::{AttachReport, attach};
 use crible_store::generation::{
     CURRENT_EPOCH_FILE_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME, INDEXES_DIRECTORY,
@@ -805,8 +806,7 @@ pub fn search(request: &SearchRequest<'_>) -> Result<(), CribleError> {
     let segments_directory = store.segments_directory();
     let records_path = store.records_path();
     let segments = snapshot.segments().to_vec();
-    let searcher =
-        scan.install(|| DenseSearcher::open(&segments_directory, &segments, &records_path))?;
+    let searcher = DenseSearcher::open_in(&scan, &segments_directory, &segments, &records_path)?;
     let answer = scan.install(|| {
         pipeline::search(
             &snapshot,
@@ -933,6 +933,39 @@ fn encode_text_query(
     model: Option<&str>,
     text: &str,
 ) -> Result<(Vec<f32>, bool), CribleError> {
+    let encoder = text_encoder(models, index, model)?;
+    encoder.encode(text)
+}
+
+/// Query encoder of an index, built once for a series of queries.
+///
+/// One `crible search` encodes one text and [`encode_text_query`] builds the
+/// encoder for it; `crible eval` encodes the queries of a game, so it builds
+/// one encoder and reuses its cache (ADR-0051).
+pub(crate) struct TextEncoder {
+    /// Encoder holding the query cache of the process.
+    encoder: QueryEncoder,
+}
+
+impl TextEncoder {
+    /// Encodes one query text and reports whether it was truncated.
+    pub(crate) fn encode(&self, text: &str) -> Result<(Vec<f32>, bool), CribleError> {
+        let encoded = self.encoder.encode_query(text, DEFAULT_QUERY_PRECISION)?;
+        Ok((encoded.vector, encoded.truncated))
+    }
+}
+
+/// Builds the encoder of `text` for an index: the `onnx` model of the index, or
+/// the one named by `model`.
+///
+/// `crible eval` builds it once, on the first textual query of a game, so a
+/// game of `vector` queries needs no `--models` and no ONNX Runtime
+/// (ADR-0125, decision 2).
+pub(crate) fn text_encoder(
+    models: Option<&Path>,
+    index: &IndexConfig,
+    model: Option<&str>,
+) -> Result<TextEncoder, CribleError> {
     let models = models.ok_or_else(|| {
         invalid_request(
             "--query needs --models <dir>, the [paths] models root of crible.toml holding \
@@ -949,14 +982,13 @@ fn encode_text_query(
             index.name, name
         )));
     }
-
-    let encoder = QueryEncoder::new(
-        &directory,
-        Arc::new(ModelRegistry::new()),
-        DEFAULT_QUERY_CACHE_ENTRIES,
-    );
-    let encoded = encoder.encode_query(text, DEFAULT_QUERY_PRECISION)?;
-    Ok((encoded.vector, encoded.truncated))
+    Ok(TextEncoder {
+        encoder: QueryEncoder::new(
+            &directory,
+            Arc::new(ModelRegistry::new()),
+            DEFAULT_QUERY_CACHE_ENTRIES,
+        ),
+    })
 }
 
 /// `crible inspect --data <dir> [--index <i>]`.
@@ -1029,7 +1061,7 @@ fn index_directory(data: &Path, name: &str) -> PathBuf {
 ///
 /// The directory name and the `name` of the configuration must agree: a command
 /// that names `synth-small` must not open another index.
-fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleError> {
+pub(crate) fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfig), CribleError> {
     let index_dir = index_directory(data, name);
     let path = index_dir.join(INDEX_CONFIG_FILE_NAME);
     let raw = fs::read_to_string(&path).map_err(|error| {
@@ -1123,13 +1155,292 @@ fn compact(value: &Value) -> Result<String, CribleError> {
 }
 
 /// Error raised when the request itself is malformed.
-fn invalid_request(message: impl Into<String>) -> CribleError {
+pub(crate) fn invalid_request(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::InvalidRequest, message)
 }
 
 /// Error raised when the process cannot carry out the request.
-fn internal(message: impl Into<String>) -> CribleError {
+pub(crate) fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message)
+}
+
+/// Output format of `crible stats`.
+///
+/// `table` is the default: the task asks for tables (`docs/phases/P7-observabilite.md:107`),
+/// rendered by hand because `docs/07` carries no table crate (ADR-0124,
+/// decision 14). `json` prints the body of `GET /v1/stats` **less**
+/// `analytics_dropped`, which measures a server process the command cannot see
+/// (decisions 13 and 14).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum StatsFormat {
+    /// ASCII tables, one per section.
+    #[default]
+    Table,
+    /// The body of `GET /v1/stats`, less `analytics_dropped`.
+    Json,
+}
+
+/// Arguments of `crible stats` (ADR-0124, decisions 13 and 14).
+pub struct StatsRequest<'a> {
+    /// Root data directory (`<data>/analytics.sqlite`).
+    pub data: &'a Path,
+    /// Lower bound, included, of the window; ISO 8601 with its offset.
+    pub from: Option<&'a str>,
+    /// Upper bound, included, of the window; ISO 8601 with its offset.
+    pub to: Option<&'a str>,
+    /// Only the events of that index.
+    pub index: Option<&'a str>,
+    /// Only the events of that operation.
+    pub operation: Option<&'a str>,
+    /// Width of the buckets: `minute`, `hour` or `day`.
+    pub group_by: Option<&'a str>,
+    /// Output format.
+    pub format: StatsFormat,
+}
+
+/// `crible stats --data <dir> [--from …] [--to …] [--index …] [--operation …]
+/// [--group-by …] [--format table|json]`.
+///
+/// The command reads `<data>/analytics.sqlite` **read-only**, on its own
+/// connection: it never waits for a flush, never blocks a running server and
+/// writes nothing (ADR-0116, decision 1; ADR-0124, decision 13). The file is
+/// absent when the instance never wrote an analytics: that is not a failure, and
+/// the message names both the file and the data directory. A file of an unknown
+/// `format_version` is refused by the check of the store (`INV-15`).
+///
+/// The parameters are the ones of `GET /v1/stats`, parsed by the same
+/// [`StatsFilter`], so the two entry points refuse with the same words
+/// (ADR-0124, decision 14).
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] for a parameter outside its domain, and the
+/// store error for an unreadable or unknown analytics file.
+pub fn stats(request: &StatsRequest<'_>) -> Result<(), CribleError> {
+    // The parameters are checked before the file is looked at, as the route
+    // decides its `400` on the query string alone (ADR-0124, decision 2): a
+    // misspelt `--group-by` is reported even when no analytics exists yet.
+    let filter = StatsFilter::parse(
+        request.from,
+        request.to,
+        request.index,
+        request.operation,
+        request.group_by,
+    )?;
+    let path = request.data.join(ANALYTICS_FILE_NAME);
+    if !path.is_file() {
+        println!(
+            "no analytics at {}: the file {} does not exist, so no analytics has been written \
+             under the data directory {}",
+            path.display(),
+            ANALYTICS_FILE_NAME,
+            request.data.display()
+        );
+        return Ok(());
+    }
+    let stats = read_stats(&path, &filter)?;
+    match request.format {
+        StatsFormat::Json => {
+            let value = serde_json::to_value(&stats)
+                .map_err(|error| internal(format!("cannot serialize the statistics: {error}")))?;
+            println!("{}", pretty(&value)?);
+        }
+        StatsFormat::Table => println!("{}", render_stats(&stats)),
+    }
+    Ok(())
+}
+
+/// Renders the tables of `crible stats --format table`.
+///
+/// The window and the width come first, then the buckets, the totals, the two
+/// rankings and the daily state of each index. A member without a value is
+/// rendered as `-`, never as a `0` or a `null` (ADR-0119, decision 3).
+fn render_stats(stats: &Stats) -> String {
+    let mut out = String::new();
+    let from = stats.from.as_deref().unwrap_or("-");
+    let to = stats.to.as_deref().unwrap_or("-");
+    out.push_str(&format!(
+        "window {from} .. {to}, buckets: {}\n",
+        stats.group_by.as_str()
+    ));
+
+    out.push_str("\nbuckets\n");
+    let mut rows: Vec<Vec<String>> = stats
+        .buckets
+        .iter()
+        .map(|bucket| {
+            let mut row = vec![bucket.start.clone(), bucket.count.to_string()];
+            row.extend(aggregate_cells(&bucket.errors, bucket.zero_results_rate));
+            row
+        })
+        .collect();
+    if let Some(totals) = &stats.totals {
+        let mut row = vec!["totals".to_owned(), totals.count.to_string()];
+        row.extend(aggregate_cells(&totals.errors, totals.zero_results_rate));
+        rows.push(row);
+    }
+    // The percentiles live in the `latency (ms)` table below, per stage and for
+    // the total: repeating the three of `total` here said nothing more and made
+    // the row wider than its four columns of state (@relecteur, NETTOYER-P7).
+    out.push_str(&table(&["start", "count", "errors", "zero_results"], &rows));
+
+    out.push_str("\nlatency (ms)\n");
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for bucket in &stats.buckets {
+        latency_rows(&bucket.start, &bucket.latency_ms, &mut rows);
+    }
+    if let Some(totals) = &stats.totals {
+        latency_rows("totals", &totals.latency_ms, &mut rows);
+    }
+    out.push_str(&table(
+        &["start", "stage", "p50_ms", "p95_ms", "p99_ms"],
+        &rows,
+    ));
+
+    out.push_str("\ntop indexes\n");
+    let rows: Vec<Vec<String>> = stats
+        .top_indexes
+        .iter()
+        .map(|entry| vec![entry.index.clone(), entry.count.to_string()])
+        .collect();
+    out.push_str(&table(&["index", "count"], &rows));
+
+    out.push_str("\ntop filter shapes\n");
+    let rows: Vec<Vec<String>> = stats
+        .top_filter_shapes
+        .iter()
+        .map(|entry| vec![entry.shape.clone(), entry.count.to_string()])
+        .collect();
+    out.push_str(&table(&["shape", "count"], &rows));
+
+    out.push_str("\nindexes\n");
+    let rows: Vec<Vec<String>> = stats
+        .indexes
+        .iter()
+        .map(|state| {
+            vec![
+                state.index.clone(),
+                state.day.clone(),
+                state.documents.to_string(),
+                state.live_passages.to_string(),
+                state.dead_passages.to_string(),
+                format!("{:.4}", state.dead_ratio),
+                state.disk_bytes.to_string(),
+                state.generation.to_string(),
+                state.batches.to_string(),
+            ]
+        })
+        .collect();
+    out.push_str(&table(
+        &[
+            "index",
+            "day",
+            "documents",
+            "live",
+            "dead",
+            "dead_ratio",
+            "disk_bytes",
+            "generation",
+            "batches",
+        ],
+        &rows,
+    ));
+    out
+}
+
+/// The five cells of one latency line: the bucket or `totals`, the stage, then
+/// its three percentiles.
+///
+/// One line per stage that carries a sample, so `--format table` shows the
+/// percentiles per stage that `--format json` renders (ADR-0124, decision 4). A
+/// stage without a sample produces no line, never a `-` row.
+fn latency_rows(start: &str, latency: &StatsLatency, rows: &mut Vec<Vec<String>>) {
+    for (stage, percentiles) in [
+        ("validate", latency.validate),
+        ("encode", latency.encode),
+        ("filter", latency.filter),
+        ("dense", latency.dense),
+        ("lexical", latency.lexical),
+        ("fusion", latency.fusion),
+        ("group", latency.group),
+        ("fetch", latency.fetch),
+        ("total", latency.total),
+    ] {
+        if let Some(percentiles) = percentiles {
+            rows.push(vec![
+                start.to_owned(),
+                stage.to_owned(),
+                format!("{:.3}", percentiles.p50),
+                format!("{:.3}", percentiles.p95),
+                format!("{:.3}", percentiles.p99),
+            ]);
+        }
+    }
+}
+
+/// The two cells of an aggregate that follow its `start` and `count`: the
+/// errors by code and the zero-result rate.
+///
+/// The percentiles are not among them: the `latency (ms)` table renders them
+/// per stage and for the total, once (@relecteur, NETTOYER-P7).
+fn aggregate_cells(
+    errors: &std::collections::BTreeMap<String, u64>,
+    zero_results_rate: Option<f64>,
+) -> Vec<String> {
+    let errors = if errors.is_empty() {
+        "-".to_owned()
+    } else {
+        errors
+            .iter()
+            .map(|(code, count)| format!("{code}={count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let rate = zero_results_rate.map_or_else(|| "-".to_owned(), |rate| format!("{rate:.4}"));
+    vec![errors, rate]
+}
+
+/// Renders one ASCII table: a header, a dashed rule, then one line per row.
+///
+/// Columns are left-aligned and separated by two spaces, with the trailing
+/// spaces of a line removed. A table without a row still prints its header, so
+/// the section says the window holds none.
+fn table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let mut widths: Vec<usize> = headers.iter().map(|header| header.len()).collect();
+    for row in rows {
+        for (position, cell) in row.iter().enumerate() {
+            if let Some(width) = widths.get_mut(position) {
+                *width = (*width).max(cell.len());
+            }
+        }
+    }
+    let headers: Vec<String> = headers.iter().map(|header| (*header).to_owned()).collect();
+    let mut out = String::new();
+    out.push_str(&table_line(&headers, &widths));
+    let rule: Vec<String> = widths.iter().map(|width| "-".repeat(*width)).collect();
+    out.push_str(&table_line(&rule, &widths));
+    for row in rows {
+        out.push_str(&table_line(row, &widths));
+    }
+    out
+}
+
+/// One line of a table, columns padded on the right and trailing spaces
+/// removed.
+fn table_line(cells: &[String], widths: &[usize]) -> String {
+    let mut line = String::new();
+    for (position, cell) in cells.iter().enumerate() {
+        if position > 0 {
+            line.push_str("  ");
+        }
+        line.push_str(cell);
+        if let Some(width) = widths.get(position) {
+            line.push_str(&" ".repeat(width.saturating_sub(cell.len())));
+        }
+    }
+    line.truncate(line.trim_end().len());
+    line.push('\n');
+    line
 }
 
 #[cfg(test)]

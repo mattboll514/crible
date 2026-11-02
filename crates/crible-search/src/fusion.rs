@@ -109,6 +109,10 @@ pub struct Fused {
     pub key: String,
     /// Fused score: an RRF sum or an `α`-weighted relative score.
     pub score: f32,
+    /// Rank of the passage in the fused list, from 1, in the order of the
+    /// answer (ADR-0119, decision 2). Written once the order is fixed, by the
+    /// sorting step of [`fuse`], [`rrf`] and [`relative_score`]; `0` before it.
+    pub rank: u32,
     /// Rank and score of the dense branch, absent when the branch did not
     /// return the passage.
     pub dense: Option<BranchScore>,
@@ -298,6 +302,8 @@ fn union(dense: &[Scored], lexical: &[Scored]) -> Vec<Fused> {
                         iid: candidate.iid,
                         key: candidate.key.clone(),
                         score: 0.0,
+                        // `sort` writes the rank once the order is fixed.
+                        rank: 0,
                         dense: is_dense.then_some(contribution),
                         lexical: (!is_dense).then_some(contribution),
                     });
@@ -308,9 +314,16 @@ fn union(dense: &[Scored], lexical: &[Scored]) -> Vec<Fused> {
     entries
 }
 
-/// Orders the fused list the way the answer is ordered (ADR-0079).
+/// Orders the fused list the way the answer is ordered (ADR-0079) and writes
+/// the rank of each entry, from 1.
+///
+/// The rank travels inside the entry, so the regrouping carries it without a
+/// second table (ADR-0119, decision 2).
 fn sort(fused: &mut [Fused]) {
     fused.sort_unstable_by(|left, right| right.cmp(left));
+    for (position, entry) in fused.iter_mut().enumerate() {
+        entry.rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
+    }
 }
 
 #[cfg(test)]

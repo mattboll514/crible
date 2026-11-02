@@ -35,8 +35,10 @@ use crible_store::online;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::analytics::Analytics;
 use crate::auth::Auth;
-use crate::config::Config;
+use crate::config::{Config, DebugJournalConfig};
+use crate::debug_journal::DebugJournal;
 use crate::error::{internal, invalid};
 use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
@@ -108,6 +110,9 @@ pub struct Loaded {
     query_cache_entries: usize,
     /// Precision of the query encoding (`[encoder].query_precision`, ADR-0052).
     query_precision: Precision,
+    /// `[debug_journal]`, so the route answers `enabled` and the draw reads the
+    /// rate without the writer (ADR-0122, decisions 1 and 9).
+    debug_journal: DebugJournalConfig,
     /// One query encoder per model directory, shared by every request so the
     /// cache of ADR-0051 is the one of the instance and not of a request.
     query_encoders: Mutex<HashMap<PathBuf, Arc<QueryEncoder>>>,
@@ -232,6 +237,12 @@ impl Loaded {
     #[must_use]
     pub fn query_precision(&self) -> Precision {
         self.query_precision
+    }
+
+    /// The `[debug_journal]` section of the instance (ADR-0122).
+    #[must_use]
+    pub fn debug_journal_config(&self) -> DebugJournalConfig {
+        self.debug_journal
     }
 
     /// Query encoder of the model directory of `access`, built once per
@@ -400,7 +411,15 @@ impl Drop for CreationQuarantine<'_> {
 #[derive(Default)]
 pub struct AppState {
     ready: AtomicBool,
-    loaded: OnceLock<Loaded>,
+    loaded: OnceLock<Arc<Loaded>>,
+    /// The analytics of the instance, once the startup opened them. `None`
+    /// when they could not start without a tokio runtime, which is the case of
+    /// a plain unit test of the startup: nothing is recorded then.
+    analytics: OnceLock<Option<Arc<Analytics>>>,
+    /// The debug journal of the instance, once the startup opened it. `None`
+    /// when the journal is disabled, which is the default, and when the writer
+    /// could not start without a tokio runtime (ADR-0121, decision 1).
+    debug_journal: OnceLock<Option<Arc<DebugJournal>>>,
     auth: OnceLock<Arc<Auth>>,
     jobs: OnceLock<Arc<JobBoard>>,
     shutdown: OnceLock<Shutdown>,
@@ -436,7 +455,82 @@ impl AppState {
     /// Everything loaded at startup, once the loader has finished.
     #[must_use]
     pub fn loaded(&self) -> Option<&Loaded> {
-        self.loaded.get()
+        self.loaded.get().map(Arc::as_ref)
+    }
+
+    /// The analytics of the instance, once the startup has opened them.
+    ///
+    /// `None` before the startup, and on a loader that ran outside a tokio
+    /// runtime: no event is recorded then, and a flush has nothing to write.
+    #[must_use]
+    pub fn analytics(&self) -> Option<&Arc<Analytics>> {
+        self.analytics.get().and_then(Option::as_ref)
+    }
+
+    /// Drains the queue into `analytics.sqlite` and waits for the write
+    /// (ADR-0118, decision 3).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush the writer reports, and
+    /// [`ErrorCode::Internal`] when the writer stopped before answering.
+    pub async fn flush_analytics(&self) -> Result<(), CribleError> {
+        match self.analytics() {
+            Some(analytics) => analytics.flush().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Drains the queue, writes it and stops the writer, bounded by
+    /// [`crate::analytics::STOP_BOUND`] (ADR-0118, decision 3).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush, and [`ErrorCode::Internal`] when the writer
+    /// stopped before answering or when the bound was reached.
+    pub async fn stop_analytics(&self) -> Result<(), CribleError> {
+        match self.analytics() {
+            Some(analytics) => analytics.stop().await,
+            None => Ok(()),
+        }
+    }
+
+    /// The debug journal of the instance, once the startup has opened it.
+    ///
+    /// `None` when the journal is disabled (the default), and on a loader that
+    /// ran outside a tokio runtime: nothing is recorded then, and a flush has
+    /// nothing to write (ADR-0121, decision 1).
+    #[must_use]
+    pub fn debug_journal(&self) -> Option<&Arc<DebugJournal>> {
+        self.debug_journal.get().and_then(Option::as_ref)
+    }
+
+    /// Drains the journal queue into `debug.sqlite` and waits for the write
+    /// (ADR-0122, decision 7).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush the writer reports, and [`ErrorCode::Internal`]
+    /// when the writer stopped before answering.
+    pub async fn flush_debug_journal(&self) -> Result<(), CribleError> {
+        match self.debug_journal() {
+            Some(journal) => journal.flush().await,
+            None => Ok(()),
+        }
+    }
+
+    /// Drains the journal queue, writes it and stops its writer, bounded by
+    /// [`crate::debug_journal::STOP_BOUND`] (ADR-0122, decision 7).
+    ///
+    /// # Errors
+    ///
+    /// The error of the flush, and [`ErrorCode::Internal`] when the writer
+    /// stopped before answering or when the bound was reached.
+    pub async fn stop_debug_journal(&self) -> Result<(), CribleError> {
+        match self.debug_journal() {
+            Some(journal) => journal.stop().await,
+            None => Ok(()),
+        }
     }
 
     /// Semaphore of the concurrent searches.
@@ -448,7 +542,7 @@ impl AppState {
     pub fn search_limit(&self) -> Result<Arc<SearchLimit>, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::search_limit)
+            .map(|loaded| loaded.search_limit())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -461,7 +555,7 @@ impl AppState {
     pub fn scan_pool(&self) -> Result<Arc<ScanPool>, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::scan_pool)
+            .map(|loaded| loaded.scan_pool())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -474,7 +568,7 @@ impl AppState {
     pub fn default_timeout_ms(&self) -> Result<u64, CribleError> {
         self.loaded
             .get()
-            .map(Loaded::default_timeout_ms)
+            .map(|loaded| loaded.default_timeout_ms())
             .ok_or_else(|| internal("the instance has not loaded its indexes"))
     }
 
@@ -756,6 +850,7 @@ impl AppState {
             config,
             loaded.writer_queue,
             Arc::clone(jobs),
+            Arc::clone(&loaded.scan_pool),
         )?);
         let handle = Arc::new(IndexHandle {
             name: name.clone(),
@@ -821,6 +916,10 @@ impl AppState {
         self.wait_timeout
             .get_or_init(|| Duration::from_millis(config.limits.wait_timeout_ms));
         let models = ModelRegistry::new();
+        // The scan pool is built before the writers: the fill of the dense
+        // readers sizes the payload pool on its worker count (ADR-0126,
+        // decision 1).
+        let scan_pool = Arc::new(ScanPool::new(config.server.search_threads)?);
         let mut indexes = Vec::new();
         for directory in index_directories(&config.paths.data.join("indexes"))? {
             let index = read_index_config(&directory)?;
@@ -838,6 +937,7 @@ impl AppState {
                 index,
                 config.limits.writer_queue,
                 Arc::clone(&jobs),
+                Arc::clone(&scan_pool),
             )?);
             indexes.push(Arc::new(IndexHandle { name, writer }));
         }
@@ -850,11 +950,12 @@ impl AppState {
             writer_queue: config.limits.writer_queue,
             creation: Mutex::new(()),
             search_limit: Arc::new(SearchLimit::new(config.server.max_concurrent_searches)),
-            scan_pool: Arc::new(ScanPool::new(config.server.search_threads)?),
+            scan_pool,
             default_timeout_ms: config.limits.default_timeout_ms,
             query_cache_entries: config.limits.query_cache_entries,
             query_precision: config.encoder.query_precision,
             query_encoders: Mutex::new(HashMap::new()),
+            debug_journal: config.debug_journal,
         };
         let opened = loaded.indexes()?;
         if opened.is_empty() {
@@ -865,9 +966,30 @@ impl AppState {
             encoders = loaded.models.len(),
             "models and indexes loaded"
         );
+        // ADR-0118, decisions 4 and 5: the analytics open their file, purge the
+        // retention and start their writer before the instance answers a
+        // request. The writer holds a shared `Loaded` so it reads the state of
+        // the indexes at each flush, without a cycle: `Loaded` never knows the
+        // analytics.
+        let loaded = Arc::new(loaded);
+        let analytics = Analytics::start(
+            &config.paths.data,
+            config.analytics.retention_days,
+            Arc::clone(&loaded),
+        )?;
+        // ADR-0122, decisions 7 and 8: the debug journal opens its file, purges
+        // the retention and starts its writer only when it is enabled. A
+        // disabled journal touches no path at all (ADR-0121, decision 1).
+        let journal = DebugJournal::start(&config.paths.data, config.debug_journal)?;
         self.jobs
             .set(jobs)
             .map_err(|_| internal("the job board of the instance was opened twice"))?;
+        self.analytics
+            .set(analytics)
+            .map_err(|_| internal("the analytics of the instance were opened twice"))?;
+        self.debug_journal
+            .set(journal)
+            .map_err(|_| internal("the debug journal of the instance was opened twice"))?;
         self.loaded
             .set(loaded)
             .map_err(|_| internal("the instance configuration was loaded twice"))

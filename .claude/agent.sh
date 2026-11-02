@@ -36,7 +36,9 @@ start=$(date +%s)
 set -- run --auto --agent "$agent" --format json --title "$title"
 if [ -n "$session" ]; then set -- "$@" --session "$session"; fi
 status=0
-opencode "$@" "$message" >"$log" 2>"$log.err" || status=$?
+# opencode run reads stdin when it is not a terminal and waits for its end: an inherited stdin
+# that never closes (a socket) would hang the run before it reaches the service.
+opencode "$@" "$message" </dev/null >"$log" 2>"$log.err" || status=$?
 [ -s "$log.err" ] || rm -f "$log.err"
 
 elapsed=$(($(date +%s) - start))

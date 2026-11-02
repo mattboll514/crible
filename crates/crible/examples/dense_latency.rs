@@ -43,6 +43,7 @@
 //! dense_latency compare   --data D --index I --vectors Q --out O [--filter F]
 //! dense_latency rss       --data D --index I --vectors Q --out O [--passes 1]
 //!                         [--model DIR] [--skip-pass]
+//! dense_latency open      --data D --index I --out O [--opens 200]
 //! dense_latency copy-nocache --src S --dst D
 //! ```
 //!
@@ -83,7 +84,7 @@ use serde_json::{Value, json};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = std::env::args().collect();
     let mode = arguments.get(1).cloned().ok_or(
-        "usage: dense_latency <scan|cross|agree|rescore|exact|compare|rss|copy-nocache> …",
+        "usage: dense_latency <scan|cross|agree|rescore|exact|compare|rss|open|copy-nocache> …",
     )?;
     match mode.as_str() {
         "copy-nocache" => {
@@ -105,6 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "exact" => exact_mode(&arguments, &opened, &out)?,
                 "compare" => compare_mode(&arguments, &opened, &out)?,
                 "rss" => rss_mode(&arguments, &opened, &out)?,
+                "open" => open_mode(&arguments, &opened, &out)?,
                 other => return Err(format!("unknown mode '{other}'").into()),
             }
         }
@@ -1781,6 +1783,90 @@ fn compare_mode(
 }
 
 // ------------------------------------------------------------------ rss ------
+
+/// Cost of `DenseSearcher::open` alone, repeated on one generation.
+///
+/// The first opening is reported apart: it pays the page-cache misses on the
+/// vector files and the initial mapping. The series that follows runs with the
+/// files in the page cache, which is the state of a server that keeps serving
+/// one generation. Every opening is dropped before the next one, so each
+/// measure pays the checksum of the whole vector file, as production does on
+/// every query today (ADR-0120, decision 2).
+fn open_mode(
+    arguments: &[String],
+    opened: &Opened,
+    out: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let opens: usize = optional(arguments, "--opens")
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(200);
+    let snapshot = opened.snapshot();
+    let segments = snapshot.segments().to_vec();
+    let live = snapshot.filters().live().len();
+    let mut vector_bytes = 0_u64;
+    for meta in &segments {
+        let name = match meta.precision {
+            crible_core::config::ReferencePrecision::Fp16 => "vectors.f16",
+            crible_core::config::ReferencePrecision::Fp32 => "vectors.f32",
+        };
+        vector_bytes +=
+            fs::metadata(opened.segments_directory.join(&meta.segment_id).join(name))?.len();
+    }
+    let scan_pool = ScanPool::new(opened.threads)?;
+    let directory = opened.segments_directory.clone();
+    let records = opened.records_path.clone();
+
+    eprintln!(
+        "open: index '{}', {} segment(s), {} live passages, {vector_bytes} vector bytes per opening",
+        opened.index,
+        segments.len(),
+        live
+    );
+    let mut durations: Vec<f64> = Vec::with_capacity(opens);
+    let mut first_ms = f64::NAN;
+    for index in 0..opens.saturating_add(1) {
+        let started = Instant::now();
+        let searcher =
+            scan_pool.install(|| DenseSearcher::open(&directory, &segments, &records))?;
+        let elapsed = started.elapsed().as_secs_f64() * 1e3;
+        drop(searcher);
+        if index == 0 {
+            first_ms = elapsed;
+            eprintln!(
+                "open 1/{}: {elapsed:.3} ms (first, reported apart)",
+                opens + 1
+            );
+        } else {
+            durations.push(elapsed);
+            eprintln!("open {}/{}: {elapsed:.3} ms", index + 1, opens + 1);
+        }
+    }
+    let summary = summarise(&durations);
+    let report = json!({
+        "kind": "open",
+        "index": opened.index,
+        "segments": segments.len(),
+        "segment_meta": segments
+            .iter()
+            .map(|meta| json!({
+                "segment_id": meta.segment_id.clone(),
+                "iid_start": meta.iid_start.get(),
+                "count": meta.count,
+                "dims": meta.dims,
+            }))
+            .collect::<Vec<Value>>(),
+        "live_passages": live,
+        "vector_bytes_per_open": vector_bytes,
+        "opens": durations.len(),
+        "first_ms": first_ms,
+        "series_ms": durations,
+        "summary_ms": summary,
+    });
+    fs::write(out, serde_json::to_vec_pretty(&report)?)?;
+    println!("open: wrote {}", out.display());
+    Ok(())
+}
 
 fn rss_mode(
     arguments: &[String],

@@ -61,6 +61,46 @@ pub const DIMS: usize = 4;
 /// External identifier of the document every test of this module writes.
 pub const DOC_ID: &str = "DOC-1";
 
+/// `[debug_journal]` section of the fixture (`docs/07-stack-et-deploiement.md:89-92`).
+///
+/// The default is the one of the documentation: the journal is disabled, no
+/// request is sampled, and an entry lives seven days. A test that needs the
+/// journal enabled builds its instance with [`Instance::with_journal`] or
+/// [`instance_with_alpha_and_journal`], and reads it through
+/// `GET /v1/debug/queries` or [`crible_store::debug_journal::read_queries`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Journal {
+    /// `debug_journal.enabled`.
+    pub enabled: bool,
+    /// `debug_journal.sample_rate`, in `[0, 1]`.
+    pub sample_rate: f64,
+    /// `debug_journal.ttl_days`; `0` is refused at the startup (ADR-0122,
+    /// decision 8).
+    pub ttl_days: usize,
+}
+
+impl Default for Journal {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sample_rate: 0.0,
+            ttl_days: 7,
+        }
+    }
+}
+
+impl Journal {
+    /// The journal enabled, with `sample_rate` and seven days of life.
+    #[must_use]
+    pub fn enabled(sample_rate: f64) -> Self {
+        Self {
+            enabled: true,
+            sample_rate,
+            ..Self::default()
+        }
+    }
+}
+
 /// A temporary instance: its directory (kept alive for the test), its
 /// configuration.
 pub struct Instance {
@@ -73,7 +113,7 @@ impl Instance {
     pub fn new() -> Self {
         let directory = tempfile::tempdir().expect("a temporary instance is creatable");
         let exchange = directory.path().join("exchange");
-        Self::with_exchange(directory, &exchange, 0)
+        Self::with_exchange(directory, &exchange, 0, Journal::default())
     }
 
     /// Creates an instance whose `[server].max_concurrent_searches` is `max`.
@@ -83,7 +123,7 @@ impl Instance {
     pub fn with_max_concurrent_searches(max: usize) -> Self {
         let directory = tempfile::tempdir().expect("a temporary instance is creatable");
         let exchange = directory.path().join("exchange");
-        Self::with_exchange(directory, &exchange, max)
+        Self::with_exchange(directory, &exchange, max, Journal::default())
     }
 
     /// Creates an instance that shares `exchange` with another instance.
@@ -92,12 +132,27 @@ impl Instance {
     /// directory is not owned here.
     pub fn sharing(exchange: &Path) -> Self {
         let directory = tempfile::tempdir().expect("a temporary instance holder is creatable");
-        Self::with_exchange(directory, exchange, 0)
+        Self::with_exchange(directory, exchange, 0, Journal::default())
+    }
+
+    /// Creates an instance whose `[debug_journal]` section is `journal`.
+    ///
+    /// The default section writes nothing and opens no file (ADR-0121,
+    /// decision 1), so every existing test keeps the behaviour it had.
+    pub fn with_journal(journal: Journal) -> Self {
+        let directory = tempfile::tempdir().expect("a temporary instance is creatable");
+        let exchange = directory.path().join("exchange");
+        Self::with_exchange(directory, &exchange, 0, journal)
     }
 
     /// Writes the directories, the model and `crible.toml`, then loads the
     /// configuration with an empty environment.
-    fn with_exchange(directory: TempDir, exchange: &Path, max_concurrent_searches: usize) -> Self {
+    fn with_exchange(
+        directory: TempDir,
+        exchange: &Path,
+        max_concurrent_searches: usize,
+        journal: Journal,
+    ) -> Self {
         let root = directory.path();
         for name in ["data", "models"] {
             std::fs::create_dir_all(root.join(name)).expect("an instance directory is creatable");
@@ -108,8 +163,11 @@ impl Instance {
             .expect("the outbox of the exchange is creatable");
         write_external_model(root);
         let path = root.join("crible.toml");
-        std::fs::write(&path, config_toml(root, exchange, max_concurrent_searches))
-            .expect("crible.toml is writable");
+        std::fs::write(
+            &path,
+            config_toml(root, exchange, max_concurrent_searches, journal),
+        )
+        .expect("crible.toml is writable");
         let config = Config::load_with_env(&path, Vec::new()).unwrap_or_else(|error| {
             panic!("the fixture configuration must load: {}", error.message())
         });
@@ -162,7 +220,12 @@ impl Instance {
 }
 
 /// `crible.toml` of the fixture, with an `admin`, a `write` and a `read` key.
-fn config_toml(root: &Path, exchange: &Path, max_concurrent_searches: usize) -> String {
+fn config_toml(
+    root: &Path,
+    exchange: &Path,
+    max_concurrent_searches: usize,
+    journal: Journal,
+) -> String {
     format!(
         r#"
 [server]
@@ -194,9 +257,9 @@ sha256 = "{reader}"
 retention_days = 90
 
 [debug_journal]
-enabled = false
-sample_rate = 0.0
-ttl_days = 7
+enabled = {enabled}
+sample_rate = {sample_rate:?}
+ttl_days = {ttl_days}
 
 [encoder]
 query_precision = "fp32"
@@ -213,6 +276,9 @@ query_cache_entries = 1024
         admin = crible_server::auth::sha256_hex(ADMIN_SECRET),
         writer = crible_server::auth::sha256_hex(WRITE_SECRET),
         reader = crible_server::auth::sha256_hex(READ_SECRET),
+        enabled = journal.enabled,
+        sample_rate = journal.sample_rate,
+        ttl_days = journal.ttl_days,
     )
 }
 
@@ -301,6 +367,36 @@ pub async fn send_with_headers(
     (status, headers, body)
 }
 
+/// Sends one request of raw bytes through the router, with its own identifier.
+///
+/// [`send`] carries a JSON value, so it cannot express a body that is not JSON
+/// at all: this is the sender of the malformed-body tests, and the
+/// `content_type` is omitted when the request declares none (`@relecteur`,
+/// NETTOYER-P7).
+pub async fn send_raw(
+    router: &Router,
+    method: Method,
+    path: &str,
+    secret: &str,
+    request_id: &str,
+    content_type: Option<&str>,
+    body: Body,
+) -> axum::response::Response {
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("x-request-id", request_id)
+        .header(AUTHORIZATION, format!("Bearer {secret}"));
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    router
+        .clone()
+        .oneshot(request.body(body).expect("the request is valid"))
+        .await
+        .expect("the router answers")
+}
+
 /// Creates the fixture index `alpha` and returns the instance, its state and
 /// its router.
 pub async fn instance_with_alpha() -> (Instance, Arc<AppState>, Router) {
@@ -310,7 +406,19 @@ pub async fn instance_with_alpha() -> (Instance, Arc<AppState>, Router) {
 /// Same as [`instance_with_alpha`], with `[server].max_concurrent_searches`
 /// set to `max` for the search-limit tests of ADR-0102.
 pub async fn instance_with_alpha_and_limit(max: usize) -> (Instance, Arc<AppState>, Router) {
-    let instance = Instance::with_max_concurrent_searches(max);
+    instance_with_alpha_section(Instance::with_max_concurrent_searches(max)).await
+}
+
+/// Same as [`instance_with_alpha`], with the `[debug_journal]` section of
+/// `journal` (JOURNAL-DE-DEBUG, ADR-0121 and ADR-0122).
+pub async fn instance_with_alpha_and_journal(
+    journal: Journal,
+) -> (Instance, Arc<AppState>, Router) {
+    instance_with_alpha_section(Instance::with_journal(journal)).await
+}
+
+/// Loads `instance`, mounts its router and creates the fixture index `alpha`.
+async fn instance_with_alpha_section(instance: Instance) -> (Instance, Arc<AppState>, Router) {
     let state = instance.state();
     let router = build_router(Arc::clone(&state));
     let (status, body) = send(
@@ -537,11 +645,22 @@ impl<'a> MakeWriter<'a> for Sink {
 /// binary; every test that reads the journal goes through this function, which
 /// keeps a single subscriber whatever the number of readers.
 pub fn journal() -> Sink {
+    journal_at_level("info")
+}
+
+/// Journal of the test binary, installed once at `level`.
+///
+/// A binary installs a single subscriber: the first call wins, and a later call
+/// with another level keeps the level of the first. The error-journal binary
+/// asks for `trace`, so the rejections axum journals on its own target reach
+/// the sink (`@relecteur`, NETTOYER-P7).
+pub fn journal_at_level(level: &str) -> Sink {
     static JOURNAL: OnceLock<Sink> = OnceLock::new();
     JOURNAL
         .get_or_init(|| {
             let sink = Sink::default();
-            let subscriber = log_subscriber(sink.clone(), "info").expect("info is a valid filter");
+            let subscriber =
+                log_subscriber(sink.clone(), level).expect("the level is a valid filter");
             subscriber
                 .try_init()
                 .expect("no other test of this binary installs a journal");

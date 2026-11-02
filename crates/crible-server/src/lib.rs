@@ -17,6 +17,7 @@
 //! with the tasks that create them; this crate only provides the state, the
 //! router they mount on and the middleware they wrap their routes with.
 
+pub mod analytics;
 pub mod auth;
 // Test barriers of the `failpoints` build only: they hold a job at a precise
 // point while a test reads the instance (ADR-0107, decisions 5 and 6).
@@ -27,6 +28,10 @@ mod barriers;
 mod attach_job;
 mod batches;
 pub mod config;
+mod debug;
+// The debug journal: the bounded queue of its writer and the payload of a
+// recorded request (ADR-0121, ADR-0122).
+pub mod debug_journal;
 mod documents;
 mod error;
 pub mod http;
@@ -49,6 +54,7 @@ mod test_encoding;
 
 pub use auth::{Auth, Client, protect};
 pub use config::Config;
+pub use debug::{TIMING_KEYS, round_ms};
 pub use http::{REQUEST_ID_HEADER, RequestId, accepted, build_router};
 pub use lifecycle::{Phase, Shutdown, StopReason, run_server, serve, serve_blocking, serve_bound};
 pub use logging::{DEFAULT_FILTER, effective_filter, init_logging, log_subscriber};

@@ -38,6 +38,17 @@ ADR-0113 ; mesure créée par la même décision (décision 4).
   `max_concurrent_searches = 0` (valeur par défaut du serveur). `k = 10`,
   `N = 4` clients, aucun encodeur chargé.
 
+### Erratum du 2026-11-01
+
+La machine de cette campagne n'est pas un Mac mini à processeur M4 : c'est le
+MacBook Air M3 de développement, modèle `Mac15,12`, 8 cœurs et 24 Gio de
+mémoire. Le modèle `Mac15,12` désigne un MacBook Air M3 dans la nomenclature
+d'Apple, `sysctl` le confirme sur la machine, et le propriétaire l'a confirmé
+le 2026-11-01 ; les campagnes de MES-01 à MES-03 ont tourné sur la même machine.
+La ligne « Machine » ci-dessus garde son texte d'origine : seule l'étiquette de
+la machine est corrigée ici, et aucune mesure, aucun protocole et aucune
+conclusion du rapport ne changent.
+
 ### Protocole
 
 Le protocole est celui d'ADR-0113, décision 5, sans écart : échauffement de

@@ -335,10 +335,19 @@ impl Config {
                 origin(overrides, "debug_journal.sample_rate")
             )));
         }
+        let ttl_days = count(journal, "debug_journal", "ttl_days", overrides)?;
+        if ttl_days == 0 {
+            // ADR-0122, decision 8: `0` would delete every row at each purge,
+            // which would make the activation a lie; the startup fails instead.
+            return Err(invalid(format!(
+                "setting 'ttl_days' must be at least 1 at {}, got {ttl_days}",
+                origin(overrides, "debug_journal.ttl_days")
+            )));
+        }
         let debug_journal = DebugJournalConfig {
             enabled: boolean(journal, "debug_journal", "enabled", overrides)?,
             sample_rate,
-            ttl_days: count(journal, "debug_journal", "ttl_days", overrides)?,
+            ttl_days,
         };
 
         let encoder = section(document, "encoder")?;
@@ -1023,6 +1032,20 @@ query_cache_entries = 1024
         assert!(message.contains("sample_rate"), "got {message}");
         assert!(
             message.contains("CRIBLE_DEBUG_JOURNAL__SAMPLE_RATE"),
+            "got {message}"
+        );
+    }
+
+    #[test]
+    fn a_ttl_of_zero_days_is_refused_naming_the_key() {
+        // ADR-0122, decision 8: `ttl_days = 0` would empty the journal at each
+        // purge, so the startup fails and names the key and the variable.
+        let error = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__TTL_DAYS", "0")])
+            .expect_err("a ttl of zero days is refused");
+        let message = message(error);
+        assert!(message.contains("ttl_days"), "got {message}");
+        assert!(
+            message.contains("CRIBLE_DEBUG_JOURNAL__TTL_DAYS"),
             "got {message}"
         );
     }

@@ -3,7 +3,9 @@
 //! Dense and lexical search for the Crible engine.
 
 pub mod api;
+pub mod debug;
 pub mod dense;
+pub mod explain;
 pub mod fusion;
 pub mod group;
 pub mod kernels;

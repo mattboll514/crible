@@ -68,12 +68,14 @@
 //! external key only (rule 11 of `AGENTS.md`).
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use crible_core::error::CribleError;
 use crible_core::ids::Iid;
-use crible_store::records::{PassageRecord, ReadPool};
+use crible_store::readers::DenseReaders;
+use crible_store::records::{DocumentRecord, PassageRecord, ReadPool};
 use crible_store::segment::{SegmentMeta, SegmentReader};
 use rayon::prelude::*;
 use serde_json::{Map, Value};
@@ -81,20 +83,23 @@ use serde_json::{Map, Value};
 use super::{Scored, cosine, internal, invalid_request, normalise, windows};
 use crate::pool::Pool;
 
-/// Number of read-only connections the searcher keeps.
+/// Number of read-only connections a searcher opened outside a [`ScanPool`]
+/// keeps.
+///
+/// [`ScanPool`]: crate::scan_pool::ScanPool
 ///
 /// Key reads happen inside the rayon windows, so the pool is sized on the rayon
 /// workers serving the scan: one connection per worker lets every window read
-/// its key without queueing on the `Condvar` behind a single connection. The
-/// value is a bound on connections, not a measured optimum, and no measurement
-/// backs it. The capacity is fixed when the searcher opens; a searcher opened
-/// inside a one-thread pool and used from a wider one would serialise its key
-/// reads, which is correct but slower.
+/// its key without queueing on the `Condvar` behind a single connection. Called
+/// inside [`ScanPool::install`](crate::scan_pool::ScanPool::install), this is
+/// exactly `ScanPool::threads()`, the rule the server applies when it fills a
+/// generation; [`DenseSearcher::open_in`] applies it without relying on the
+/// ambient pool. The value is a bound on connections, not a measured optimum,
+/// and no measurement backs it. The capacity is fixed when the searcher opens;
+/// a searcher opened inside a one-thread pool and used from a wider one would
+/// serialise its key reads, which is correct but slower.
 ///
-/// The searcher owns this pool privately in P1: no other branch shares it. A
-/// later design that shares one read pool between two branches (the lexical
-/// branch of `docs/03-recherche.md`, step 5) would have to revisit the capacity
-/// with a measurement.
+/// The searcher owns this pool privately in P1: no other branch shares it.
 ///
 /// **Nesting rule.** A caller must not call [`DenseSearcher::top_k`] while it
 /// already holds a connection of this same [`ReadPool`]: `checkout` is never
@@ -124,9 +129,18 @@ pub struct Hit {
 
 /// Exact top-k cosine search over the segments of one generation.
 ///
-/// The searcher opens every segment once, at construction, so it serves many
-/// queries: [`SegmentReader::open`] verifies the blake3 checksum of the whole
-/// vector file, which must not be paid per query.
+/// The searcher **composes** from readers that are already open: it opens no
+/// vector file and no connection, so a server builds one per query from the
+/// cache of the published generation (ADR-0126, decisions 1 and 4). The blake3
+/// checksum of a segment is paid once per process, at the fill of that cache
+/// ([`DenseReaders::filled`]), never here.
+///
+/// [`DenseSearcher::open`] stays the opening of a **process**: it fills an empty
+/// cache from a directory and composes the searcher from it, which is what
+/// `crible search`, `crible eval` and the harnesses of the measurements do. It
+/// therefore serves many queries too: the readers it opened are kept for every
+/// later query, and only a caller that throws the searcher away pays the
+/// opening again.
 ///
 /// It owns what the dense branch reads from an epoch: the reference vectors of
 /// the segments, through their memory maps, and the read-only connections to
@@ -136,10 +150,10 @@ pub struct Hit {
 /// therefore serves either strategy, and both read the same bytes.
 #[derive(Debug)]
 pub struct DenseSearcher {
-    /// One reader per segment, sorted by `iid_start`.
-    segments: Vec<SegmentReader>,
-    /// Read-only connections used for the payloads.
-    records: ReadPool,
+    /// One reader per segment, sorted by `iid_start`, shared with the cache.
+    segments: Vec<Arc<SegmentReader>>,
+    /// Read-only connections used for the payloads, shared with the cache.
+    records: Arc<ReadPool>,
     /// Dimensionality of the vectors, shared by every segment.
     dims: u32,
 }
@@ -151,21 +165,84 @@ impl DenseSearcher {
     /// the metadata of the generation being served: the readers are opened
     /// from the two, at once, and kept for every later query. The
     /// `records_path` is the `records.sqlite` file of the same epoch.
+    ///
+    /// This is the opening of one **process**, not of one query: it runs the
+    /// fill of [`DenseReaders`] on an empty cache, so the CLI and the
+    /// measurements open each segment once, by the same code as the server
+    /// (ADR-0126, decision 3).
+    ///
+    /// The payload pool takes one connection per worker of the rayon pool
+    /// installed on the calling thread. [`DenseSearcher::open_in`] states that
+    /// pool, so a caller holding a [`ScanPool`](crate::scan_pool::ScanPool)
+    /// should prefer it: opening this function outside `ScanPool::install`
+    /// sizes the pool on the workers of the ambient rayon pool instead.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`DenseReaders::filled`], plus the ones of
+    /// [`DenseSearcher::compose`].
     pub fn open(
         segments_dir: &Path,
         segments: &[SegmentMeta],
         records_path: &Path,
     ) -> Result<Self, CribleError> {
-        let mut readers = Vec::with_capacity(segments.len());
+        let filled = DenseReaders::empty().filled(
+            segments_dir,
+            segments,
+            records_path,
+            read_connections(),
+        )?;
+        Self::compose(filled.readers(), filled.records()?)
+    }
+
+    /// Opens the searcher of a process **inside** `scan`, on its worker count.
+    ///
+    /// The payload pool takes one read-only connection per scan worker, which
+    /// is [`ScanPool::threads`](crate::scan_pool::ScanPool::threads): that is
+    /// the rule the server applies when it fills the readers of a generation
+    /// (ADR-0126, decision 1), and the CLI applies it here rather than reading
+    /// the ambient rayon pool. The scan of every later query runs on the same
+    /// pool, so no window waits on the `Condvar` of the pool for a connection.
+    ///
+    /// The fill itself runs no `rayon` code — neither `crible-store`'s
+    /// `readers.rs` nor its `segment.rs` has a `par_iter` — so the call stays
+    /// outside [`ScanPool::install`](crate::scan_pool::ScanPool::install) and
+    /// owes it no `Send` bound.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`DenseSearcher::open`].
+    pub fn open_in(
+        scan: &crate::scan_pool::ScanPool,
+        segments_dir: &Path,
+        segments: &[SegmentMeta],
+        records_path: &Path,
+    ) -> Result<Self, CribleError> {
+        let filled =
+            DenseReaders::empty().filled(segments_dir, segments, records_path, scan.threads())?;
+        Self::compose(filled.readers(), filled.records()?)
+    }
+
+    /// Composes a searcher from readers and a payload pool already open.
+    ///
+    /// No file of vectors is read and no connection is opened: the call checks
+    /// that the readers describe one coherent generation — one dimensionality,
+    /// no overlapping range of identifiers — and keeps them. A server calls it
+    /// per query with the `Arc`s of its published cache (ADR-0126,
+    /// decision 1).
+    ///
+    /// # Errors
+    ///
+    /// `internal` when two segments disagree on the dimensionality, or when
+    /// their ranges overlap.
+    pub fn compose(
+        mut readers: Vec<Arc<SegmentReader>>,
+        records: Arc<ReadPool>,
+    ) -> Result<Self, CribleError> {
+        readers.sort_by_key(|reader| reader.meta().iid_start.get());
         let mut dims: Option<u32> = None;
-        for meta in segments {
-            let reader = SegmentReader::open(&segments_dir.join(&meta.segment_id))?;
-            if reader.meta() != meta {
-                return Err(internal(format!(
-                    "the segment directory '{}' does not match the metadata of the generation",
-                    meta.segment_id
-                )));
-            }
+        for reader in &readers {
+            let meta = reader.meta();
             if let Some(expected) = dims
                 && expected != meta.dims
             {
@@ -175,9 +252,7 @@ impl DenseSearcher {
                 )));
             }
             dims = Some(meta.dims);
-            readers.push(reader);
         }
-        readers.sort_by_key(|reader| reader.meta().iid_start.get());
         for pair in readers.windows(2) {
             let (left, right) = (pair[0].meta(), pair[1].meta());
             let left_end = u64::from(left.iid_start.get()) + u64::from(left.count);
@@ -188,12 +263,6 @@ impl DenseSearcher {
                 )));
             }
         }
-        let records = ReadPool::new(records_path, read_connections())?;
-        // `ReadPool` opens its connections lazily and SQLite does not validate
-        // the file header when a connection opens, so a wrong path or a foreign
-        // file would only fail at the first search. One trivial query is run
-        // here, through the pool, so `open` reports the fault instead.
-        records.verify()?;
         Ok(Self {
             segments: readers,
             records,
@@ -257,6 +326,157 @@ impl DenseSearcher {
         candidates.sort_unstable_by(|left, right| right.cmp(left));
         candidates.truncate(k);
         Ok(candidates)
+    }
+
+    /// Exact rank of each passage of `targets` over the whole pool.
+    ///
+    /// The rank is the position the passage takes in the exact ranking of the
+    /// filtered pool, descending cosine, ties broken on the ascending key
+    /// `doc_id#ord` (ADR-0079). It is independent of `k` and of the strategy the
+    /// search ran: it is the `dense.exact_rank` of ADR-0123, decision 5, which
+    /// the exact scan of the pool alone can give.
+    ///
+    /// The scan walks the pool once and counts, for every target, the passages
+    /// that precede it. A passage of equal score is settled on the keys of the
+    /// tie only, so the scan reads no key for the passages that cannot tie. A
+    /// target outside the pool has no rank and is absent from the result.
+    pub(crate) fn exact_ranks(
+        &self,
+        query: &[f32],
+        pool: &Pool,
+        targets: &[(Iid, String)],
+    ) -> Result<HashMap<Iid, u32>, CribleError> {
+        let empty = pool.is_empty();
+        // A vector of the wrong length is refused whatever the pool holds, as
+        // the exact strategy does.
+        let query = self.normalised_query(query, empty)?;
+        if empty || targets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut scored: Vec<(Iid, String, f32)> = Vec::with_capacity(targets.len());
+        for (iid, key) in targets {
+            if !pool.bitmap().contains(iid.get()) {
+                continue;
+            }
+            let score = cosine(self.reader(*iid)?, *iid, &query)?;
+            if !score.is_finite() {
+                return Err(internal(
+                    "a stored vector produces a non-finite cosine, so the ranking is undefined",
+                ));
+            }
+            scored.push((*iid, key.clone(), score));
+        }
+        if scored.is_empty() {
+            return Ok(HashMap::new());
+        }
+        // Best first, the order of the answer.
+        scored.sort_unstable_by(|left, right| {
+            super::compare_ranked(right.2, &right.1, left.2, &left.1)
+        });
+        let scores: Vec<f32> = scored.iter().map(|(_, _, score)| *score).collect();
+        let keys: Vec<&str> = scored.iter().map(|(_, key, _)| key.as_str()).collect();
+        let ranges = windows(
+            pool.bitmap(),
+            pool.len(),
+            rayon::current_num_threads().max(1),
+        );
+        let counted: Vec<(Vec<i64>, Vec<u64>)> = ranges
+            .par_iter()
+            .map(|&(from, to)| self.count_window(&query, pool, from, to, &scores, &keys))
+            .collect::<Result<Vec<_>, CribleError>>()?;
+        let mut better = vec![0_i64; scores.len() + 1];
+        let mut tied = vec![0_u64; scores.len()];
+        for (difference, ties) in counted {
+            for (position, change) in difference.iter().enumerate() {
+                better[position] += change;
+            }
+            for (position, count) in ties.iter().enumerate() {
+                tied[position] += count;
+            }
+        }
+        let mut ranks: HashMap<Iid, u32> = HashMap::with_capacity(scored.len());
+        let mut running = 0_i64;
+        for (position, (iid, _, _)) in scored.iter().enumerate() {
+            running += better[position];
+            let total = u64::try_from(running)
+                .unwrap_or(0)
+                .saturating_add(tied[position]);
+            let rank = total.saturating_add(1);
+            ranks.insert(*iid, u32::try_from(rank).unwrap_or(u32::MAX));
+        }
+        Ok(ranks)
+    }
+
+    /// Counts, over one window, which targets each passage precedes.
+    ///
+    /// The targets are sorted best first. A passage of score `p` precedes every
+    /// target of score below `p`, a prefix the difference array marks in
+    /// constant time. A passage of a score a target shares is settled on the
+    /// keys of that tie, which are then the only keys the scan reads.
+    fn count_window(
+        &self,
+        query: &[f32],
+        pool: &Pool,
+        from: u32,
+        to: u32,
+        scores: &[f32],
+        keys: &[&str],
+    ) -> Result<(Vec<i64>, Vec<u64>), CribleError> {
+        let mut difference = vec![0_i64; scores.len() + 1];
+        let mut tied = vec![0_u64; scores.len()];
+        let mut live = pool.bitmap().iter();
+        live.advance_to(from);
+        for raw in live {
+            if raw > to {
+                break;
+            }
+            let iid = Iid::new(raw);
+            let score = cosine(self.reader(iid)?, iid, query)?;
+            if !score.is_finite() {
+                return Err(internal(
+                    "a stored vector produces a non-finite cosine, so the ranking is undefined",
+                ));
+            }
+            // First target whose score is not strictly above this passage, and
+            // first target strictly below it: the passage precedes every target
+            // of the latter suffix, and itself only if the key decides.
+            let below =
+                scores.partition_point(|target| target.total_cmp(&score) == Ordering::Greater);
+            let equal_end =
+                scores.partition_point(|target| target.total_cmp(&score) != Ordering::Less);
+            if equal_end < scores.len() {
+                difference[equal_end] += 1;
+                difference[scores.len()] -= 1;
+            }
+            // Targets whose score equals this passage: the key decides.
+            if below < equal_end {
+                let key = self.key_of(iid)?;
+                for position in below..equal_end {
+                    if keys[position] > key.as_str() {
+                        tied[position] += 1;
+                    }
+                }
+            }
+        }
+        Ok((difference, tied))
+    }
+
+    /// Document row of `doc_id`, or `None` when the reference state never held it.
+    pub(crate) fn document_record(
+        &self,
+        doc_id: &str,
+    ) -> Result<Option<DocumentRecord>, CribleError> {
+        self.records.read_document(doc_id)
+    }
+
+    /// Passages of `doc_id`, dead ones included, in `ord` order.
+    pub(crate) fn passages_of(&self, doc_id: &str) -> Result<Vec<PassageRecord>, CribleError> {
+        self.records.passages_of_document(doc_id)
+    }
+
+    /// Exact encoder input of `iid`, decompressed.
+    pub(crate) fn passage_text(&self, iid: Iid) -> Result<String, CribleError> {
+        Ok(self.passage_of(iid)?.text)
     }
 
     /// Validates `query` against the generation and returns it normalised.
@@ -365,7 +585,7 @@ impl DenseSearcher {
                 "a passage of the pool falls outside the segments of the generation",
             ));
         }
-        Ok(reader)
+        Ok(reader.as_ref())
     }
 
     /// Key of `iid`, read from its identity columns only.

@@ -1,0 +1,8 @@
+[env]
+# ONNX Runtime 1.31.0 carries the Microsoft 1DS telemetry client, which writes a
+# device id and sends usage data to a third party (ADR-0128). The `crible` binary
+# sets this variable at the start of `main`, but the test binaries of the
+# workspace load ONNX Runtime in their own process and never run that `main`:
+# `force = true` makes cargo set it for them, overriding any value already in
+# the environment, so no test run reopens the telemetry (ADR-0128, decision 5).
+ORT_DISABLE_TELEMETRY = { value = "1", force = true }

@@ -17,12 +17,23 @@
 //!
 //! - `CRIBLE_TEST_BARRIER` names a directory the test owns;
 //! - the job writes `<dir>/ready-<scope>` and waits for `<dir>/go-<scope>`;
+//! - once it has observed `go-<scope>`, the job writes `<dir>/left-<scope>`, so
+//!   a test that must outlive the wake-up waits on that mark instead of on a
+//!   fixed duration (NETTOYER-P7);
 //! - the attach steps need one more mark: a test that arms
 //!   `attach-before-commit` or `attach-after-sqlite-commit` also writes
 //!   `<dir>/armed-attach`, so an attach started by a test that only arms the
 //!   `batch`, `search` or `compaction` scope is never held;
 //! - the pre-token step of the search route needs `<dir>/armed-search-start`,
 //!   so a search of a test that holds a write job is never held there;
+//! - the work step of the search route needs `<dir>/armed-search`, and the one
+//!   of the multi-index route `<dir>/armed-search-multi`, for the same reason:
+//!   every server test sends searches, so a test that arms only another scope
+//!   must not stop them on their token;
+//! - the head of the loop of the analytics writer needs
+//!   `<dir>/armed-analytics-flush`, so a test that holds a write job or a search
+//!   never holds the analytics (ADR-0118, decision 7); that barrier is async, so
+//!   it waits on the async runtime and never blocks the requests of the test;
 //! - without the variable the call returns at once, so a build with the feature
 //!   but no test armed behaves exactly like a normal one.
 //!
@@ -33,6 +44,8 @@ use std::fs;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crible_core::error::{CribleError, ErrorCode};
 
 /// Environment variable naming the barrier directory of a test.
 pub(crate) const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
@@ -78,10 +91,19 @@ pub(crate) fn hold_attach(step: crible_store::generation::CommitStep) {
 /// A write of a test that only arms another scope runs at full speed: the
 /// attach steps are opt-in through [`ATTACH_ARMED`].
 fn wait_attach(scope: &str) {
+    wait_armed(ATTACH_ARMED, scope);
+}
+
+/// Holds the calling job at `scope`, if the mark `armed` is present.
+///
+/// The variable names one directory per process, and several tests of a binary
+/// may arm different steps of it: a step is held only when the test wrote its
+/// own mark, so an unrelated scope never delays a job.
+fn wait_armed(armed: &str, scope: &str) {
     let Ok(directory) = std::env::var(BARRIER_ENV) else {
         return;
     };
-    if !Path::new(&directory).join(ATTACH_ARMED).exists() {
+    if !Path::new(&directory).join(armed).exists() {
         return;
     }
     hold(&directory, scope);
@@ -108,6 +130,132 @@ pub(crate) fn wait_search_start() {
     hold(&directory, "search-start");
 }
 
+/// Name of the mark a test writes to arm the work step of the search route.
+///
+/// Every server test sends searches, and the analytics tests arm a directory of
+/// their own; without this mark their searches would stop here for
+/// [`RELEASE_TIMEOUT`] and answer `504` (INV-17, ADR-0118, decision 7).
+const SEARCH_ARMED: &str = "armed-search";
+
+/// Holds the calling search inside its blocking task, before the computation.
+///
+/// A test proves here that a `504` keeps its concurrency token until the
+/// computation really ends (ADR-0102, decision 3). The step is opt-in through
+/// [`SEARCH_ARMED`].
+pub(crate) fn wait_search() {
+    wait_armed(SEARCH_ARMED, "search");
+}
+
+/// Name of the mark a test writes to arm the work step of the multi-index route.
+const SEARCH_MULTI_ARMED: &str = "armed-search-multi";
+
+/// Holds the calling multi-index search inside its blocking task.
+///
+/// A test proves here the single token of the whole request (ADR-0110,
+/// decision 8; ADR-0102, decision 2). The step is opt-in through
+/// [`SEARCH_MULTI_ARMED`].
+pub(crate) fn wait_search_multi() {
+    wait_armed(SEARCH_MULTI_ARMED, "search-multi");
+}
+
+/// Name of the file that names the index whose search must fail.
+///
+/// With the readers of a served generation cached, a search of that generation
+/// reads no file it has to open, so an epoch removed from disk makes no request
+/// fail any more (ADR-0126, decisions 1 and 4). A test that proves the events of
+/// a multi-index failure taken **inside** the loop (ADR-0124, decision 10) needs
+/// that failure, and the ADR names this seam as the way to produce it
+/// (ADR-0126, decision 6).
+const SEARCH_FAULT: &str = "fault-search-index";
+
+/// Returns the fault armed for the index `index`, when the file names it.
+///
+/// The fault is raised inside the search of one index, after its filter ran and
+/// before its branches: the point where the opening of the readers used to fail
+/// before ADR-0126. Without the variable, without the file or for another index,
+/// this returns `None`, so a build with the feature but no test armed behaves
+/// exactly like a normal one.
+pub(crate) fn fault_search(index: &str) -> Option<CribleError> {
+    let directory = std::env::var(BARRIER_ENV).ok()?;
+    let named = fs::read_to_string(Path::new(&directory).join(SEARCH_FAULT)).ok()?;
+    (named.trim() == index).then(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            format!("the search of the index '{index}' fails at the armed fault"),
+        )
+    })
+}
+
+/// Name of the mark a test writes to arm the analytics writer's hold point.
+///
+/// The analytics writer runs in every server test, so the hold point is opt-in:
+/// without this mark a test that armed another scope runs the writer at full
+/// speed, like the attach steps above.
+const ANALYTICS_FLUSH_ARMED: &str = "armed-analytics-flush";
+
+/// Holds the analytics writer at the head of its loop, before it receives
+/// anything (ADR-0118, decision 7).
+///
+/// It is **async**: the writer runs on the async runtime, and a blocking sleep
+/// here would stop every task of a current-thread test runtime, the route that
+/// must answer while the writer is held included.
+pub(crate) async fn wait_analytics_flush() {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    let directory = Path::new(&directory);
+    if !directory.join(ANALYTICS_FLUSH_ARMED).exists() {
+        return;
+    }
+    let ready = directory.join("ready-analytics-flush");
+    let go = directory.join("go-analytics-flush");
+    if fs::write(&ready, b"").is_err() {
+        return;
+    }
+    let deadline = Instant::now() + RELEASE_TIMEOUT;
+    while !go.exists() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_MILLIS)).await;
+    }
+}
+
+/// Name of the mark a test writes to arm the debug journal writer's hold point.
+///
+/// The journal writer runs in every server test whose instance enabled the
+/// journal, so the hold point is opt-in (ADR-0122, decision 11).
+const DEBUG_JOURNAL_FLUSH_ARMED: &str = "armed-debug-journal-flush";
+
+/// Holds the debug journal writer at the head of its loop, before it receives
+/// anything (ADR-0122, decision 11).
+///
+/// It is **async**, like [`wait_analytics_flush`]: the writer runs on the async
+/// runtime, and the route that must answer while it is held runs there too. The
+/// scope `debug-journal-flush` is distinct from `analytics-flush`, so an armed
+/// barrier for one writer never retains the other.
+pub(crate) async fn wait_debug_journal_flush() {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    let directory = Path::new(&directory);
+    if !directory.join(DEBUG_JOURNAL_FLUSH_ARMED).exists() {
+        return;
+    }
+    let ready = directory.join("ready-debug-journal-flush");
+    let go = directory.join("go-debug-journal-flush");
+    if fs::write(&ready, b"").is_err() {
+        return;
+    }
+    let deadline = Instant::now() + RELEASE_TIMEOUT;
+    while !go.exists() {
+        if Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(POLL_MILLIS)).await;
+    }
+}
+
 /// Holds the calling job until the test writes `<dir>/go-<scope>`.
 ///
 /// `scope` names the barrier: a test that arms two of them in one binary uses
@@ -119,7 +267,12 @@ pub(crate) fn wait(scope: &str) {
     hold(&directory, scope);
 }
 
-/// Writes `<dir>/ready-<scope>` and waits for `<dir>/go-<scope>`.
+/// Writes `<dir>/ready-<scope>`, waits for `<dir>/go-<scope>`, then writes
+/// `<dir>/left-<scope>`.
+///
+/// The mark of the release observed is what lets a test wait until the job has
+/// really left the barrier, instead of sleeping for a duration that a loaded
+/// machine may outlast (NETTOYER-P7).
 fn hold(directory: &str, scope: &str) {
     let directory = Path::new(directory);
     let ready = directory.join(format!("ready-{scope}"));
@@ -134,4 +287,7 @@ fn hold(directory: &str, scope: &str) {
         }
         thread::sleep(Duration::from_millis(POLL_MILLIS));
     }
+    // A failure is not reported: the test owns the directory, and a mark it
+    // cannot read only brings its own bounded wait to its deadline.
+    let _ = fs::write(directory.join(format!("left-{scope}")), b"");
 }

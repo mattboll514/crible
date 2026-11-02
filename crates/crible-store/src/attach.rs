@@ -1348,33 +1348,8 @@ fn float_value(value: f64, name: &str) -> Result<Value, CribleError> {
 
 /// `YYYY-MM-DD` of a count of days since 1970-01-01, as `date32` stores it.
 fn format_date(days: i32) -> String {
-    let (year, month, day) = civil_from_days(i64::from(days));
+    let (year, month, day) = crible_core::time::civil_from_days(i64::from(days));
     format!("{year:04}-{month:02}-{day:02}")
-}
-
-/// Converts a count of days since 1970-01-01 to a civil date.
-///
-/// Howard Hinnant's `civil_from_days`, which is exact over the whole `i32` range
-/// of a `date32` and never depends on a platform clock or time zone.
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = if shifted >= 0 {
-        shifted
-    } else {
-        shifted - 146_096
-    } / 146_097;
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_prime = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
-    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-    (year, month, day)
 }
 
 /// Digest of a passage text, which `dedup: content` compares.
@@ -1568,9 +1543,9 @@ mod tests {
     use crible_core::ids::Generation;
 
     use super::{
-        AcceptanceReport, AttachReport, Counters, acceptance_sample_size, civil_from_days,
-        format_date, percentile,
+        AcceptanceReport, AttachReport, Counters, acceptance_sample_size, format_date, percentile,
     };
+    use crible_core::time::civil_from_days;
 
     #[test]
     fn a_date32_converts_to_the_calendar_day() {

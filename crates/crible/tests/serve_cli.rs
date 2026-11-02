@@ -19,10 +19,11 @@
 //! the test fails before its stop.
 
 use std::fs;
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -31,10 +32,16 @@ use tempfile::TempDir;
 /// Time a child has to answer or to exit before the test fails.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// A configuration file and the port it binds, in a temporary directory.
+/// A configuration file in a temporary directory.
+///
+/// The port is not chosen here: the configuration binds `127.0.0.1:0`, and the
+/// kernel picks a port that is free at the moment of the bind. A port reserved
+/// by the test and released before the child binds can be taken in that
+/// window: the child then exits on `EADDRINUSE`, and a probe that reached the
+/// foreign listener is reset. That race is `CORRIGER-ARRET-SOUS-CHARGE`; the
+/// address the child bound is read from its journal (see [`Server::start`]).
 struct Instance {
     directory: TempDir,
-    port: u16,
 }
 
 impl Instance {
@@ -50,21 +57,16 @@ impl Instance {
             fs::create_dir_all(directory.path().join(name))
                 .expect("an instance directory is creatable");
         }
-        let port = free_port();
         fs::write(
             directory.path().join("crible.toml"),
-            config(directory.path(), port, timeout_ms),
+            config(directory.path(), timeout_ms),
         )
         .expect("crible.toml is writable");
-        Self { directory, port }
+        Self { directory }
     }
 
     fn config_path(&self) -> PathBuf {
         self.directory.path().join("crible.toml")
-    }
-
-    fn address(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], self.port))
     }
 
     /// Adds an index whose model configuration is a named pipe: the loader
@@ -114,13 +116,16 @@ fn fifo(path: &Path) {
     assert!(status.success(), "mkfifo must create {}", path.display());
 }
 
-/// The configuration of `docs/07`, with the paths of `root`, `port` and
+/// The configuration of `docs/07`, with the paths of `root` and
 /// `[limits].default_timeout_ms`.
-fn config(root: &Path, port: u16, timeout_ms: u64) -> String {
+///
+/// The bind address asks the kernel for a free port (`:0`): the test never
+/// reserves a port it cannot keep until the child binds it.
+fn config(root: &Path, timeout_ms: u64) -> String {
     format!(
         r#"
 [server]
-bind = "127.0.0.1:{port}"
+bind = "127.0.0.1:0"
 search_threads = 0
 max_concurrent_searches = 0
 
@@ -157,27 +162,27 @@ query_cache_entries = 1024
     )
 }
 
-/// Reserves an ephemeral port and releases it.
-///
-/// The port is reused by the child at once: a race exists in principle, and no
-/// test elsewhere binds it in the meantime.
-fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("an ephemeral port is bindable");
-    listener
-        .local_addr()
-        .expect("the bound address is known")
-        .port()
-}
-
 /// A child server, killed if the test fails before it stops it.
+///
+/// It holds the journal reader: the first lines are read while the bound
+/// address is awaited, and [`Server::journal`] returns them with the rest.
 struct Server {
     child: Child,
+    stdout: BufReader<ChildStdout>,
+    /// Lines of the journal read before the test reached its first probe.
+    first_lines: Vec<String>,
+    address: SocketAddr,
 }
 
 impl Server {
-    /// Starts `crible serve` on `instance`.
+    /// Starts `crible serve` on `instance` and waits for the address it bound.
+    ///
+    /// The child binds `127.0.0.1:0`: the kernel picks the port at the bind, so
+    /// no other process can take it between the choice and the bind. The
+    /// address is read from the `"the server is bound"` line of the journal,
+    /// which the server logs right after the bind (ADR-0099, "Démarrage").
     fn start(instance: &Instance) -> Self {
-        let child = Command::new(env!("CARGO_BIN_EXE_crible"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_crible"))
             .arg("serve")
             .arg("--config")
             .arg(instance.config_path())
@@ -189,7 +194,27 @@ impl Server {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|error| panic!("crible serve must start: {error}"));
-        Self { child }
+        let stdout = child
+            .stdout
+            .take()
+            .expect("the journal of the child is captured");
+        let mut stderr = child
+            .stderr
+            .take()
+            .expect("the errors of the child are captured");
+        let (address, first_lines, stdout) =
+            bound_address(&mut child, BufReader::new(stdout), &mut stderr, PATIENCE);
+        Self {
+            child,
+            stdout,
+            first_lines,
+            address,
+        }
+    }
+
+    /// The address the child bound.
+    fn address(&self) -> SocketAddr {
+        self.address
     }
 
     /// Waits until the process exits, with a bound.
@@ -209,17 +234,17 @@ impl Server {
     }
 
     /// Reads the journal captured on stdout.
+    ///
+    /// The lines read while the bound address was awaited come first, in order:
+    /// the caller sees the whole journal.
     fn journal(&mut self) -> String {
-        let mut stdout = self
-            .child
-            .stdout
-            .take()
-            .expect("the journal of the child is captured");
         let mut text = String::new();
-        stdout
+        self.stdout
             .read_to_string(&mut text)
             .expect("the journal of the child is readable");
-        text
+        let mut lines = std::mem::take(&mut self.first_lines);
+        lines.extend(text.lines().map(str::to_owned));
+        lines.join("\n")
     }
 
     /// Sends `signal` to the child.
@@ -237,6 +262,153 @@ impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.child.kill();
     }
+}
+
+/// Reads the journal until the child announces the address it bound.
+///
+/// The lines read on the way are returned with the reader, so [`Server::journal`]
+/// can return the whole journal. The line is the one `lifecycle::serve_bound`
+/// logs first (ADR-0099, "Démarrage"): `{"fields":{"message":"the server is
+/// bound","address":"127.0.0.1:<port>",…}}`.
+///
+/// The read runs on a thread of its own and the caller waits on a channel with
+/// `patience` as its bound: a child frozen before the bind fails the test
+/// instead of blocking it forever (`@relecteur`, NETTOYER-P7). A child that
+/// exits or writes an unreadable line fails at once, and the failure quotes
+/// what it wrote on stderr, such as its `cannot bind …` (`@relecteur`,
+/// NETTOYER-P7).
+fn bound_address(
+    child: &mut Child,
+    stdout: BufReader<ChildStdout>,
+    stderr: &mut ChildStderr,
+    patience: Duration,
+) -> (SocketAddr, Vec<String>, BufReader<ChildStdout>) {
+    let (sender, receiver) = mpsc::channel::<JournalLine>();
+    let reader = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        loop {
+            match read_journal_line(&mut stdout) {
+                Ok(Some((line, Some(address)))) => {
+                    let _ = sender.send(JournalLine::Line(line));
+                    let _ = sender.send(JournalLine::Bound(address));
+                    return stdout;
+                }
+                Ok(Some((line, None))) => {
+                    if sender.send(JournalLine::Line(line)).is_err() {
+                        return stdout;
+                    }
+                }
+                Ok(None) => return stdout,
+                Err(message) => {
+                    let _ = sender.send(JournalLine::Unreadable(message));
+                    return stdout;
+                }
+            }
+        }
+    });
+    let deadline = Instant::now() + patience;
+    let mut lines = Vec::new();
+    loop {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(JournalLine::Line(line)) => lines.push(line),
+            Ok(JournalLine::Bound(address)) => {
+                let stdout = reader
+                    .join()
+                    .expect("the journal reader ends once it announces the bound");
+                return (address, lines, stdout);
+            }
+            Ok(JournalLine::Unreadable(message)) => {
+                let errors = stderr_after_exit(child, stderr, patience);
+                panic!(
+                    "the journal of the child is unreadable: {message}; journal {lines:?}, \
+                     stderr {errors:?}"
+                );
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let status = exited_status(child, patience);
+                let errors = stderr_after_exit(child, stderr, patience);
+                panic!(
+                    "crible serve announces the address it bound before it exits, got \
+                     {lines:?}; the child exited {status}; stderr {errors:?}"
+                );
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let _ = child.kill();
+                let status = exited_status(child, patience);
+                let errors = stderr_after_exit(child, stderr, patience);
+                panic!(
+                    "crible serve did not announce the address it bound within {patience:?}, \
+                     so the test gives up; journal {lines:?}, child {status}, stderr {errors:?}"
+                );
+            }
+        }
+    }
+}
+
+/// One line of the child journal, or the announcement of its address.
+enum JournalLine {
+    /// A complete line, already trimmed.
+    Line(String),
+    /// The line that carries the bound address.
+    Bound(SocketAddr),
+    /// A line that is not the JSON object a journal line must be.
+    Unreadable(String),
+}
+
+/// Reads one line of `stdout` and parses the address when it is the bound one.
+///
+/// `Ok(None)` is the end of the journal: the child closed its stdout.
+fn read_journal_line(
+    stdout: &mut BufReader<ChildStdout>,
+) -> Result<Option<(String, Option<SocketAddr>)>, String> {
+    let mut raw = String::new();
+    let read = stdout
+        .read_line(&mut raw)
+        .map_err(|error| format!("the journal of the child is not readable: {error}"))?;
+    if read == 0 {
+        return Ok(None);
+    }
+    let line = raw.trim_end();
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|error| format!("a journal line is a JSON object, got {line:?}: {error}"))?;
+    if value["fields"]["message"] != "the server is bound" {
+        return Ok(Some((line.to_owned(), None)));
+    }
+    let address = value["fields"]["address"]
+        .as_str()
+        .ok_or_else(|| format!("the bound line carries its address, got {line:?}"))?;
+    let address = address
+        .parse()
+        .map_err(|error| format!("the bound address parses, got {address:?}: {error}"))?;
+    Ok(Some((line.to_owned(), Some(address))))
+}
+
+/// Waits for `child` to exit on its own, bounded by `patience`, then reports it.
+///
+/// The wait never panics: it runs on the failure path of [`bound_address`],
+/// whose panic message quotes the result.
+fn exited_status(child: &mut Child, patience: Duration) -> String {
+    let deadline = Instant::now() + patience;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return format!("{status}"),
+            Ok(None) if Instant::now() >= deadline => return "still running".to_owned(),
+            Ok(None) => sleep(Duration::from_millis(20)),
+            Err(error) => return format!("unpollable: {error}"),
+        }
+    }
+}
+
+/// Kills `child` if it still runs and returns what it wrote on stderr.
+///
+/// A dead child closes its stderr, so the read returns: the diagnostics of a
+/// failure never block the test.
+fn stderr_after_exit(child: &mut Child, stderr: &mut ChildStderr, patience: Duration) -> String {
+    let _ = child.kill();
+    let _ = exited_status(child, patience);
+    let mut text = String::new();
+    let _ = stderr.read_to_string(&mut text);
+    text
 }
 
 /// One reply of a probe, read over a socket.
@@ -344,9 +516,9 @@ fn serve_answers_the_probes_and_stops_on_sigterm() {
     let instance = Instance::new();
     let mut server = Server::start(&instance);
 
-    let health = wait_for(instance.address(), "/health", 200);
+    let health = wait_for(server.address(), "/health", 200);
     assert!(health.body.contains("\"ok\""), "got {}", health.body);
-    let ready = wait_for(instance.address(), "/ready", 200);
+    let ready = wait_for(server.address(), "/ready", 200);
     assert!(ready.body.contains("\"ready\""), "got {}", ready.body);
 
     server.signal("TERM");
@@ -404,8 +576,8 @@ fn serve_stops_on_sigterm_while_the_loader_waits() {
     let instance = Instance::new().with_blocked_model();
     let mut server = Server::start(&instance);
 
-    wait_for(instance.address(), "/health", 200);
-    let ready = try_get(instance.address(), "/ready").expect("the server accepts");
+    wait_for(server.address(), "/health", 200);
+    let ready = try_get(server.address(), "/ready").expect("the server accepts");
     assert_eq!(
         ready.status, 503,
         "the loader is still waiting on the model"
@@ -426,9 +598,9 @@ fn serve_exits_at_once_on_a_second_signal_during_the_drain() {
     // only the second signal can end the process within the test.
     let instance = Instance::with_timeout(60_000);
     let mut server = Server::start(&instance);
-    wait_for(instance.address(), "/ready", 200);
+    wait_for(server.address(), "/ready", 200);
 
-    let mut held = TcpStream::connect(instance.address()).expect("the server accepts");
+    let mut held = TcpStream::connect(server.address()).expect("the server accepts");
     held.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n")
         .expect("the partial request is writable");
 
@@ -454,9 +626,86 @@ fn serve_stops_on_sigint() {
     // ADR-0099: SIGINT triggers the same sequence as SIGTERM.
     let instance = Instance::new();
     let mut server = Server::start(&instance);
-    wait_for(instance.address(), "/ready", 200);
+    wait_for(server.address(), "/ready", 200);
 
     server.signal("INT");
     let status = server.wait_for_exit();
     assert!(status.success(), "SIGINT stops cleanly too, got {status}");
+}
+
+/// Runs `operation`, which must panic, and returns the message it carried.
+fn panic_message<T>(operation: impl FnOnce() -> T) -> String {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+        Ok(_) => panic!("the operation must panic"),
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| (*text).to_owned())
+            })
+            .unwrap_or_else(|| "a panic payload without a message".to_owned()),
+    }
+}
+
+/// A child frozen before the bind fails the awaiting test, bounded by the
+/// patience it is given, instead of blocking on its journal forever
+/// (`@relecteur`, NETTOYER-P7).
+#[cfg(unix)]
+#[test]
+fn bound_address_gives_up_on_a_child_that_never_announces_the_bound_line() {
+    // `sleep` writes nothing on stdout and stays alive: the journal reader
+    // blocks exactly like the one of a server frozen before its bind.
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sleep must start");
+    let stdout = BufReader::new(child.stdout.take().expect("stdout is captured"));
+    let mut stderr = child.stderr.take().expect("stderr is captured");
+    let patience = Duration::from_millis(200);
+    let started = Instant::now();
+    let message = panic_message(|| bound_address(&mut child, stdout, &mut stderr, patience));
+    assert!(
+        started.elapsed() < PATIENCE,
+        "the wait is bounded by the patience, got {:?}",
+        started.elapsed()
+    );
+    assert!(
+        message.contains("did not announce the address it bound"),
+        "the failure names the missing announcement, got {message}"
+    );
+}
+
+/// A child that dies before the bind fails at once, and its failure quotes the
+/// stderr that explains it (`@relecteur`, NETTOYER-P7).
+#[cfg(unix)]
+#[test]
+fn bound_address_reports_the_stderr_of_a_child_that_died_before_the_bind() {
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg("echo 'cannot bind 127.0.0.1:1: address in use' >&2; exit 3")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sh must start");
+    let stdout = BufReader::new(child.stdout.take().expect("stdout is captured"));
+    let mut stderr = child.stderr.take().expect("stderr is captured");
+    let started = Instant::now();
+    let message = panic_message(|| bound_address(&mut child, stdout, &mut stderr, PATIENCE));
+    assert!(
+        started.elapsed() < PATIENCE,
+        "a dead child fails before the patience runs out, got {:?}",
+        started.elapsed()
+    );
+    assert!(
+        message.contains("announces the address it bound before it exits"),
+        "the failure names the missing announcement, got {message}"
+    );
+    assert!(
+        message.contains("cannot bind 127.0.0.1:1"),
+        "the failure quotes the stderr of the child, got {message}"
+    );
 }

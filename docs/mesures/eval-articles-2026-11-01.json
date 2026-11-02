@@ -1,0 +1,1116 @@
+{
+  "command": "crible eval --data data/j7-demo/data --index articles --queries data/j7-demo/queries/articles.jsonl --models data/models --modes dense,lexical,hybrid --k 10 --out docs/mesures --repeat 3",
+  "date": "2026-11-01",
+  "exact_threshold": 0,
+  "format_version": 1,
+  "game": "articles",
+  "generation": 1,
+  "index": "articles",
+  "k": 10,
+  "modes": {
+    "dense": {
+      "dense_strategy": {
+        "binary": 63
+      },
+      "fidelity": {
+        "n": 63,
+        "overlap_at_10": 0.9855379188712521,
+        "recall_at_10": 0.9825396825396824
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 1.354,
+          "p95": 2.671,
+          "p99": 2.807
+        },
+        "encode": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "fetch": {
+          "p50": 0.176,
+          "p95": 1.776,
+          "p99": 2.702
+        },
+        "filter": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "group": {
+          "p50": 0.002,
+          "p95": 0.003,
+          "p99": 0.003
+        },
+        "total": {
+          "p50": 1.562,
+          "p95": 3.342,
+          "p99": 4.371
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.0,
+        "n": 13,
+        "recall_at_k": 0.0
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q01",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q02",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q03",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q04",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q05",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q06",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q07",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.8888888888888888,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q08",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q09",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q10",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q11",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q12",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q30",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S001"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S002"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S003"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S004"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S005"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S006"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S007"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S008"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S009"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S010"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S011"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S012"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S013"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S014"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S015"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S016"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S017"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S018"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S019"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S020"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S021"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S022"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S023"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S024"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S025"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S026"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S027"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S028"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S029"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S030"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S031"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S032"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S033"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S034"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S035"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S036"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S037"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S038"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S039"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S040"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S041"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S042"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S043"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S044"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S045"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S046"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S047"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S048"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S049"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S050"
+        }
+      ]
+    },
+    "hybrid": {
+      "dense_strategy": {
+        "binary": 63
+      },
+      "fidelity": {
+        "n": 63,
+        "overlap_at_10": 0.9562169312169307,
+        "recall_at_10": 0.9507936507936503
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 1.407,
+          "p95": 2.154,
+          "p99": 2.807
+        },
+        "encode": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.002
+        },
+        "fetch": {
+          "p50": 0.185,
+          "p95": 1.851,
+          "p99": 2.724
+        },
+        "filter": {
+          "p50": 0.001,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "fusion": {
+          "p50": 0.017,
+          "p95": 0.024,
+          "p99": 0.027
+        },
+        "group": {
+          "p50": 0.005,
+          "p95": 0.005,
+          "p99": 0.006
+        },
+        "lexical": {
+          "p50": 0.756,
+          "p95": 1.216,
+          "p99": 1.305
+        },
+        "total": {
+          "p50": 1.641,
+          "p95": 3.637,
+          "p99": 4.301
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.0,
+        "n": 13,
+        "recall_at_k": 0.0
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q01",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q02",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q03",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.8,
+          "fidelity_recall_at_10": 0.8,
+          "id": "Q04",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q05",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q06",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q07",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q08",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q09",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q10",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q11",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q12",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "Q30",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S001"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S002"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S003"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S004"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S005"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S006"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S007"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S008"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S009"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S010"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S011"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S012"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S013"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S014"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S015"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S016"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S017"
+        },
+        {
+          "fidelity_overlap_at_10": 0.7,
+          "fidelity_recall_at_10": 0.7,
+          "id": "S018"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S019"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S020"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S021"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S022"
+        },
+        {
+          "fidelity_overlap_at_10": 0.8,
+          "fidelity_recall_at_10": 0.8,
+          "id": "S023"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S024"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S025"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S026"
+        },
+        {
+          "fidelity_overlap_at_10": 0.7,
+          "fidelity_recall_at_10": 0.7,
+          "id": "S027"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S028"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S029"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S030"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S031"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S032"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S033"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S034"
+        },
+        {
+          "fidelity_overlap_at_10": 0.8888888888888888,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S035"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S036"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S037"
+        },
+        {
+          "fidelity_overlap_at_10": 0.8888888888888888,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S038"
+        },
+        {
+          "fidelity_overlap_at_10": 0.8,
+          "fidelity_recall_at_10": 0.8,
+          "id": "S039"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S040"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S041"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S042"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S043"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S044"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S045"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "S046"
+        },
+        {
+          "fidelity_overlap_at_10": 0.8888888888888888,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S047"
+        },
+        {
+          "fidelity_overlap_at_10": 0.875,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S048"
+        },
+        {
+          "fidelity_overlap_at_10": 0.9,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S049"
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 0.9,
+          "id": "S050"
+        }
+      ]
+    },
+    "lexical": {
+      "latency": {
+        "fetch": {
+          "p50": 0.179,
+          "p95": 0.208,
+          "p99": 0.226
+        },
+        "filter": {
+          "p50": 0.0,
+          "p95": 0.001,
+          "p99": 0.001
+        },
+        "group": {
+          "p50": 0.002,
+          "p95": 0.002,
+          "p99": 0.003
+        },
+        "lexical": {
+          "p50": 0.661,
+          "p95": 0.979,
+          "p99": 1.039
+        },
+        "total": {
+          "p50": 0.844,
+          "p95": 1.178,
+          "p99": 1.238
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.0,
+        "n": 13,
+        "recall_at_k": 0.0
+      },
+      "queries": [
+        {
+          "id": "Q01",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q02",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q03",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q04",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q05",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q06",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q07",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q08",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q09",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q10",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q11",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q12",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "Q30",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "id": "S001"
+        },
+        {
+          "id": "S002"
+        },
+        {
+          "id": "S003"
+        },
+        {
+          "id": "S004"
+        },
+        {
+          "id": "S005"
+        },
+        {
+          "id": "S006"
+        },
+        {
+          "id": "S007"
+        },
+        {
+          "id": "S008"
+        },
+        {
+          "id": "S009"
+        },
+        {
+          "id": "S010"
+        },
+        {
+          "id": "S011"
+        },
+        {
+          "id": "S012"
+        },
+        {
+          "id": "S013"
+        },
+        {
+          "id": "S014"
+        },
+        {
+          "id": "S015"
+        },
+        {
+          "id": "S016"
+        },
+        {
+          "id": "S017"
+        },
+        {
+          "id": "S018"
+        },
+        {
+          "id": "S019"
+        },
+        {
+          "id": "S020"
+        },
+        {
+          "id": "S021"
+        },
+        {
+          "id": "S022"
+        },
+        {
+          "id": "S023"
+        },
+        {
+          "id": "S024"
+        },
+        {
+          "id": "S025"
+        },
+        {
+          "id": "S026"
+        },
+        {
+          "id": "S027"
+        },
+        {
+          "id": "S028"
+        },
+        {
+          "id": "S029"
+        },
+        {
+          "id": "S030"
+        },
+        {
+          "id": "S031"
+        },
+        {
+          "id": "S032"
+        },
+        {
+          "id": "S033"
+        },
+        {
+          "id": "S034"
+        },
+        {
+          "id": "S035"
+        },
+        {
+          "id": "S036"
+        },
+        {
+          "id": "S037"
+        },
+        {
+          "id": "S038"
+        },
+        {
+          "id": "S039"
+        },
+        {
+          "id": "S040"
+        },
+        {
+          "id": "S041"
+        },
+        {
+          "id": "S042"
+        },
+        {
+          "id": "S043"
+        },
+        {
+          "id": "S044"
+        },
+        {
+          "id": "S045"
+        },
+        {
+          "id": "S046"
+        },
+        {
+          "id": "S047"
+        },
+        {
+          "id": "S048"
+        },
+        {
+          "id": "S049"
+        },
+        {
+          "id": "S050"
+        }
+      ]
+    }
+  },
+  "pool_size": 50000,
+  "queries": 63,
+  "queries_with_expected": 13,
+  "repeat": 3,
+  "rescore_candidates": 1000,
+  "rescore_candidates_source": "configuration",
+  "version": "0.1.0"
+}

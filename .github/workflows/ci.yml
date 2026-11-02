@@ -9,6 +9,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Complement of 2026-11-01 to ADR-0068: the CI keeps no debug information, so
+  # `target/` stays smaller and linking writes less to the disk of the runner.
+  CARGO_PROFILE_DEV_DEBUG: 0
 
 jobs:
   rust:
@@ -16,6 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # Complement of 2026-11-01 to ADR-0068: several feature sets are linked in
+      # one `target/`, and the disk of the runner fills up. The SDKs the project
+      # does not use are removed, and the free space is measured before and after.
+      # A missing directory is not an error.
+      - name: Free the disk of the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@master
         with:
@@ -51,10 +63,13 @@ jobs:
       # `compaction_recovery` arms the store failpoint through the server's own
       # `failpoints` feature (complement of 2026-10-29 to ADR-0068, decision 2):
       # without these two steps the recovery of ADR-0108 is never run in CI.
+      # `crible` carries the same feature, forwarded to `crible-store`: the CLI
+      # tests that count the openings of the dense readers only exist with it
+      # (ADR-0126, decision 6).
       - name: Lint the server failpoint build
-        run: cargo clippy -p crible-server --all-targets --locked --features failpoints -- -D warnings
+        run: cargo clippy -p crible-server -p crible --all-targets --locked --features failpoints -- -D warnings
       - name: Test the server failpoint build
-        run: cargo test -p crible-server --locked --features failpoints
+        run: cargo test -p crible-server -p crible --locked --features failpoints
       - name: Test the Python client against the binary
         working-directory: clients/python
         env:
@@ -62,6 +77,11 @@ jobs:
         run: |
           uv sync
           uv run pytest -m server
+      # Complement of 2026-11-01 to ADR-0068: the free space at the end of the job
+      # confirms or refutes the diagnosis of the run 41343484760.
+      - name: Report the disk of the runner
+        if: always()
+        run: df -h /
 
   python:
     name: Python

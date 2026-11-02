@@ -57,7 +57,7 @@
 //! to P7 (`docs/06-observabilite.md`); this module returns tantivy's value only.
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::BinaryHeap;
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::sync::Arc;
 
 use crible_core::error::{CribleError, ErrorCode};
@@ -138,6 +138,137 @@ pub fn search(
     Ok(scored)
 }
 
+/// Rank and score of each passage of `targets` among the pool passages the
+/// query scores.
+///
+/// The rank is the position of the passage in the order of [`search`] over the
+/// whole pool — descending BM25 score, ties broken on the ascending key — and it
+/// is independent of `k` (ADR-0123, decision 5). A target outside the pool, or
+/// one the query does not match, is absent from the result; a state that serves
+/// nothing refuses as [`search`] does.
+///
+/// The ranking is never materialised: two scans of the pool count what comes
+/// before each target — strictly above by score, then, at the same score, the
+/// keys that sort first. The first scan reads the scores of the targets only;
+/// the second counts the pool and keeps the identifiers tied with a target, so
+/// keys are read for the ties only (ADR-0123, complement of 2026-11-01, "À
+/// surveiller").
+pub fn ranks(
+    snapshot: &Snapshot,
+    pool: &Pool,
+    query: &str,
+    targets: &[Iid],
+) -> Result<HashMap<Iid, (u32, f32)>, CribleError> {
+    let Some(index) = reader_of(snapshot)? else {
+        return Ok(HashMap::new());
+    };
+    if pool.is_empty() || targets.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let terms = index.terms(query)?;
+    if terms.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let wanted: BTreeSet<u32> = targets
+        .iter()
+        .map(|iid| iid.get())
+        .filter(|iid| pool.bitmap().contains(*iid))
+        .collect();
+    if wanted.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let searcher = index.searcher();
+    let query = query_of(&searcher, &terms)?;
+    let bitmap = Arc::new(pool.bitmap().clone());
+    let found = searcher
+        .search(&query, &TargetScores::new(Arc::clone(&bitmap), wanted))
+        .map_err(|error| internal(format!("the lexical search failed: {error}")))?;
+    if found.foreign_iid {
+        return Err(internal(
+            "the lexical index holds a value in its iid fast field that is not a Crible internal \
+             identifier",
+        ));
+    }
+    if found.scores.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Ascending score: the second scan then binary-searches, for each passage,
+    // the targets it outscores.
+    let mut scores: Vec<(Iid, Score)> = found.scores;
+    scores.sort_unstable_by(|left, right| left.1.total_cmp(&right.1));
+    let slots: Arc<Vec<Score>> = Arc::new(scores.iter().map(|(_, score)| *score).collect());
+    let counts = searcher
+        .search(
+            &query,
+            &RankScan::new(Arc::clone(&bitmap), Arc::clone(&slots)),
+        )
+        .map_err(|error| internal(format!("the lexical search failed: {error}")))?;
+    if counts.foreign_iid {
+        return Err(internal(
+            "the lexical index holds a value in its iid fast field that is not a Crible internal \
+             identifier",
+        ));
+    }
+    let count = slots.len();
+    // The keys of the targets are read for the ties only: the rank of a target
+    // is the number of passages strictly above it, plus the tied passages whose
+    // key sorts first, so a target without a tie never needs its key
+    // (ADR-0123, complement of 2026-11-01, "À surveiller"). `target_keys` is
+    // filled on the first tie that names a slot: the score of a target is its
+    // slot, so the key of that slot is read once for all its tied passages.
+    let mut target_keys: Vec<Option<String>> = vec![None; count];
+    let mut tied_smaller = vec![0_u64; count];
+    for (slot, iid) in counts.tied {
+        if target_keys.get(slot).is_some_and(Option::is_none) {
+            let target = scores
+                .get(slot)
+                .map(|(iid, _)| *iid)
+                .ok_or_else(|| internal("a tie names a slot no target occupies"))?;
+            let key = index
+                .passage_key(target)?
+                .ok_or_else(|| {
+                    internal("a passage of the pool has no passage row in the reference state")
+                })?
+                .to_string();
+            if let Some(entry) = target_keys.get_mut(slot) {
+                *entry = Some(key);
+            }
+        }
+        let key = index
+            .passage_key(Iid::new(iid))?
+            .ok_or_else(|| {
+                internal("a passage of the pool has no passage row in the reference state")
+            })?
+            .to_string();
+        if target_keys
+            .get(slot)
+            .and_then(Option::as_deref)
+            .is_some_and(|target| key.as_str() < target)
+            && let Some(tied) = tied_smaller.get_mut(slot)
+        {
+            *tied = tied.saturating_add(1);
+        }
+    }
+    // `above[slot]` counts the passages scoring strictly above the target of
+    // `slot`; `greater_at[p]` counts those that outscore exactly `p` targets.
+    let mut above = vec![0_u64; count];
+    // The passages that outscore every target are the first to count, at slot
+    // `count`, and they precede every target.
+    let mut running = counts.greater_at.get(count).copied().unwrap_or(0);
+    for slot in (0..count).rev() {
+        above[slot] = running;
+        running = running.saturating_add(counts.greater_at.get(slot).copied().unwrap_or(0));
+    }
+    let mut ranks = HashMap::with_capacity(count);
+    for (slot, (iid, score)) in scores.iter().enumerate() {
+        let rank = 1_u64
+            .saturating_add(above.get(slot).copied().unwrap_or(0))
+            .saturating_add(tied_smaller.get(slot).copied().unwrap_or(0));
+        ranks.insert(*iid, (u32::try_from(rank).unwrap_or(u32::MAX), *score));
+    }
+    Ok(ranks)
+}
+
 /// Renders tantivy's explanation of one passage for `query`, or `None` when the
 /// branch has nothing to explain.
 ///
@@ -177,6 +308,83 @@ pub fn explain(
         .explain(&searcher, address)
         .map(Some)
         .map_err(|error| internal(format!("the lexical explanation failed: {error}")))
+}
+
+/// Contribution of one analysed term of the query to the score of a passage.
+///
+/// `tf` is the frequency the analysis chain of the index would count in the
+/// passage, and `score` the BM25 contribution of the term, in the unit of
+/// `lexical.score` (ADR-0123, decision 6). The type carries no internal
+/// identifier and no raw tantivy structure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermScore {
+    /// Term as the analysis chain of the index produced it.
+    pub term: String,
+    /// Frequency of the term in the passage.
+    pub tf: u32,
+    /// BM25 contribution of the term to the score of the passage.
+    pub score: f32,
+}
+
+/// Per-term contributions of `query` to the score of one passage.
+///
+/// `key` names the passage and `text` is its exact encoder input, the text the
+/// index analysed. The result holds one entry per analysed term of the query
+/// that the passage contains, sorted by descending contribution; a term the
+/// passage lacks has no entry. `None` means the branch has nothing to explain —
+/// no reader, no such passage, no analysed term — as [`explain`] does. No raw
+/// tantivy `Explanation` leaves this module (ADR-0123, decision 6).
+pub fn term_scores(
+    snapshot: &Snapshot,
+    key: &PassageKey,
+    query: &str,
+    text: &str,
+) -> Result<Option<Vec<TermScore>>, CribleError> {
+    let Some(index) = reader_of(snapshot)? else {
+        return Ok(None);
+    };
+    let Some(iid) = index.passage_iid(key)? else {
+        return Ok(None);
+    };
+    let terms = index.terms(query)?;
+    if terms.is_empty() {
+        return Ok(None);
+    }
+    let searcher = index.searcher();
+    let Some(address) = document_of(&searcher, iid)? else {
+        return Ok(None);
+    };
+    let field = text_field(&searcher)?;
+    let frequencies = index.term_frequencies(text)?;
+    let mut scores: Vec<TermScore> = Vec::with_capacity(terms.len());
+    for term in terms {
+        let Some(tf) = frequencies.get(&term).copied() else {
+            continue;
+        };
+        if tf == 0 {
+            continue;
+        }
+        let term_query = TermQuery::new(
+            Term::from_field_text(field, &term),
+            IndexRecordOption::WithFreqs,
+        );
+        let explanation = term_query.explain(&searcher, address).map_err(|error| {
+            internal(format!("the lexical explanation of a term failed: {error}"))
+        })?;
+        scores.push(TermScore {
+            term,
+            tf,
+            score: explanation.value(),
+        });
+    }
+    // Descending contribution; the term settles a tie so the list is stable.
+    scores.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.term.cmp(&right.term))
+    });
+    Ok(Some(scores))
 }
 
 /// Lexical reader a query may use, `None` when the epoch has nothing to serve.
@@ -562,6 +770,220 @@ impl SegmentCollector for PoolTopKSegment {
             ambiguous,
             foreign_iid: self.foreign_iid,
         }
+    }
+}
+
+/// Collector of the scores of the passages of `wanted`, for [`ranks`].
+///
+/// It reads the `iid` fast field, drops the documents outside the pool, and
+/// keeps the score of the identifiers the explanation asks for only, so the
+/// first scan costs nothing in memory beyond the targets.
+struct TargetScores {
+    bitmap: Arc<RoaringBitmap>,
+    wanted: Arc<BTreeSet<u32>>,
+}
+
+impl TargetScores {
+    /// Collector of the scores of `wanted` in `bitmap`.
+    fn new(bitmap: Arc<RoaringBitmap>, wanted: BTreeSet<u32>) -> Self {
+        Self {
+            bitmap,
+            wanted: Arc::new(wanted),
+        }
+    }
+}
+
+impl Collector for TargetScores {
+    type Fruit = TargetFound;
+    type Child = TargetScoresSegment;
+
+    fn for_segment(
+        &self,
+        _segment_ord: SegmentOrdinal,
+        segment: &SegmentReader,
+    ) -> tantivy::Result<Self::Child> {
+        Ok(TargetScoresSegment {
+            bitmap: Arc::clone(&self.bitmap),
+            wanted: Arc::clone(&self.wanted),
+            iid: segment.fast_fields().u64(IID_FIELD_NAME)?,
+            scores: Vec::new(),
+            foreign_iid: false,
+        })
+    }
+
+    fn requires_scoring(&self) -> bool {
+        true
+    }
+
+    fn merge_fruits(&self, fruits: Vec<TargetFound>) -> tantivy::Result<TargetFound> {
+        let mut scores = Vec::new();
+        let mut foreign_iid = false;
+        for fruit in fruits {
+            scores.extend(fruit.scores);
+            foreign_iid = foreign_iid || fruit.foreign_iid;
+        }
+        Ok(TargetFound {
+            scores,
+            foreign_iid,
+        })
+    }
+}
+
+/// Scores of the target passages one segment matched.
+struct TargetFound {
+    /// `(identifier, score)` of the targets the segment holds.
+    scores: Vec<(Iid, Score)>,
+    /// Whether the segment held a value the `iid` field cannot carry.
+    foreign_iid: bool,
+}
+
+/// Collector of one segment for [`ranks`]: it keeps the score of the targets.
+struct TargetScoresSegment {
+    bitmap: Arc<RoaringBitmap>,
+    wanted: Arc<BTreeSet<u32>>,
+    iid: Column<u64>,
+    scores: Vec<(Iid, Score)>,
+    foreign_iid: bool,
+}
+
+impl SegmentCollector for TargetScoresSegment {
+    type Fruit = TargetFound;
+
+    fn collect(&mut self, doc: DocId, score: Score) {
+        let Some(value) = self.iid.first(doc) else {
+            return;
+        };
+        let Ok(iid) = u32::try_from(value) else {
+            self.foreign_iid = true;
+            return;
+        };
+        if !self.bitmap.contains(iid) || !self.wanted.contains(&iid) {
+            return;
+        }
+        self.scores.push((Iid::new(iid), score));
+    }
+
+    fn harvest(self) -> TargetFound {
+        TargetFound {
+            scores: self.scores,
+            foreign_iid: self.foreign_iid,
+        }
+    }
+}
+
+/// Collector of the passages that precede each target, for [`ranks`].
+///
+/// A passage is counted in `greater_at[p]`, where `p` is the number of targets
+/// it outscores, and its identifier is kept when it ties with the score of a
+/// target, so the key decides later.
+struct RankScan {
+    bitmap: Arc<RoaringBitmap>,
+    slots: Arc<Vec<Score>>,
+}
+
+impl RankScan {
+    /// Collector of `slots`, the ascending scores of the targets, in `bitmap`.
+    fn new(bitmap: Arc<RoaringBitmap>, slots: Arc<Vec<Score>>) -> Self {
+        Self { bitmap, slots }
+    }
+}
+
+impl Collector for RankScan {
+    type Fruit = RankFound;
+    type Child = RankScanSegment;
+
+    fn for_segment(
+        &self,
+        _segment_ord: SegmentOrdinal,
+        segment: &SegmentReader,
+    ) -> tantivy::Result<Self::Child> {
+        Ok(RankScanSegment {
+            bitmap: Arc::clone(&self.bitmap),
+            slots: Arc::clone(&self.slots),
+            iid: segment.fast_fields().u64(IID_FIELD_NAME)?,
+            found: RankFound {
+                greater_at: vec![0; self.slots.len() + 1],
+                tied: Vec::new(),
+                foreign_iid: false,
+            },
+        })
+    }
+
+    fn requires_scoring(&self) -> bool {
+        true
+    }
+
+    fn merge_fruits(&self, fruits: Vec<RankFound>) -> tantivy::Result<RankFound> {
+        let mut merged = RankFound {
+            greater_at: vec![0; self.slots.len() + 1],
+            tied: Vec::new(),
+            foreign_iid: false,
+        };
+        for fruit in fruits {
+            if merged.greater_at.len() < fruit.greater_at.len() {
+                merged.greater_at.resize(fruit.greater_at.len(), 0);
+            }
+            for (slot, count) in fruit.greater_at.iter().enumerate() {
+                if let Some(total) = merged.greater_at.get_mut(slot) {
+                    *total = total.saturating_add(*count);
+                }
+            }
+            merged.tied.extend(fruit.tied);
+            merged.foreign_iid = merged.foreign_iid || fruit.foreign_iid;
+        }
+        Ok(merged)
+    }
+}
+
+/// Counts one segment gathered for [`ranks`].
+struct RankFound {
+    /// Per number of targets a passage outscores, the number of such passages.
+    greater_at: Vec<u64>,
+    /// `(slot, identifier)` of the passages tied with the score of a target.
+    tied: Vec<(usize, u32)>,
+    /// Whether the segment held a value the `iid` field cannot carry.
+    foreign_iid: bool,
+}
+
+/// Collector of one segment for [`ranks`]: it counts the passages before the
+/// targets, without keeping them.
+struct RankScanSegment {
+    bitmap: Arc<RoaringBitmap>,
+    slots: Arc<Vec<Score>>,
+    iid: Column<u64>,
+    found: RankFound,
+}
+
+impl SegmentCollector for RankScanSegment {
+    type Fruit = RankFound;
+
+    fn collect(&mut self, doc: DocId, score: Score) {
+        let Some(value) = self.iid.first(doc) else {
+            return;
+        };
+        let Ok(iid) = u32::try_from(value) else {
+            self.found.foreign_iid = true;
+            return;
+        };
+        if !self.bitmap.contains(iid) {
+            return;
+        }
+        let outscores = self
+            .slots
+            .partition_point(|target| target.total_cmp(&score) == Ordering::Less);
+        if let Some(count) = self.found.greater_at.get_mut(outscores) {
+            *count = count.saturating_add(1);
+        }
+        let equal_end = self
+            .slots
+            .partition_point(|target| target.total_cmp(&score) != Ordering::Greater);
+        for slot in outscores..equal_end {
+            self.found.tied.push((slot, iid));
+        }
+    }
+
+    fn harvest(self) -> RankFound {
+        self.found
     }
 }
 

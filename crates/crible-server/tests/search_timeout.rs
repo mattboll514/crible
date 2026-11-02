@@ -57,12 +57,14 @@ fn wait_ready(directory: &Path, scope: &str) {
     );
 }
 
-/// A dense search with `timeout_ms` milliseconds.
+/// A dense search with `timeout_ms` milliseconds, asking for `debug`: a `504`
+/// must not carry the member (ADR-0119, decision 10).
 fn body(timeout_ms: u64) -> Value {
     json!({
         "vector": base64_vector([1.0, 0.0, 0.0, 0.0]),
         "mode": "dense",
         "timeout_ms": timeout_ms,
+        "debug": true,
     })
 }
 
@@ -89,6 +91,9 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     // SAFETY: the test holds the barrier environment slot, so no other test of
     // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The work step of the route is opt-in, like the attach steps of
+    // `src/barriers.rs`: this test holds it on purpose.
+    std::fs::write(barrier.path().join("armed-search"), b"").expect("the work step is armable");
 
     let (_instance, _state, router) = instance_with_alpha_and_limit(1).await;
 
@@ -99,6 +104,10 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     let (status, first_body) = first.await.expect("the request task finishes");
     assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{first_body}");
     assert_eq!(first_body["error"]["code"], "timeout", "{first_body}");
+    assert!(
+        first_body.get("debug").is_none(),
+        "a `504` never carries `debug` (ADR-0119, decision 10): {first_body}"
+    );
 
     // The `504` did not give the token back: the work is still held.
     let (status, headers, overloaded) = send_with_headers(
@@ -141,6 +150,10 @@ async fn an_expired_search_keeps_its_token_until_the_computation_really_ends() {
     }
     assert_eq!(status, StatusCode::OK, "the token comes back: {last}");
     assert_eq!(last["pool_size"], 0, "{last}");
+    assert!(
+        last.get("debug").is_some(),
+        "the `200` carries the member it was asked for: {last}"
+    );
 
     // SAFETY: the test owns the variable until its end, as for `set_var`.
     unsafe { std::env::remove_var("CRIBLE_TEST_BARRIER") };
@@ -156,6 +169,8 @@ async fn took_ms_covers_the_time_the_work_is_held() {
     // SAFETY: the test holds the barrier environment slot, so no other test of
     // this process reads or writes the variable while it is set.
     unsafe { std::env::set_var("CRIBLE_TEST_BARRIER", barrier.path()) };
+    // The work step of the route is opt-in: this test holds it on purpose.
+    std::fs::write(barrier.path().join("armed-search"), b"").expect("the work step is armable");
 
     let (_instance, _state, router) = instance_with_alpha().await;
     let held = spawn_search(&router, 30_000);
@@ -197,9 +212,8 @@ async fn took_ms_starts_before_the_token_is_taken() {
     // The pre-token step is opt-in, like the attach steps of `src/barriers.rs`.
     std::fs::write(barrier.path().join("armed-search-start"), b"")
         .expect("the pre-token step is armable");
-    // The work barrier is released up front: this test measures the wait that
-    // precedes the token, not the computation.
-    std::fs::write(barrier.path().join("go-search"), b"").expect("the work barrier is released");
+    // The work step is not armed here: this test measures the wait that precedes
+    // the token, not the computation.
 
     let (_instance, _state, router) = instance_with_alpha().await;
     let held = spawn_search(&router, 30_000);

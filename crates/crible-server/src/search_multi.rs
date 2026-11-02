@@ -43,7 +43,7 @@
 //! most `k × passages_per_document` entries. No `dedup` and no regrouping ever
 //! crosses an index boundary (ADR-0110, decision 8).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,16 +54,24 @@ use crible_core::config::FusionConfig;
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::filter::Filter;
 use crible_search::api::{self, ReturnSelection};
+use crible_search::debug::DebugCapture;
+use crible_search::explain::{ExplainEntry, ExplainId};
 use crible_search::group::Grouping;
 use crible_search::pipeline::{Mode, RankedHit, ScoreType};
 use serde_json::{Map, Value, json};
 
+use crate::AppState;
+use crate::analytics::{self, Operation, Record, StageDurations};
+use crate::auth::Client;
+use crate::debug_journal::{self, Deposit, RequestView};
+use crate::error;
+use crate::http::RequestId;
 use crate::jobs::Published;
+use crate::limits;
 use crate::search::{
-    self, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS, ReturnSpec, SearchRequest,
-    json_object, optional_string, reject_unknown,
+    self, ExplainContext, ExplainTarget, IndexOutcome, IndexParams, Inputs, MULTI_BODY_FIELDS,
+    Observed, ReturnSpec, SearchRequest, json_object, optional_string, reject_unknown,
 };
-use crate::{AppState, error, http::RequestId, limits};
 
 /// Constant of the reciprocal rank fusion, shared with the fusion of the two
 /// branches of one index (`docs/03-recherche.md:101`, ADR-0110, decision 9).
@@ -99,41 +107,290 @@ const RRF_CONSTANT: f32 = 60.0;
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
     Json(body): Json<Value>,
 ) -> Response {
-    let plan = match MultiRequest::parse(&body).and_then(|request| validate(&state, request)) {
-        Ok(plan) => plan,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
-    };
+    // ADR-0122, decision 1: the draw happens at the entry of the route, before
+    // the concurrency token.
+    let sampled = debug_journal::sampled(&state);
+    let (answer, records, deposit) =
+        search_inner(Arc::clone(&state), &identifier, body, sampled).await;
+    analytics::record(&state, records, &client);
+    if let Some(deposit) = deposit {
+        debug_journal::deposit(&state, deposit, &client, &identifier.0);
+    }
+    answer
+}
+
+/// The work of [`search`], with the events it records (ADR-0117, decision 5)
+/// and the row of the debug journal, when the request is recorded (ADR-0122).
+///
+/// A multi-index search produces **one event per target**, never a consolidated
+/// row: the pool, the strategy and the contributions belong to one target, and a
+/// global row could only average them (ADR-0117, decision 5). The journal, on the
+/// other hand, writes **one row per request** (ADR-0122, decision 4).
+async fn search_inner(
+    state: Arc<AppState>,
+    identifier: &RequestId,
+    body: Value,
+    sampled: bool,
+) -> (Response, Vec<Record>, Option<Deposit>) {
+    let entry = Instant::now();
+    // A request refused before its targets are resolved has no target: its one
+    // event carries an empty index, and the first name of the body is never
+    // reused, since that name was not resolved (ADR-0124, decision 10).
+    let plan =
+        match MultiRequest::parse(&body).and_then(|request| validate(&state, request, sampled)) {
+            Ok(plan) => plan,
+            Err(failure) => {
+                let answered = Observed::new_at(String::new(), Operation::SearchMulti, entry)
+                    .refused(&failure, &identifier.0);
+                let deposit = sampled.then(|| failure_deposit(&failure, None, &identifier.0));
+                return (answered.0, answered.1, deposit);
+            }
+        };
+    // ADR-0122, decisions 1 and 3: a `debug` request is recorded when the
+    // journal is on, and the draw records the others; the capture and the plan
+    // are built only for a recorded request.
+    let recording = plan.recording;
+    let request = recording.then(|| request_payload_of(&body, &plan));
+    // The targets that reached the token, kept for a refusal taken at the token
+    // and for a deadline that expires before any of them answers (ADR-0124,
+    // decision 10).
+    let resolved: Vec<(String, Option<String>)> = plan
+        .targets
+        .iter()
+        .map(|target| {
+            (
+                target.index.clone(),
+                analytics::filter_shape(&target.filter),
+            )
+        })
+        .collect();
     let limit = match state.search_limit() {
         Ok(limit) => limit,
-        Err(failure) => return error::rendered(&failure, &identifier.0),
+        Err(failure) => {
+            // The targets were resolved: the refusal is spread over them
+            // (ADR-0124, decision 10).
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            let records = refused_targets(&resolved, None, plan.mode, entry, &status);
+            let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
+            return (answer, records, deposit);
+        }
     };
+    let index = plan
+        .targets
+        .first()
+        .map_or_else(String::new, |target| target.index.clone());
+    let mut first = Observed::new_at(index, Operation::SearchMulti, entry);
+    first.mode(plan.mode);
+    first.shape(
+        plan.targets
+            .first()
+            .and_then(|t| analytics::filter_shape(&t.filter)),
+    );
+    first.validate_now();
 
     let holder = Arc::clone(&state);
     // `took_ms` starts at the acquisition of the concurrency token (ADR-0109,
     // decision 2). This instant is read just before the token, so the
     // acquisition and everything after it are covered.
     let started = Instant::now();
+    let reported = first.clone();
+    let mode = plan.mode;
+    let journal_request = request.clone();
     let outcome = limit
         .run_blocking(plan.deadline, move || {
             // A test holds the work here to prove the single token of the whole
             // request (ADR-0110, decision 8; ADR-0102, decision 2).
             #[cfg(feature = "failpoints")]
-            crate::barriers::wait("search-multi");
-            run_multi(&holder, plan).map(|outcome| outcome.with_start(started))
+            crate::barriers::wait_search_multi();
+            run_multi(&holder, plan, first, started, journal_request)
         })
         .await;
 
     match outcome {
-        Ok(Ok(outcome)) => (
-            axum::http::StatusCode::OK,
-            Json(outcome.render(&identifier.0)),
-        )
-            .into_response(),
-        Ok(Err(failure)) => limits::refusal(&failure, &identifier.0),
-        Err(failure) => limits::refusal(&failure, &identifier.0),
+        Ok((Ok(outcome), records, journal)) => {
+            let took_ms = Some(outcome.took_ms);
+            let payload = journal;
+            let answer = (
+                axum::http::StatusCode::OK,
+                Json(outcome.render(&identifier.0)),
+            )
+                .into_response();
+            let deposit =
+                payload.map(|payload| multi_deposit(&identifier.0, mode, "ok", took_ms, payload));
+            (answer, records, deposit)
+        }
+        Ok((Err(failure), records, journal)) => {
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            let payload = journal.or_else(|| failure_payload(&failure, request));
+            let deposit =
+                payload.map(|payload| multi_deposit(&identifier.0, mode, &status, None, payload));
+            (answer, records, deposit)
+        }
+        // The deadline expired before the blocking thread answered: no target
+        // reported anything, so every resolved target carries the deadline, with
+        // empty steps, and `mode` is kept because it was resolved (ADR-0124,
+        // decision 10).
+        Err(failure) => {
+            let answer = error::rendered(&failure, &identifier.0);
+            let status = analytics::status(&answer);
+            let records = refused_targets(&resolved, Some(reported), mode, entry, &status);
+            let deposit = recording.then(|| failure_deposit(&failure, request, &identifier.0));
+            (answer, records, deposit)
+        }
     }
+}
+
+/// Builds the journal row of a multi-index answer (ADR-0122, decision 4).
+///
+/// `index` stays `NULL` for **every** request of this route, even when it names
+/// one target: the column says which route wrote the row, not how many targets
+/// it had.
+fn multi_deposit(
+    request_id: &str,
+    mode: Mode,
+    status: &str,
+    total_ms: Option<f64>,
+    payload: Value,
+) -> Deposit {
+    Deposit {
+        request_id: request_id.to_owned(),
+        index: None,
+        client: String::new(),
+        mode: mode.as_str().to_owned(),
+        status: status.to_owned(),
+        total_ms,
+        payload,
+    }
+}
+
+/// The payload of a refused request whose `request` member is already known.
+fn failure_payload(failure: &CribleError, request: Option<Value>) -> Option<Value> {
+    request.map(|request| {
+        json!({
+            "request": request,
+            "error": { "code": failure.code().as_str() },
+        })
+    })
+}
+
+/// The row of a refusal recorded before the `request` member could be built.
+fn failure_deposit(failure: &CribleError, request: Option<Value>, request_id: &str) -> Deposit {
+    Deposit {
+        request_id: request_id.to_owned(),
+        index: None,
+        client: String::new(),
+        mode: String::new(),
+        status: failure.code().as_str().to_owned(),
+        total_ms: None,
+        payload: failure_payload(failure, request)
+            .unwrap_or_else(|| json!({ "error": { "code": failure.code().as_str() } })),
+    }
+}
+
+/// Builds the `request` member of a multi-index journal row.
+///
+/// `filter` is absent: each target carries its own in `targets[]`
+/// (ADR-0121, decision 4). The rest of the body is common to the request.
+fn request_payload_of(body: &Value, plan: &Plan) -> Value {
+    let fusion = plan.fusion.unwrap_or_else(|| {
+        plan.targets.first().map_or(FusionConfig::Rrf, |target| {
+            target.published.config.search.fusion
+        })
+    });
+    let view = RequestView {
+        body,
+        mode: plan.mode,
+        k: plan.k,
+        exact: plan.exact,
+        fusion,
+        by_document: plan.grouping.by_document,
+        passages_per_document: plan.grouping.passages_per_document,
+        dedup_content: plan.grouping.dedup_content,
+        with_filter: false,
+        dimension: plan.dimension,
+    };
+    debug_journal::request_payload(&view)
+}
+
+/// One event per target that ran, the last one with `last_status` and the
+/// earlier ones `ok` (ADR-0117, decision 5).
+///
+/// The callers hand the observers in the order of the request: on a failure, the
+/// faulty target is the last of them, because `run_multi` truncates the list
+/// there.
+fn events_of(observers: Vec<Observed>, last_status: &str) -> Vec<Record> {
+    let mut records = Vec::with_capacity(observers.len());
+    let count = observers.len();
+    for (position, observed) in observers.into_iter().enumerate() {
+        let status = if position + 1 == count {
+            last_status.to_owned()
+        } else {
+            "ok".to_owned()
+        };
+        records.extend(observed.events(status));
+    }
+    records
+}
+
+/// One event per resolved target, every one of them carrying `status`.
+///
+/// It serves the failures that happen **after** the targets were resolved and
+/// before any of them answered: the request has targets, so each of them reports
+/// the refusal, with the steps that ran left empty rather than invented
+/// (ADR-0124, decision 10). `targets` holds the name and the filter shape of each
+/// resolved target, in the order of the request; `first` keeps what the route
+/// measured before the token — the validation, and the encoding when it
+/// happened.
+fn refused_targets(
+    targets: &[(String, Option<String>)],
+    first: Option<Observed>,
+    mode: Mode,
+    entry: Instant,
+    status: &str,
+) -> Vec<Record> {
+    let mut records = Vec::with_capacity(targets.len());
+    for (position, (index, shape)) in targets.iter().enumerate() {
+        let observed = match (&first, position) {
+            (Some(observed), 0) => observed.clone(),
+            _ => Observed::new_at(index.clone(), Operation::SearchMulti, entry),
+        };
+        let mut observed = observed;
+        observed.mode(mode);
+        observed.shape(shape.clone());
+        records.extend(observed.events(status.to_owned()));
+    }
+    records
+}
+
+/// Events of a failed target and of the targets the loop never reached.
+///
+/// `position` is the target whose search failed: its observer is closed at
+/// `started`, and the list is truncated **at** it, so the targets after it never
+/// produce an event of their own with work that did not happen (ADR-0124,
+/// decision 10). The events of the targets that answered keep `ok`; the faulty
+/// one carries `status`; each target after it carries `status` with empty steps
+/// and no pool size, in the order of the request.
+fn failure_events(
+    observers: &mut Vec<Observed>,
+    resolved: &[(String, Option<String>)],
+    position: usize,
+    started: Instant,
+    mode: Mode,
+    status: &str,
+) -> Vec<Record> {
+    if let Some(observed) = observers.get_mut(position) {
+        observed.finish_at(started);
+    }
+    observers.truncate(position + 1);
+    let mut records = events_of(std::mem::take(observers), status);
+    let unreached = resolved.get(position + 1..).unwrap_or_default();
+    records.extend(refused_targets(unreached, None, mode, started, status));
+    records
 }
 
 /// A multi-index request, validated far enough to take the token.
@@ -154,8 +411,17 @@ struct Plan {
     k: usize,
     /// `exact: true` forces the exact dense calculation.
     exact: bool,
+    /// `debug` asks for the `debug` member of ADR-0119.
+    debug: bool,
+    /// Ids of `explain_ids`, in the order of the request (ADR-0123).
+    explain: Vec<ExplainTarget>,
     /// Deadline of the whole request (ADR-0102, decision 3).
     deadline: Duration,
+    /// Whether the request is recorded by the debug journal (ADR-0122).
+    recording: bool,
+    /// Dimension of the vector the body carries, when it carries one, for the
+    /// `request` member of the journal payload.
+    dimension: Option<usize>,
 }
 
 /// One target of the request, with its published state and its filter.
@@ -166,6 +432,8 @@ struct ResolvedTarget {
     published: Published,
     /// Filter of this target; the empty filter matches every living passage.
     filter: Filter,
+    /// Filter of this target as it was received, for the journal payload.
+    filter_json: Value,
 }
 
 /// Body of the multi-index request: the common fields and the list of targets.
@@ -182,6 +450,8 @@ struct TargetRequest {
     index: String,
     /// `filter` of the target, structurally parsed with its full JSON path.
     filter: Option<Filter>,
+    /// `filter` of the target as received, `{}` when absent.
+    filter_json: Value,
 }
 
 impl MultiRequest {
@@ -232,13 +502,30 @@ fn parse_targets(object: &Map<String, Value>) -> Result<Vec<TargetRequest>, Crib
                 Some(Filter::from_json_str_at(&value.to_string(), &filter_path)?)
             }
         };
-        targets.push(TargetRequest { index, filter });
+        let filter_json = match target.get("filter") {
+            Some(value) if !value.is_null() => value.clone(),
+            _ => json!({}),
+        };
+        targets.push(TargetRequest {
+            index,
+            filter,
+            filter_json,
+        });
     }
     Ok(targets)
 }
 
 /// Applies the order of ADR-0110, decision 7, and builds the plan.
-fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError> {
+fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Plan, CribleError> {
+    // ADR-0123, decision 2: an entry of `explain_ids` must name one of the
+    // targets. The shape of the field was checked with the body, so this is still
+    // the validation step (a) of ADR-0110, before any index is read.
+    let names: BTreeSet<String> = request
+        .targets
+        .iter()
+        .map(|target| target.index.clone())
+        .collect();
+    request.common.check_explain_targets(&names)?;
     let common = request.common;
     // (a) bounds of the body, and the entries of an explicit mode, before any
     // index is read. `targets` was already checked by the parser.
@@ -313,6 +600,7 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
             index: target.index,
             published,
             filter,
+            filter_json: target.filter_json,
         });
     }
     // (c) `return.fields` against the whole set of targets, once their schemas
@@ -321,6 +609,7 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         check_return_names(&common.selection, &targets)?;
     }
     let selection = common.selection.selection();
+    let dimension = inputs.vector_dimension();
 
     // (d) common model of a mode that compares vectors (ADR-0110, decision 3).
     if mode.uses_dense() {
@@ -336,7 +625,13 @@ fn validate(state: &AppState, request: MultiRequest) -> Result<Plan, CribleError
         selection,
         k: common.k,
         exact: common.exact,
+        debug: common.debug,
+        explain: common.explain,
         deadline,
+        // ADR-0122, decision 1: a `debug` request is always recorded when the
+        // journal is on; the draw records the others.
+        recording: state.debug_journal().is_some() && (sampled || common.debug),
+        dimension,
     })
 }
 
@@ -401,7 +696,30 @@ fn check_common_model(state: &AppState, targets: &[ResolvedTarget]) -> Result<()
 }
 
 /// Runs every target, one after the other, then fuses their answers.
-fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> {
+///
+/// It returns the events of the targets **with** the answer, successful or not:
+/// one event per resolved target, never a consolidated row (ADR-0117,
+/// decision 5; ADR-0124, decision 10). The first target carries the validation
+/// and the single encoding
+/// of the request, which happen once and must not be counted again on the
+/// others. Each target closes its own total, so a request of three targets does
+/// not add its whole duration three times (decision 2).
+///
+/// A failure after the targets were resolved records **one event per resolved
+/// target** (ADR-0124, decision 10): the targets that ran keep their status and
+/// their own steps, the faulty one carries the code of the answer, and the
+/// targets that were never reached carry that code too, with empty steps.
+fn run_multi(
+    state: &AppState,
+    plan: Plan,
+    first: Observed,
+    started: Instant,
+    journal_request: Option<Value>,
+) -> (
+    Result<MultiOutcome, CribleError>,
+    Vec<Record>,
+    Option<Value>,
+) {
     let Plan {
         targets,
         mode,
@@ -411,32 +729,117 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
         selection,
         k,
         exact,
+        debug,
+        explain,
+        recording,
         ..
     } = plan;
+    // The name and the filter shape of each resolved target, in the order of the
+    // request: a refusal that leaves no target to report spreads over them
+    // (ADR-0124, decision 10).
+    let resolved: Vec<(String, Option<String>)> = targets
+        .iter()
+        .map(|target| {
+            (
+                target.index.clone(),
+                analytics::filter_shape(&target.filter),
+            )
+        })
+        .collect();
 
     // The single encoding point of the request, whatever the number of targets
     // (ADR-0110, decisions 8 and 11).
-    let first = targets
-        .first()
-        .ok_or_else(|| error::invalid("'$.targets' must name at least one index"))?;
-    let prepared = inputs.prepare(|query| search::encode_query(state, &first.published, query))?;
+    let first_target = match targets.first() {
+        Some(target) => target,
+        None => {
+            let failure = error::invalid("'$.targets' must name at least one index");
+            let payload = failure_payload(&failure, journal_request);
+            let status = failure.code().as_str().to_owned();
+            return (Err(failure), first.events(status), payload);
+        }
+    };
+    let encodes = inputs.encodes();
+    let encoding = Instant::now();
+    let prepared =
+        match inputs.prepare(|query| search::encode_query(state, &first_target.published, query)) {
+            Ok(prepared) => prepared,
+            // No target ran, and every target was resolved: each of them
+            // reports the refusal (ADR-0124, decision 10).
+            Err(failure) => {
+                let payload = failure_payload(&failure, journal_request);
+                let status = failure.code().as_str().to_owned();
+                let records = refused_targets(&resolved, Some(first), mode, started, &status);
+                return (Err(failure), records, payload);
+            }
+        };
+    let encoding = encodes.then(|| encoding.elapsed());
     let vector = match &prepared.vector {
-        Some(vector) => Some(search::check_vector(
-            state,
-            &first.published,
-            vector.clone(),
-        )?),
+        Some(vector) => {
+            match search::check_vector(state, &first_target.published, vector.clone()) {
+                Ok(vector) => Some(vector),
+                Err(failure) => {
+                    let payload = failure_payload(&failure, journal_request);
+                    let status = failure.code().as_str().to_owned();
+                    let records = refused_targets(&resolved, Some(first), mode, started, &status);
+                    return (Err(failure), records, payload);
+                }
+            }
+        }
         None => None,
     };
 
+    // The validation and the single encoding of the request belong to the
+    // global `timings_ms` of `debug`; each target renders `0.0` for them
+    // (ADR-0119, decision 9).
+    // The encoding is measured once, on the observer of the first target and
+    // here; the validation happened before it (ADR-0119, decision 9).
+    let request_validate = first.validate_step();
+    let request_encode = encoding;
+    let mut observers: Vec<Observed> = targets
+        .iter()
+        .enumerate()
+        .map(|(position, target)| {
+            let mut observed = if position == 0 {
+                first.clone()
+            } else {
+                Observed::new(target.index.clone(), Operation::SearchMulti)
+            };
+            observed.mode(mode);
+            observed.shape(analytics::filter_shape(&target.filter));
+            if let Some(encoding) = encoding
+                && position == 0
+            {
+                observed.encoded(encoding);
+            }
+            observed
+        })
+        .collect();
+
     let mut outcomes: Vec<(&ResolvedTarget, IndexOutcome)> = Vec::with_capacity(targets.len());
-    for target in &targets {
+    let mut target_debug: Vec<Value> = Vec::new();
+    let mut target_journal: Vec<Value> = Vec::new();
+    let mut filter_total = Duration::ZERO;
+    let mut dense_total = Duration::ZERO;
+    let mut lexical_total = Duration::ZERO;
+    let mut fusion_total = Duration::ZERO;
+    let mut group_total = Duration::ZERO;
+    let mut fetch_total = Duration::ZERO;
+    for (position, target) in targets.iter().enumerate() {
         let per_index_fusion = fusion.unwrap_or(target.published.config.search.fusion);
-        let outcome = search::search_index(
+        let target_started = Instant::now();
+        // ADR-0122, decision 3: the capture exists for a request that asks for
+        // `debug` or is recorded; without either, no vector is allocated.
+        let mut capture =
+            (debug || recording).then(|| DebugCapture::new(crible_search::debug::DEFAULT_TOP_N));
+        // ADR-0123, decision 4: the target keeps what its explanation reads when
+        // at least one id names it.
+        let explaining = explain
+            .iter()
+            .any(|entry| entry.index.as_deref() == Some(target.index.as_str()));
+        let outcome = match search::search_index(
             state,
-            &target.index,
             &target.published,
-            &IndexParams {
+            IndexParams {
                 mode,
                 vector: vector.as_deref(),
                 text: prepared.text.as_deref(),
@@ -445,8 +848,77 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
                 fusion: per_index_fusion,
                 k,
                 exact,
+                capture: capture.as_mut(),
+                explain: explaining,
             },
-        )?;
+        ) {
+            Ok(outcome) => outcome,
+            Err(failure) => {
+                // One event per resolved target (ADR-0124, decision 10): the
+                // targets that answered keep their `ok` and their own steps, the
+                // faulty one carries the code of the answer, and the targets that
+                // were never reached carry the same code with empty steps — no
+                // duration and no pool size is invented for work that did not
+                // happen.
+                let payload = failure_payload(&failure, journal_request);
+                let status = failure.code().as_str().to_owned();
+                let records = failure_events(
+                    &mut observers,
+                    &resolved,
+                    position,
+                    target_started,
+                    mode,
+                    &status,
+                );
+                return (Err(failure), records, payload);
+            }
+        };
+        // One reading of the target's total, shared by the event and by the
+        // target's `timings_ms` (ADR-0119, decision 7).
+        let target_total = target_started.elapsed();
+        if let Some(observed) = observers.get_mut(position) {
+            observed.target(&outcome, prepared.truncated_query);
+            observed.close_total(target_total);
+        }
+        if debug {
+            target_debug.push(json!({
+                "index": target.index,
+                "plan": crate::debug::plan(
+                    mode,
+                    outcome.strategy,
+                    &target.published.config.search,
+                    outcome.pool_size,
+                    k,
+                    exact,
+                    &grouping,
+                    per_index_fusion,
+                ),
+                "timings_ms": crate::debug::timings(&target_stages(mode, &outcome, target_total)),
+            }));
+        }
+        if recording {
+            // ADR-0122, decision 4: one entry per target, in the order of the
+            // request, with the filter as received and its own generation.
+            // ADR-0119, decision 3: `capture` is omitted when no capture was
+            // built, never written as an empty object.
+            let mut entry = Map::new();
+            entry.insert("index".to_owned(), json!(target.index));
+            entry.insert("filter".to_owned(), target.filter_json.clone());
+            entry.insert("generation".to_owned(), json!(outcome.generation));
+            if let Some(capture) = capture.as_ref() {
+                entry.insert(
+                    "capture".to_owned(),
+                    debug_journal::capture_payload(capture),
+                );
+            }
+            target_journal.push(Value::Object(entry));
+        }
+        filter_total += outcome.filter;
+        dense_total += outcome.stages.dense;
+        lexical_total += outcome.stages.lexical;
+        fusion_total += outcome.stages.fusion;
+        group_total += outcome.stages.group;
+        fetch_total += outcome.stages.fetch;
         outcomes.push((target, outcome));
     }
 
@@ -465,14 +937,184 @@ fn run_multi(state: &AppState, plan: Plan) -> Result<MultiOutcome, CribleError> 
     } else {
         ScoreType::Rrf
     };
+    // ADR-0123, decision 4: the explanation of each target runs after the
+    // global `took_ms`, so its context leaves the outcome here, before the fusion
+    // consumes the rest.
+    let mut contexts: HashMap<String, ExplainContext> = HashMap::new();
+    for (target, outcome) in outcomes.iter_mut() {
+        if let Some(context) = outcome.explain.take() {
+            contexts.insert(target.index.clone(), context);
+        }
+    }
+    let fusing = Instant::now();
     let entries = fuse(outcomes, mode, &grouping, k);
-    let results = render_entries(entries, &targets, score_type, &selection)?;
-    Ok(MultiOutcome {
-        results,
-        targets: summaries,
-        truncated_query: prepared.truncated_query,
-        took_ms: 0.0,
-    })
+    // The fusion between indexes belongs to the global `fusion` of `debug` and
+    // of the journal; it is timed only for a request that needs it
+    // (ADR-0119, decision 9).
+    let exchange_fusion = (debug || recording).then(|| fusing.elapsed());
+    // ADR-0120, decision 1: the global total stops at the end of `fetch`, after
+    // the fusion between indexes and before the JSON rendering of the results.
+    // It is read once and shared with the `debug` member (ADR-0119, decisions 7
+    // and 9) and with the journal (ADR-0121, decision 4).
+    let total = started.elapsed();
+    // ADR-0123, decisions 1, 2 and 4: one flat list, in the order of the request,
+    // each entry naming its index, computed after `fetch` and under the deadline.
+    let explain = match explain_entries(
+        &explain,
+        &contexts,
+        &targets,
+        vector.as_deref(),
+        prepared.text.as_deref(),
+    ) {
+        Ok(rendered) => rendered,
+        Err(failure) => {
+            let payload = failure_payload(&failure, journal_request);
+            let status = failure.code().as_str().to_owned();
+            return (Err(failure), events_of(observers, &status), payload);
+        }
+    };
+    let (results, per_result) =
+        match render_entries(entries, &targets, score_type, &selection, debug) {
+            Ok(rendered) => rendered,
+            // Every target ran: all of them keep their event, and the last one
+            // carries the code of the failure (ADR-0117, decision 5).
+            Err(failure) => {
+                let payload = failure_payload(&failure, journal_request);
+                let status = failure.code().as_str().to_owned();
+                return (Err(failure), events_of(observers, &status), payload);
+            }
+        };
+    let stages = StageDurations {
+        validate: request_validate,
+        encode: request_encode,
+        filter: Some(filter_total),
+        dense: mode.uses_dense().then_some(dense_total),
+        lexical: mode.uses_lexical().then_some(lexical_total),
+        fusion: (mode == Mode::Hybrid)
+            .then_some(fusion_total + exchange_fusion.unwrap_or_default()),
+        group: Some(group_total),
+        fetch: Some(fetch_total),
+        total: Some(total),
+    };
+    let debug = debug.then(|| {
+        json!({
+            "targets": target_debug,
+            "timings_ms": crate::debug::timings(&stages),
+            "per_result": per_result,
+        })
+    });
+    // ADR-0122, decision 4: one row for the request, the text once, and one
+    // entry per target in `targets[]`.
+    let journal = recording.then(|| {
+        let mut payload = Map::new();
+        if let Some(request) = journal_request {
+            payload.insert("request".to_owned(), request);
+        }
+        payload.insert(
+            "timings_ms".to_owned(),
+            debug_journal::timings_payload(&stages),
+        );
+        payload.insert("targets".to_owned(), Value::Array(target_journal));
+        Value::Object(payload)
+    });
+    (
+        Ok(MultiOutcome {
+            results,
+            debug,
+            explain,
+            targets: summaries,
+            truncated_query: prepared.truncated_query,
+            took_ms: total.as_secs_f64() * 1_000.0,
+        }),
+        events_of(observers, "ok"),
+        journal,
+    )
+}
+
+/// Explains the ids of a multi-index request, in the order of the request.
+///
+/// The ids are grouped by index, so one exact scan and one lexical ranking serve
+/// every id of a target (ADR-0123, decision 4). Each entry names its `index`, and
+/// the list is flat even though the computation is per target (decision 2).
+fn explain_entries(
+    requested: &[ExplainTarget],
+    contexts: &HashMap<String, ExplainContext>,
+    targets: &[ResolvedTarget],
+    vector: Option<&[f32]>,
+    text: Option<&str>,
+) -> Result<Option<Vec<Value>>, CribleError> {
+    if requested.is_empty() {
+        return Ok(None);
+    }
+    let mut computed: HashMap<(String, String), ExplainEntry> = HashMap::new();
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    for target in requested {
+        let Some(index) = target.index.as_ref() else {
+            return Err(error::internal(
+                "a multi-index explanation entry names no index, so no target can explain it",
+            ));
+        };
+        if !done.insert(index.clone()) {
+            continue;
+        }
+        let ids: Vec<ExplainId> = requested
+            .iter()
+            .filter(|entry| entry.index.as_deref() == Some(index.as_str()))
+            .map(|entry| entry.id.clone())
+            .collect();
+        let raw: Vec<&str> = requested
+            .iter()
+            .filter(|entry| entry.index.as_deref() == Some(index.as_str()))
+            .map(|entry| entry.raw.as_str())
+            .collect();
+        let context = contexts.get(index).ok_or_else(|| {
+            error::internal("a target asked for an explanation but kept no context for it")
+        })?;
+        let resolved = targets
+            .iter()
+            .find(|resolved| resolved.index == *index)
+            .ok_or_else(|| {
+                error::internal("an explanation names an index the request did not resolve")
+            })?;
+        let entries = context.explain(
+            &resolved.published.snapshot,
+            vector,
+            text,
+            &resolved.published.config.search,
+            &ids,
+        )?;
+        for (entry, raw) in entries.into_iter().zip(raw) {
+            computed.insert((index.clone(), raw.to_owned()), entry);
+        }
+    }
+    let rendered = requested
+        .iter()
+        .filter_map(|target| {
+            let index = target.index.as_ref()?;
+            computed
+                .get(&(index.clone(), target.raw.clone()))
+                .map(|entry| search::render_explain_entry(entry, Some(index)))
+        })
+        .collect();
+    Ok(Some(rendered))
+}
+
+/// Durations of one target, in the shape of `debug`.
+///
+/// `validate` and `encode` happened once for the request, so they are `0.0`
+/// here; the other steps come from the target's own outcome, and its `total` is
+/// the duration read once by the route (ADR-0119, decision 9).
+fn target_stages(mode: Mode, outcome: &IndexOutcome, total: Duration) -> StageDurations {
+    StageDurations {
+        filter: Some(outcome.filter),
+        dense: mode.uses_dense().then_some(outcome.stages.dense),
+        lexical: mode.uses_lexical().then_some(outcome.stages.lexical),
+        fusion: (mode == Mode::Hybrid).then_some(outcome.stages.fusion),
+        group: Some(outcome.stages.group),
+        fetch: Some(outcome.stages.fetch),
+        total: Some(total),
+        ..StageDurations::default()
+    }
 }
 
 /// One unit of the fusion between indexes: a passage, or a document under
@@ -499,6 +1141,9 @@ struct MergedEntry {
     /// Score of the answer: the cosine of the entry in `dense`, the score of the
     /// document in `lexical` and `hybrid`.
     score: f32,
+    /// Rank of the unit in the final list of its index, from 1 (ADR-0119,
+    /// decision 9).
+    target_rank: u32,
 }
 
 /// Fuses the answers of the targets and truncates to `k` units.
@@ -529,12 +1174,17 @@ fn fuse(
 /// Splits the final list of one index into units, scoring them by mode.
 fn units_of(index: &str, hits: Vec<RankedHit>, grouping: &Grouping, rrf: bool) -> Vec<MergedUnit> {
     let mut units = group_hits(index, hits, grouping);
-    if rrf {
-        for (position, unit) in units.iter_mut().enumerate() {
-            // The rank is the position of the unit in the final list of its
-            // index, from 1; every entry of a document carries its score.
-            let rank = f32::from(u16::try_from(position + 1).unwrap_or(u16::MAX));
-            let score = 1.0 / (RRF_CONSTANT + rank);
+    for (position, unit) in units.iter_mut().enumerate() {
+        // The rank is the position of the unit in the final list of its index,
+        // from 1; every entry of a document carries its rank and its score
+        // (ADR-0110, decision 9; ADR-0119, decision 9).
+        let rank = u32::try_from(position + 1).unwrap_or(u32::MAX);
+        for entry in &mut unit.entries {
+            entry.target_rank = rank;
+        }
+        if rrf {
+            let position = f32::from(u16::try_from(position + 1).unwrap_or(u16::MAX));
+            let score = 1.0 / (RRF_CONSTANT + position);
             unit.score = score;
             for entry in &mut unit.entries {
                 entry.score = score;
@@ -561,6 +1211,7 @@ fn group_hits(index: &str, hits: Vec<RankedHit>, grouping: &Grouping) -> Vec<Mer
                 index: entry_index,
                 score: hit.hit.score,
                 hit,
+                target_rank: 0,
             });
             continue;
         }
@@ -573,6 +1224,7 @@ fn group_hits(index: &str, hits: Vec<RankedHit>, grouping: &Grouping) -> Vec<Mer
                 index: entry_index,
                 score: hit.hit.score,
                 hit,
+                target_rank: 0,
             }],
         });
     }
@@ -589,8 +1241,10 @@ fn render_entries(
     targets: &[ResolvedTarget],
     score_type: ScoreType,
     selection: &ReturnSelection,
-) -> Result<Vec<Value>, CribleError> {
+    debug: bool,
+) -> Result<(Vec<Value>, Vec<Value>), CribleError> {
     let mut rendered = Vec::with_capacity(entries.len());
+    let mut per_result = Vec::new();
     for entry in entries {
         let target = targets
             .iter()
@@ -608,34 +1262,143 @@ fn render_entries(
         if let Some(object) = value.as_object_mut() {
             object.insert("index".to_owned(), json!(entry.index));
         }
+        if debug {
+            per_result.push(crate::debug::multi_result_entry(
+                &entry.index,
+                &hit,
+                entry.target_rank,
+            ));
+        }
         rendered.push(value);
     }
-    Ok(rendered)
+    Ok((rendered, per_result))
 }
 
 /// One answer of the multi-index search, before its envelope.
 struct MultiOutcome {
     results: Vec<Value>,
+    /// `targets[]`, `timings_ms` and `per_result` of a `debug` request; absent
+    /// without `debug` (ADR-0119, decision 9).
+    debug: Option<Value>,
+    /// Entries of `explain_ids`, flat and in the order of the request; absent
+    /// without `explain_ids` (ADR-0123, decision 2).
+    explain: Option<Vec<Value>>,
     targets: Vec<Value>,
     truncated_query: bool,
     took_ms: f64,
 }
 
 impl MultiOutcome {
-    /// Sets the duration measured from the token acquisition.
-    fn with_start(mut self, started: Instant) -> Self {
-        self.took_ms = started.elapsed().as_secs_f64() * 1_000.0;
-        self
-    }
-
     /// Renders the body of the `200`, with the request identifier of ADR-0098.
     fn render(self, request_id: &str) -> Value {
-        json!({
+        let mut body = json!({
             "results": self.results,
             "targets": self.targets,
             "took_ms": self.took_ms,
             "truncated_query": self.truncated_query,
             "request_id": request_id,
-        })
+        });
+        if let Some(debug) = self.debug {
+            body["debug"] = debug;
+        }
+        if let Some(explain) = self.explain {
+            body["explain"] = Value::Array(explain);
+        }
+        body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Mode, Observed, Operation, events_of, failure_events};
+    use crate::analytics::{Record, SearchEvent};
+    use std::time::Instant;
+
+    /// An observer of a target that ran, closed on its own duration.
+    fn ran(index: &str) -> Observed {
+        let started = Instant::now();
+        let mut observed = Observed::new_at(index, Operation::SearchMulti, Instant::now());
+        observed.finish_at(started);
+        observed
+    }
+
+    /// An observer of a target the loop never reached: no step was measured.
+    fn waiting(index: &str) -> Observed {
+        Observed::new_at(index, Operation::SearchMulti, Instant::now())
+    }
+
+    /// The events of the records, in their order.
+    fn events(records: Vec<Record>) -> Vec<SearchEvent> {
+        records
+            .into_iter()
+            .filter_map(|record| match record {
+                Record::Search { event, .. } => Some(event),
+                Record::Operation(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failure_after_the_first_target_leaves_one_event_per_target_that_ran() {
+        // ADR-0117, decision 5: one event per target, never a consolidated row.
+        // The targets that answered keep `ok`, the faulty one carries the code,
+        // and a target that never ran produces no event.
+        let written = events(events_of(vec![ran("alpha"), ran("beta")], "timeout"));
+        assert_eq!(
+            written.len(),
+            2,
+            "one event per target that ran: {written:?}"
+        );
+        assert_eq!(written[0].index, "alpha");
+        assert_eq!(written[0].status, "ok");
+        assert_eq!(written[1].index, "beta");
+        assert_eq!(written[1].status, "timeout");
+    }
+
+    #[test]
+    fn a_request_that_failed_before_any_target_keeps_one_event() {
+        // No target ran: the single event is the first target the plan resolved,
+        // and it carries the code of the failure.
+        let written = events(events_of(vec![ran("alpha")], "invalid_request"));
+        assert_eq!(written.len(), 1, "{written:?}");
+        assert_eq!(written[0].index, "alpha");
+        assert_eq!(written[0].status, "invalid_request");
+    }
+
+    #[test]
+    fn a_failure_on_the_second_target_stops_the_events_at_it() {
+        // ADR-0124, decision 10: the second target fails and the third is never
+        // reached. The truncation of `run_multi` keeps the faulty target **in**,
+        // so `alpha` stays `ok`, `beta` carries the code, and `gamma` reports the
+        // same code with no step of its own — without it `beta` would read `ok`
+        // and `gamma` would carry the failure twice.
+        let mut observers = vec![ran("alpha"), ran("beta"), waiting("gamma")];
+        let resolved = vec![
+            ("alpha".to_owned(), None),
+            ("beta".to_owned(), None),
+            ("gamma".to_owned(), None),
+        ];
+        let written = events(failure_events(
+            &mut observers,
+            &resolved,
+            1,
+            Instant::now(),
+            Mode::Dense,
+            "internal",
+        ));
+        assert_eq!(
+            written.len(),
+            3,
+            "one event per resolved target, never two for the faulty one: {written:?}"
+        );
+        let statuses: Vec<&str> = written.iter().map(|event| event.status.as_str()).collect();
+        assert_eq!(statuses, ["ok", "internal", "internal"], "{written:?}");
+        let indexes: Vec<&str> = written.iter().map(|event| event.index.as_str()).collect();
+        assert_eq!(indexes, ["alpha", "beta", "gamma"], "{written:?}");
+        // The target that never ran invents no step and no pool size.
+        let unreached = &written[2];
+        assert!(unreached.stages.filter.is_none(), "{unreached:?}");
+        assert!(unreached.stages.dense.is_none(), "{unreached:?}");
+        assert_eq!(unreached.pool, 0, "{unreached:?}");
     }
 }

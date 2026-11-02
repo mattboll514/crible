@@ -22,6 +22,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::{Extension, Path as AxumPath, Query, State};
@@ -35,6 +36,8 @@ use serde_json::{Value, json};
 use tracing::warn;
 
 use crate::AppState;
+use crate::analytics::{self, Operation};
+use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
 use crate::jobs::{IndexSummary, IndexWriter, JobOutcome, JobProgress};
@@ -64,6 +67,20 @@ use crate::state::IndexHandle;
     )
 )]
 pub async fn create_index(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    Json(body): Json<Value>,
+) -> Response {
+    let started = Instant::now();
+    let answer =
+        create_index_inner(State(Arc::clone(&state)), Extension(identifier), Json(body)).await;
+    analytics::record_operation(&state, Operation::IndexAdmin, "", &client, started, &answer);
+    answer
+}
+
+/// The work of [`create_index`], without the event of its operation.
+async fn create_index_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     Json(body): Json<Value>,
@@ -104,6 +121,18 @@ pub async fn create_index(
     )
 )]
 pub async fn list_indexes(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+) -> Response {
+    let started = Instant::now();
+    let answer = list_indexes_inner(State(Arc::clone(&state)), Extension(identifier)).await;
+    analytics::record_operation(&state, Operation::IndexAdmin, "", &client, started, &answer);
+    answer
+}
+
+/// The work of [`list_indexes`], without the event of its operation.
+async fn list_indexes_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
 ) -> Response {
@@ -149,6 +178,31 @@ pub async fn list_indexes(
     )
 )]
 pub async fn get_index(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+) -> Response {
+    let started = Instant::now();
+    let answer = get_index_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::IndexAdmin,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`get_index`], without the event of its operation.
+async fn get_index_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
@@ -198,6 +252,35 @@ pub async fn get_index(
     )
 )]
 pub async fn patch_index(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let started = Instant::now();
+    let answer = patch_index_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        Json(body),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::IndexAdmin,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`patch_index`], without the event of its operation.
+async fn patch_index_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
@@ -294,6 +377,33 @@ pub async fn patch_index(
     )
 )]
 pub async fn delete_index(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let started = Instant::now();
+    let answer = delete_index_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::IndexAdmin,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`delete_index`], without the event of its operation.
+async fn delete_index_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
@@ -432,7 +542,7 @@ fn index_directory(state: &AppState, name: &str) -> Result<PathBuf, CribleError>
 /// a `GET` that interleaves answers `404 unknown_index` (ADR-0105, decision 6).
 /// Only the index directory itself carries that meaning: a child directory that
 /// goes away during the walk is skipped like any other vanished entry.
-fn directory_size(directory: &Path) -> Result<u64, CribleError> {
+pub(crate) fn directory_size(directory: &Path) -> Result<u64, CribleError> {
     let reader = Disk;
     match reader.read_dir(directory) {
         Ok(entries) => entries_size(&reader, &entries),

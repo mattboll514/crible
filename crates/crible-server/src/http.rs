@@ -29,6 +29,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Extension, Json, Router};
 use crible_core::error::{CribleError, ErrorCode};
+use crible_store::analytics::StatsFilter;
+use crible_store::debug_journal::JournalFilter;
 use crible_store::jobs::JobState;
 use serde_json::{Value, json};
 use tower_http::catch_panic::CatchPanicLayer;
@@ -74,6 +76,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let write = protect(writes_routes(), Arc::clone(&auth), Role::Write);
     let jobs = protect(jobs_routes(), Arc::clone(&auth), Role::Write);
     let admin = protect(indexes_admin_routes(), Arc::clone(&auth), Role::Admin);
+    let debug = protect(debug_routes(), Arc::clone(&auth), Role::Admin);
+    let stats = protect(stats_routes(), Arc::clone(&auth), Role::Admin);
     let read = protect(indexes_read_routes(), auth, Role::Read);
     // The specification and Swagger UI are served by the instance, without a
     // key: their paths are the two exceptions of `docs/05-api.md` and never ask
@@ -91,6 +95,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             .merge(write)
             .merge(jobs)
             .merge(admin)
+            .merge(debug)
+            .merge(stats)
             .merge(read),
     )
     .with_state(state)
@@ -139,6 +145,17 @@ fn indexes_read_routes() -> Router<Arc<AppState>> {
         // The multi-index search is open to the same role, for the same reason
         // (ADR-0110, ADR-0095).
         .route("/v1/search", post(search_multi::search))
+}
+
+/// The debug routes of the instance: the journal, `admin` only (ADR-0122,
+/// decision 9).
+fn debug_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/v1/debug/queries", get(debug_queries))
+}
+
+/// The statistics route of the instance, `admin` only (ADR-0124, decision 16).
+fn stats_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/v1/stats", get(stats))
 }
 
 /// The job routes of the instance: the list and the detail, `write` only.
@@ -226,6 +243,265 @@ async fn get_job(
             error::rendered(&failure, &identifier.0)
         }
     }
+}
+
+/// `GET /v1/debug/queries`: one page of the debug journal, `admin` only
+/// (ADR-0122, decision 9).
+///
+/// The parameters are checked **before** the journal is read, so a refused
+/// parameter is a `400` even when the journal is disabled; a disabled journal
+/// answers `200` with `enabled: false` and opens no file (ADR-0121, decision 1).
+/// The payload of each row is parsed and rendered as an object; an unreadable
+/// payload is an `internal` failure of the route (ADR-0122, decision 9).
+#[utoipa::path(
+    get,
+    path = "/v1/debug/queries",
+    tag = "debug",
+    operation_id = "debug_queries",
+    description = "One page of the debug journal, `created_at` descending then `id`. When the \
+                   journal is disabled, `200` with `enabled: false` and an empty list, without \
+                   opening the file. Role: `admin` (ADR-0095, ADR-0122).",
+    params(
+        ("index" = Option<String>, Query, description = "Name of the index; a multi-index row is retained when it targets that index"),
+        ("min_total_ms" = Option<f64>, Query, description = "Keep the rows whose `total_ms` is at least this value; a `null` total is excluded"),
+        ("from" = Option<String>, Query, description = "Lower bound, included, of `created_at`, ISO 8601 in UTC"),
+        ("to" = Option<String>, Query, description = "Upper bound, included, of `created_at`, ISO 8601 in UTC"),
+        ("limit" = Option<usize>, Query, description = "Number of rows, from 1 to 1 000; 100 by default"),
+        ("before_id" = Option<i64>, Query, description = "Keyset cursor: only the rows of a strictly lower `id`")
+    ),
+    responses(
+        (status = 200, description = "One page of the journal", body = crate::openapi::DebugQueryList),
+        (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure, or a payload the route cannot render", body = crate::openapi::Error)
+    )
+)]
+async fn debug_queries(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let filter = match journal_filter(&query) {
+        Ok(filter) => filter,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
+    let enabled = state
+        .loaded()
+        .is_some_and(|loaded| loaded.debug_journal_config().enabled);
+    if !enabled {
+        let list = crate::openapi::DebugQueryList {
+            enabled: false,
+            dropped: crate::debug_journal::dropped(),
+            queries: Vec::new(),
+        };
+        return Json(list).into_response();
+    }
+    let Some(root) = state.data_root() else {
+        let failure = error::internal("the instance has not loaded its configuration");
+        return error::rendered(&failure, &identifier.0);
+    };
+    let rows = match crate::debug_journal::page(root, filter).await {
+        Ok(rows) => rows,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
+    let mut queries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let payload = match serde_json::from_str::<crate::openapi::FreeObject>(&row.payload) {
+            Ok(payload) => payload,
+            Err(_) => {
+                // ADR-0122, decision 9: an unreadable payload is an error of the
+                // route, never an opaque string; the request id is logged, the
+                // payload is not.
+                let failure = error::internal(format!(
+                    "the payload of the row '{}' of the debug journal is not a JSON object",
+                    row.request_id
+                ));
+                return error::rendered(&failure, &identifier.0);
+            }
+        };
+        queries.push(crate::openapi::DebugQuery {
+            id: row.id,
+            created_at: row.created_at,
+            request_id: row.request_id,
+            index: row.index,
+            client: row.client,
+            mode: row.mode,
+            status: row.status,
+            total_ms: row.total_ms,
+            payload,
+        });
+    }
+    let list = crate::openapi::DebugQueryList {
+        enabled: true,
+        dropped: crate::debug_journal::dropped(),
+        queries,
+    };
+    Json(list).into_response()
+}
+
+/// The parameters of `GET /v1/debug/queries`, checked and normalised
+/// (ADR-0122, decision 9).
+///
+/// Every refusal names the parameter and its JSON path, and none reads the file
+/// or the configuration: a `400` is decided on the query string alone.
+fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, CribleError> {
+    const ALLOWED: [&str; 6] = ["index", "min_total_ms", "from", "to", "limit", "before_id"];
+    for parameter in query.keys() {
+        if !ALLOWED.contains(&parameter.as_str()) {
+            return Err(error::invalid(format!(
+                "'{parameter}' is not a parameter of this route; the parameters are `index`, \
+                 `min_total_ms`, `from`, `to`, `limit` and `before_id`"
+            )));
+        }
+    }
+    let limit = match query.get("limit") {
+        Some(raw) => match raw.parse::<usize>() {
+            Ok(limit) if (1..=crate::debug_journal::MAX_PAGE).contains(&limit) => limit,
+            _ => {
+                return Err(error::invalid(format!(
+                    "'limit' must be an integer from 1 to {}",
+                    crate::debug_journal::MAX_PAGE
+                )));
+            }
+        },
+        None => crate::debug_journal::DEFAULT_PAGE,
+    };
+    let before_id = match query.get("before_id") {
+        Some(raw) => match raw.parse::<i64>() {
+            Ok(id) if id >= 0 => Some(id),
+            _ => {
+                return Err(error::invalid("'before_id' must be a non-negative integer"));
+            }
+        },
+        None => None,
+    };
+    let min_total_ms = match query.get("min_total_ms") {
+        Some(raw) => match raw.parse::<f64>() {
+            Ok(value) if value.is_finite() && value >= 0.0 => Some(value),
+            _ => {
+                return Err(error::invalid(
+                    "'min_total_ms' must be a non-negative number",
+                ));
+            }
+        },
+        None => None,
+    };
+    let from = match query.get("from") {
+        Some(raw) => Some(journal_timestamp(raw, "from")?),
+        None => None,
+    };
+    let to = match query.get("to") {
+        Some(raw) => Some(journal_timestamp(raw, "to")?),
+        None => None,
+    };
+    Ok(JournalFilter {
+        index: query.get("index").cloned(),
+        min_total_ms,
+        from,
+        to,
+        limit,
+        before_id,
+    })
+}
+
+/// `GET /v1/stats`: the aggregated analytics of the instance (ADR-0124).
+///
+/// The read opens `analytics.sqlite` **read-only** on its own connection, off the
+/// async threads: it never waits for a flush, never blocks the writer and writes
+/// nothing (ADR-0116, decision 1; ADR-0124, decision 12). `analytics_dropped` is
+/// read from the process, not from the file (ADR-0118, decision 2). Role: `admin`
+/// (ADR-0095; ADR-0124, decision 16).
+#[utoipa::path(
+    get,
+    path = "/v1/stats",
+    tag = "stats",
+    operation_id = "stats",
+    description = "The aggregated analytics of the instance: counts, errors by code, p50/p95/p99 \
+                   per stage, the zero-result rate, the busiest indexes and filter forms, and the \
+                   last daily state of each index. Role: `admin` only (ADR-0095, ADR-0124).",
+    params(
+        ("from" = Option<String>, Query, description = "Lower bound, included, of the window, ISO 8601 with its offset; defaults to the oldest retained row"),
+        ("to" = Option<String>, Query, description = "Upper bound, included, of the window, ISO 8601 with its offset; defaults to the newest retained row"),
+        ("index" = Option<String>, Query, description = "Only the events of that index, present in the analytics or not"),
+        ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
+        ("group_by" = Option<String>, Query, description = "Width of the buckets: `minute`, `hour` (default) or `day`")
+    ),
+    responses(
+        (status = 200, description = "The aggregated analytics of the window", body = crate::openapi::StatsResponse),
+        (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
+        (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
+        (status = 403, description = "Insufficient role", body = crate::openapi::Error),
+        (status = 500, description = "Unexpected failure, or an analytics file this build cannot read", body = crate::openapi::Error)
+    )
+)]
+async fn stats(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let filter = match stats_filter(&query) {
+        Ok(filter) => filter,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
+    let Some(root) = state.data_root().map(std::path::Path::to_path_buf) else {
+        let failure = error::internal("the instance has not loaded its configuration");
+        return error::rendered(&failure, &identifier.0);
+    };
+    let path = root.join(crible_store::analytics::ANALYTICS_FILE_NAME);
+    let read =
+        tokio::task::spawn_blocking(move || crible_store::analytics::read_stats(&path, &filter))
+            .await;
+    let stats = match read {
+        Ok(Ok(stats)) => stats,
+        Ok(Err(failure)) => return error::rendered(&failure, &identifier.0),
+        Err(_) => {
+            let failure = error::internal("the analytics reader stopped before answering");
+            return error::rendered(&failure, &identifier.0);
+        }
+    };
+    let mut body = crate::openapi::StatsResponse::from(stats);
+    body.analytics_dropped = crate::analytics::dropped();
+    Json(body).into_response()
+}
+
+/// The parameters of `GET /v1/stats`, checked and normalised
+/// (ADR-0124, decision 2).
+///
+/// The list is closed and a refusal names the parameter. Nothing is read from
+/// the file here: a `400` is decided on the query string alone.
+fn stats_filter(query: &HashMap<String, String>) -> Result<StatsFilter, CribleError> {
+    const ALLOWED: [&str; 5] = ["from", "to", "index", "operation", "group_by"];
+    for parameter in query.keys() {
+        if !ALLOWED.contains(&parameter.as_str()) {
+            return Err(error::invalid(format!(
+                "'{parameter}' is not a parameter of this route; the parameters are `from`, \
+                 `to`, `index`, `operation` and `group_by`"
+            )));
+        }
+    }
+    StatsFilter::parse(
+        query.get("from").map(String::as_str),
+        query.get("to").map(String::as_str),
+        query.get("index").map(String::as_str),
+        query.get("operation").map(String::as_str),
+        query.get("group_by").map(String::as_str),
+    )
+}
+
+/// Normalises an ISO 8601 date of the query string to the millisecond form
+/// SQLite writes, `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+///
+/// The comparison of the file is a string comparison, so the bound takes the
+/// exact shape of `created_at` (ADR-0121, decision 3). The date may carry the `Z`
+/// suffix or a `±HH:MM` offset, which is applied to read the instant in UTC; a
+/// calendar day that does not exist, a leap second and a malformed offset are
+/// refused, with a message naming `parameter` (ADR-0122, decision 9). The
+/// reading itself is [`crible_core::time`], shared with the bounds of
+/// `GET /v1/stats` (ADR-0124, decision 2).
+fn journal_timestamp(raw: &str, parameter: &str) -> Result<String, CribleError> {
+    let instant = crible_core::time::parse_iso8601(raw, parameter)?;
+    Ok(crible_core::time::format_millis(instant))
 }
 
 /// Renders the answer to a job submission, the helper every write route uses.
@@ -665,6 +941,40 @@ mod tests {
                 super::accepted_request_id(&header).is_none(),
                 "ADR-0098 refuses {value:?}"
             );
+        }
+    }
+
+    #[test]
+    fn a_journal_bound_reads_zulu_and_a_signed_offset_as_utc() {
+        // ADR-0122, decision 9: the bound is an ISO 8601 date. The offset is
+        // applied, because the file stores UTC and the comparison is literal.
+        for (raw, expected) in [
+            ("2026-10-31T12:00:00Z", "2026-10-31T12:00:00.000Z"),
+            ("2026-10-31T12:00:00.123Z", "2026-10-31T12:00:00.123Z"),
+            ("2026-10-31T12:00:00+02:00", "2026-10-31T10:00:00.000Z"),
+            ("2026-10-31T12:00:00-05:30", "2026-10-31T17:30:00.000Z"),
+            ("2026-01-01T01:00:00+02:00", "2025-12-31T23:00:00.000Z"),
+        ] {
+            assert_eq!(
+                super::journal_timestamp(raw, "from").expect("the bound is accepted"),
+                expected,
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_journal_bound_names_its_parameter() {
+        for raw in [
+            "2026-10-31T12:00:00",
+            "2026-10-31T12:00:00+2:00",
+            "2026-10-31T12:00:00+24:00",
+            "2026-10-31T12:00:00+02:60",
+            "2026-10-31T12:00:00+0200",
+            "2026-02-30T12:00:00Z",
+        ] {
+            let failure = super::journal_timestamp(raw, "to").expect_err(raw);
+            assert!(failure.message().contains("'to'"), "{raw}: {failure:?}");
         }
     }
 }

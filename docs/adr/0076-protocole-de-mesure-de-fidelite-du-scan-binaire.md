@@ -1,6 +1,6 @@
 # ADR-0076 — Protocole de mesure de fidélité du scan binaire : métriques, centrage, pools et requêtes
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-27, confirmé par le propriétaire le 2026-10-27 ; note du 2026-11-02, configurations de l'échantillon à N = 5000, confirmée par le propriétaire le 2026-11-02)
 - **Date** : 2026-10-27 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Décision** : accepté par anticipation le 2026-10-27, par délégation du propriétaire pour la série REGROUPER-RESULTATS, MESURER-FIDELITE-BINAIRE, MESURER-LATENCE-DENSE, puis confirmé par le propriétaire le 2026-10-27. Les six décisions sont retenues telles que proposées, sans erratum : recall@10 au niveau du passage et recouvrement@10 au niveau du document, avec la cible de 0,99 en moyenne globale au N par défaut ; un tableau par structure plus la moyenne ; centrage mesuré hors moteur par un harnais contrôlé au bit près, sans changement du moteur ni du format ; mesure sur l'échantillon, BINARY forcé par `search.exact_threshold = 0` ; 300 requêtes fp32, campagne principale sans filtre et variante filtrée déclarée ; levier proposé, non codé, si la cible manque.
@@ -43,6 +43,8 @@ Aucune de ces questions ne se tranche par la lecture seule : elles fixent deux d
 - `data/legifacile-sample/queries.jsonl` contient **300** requêtes, chacune portant un champ `structure` : 63 `articles`, 200 `decisions`, 12 `jorf`, 9 `sarde`, 8 `titres`, 8 `dole`. Le texte de la requête est le champ `question`. Aucune entrée ne porte de champ `filter`.
 - Les pools de l'échantillon, relevés par MES-04 §3, vont de **7 628** passages (`dole`) à **50 000** passages (`articles`, `jorf`, `sarde`, `titres`), pour **257 626** passages au total. Le plus grand pool de la mesure vaut donc 50 000 passages, contre 8,58 M en production.
 - Les configurations de `data/legifacile-sample/configs/` portent déjà `search.exact_threshold` explicite (par exemple 1000 pour `articles`), `rescore_candidates` 1000 et `scan: "binary"`. Le champ `etat` existe dans le schéma de `articles` et le champ `partie` dans celui de `decisions` : ce sont les deux seuls champs dérivables pour une variante filtrée sans modifier les lots.
+
+  > **Note du 2026-11-02 (tâche `NETTOYER-P7`, passage E).** Les six configurations gitignorées `data/legifacile-sample/configs/*.json` portent désormais `rescore_candidates: 5000` et `exact_threshold: 5000` : le défaut d'ADR-0078 et le seuil qui suit N à la création (ADR-0074). Aucun autre réglage n'a changé. Les index de la démo J7 sont recréés depuis ces configurations, et la campagne `crible eval` de l'échantillon est régénérée à N = 5000 par `@mesureur` sous un nouveau nom daté, les rapports du 2026-11-01 à N = 1000 restant en place. Le présent ADR décrit l'état du 2026-10-27 et n'est pas réécrit : les mesures de l'époque restent valables au N = 1000 où elles ont été faites, et le protocole de la section « Décision » est inchangé. Le forçage BINARY par `PATCH search.exact_threshold = 0` sur les index de mesure (décision 4) n'est pas concerné.
 
 ## Décision
 

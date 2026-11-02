@@ -20,16 +20,20 @@
 //! between.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
+use crible_search::scan_pool::ScanPool;
 use crible_store::attach::AttachDurations;
-use crible_store::generation::{GenerationStore, LastBatch, Snapshot};
+use crible_store::generation::{
+    GenerationStore, LastBatch, Snapshot, epoch_records_path, epoch_segments_directory,
+};
 use crible_store::jobs::{JobKind, JobRecord, JobState, JobStore};
+use crible_store::readers::DenseReaders;
 use serde_json::{Value, json};
 use tokio::sync::{Notify, mpsc, watch};
 use tracing::{error, info, warn};
@@ -607,8 +611,10 @@ impl JobBoard {
 ///
 /// ADR-0105, decision 4, requires the configuration and the snapshot to be
 /// published together: a request sees the old triplet or the new one, never a
-/// configuration with a snapshot of another generation. The three parts live
-/// under one `RwLock`, and a reader takes a single read guard
+/// configuration with a snapshot of another generation. ADR-0126 adds the dense
+/// readers of that generation to the same value: "une génération servie est une
+/// génération publiée avec ses lecteurs" (decision 4). The four parts live under
+/// one `RwLock`, and a reader takes a single read guard
 /// ([`IndexWriter::published`]).
 #[derive(Debug, Clone)]
 pub struct Published {
@@ -618,6 +624,10 @@ pub struct Published {
     pub snapshot: Arc<Snapshot>,
     /// Counts of that generation, for the two `GET` routes.
     pub summary: IndexSummary,
+    /// Readers of the segments of that generation and the payload pool of its
+    /// epoch, filled **before** this value was published (ADR-0126,
+    /// decisions 1 and 4).
+    pub readers: Arc<DenseReaders>,
 }
 
 /// Summary of the published state of an index, as the two `GET` routes of
@@ -647,6 +657,9 @@ pub struct IndexSummary {
     pub codes_memory_bytes: u64,
     /// Last applied batch, or `None` when the epoch holds none.
     pub last_batch: Option<LastBatch>,
+    /// Batches the reference state applied, for the daily analytics row
+    /// (ADR-0117, decision 1).
+    pub batches: u64,
 }
 
 impl IndexSummary {
@@ -686,6 +699,7 @@ impl IndexSummary {
                 .unwrap_or(u64::MAX),
             codes_memory_bytes: snapshot.codes_memory(),
             last_batch: store.last_batch()?,
+            batches: store.batch_count()?,
         })
     }
 
@@ -714,6 +728,10 @@ pub struct IndexWriter {
     store: Mutex<Option<GenerationStore>>,
     board: Arc<JobBoard>,
     published: RwLock<Published>,
+    /// Dedicated pool of the scans, read here only for its worker count: the
+    /// payload pool of a generation takes one read-only connection per scan
+    /// worker, as the searcher has always sized it (ADR-0126, decision 1).
+    scan_pool: Arc<ScanPool>,
     deleted: AtomicBool,
     /// Set when the store could not be reopened after a failed compaction: the
     /// index still serves reads on its last snapshot, and every later job fails
@@ -728,19 +746,34 @@ impl IndexWriter {
     /// A declared depth of zero is read as one: a job must be acceptable at
     /// all, and `docs/07` fixes the default at 16.
     ///
+    /// The dense readers of the generation the store publishes are filled here,
+    /// **before** the published value exists: a startup and a creation serve no
+    /// generation without them (ADR-0126, decision 4). The fill pays the blake3
+    /// check of every segment once per process, which is the cost of the
+    /// restart.
+    ///
     /// # Errors
     ///
-    /// The errors of the first summary of the store.
+    /// The errors of the first summary of the store, and the errors of the fill
+    /// of its readers: a segment that does not open, or whose checksum does not
+    /// match, keeps the index from being served.
     pub fn new(
         index: String,
         store: GenerationStore,
         config: IndexConfig,
         writer_queue: usize,
         board: Arc<JobBoard>,
+        scan_pool: Arc<ScanPool>,
     ) -> Result<Self, CribleError> {
         let snapshot = store.snapshot();
         let summary = IndexSummary::of_snapshot(&store, &snapshot)?;
         let directory = store.index_dir().to_path_buf();
+        let readers = fill_readers(
+            &directory,
+            &snapshot,
+            &DenseReaders::empty(),
+            scan_pool.threads(),
+        )?;
         let (queue, receiver) = mpsc::channel(writer_queue.max(1));
         Ok(Self {
             index,
@@ -753,7 +786,9 @@ impl IndexWriter {
                 config,
                 snapshot,
                 summary,
+                readers,
             }),
+            scan_pool,
             deleted: AtomicBool::new(false),
             broken: AtomicBool::new(false),
         })
@@ -784,15 +819,25 @@ impl IndexWriter {
 
     /// Publishes a new triplet, atomically for every reader.
     ///
+    /// The readers of `snapshot` are filled **before** the write lock is taken:
+    /// a request keeps reading the previous published value while the new
+    /// segments open, and the lock is never held across a fill (ADR-0126,
+    /// decision 4). The readers already open for a segment of the new generation
+    /// are reused, so a metadata patch opens nothing.
+    ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`] when the lock is poisoned.
+    /// The errors of the fill — a segment that does not open, or whose checksum
+    /// does not match — and [`ErrorCode::Internal`] when the lock is poisoned.
+    /// A failed fill publishes nothing: the index keeps serving the previous
+    /// generation with its readers.
     pub fn publish(
         &self,
         config: IndexConfig,
         snapshot: Arc<Snapshot>,
         summary: IndexSummary,
     ) -> Result<(), CribleError> {
+        let readers = self.fill_readers(&snapshot)?;
         let mut published = self
             .published
             .write()
@@ -801,20 +846,104 @@ impl IndexWriter {
             config,
             snapshot,
             summary,
+            readers,
         };
         Ok(())
     }
 
-    /// Refreshes the snapshot and the summary after a job that committed, keeping
-    /// the configuration: the three parts still change under one write lock.
+    /// Republishes the snapshot, the summary and the readers of the store after
+    /// a job, and returns the error the job must report.
+    ///
+    /// The refresh is **unconditional**: a job that fails *after* its commit
+    /// point has still committed a generation (`crates/crible-store/src/attach.rs`,
+    /// "An error raised after the commit point"), so skipping the refresh would
+    /// leave the published state behind the store until the next restart, against
+    /// INV-03 and INV-04. The error of the work stays the one the job reports,
+    /// and a failure of the refresh is only logged: it never hides a failure of
+    /// the work (ADR-0126, decision 4).
+    ///
+    /// # Errors
+    ///
+    /// The errors of the fill — a segment that does not open, or whose checksum
+    /// does not match — and [`ErrorCode::Internal`] when the lock is poisoned,
+    /// returned only when the work itself succeeded.
+    fn refresh_after_job(
+        &self,
+        store: &GenerationStore,
+        snapshot: Arc<Snapshot>,
+        outcome: Result<JobOutcome, CribleError>,
+    ) -> Result<JobOutcome, CribleError> {
+        let summary = match IndexSummary::of_snapshot(store, &snapshot) {
+            Ok(summary) => summary,
+            Err(failure) => {
+                error!(
+                    index = %self.index,
+                    cause = failure.message(),
+                    "the counts of the generation could not be read; the published state is \
+                     unchanged"
+                );
+                return outcome;
+            }
+        };
+        match (outcome, self.refresh(snapshot, summary)) {
+            (outcome, Ok(())) => outcome,
+            // ADR-0126, decision 4: a fill that fails publishes nothing, and the
+            // failure goes back to the caller of the commit. The index keeps
+            // serving its previous generation, with the readers that generation
+            // already holds.
+            (Ok(_), Err(failure)) => Err(failure),
+            (outcome @ Err(_), Err(failure)) => {
+                error!(
+                    index = %self.index,
+                    cause = failure.message(),
+                    "the readers of the generation could not be filled; the published state is \
+                     unchanged, and the failure of the work is the one reported"
+                );
+                outcome
+            }
+        }
+    }
+
+    /// Refreshes the snapshot, the summary and the readers after a job that
+    /// committed, keeping the configuration: the parts still change under one
+    /// write lock.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the fill and [`ErrorCode::Internal`] when the lock is
+    /// poisoned.
     fn refresh(&self, snapshot: Arc<Snapshot>, summary: IndexSummary) -> Result<(), CribleError> {
+        let readers = self.fill_readers(&snapshot)?;
         let mut published = self
             .published
             .write()
             .map_err(|_| error::internal("the published state of an index is poisoned"))?;
         published.snapshot = snapshot;
         published.summary = summary;
+        published.readers = readers;
         Ok(())
+    }
+
+    /// Opens the readers the generation of `snapshot` adds, reusing the ones the
+    /// published state already holds, outside every write lock.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`DenseReaders::filled`], plus [`ErrorCode::Internal`] when
+    /// the published state is poisoned.
+    fn fill_readers(&self, snapshot: &Snapshot) -> Result<Arc<DenseReaders>, CribleError> {
+        let current = self
+            .published
+            .read()
+            .map_err(|_| error::internal("the published state of an index is poisoned"))?
+            .readers
+            .clone();
+        fill_readers(
+            &self.directory,
+            snapshot,
+            &current,
+            self.scan_pool.threads(),
+        )
     }
 
     /// Marks the index as deleted, so the writer fails the jobs queued behind
@@ -913,15 +1042,7 @@ impl IndexWriter {
                 let mut store = current;
                 let outcome = work(&mut store, &progress, &writer);
                 let snapshot = store.snapshot();
-                if let Ok(summary) = IndexSummary::of_snapshot(&store, &snapshot)
-                    && let Err(failure) = writer.refresh(snapshot, summary)
-                {
-                    error!(
-                        index = %writer.index,
-                        cause = failure.message(),
-                        "the published state of the index could not be refreshed"
-                    );
-                }
+                let outcome = writer.refresh_after_job(&store, snapshot, outcome);
                 (store, outcome)
             })
             .await;
@@ -1084,6 +1205,34 @@ async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, i
             &command.progress,
         );
     }
+}
+
+/// Opens the dense readers of the generation `snapshot` of the index at
+/// `directory`, reusing the ones `current` already holds.
+///
+/// It is the only code that fills a cache of readers: the startup and creation
+/// call it on an empty cache, and every publication calls it on the published
+/// one (ADR-0126, decisions 3 and 4). It touches no lock, so the caller decides
+/// when the publication happens.
+///
+/// # Errors
+///
+/// The errors of [`DenseReaders::filled`].
+fn fill_readers(
+    directory: &Path,
+    snapshot: &Snapshot,
+    current: &DenseReaders,
+    connections: usize,
+) -> Result<Arc<DenseReaders>, CribleError> {
+    let segments_directory = epoch_segments_directory(directory, snapshot.epoch());
+    let records_path = epoch_records_path(directory, snapshot.epoch());
+    let filled = current.filled(
+        &segments_directory,
+        snapshot.segments(),
+        &records_path,
+        connections,
+    )?;
+    Ok(Arc::new(filled))
 }
 
 /// Logs the durations of an attach once, at the end of its job (ADR-0107,

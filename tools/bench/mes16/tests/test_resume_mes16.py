@@ -137,6 +137,34 @@ def test_summary_rounds_to_the_millisecond_fraction() -> None:
     assert document["criterion"]["limit_ms"] == round(3.0 * 2.0, 3)
 
 
+def test_a_p6_raw_document_has_no_observability_blocks() -> None:
+    # The campaigns of 2026-10-30 ran without analytics nor journal: their raw
+    # document has neither key, and the summary must say so instead of inventing
+    # a block (ADR-0113 against ADR-0122, decision 12).
+    document = reducer.reduce_campaign(campaign([sample(10.0)], [], []))
+    assert document["journal"] is None
+    assert document["analytics"] is None
+
+
+def test_a_p7_raw_document_copies_the_observability_blocks() -> None:
+    # The replay of ADR-0122, decision 12: `dropped`, the size and rows of
+    # `debug.sqlite`, and the missing HTTP read of the analytics counter.
+    raw = campaign([sample(10.0)], [], [])
+    raw["journal"] = {
+        "route": {"enabled": True, "dropped": 0},
+        "file": {"file": "debug.sqlite", "exists": True, "rows": 3},
+        "log_warnings": {"analytics_dropped": 0, "debug_journal_dropped": 0},
+    }
+    raw["analytics"] = {
+        "retention_days": 90,
+        "dropped": None,
+        "dropped_source": "no HTTP read",
+    }
+    document = reducer.reduce_campaign(raw)
+    assert document["journal"] == raw["journal"]
+    assert document["analytics"] == raw["analytics"]
+
+
 def test_main_writes_the_summary_for_one_directory(tmp_path) -> None:
     raw = tmp_path / "campaign-1"
     raw.mkdir()

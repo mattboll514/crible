@@ -252,6 +252,53 @@ fn the_schema_refuses_what_the_server_refuses() {
     );
 }
 
+/// `debug` is an optional boolean of both request bodies, and its absence means
+/// `false` (ADR-0119, decisions 10 and 11).
+#[test]
+fn debug_is_an_optional_boolean_of_both_request_schemas() {
+    let simple = validator("SearchRequest");
+    assert!(
+        simple.validate(&serde_json::json!({})).is_ok(),
+        "every member of the body is optional"
+    );
+    for value in [true, false] {
+        assert!(
+            simple
+                .validate(&serde_json::json!({ "debug": value }))
+                .is_ok(),
+            "`debug: {value}` is accepted"
+        );
+    }
+    assert!(
+        simple
+            .validate(&serde_json::json!({ "debug": "yes" }))
+            .is_err(),
+        "`debug` is a boolean"
+    );
+
+    let multi = validator("SearchMultiRequest");
+    for value in [true, false] {
+        assert!(
+            multi
+                .validate(&serde_json::json!({
+                    "debug": value,
+                    "targets": [ { "index": "alpha" } ],
+                }))
+                .is_ok(),
+            "`debug: {value}` is accepted by the multi-index body"
+        );
+    }
+    assert!(
+        multi
+            .validate(&serde_json::json!({
+                "debug": 1,
+                "targets": [ { "index": "alpha" } ],
+            }))
+            .is_err(),
+        "`debug` is a boolean in the multi-index body too"
+    );
+}
+
 #[test]
 fn every_marker_is_a_valid_component_or_none() {
     let specification = crible_server::openapi::specification()

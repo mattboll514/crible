@@ -617,6 +617,330 @@ pub struct JobList {
     pub jobs: Vec<Job>,
 }
 
+/// One row of the debug journal as `GET /v1/debug/queries` renders it
+/// (ADR-0122, decision 9).
+///
+/// `index` is `null` for a multi-index row, which names its targets in
+/// `payload.targets[]`; `total_ms` is `null` when `fetch` did not finish; the
+/// payload is an **object**, never a string (ADR-0121, decisions 3 and 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugQuery {
+    /// Primary key, the cursor of the keyset pagination.
+    pub id: i64,
+    /// Timestamp of the flush, RFC 3339 UTC.
+    pub created_at: String,
+    /// Request identifier of ADR-0098.
+    pub request_id: String,
+    /// Name of the index, `null` for a multi-index row.
+    pub index: Option<String>,
+    /// Name of the API key that sent the request.
+    pub client: String,
+    /// `dense`, `lexical` or `hybrid`.
+    pub mode: String,
+    /// `ok` or an error code of `docs/05-api.md`.
+    pub status: String,
+    /// Duration of the request, `null` when it did not finish.
+    pub total_ms: Option<f64>,
+    /// The payload of ADR-0121, decision 4, rendered as an object.
+    #[schema(value_type = Object)]
+    pub payload: FreeObject,
+}
+
+/// Body of `GET /v1/debug/queries` (ADR-0122, decision 9).
+///
+/// `enabled` is `false` and `queries` empty when the journal is disabled;
+/// `dropped` is the counter of the rows the bounded queue refused since the
+/// start of the process (ADR-0122, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugQueryList {
+    /// Whether the journal is enabled on this instance.
+    pub enabled: bool,
+    /// Rows the bounded queue refused since the start of the process.
+    pub dropped: u64,
+    /// The page, `created_at` descending then `id`.
+    pub queries: Vec<DebugQuery>,
+}
+
+/// Body of `GET /v1/stats` (ADR-0124, decision 1).
+///
+/// The members are the fixed list of `docs/05-api.md`; a member without a value
+/// is omitted, never rendered `null` nor filled with an invented `0`
+/// (ADR-0119, decision 3). The four lists are always present, even empty.
+/// `analytics_dropped` is the counter of the process, not a value of the file
+/// (ADR-0118, decision 2).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsResponse {
+    /// Lower bound applied, in UTC; absent when no row and no bound exist.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Upper bound applied, in UTC; absent for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Width of the buckets, echoed: `minute`, `hour` or `day`.
+    pub group_by: StatsGroup,
+    /// Buckets that hold at least one event, in chronological order.
+    pub buckets: Vec<StatsBucket>,
+    /// The aggregate of the window, the shape of a bucket without `start`;
+    /// absent when the window holds no event.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub totals: Option<StatsTotals>,
+    /// At most ten indexes, by count descending then name.
+    pub top_indexes: Vec<StatsIndexCount>,
+    /// At most ten filter forms, by count descending then form.
+    pub top_filter_shapes: Vec<StatsFilterShape>,
+    /// The last daily row of each index in the window, by name.
+    pub indexes: Vec<StatsIndexState>,
+    /// Events the bounded queue refused since the start of the process.
+    pub analytics_dropped: u64,
+}
+
+/// Width of the buckets of a statistics answer (ADR-0124, decision 2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StatsGroup {
+    /// One bucket per stored minute.
+    Minute,
+    /// One bucket per hour, the default.
+    Hour,
+    /// One bucket per UTC day.
+    Day,
+}
+
+/// One bucket of a statistics answer (ADR-0124, decision 1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsBucket {
+    /// Start of the bucket in UTC, truncated to the width.
+    pub start: String,
+    /// Number of events of the bucket.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<BTreeMap<String, u64>>,
+    /// Share of the successful searches that returned nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage; omitted when no stage has a sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<StatsLatency>,
+}
+
+/// The aggregate of the whole window, the shape of a bucket without `start`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsTotals {
+    /// Number of events of the window.
+    pub count: u64,
+    /// Events that failed, by error code; omitted without an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub errors: Option<BTreeMap<String, u64>>,
+    /// Share of the successful searches that returned nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zero_results_rate: Option<f64>,
+    /// Percentiles per stage over the window; omitted when none has a sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<StatsLatency>,
+}
+
+/// The three percentiles of one stage, in milliseconds (ADR-0124, decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsPercentiles {
+    /// Nearest-rank median.
+    pub p50: f64,
+    /// Nearest-rank 95th percentile.
+    pub p95: f64,
+    /// Nearest-rank 99th percentile.
+    pub p99: f64,
+}
+
+/// The percentiles of the nine stages, a stage without a sample omitted.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsLatency {
+    /// Step 1, validation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate: Option<StatsPercentiles>,
+    /// Step 2, encoding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encode: Option<StatsPercentiles>,
+    /// Step 3, pool.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<StatsPercentiles>,
+    /// Step 4, dense branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dense: Option<StatsPercentiles>,
+    /// Step 5, lexical branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lexical: Option<StatsPercentiles>,
+    /// Step 6, fusion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fusion: Option<StatsPercentiles>,
+    /// Step 7, regrouping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<StatsPercentiles>,
+    /// Step 8, payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<StatsPercentiles>,
+    /// Total of the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<StatsPercentiles>,
+}
+
+/// One entry of `top_indexes` (ADR-0124, decision 7).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsIndexCount {
+    /// Name of the index.
+    pub index: String,
+    /// Events of that index on the window.
+    pub count: u64,
+}
+
+/// One entry of `top_filter_shapes` (ADR-0124, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsFilterShape {
+    /// Canonical form: field names and operators only, never a value.
+    pub shape: String,
+    /// Searches that carried that form on the window.
+    pub count: u64,
+}
+
+/// One entry of `indexes`: the last daily row of an index in the window
+/// (ADR-0124, decision 8).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StatsIndexState {
+    /// Day of the row, `AAAA-MM-JJ`.
+    pub day: String,
+    /// Index the row describes.
+    pub index: String,
+    /// Documents of the reference state.
+    pub documents: u64,
+    /// Passages alive at the generation.
+    pub live_passages: u64,
+    /// Passages tombstoned at the generation or an earlier one.
+    pub dead_passages: u64,
+    /// Derived `dead_passages / (live_passages + dead_passages)`.
+    pub dead_ratio: f64,
+    /// Bytes the index directory occupies.
+    pub disk_bytes: u64,
+    /// Published generation.
+    pub generation: u64,
+    /// Batches the reference state applied.
+    pub batches: u64,
+}
+
+impl From<crible_store::analytics::Stats> for StatsResponse {
+    fn from(stats: crible_store::analytics::Stats) -> Self {
+        Self {
+            from: stats.from,
+            to: stats.to,
+            group_by: stats.group_by.into(),
+            buckets: stats.buckets.into_iter().map(StatsBucket::from).collect(),
+            totals: stats.totals.map(StatsTotals::from),
+            top_indexes: stats
+                .top_indexes
+                .into_iter()
+                .map(|entry| StatsIndexCount {
+                    index: entry.index,
+                    count: entry.count,
+                })
+                .collect(),
+            top_filter_shapes: stats
+                .top_filter_shapes
+                .into_iter()
+                .map(|entry| StatsFilterShape {
+                    shape: entry.shape,
+                    count: entry.count,
+                })
+                .collect(),
+            indexes: stats
+                .indexes
+                .into_iter()
+                .map(|entry| StatsIndexState {
+                    day: entry.day,
+                    index: entry.index,
+                    documents: entry.documents,
+                    live_passages: entry.live_passages,
+                    dead_passages: entry.dead_passages,
+                    dead_ratio: entry.dead_ratio,
+                    disk_bytes: entry.disk_bytes,
+                    generation: entry.generation,
+                    batches: entry.batches,
+                })
+                .collect(),
+            // Filled by the route, which alone reads the state of the process.
+            analytics_dropped: 0,
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsGroupBy> for StatsGroup {
+    fn from(width: crible_store::analytics::StatsGroupBy) -> Self {
+        match width {
+            crible_store::analytics::StatsGroupBy::Minute => Self::Minute,
+            crible_store::analytics::StatsGroupBy::Hour => Self::Hour,
+            crible_store::analytics::StatsGroupBy::Day => Self::Day,
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsBucket> for StatsBucket {
+    fn from(bucket: crible_store::analytics::StatsBucket) -> Self {
+        let errors = (!bucket.errors.is_empty()).then_some(bucket.errors);
+        Self {
+            start: bucket.start,
+            count: bucket.count,
+            errors,
+            zero_results_rate: bucket.zero_results_rate,
+            latency_ms: (!bucket.latency_ms.is_empty()).then(|| bucket.latency_ms.into()),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsTotals> for StatsTotals {
+    fn from(totals: crible_store::analytics::StatsTotals) -> Self {
+        let errors = (!totals.errors.is_empty()).then_some(totals.errors);
+        Self {
+            count: totals.count,
+            errors,
+            zero_results_rate: totals.zero_results_rate,
+            latency_ms: (!totals.latency_ms.is_empty()).then(|| totals.latency_ms.into()),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsLatency> for StatsLatency {
+    fn from(latency: crible_store::analytics::StatsLatency) -> Self {
+        Self {
+            validate: latency.validate.map(StatsPercentiles::from),
+            encode: latency.encode.map(StatsPercentiles::from),
+            filter: latency.filter.map(StatsPercentiles::from),
+            dense: latency.dense.map(StatsPercentiles::from),
+            lexical: latency.lexical.map(StatsPercentiles::from),
+            fusion: latency.fusion.map(StatsPercentiles::from),
+            group: latency.group.map(StatsPercentiles::from),
+            fetch: latency.fetch.map(StatsPercentiles::from),
+            total: latency.total.map(StatsPercentiles::from),
+        }
+    }
+}
+
+impl From<crible_store::analytics::StatsPercentiles> for StatsPercentiles {
+    fn from(percentiles: crible_store::analytics::StatsPercentiles) -> Self {
+        Self {
+            p50: percentiles.p50,
+            p95: percentiles.p95,
+            p99: percentiles.p99,
+        }
+    }
+}
+
 /// Mode of an online batch: `upsert` only (ADR-0055).
 ///
 /// `replace_all` is the mode of a deposited batch; the online route refuses it
@@ -799,9 +1123,9 @@ pub struct SearchReturn {
 
 /// Body of `POST /v1/indexes/{index}/search` (ADR-0109).
 ///
-/// `debug` and `explain_ids` are not members: P6 refuses them in
-/// `invalid_request`, and the specification describes only the body the server
-/// accepts. P7 opens them (`REPONSE-DEBUG`, `EXPLIQUER-DOCUMENTS`).
+/// `debug` is a member since P7 and adds the diagnostic member of ADR-0119.
+/// `explain_ids` is a member since `EXPLIQUER-DOCUMENTS` and adds the `explain`
+/// member of ADR-0123.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SearchRequest {
@@ -845,6 +1169,12 @@ pub struct SearchRequest {
     /// Forces the exact computation (eval, debug).
     #[schema(nullable = false)]
     pub exact: Option<bool>,
+    /// Adds the plan, the timings and the branch ranks (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<bool>,
+    /// Ids to explain, 100 at most, duplicates merged (ADR-0123).
+    #[schema(nullable = false, max_items = 100)]
+    pub explain_ids: Option<Vec<String>>,
     /// Deadline of the request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -904,6 +1234,13 @@ pub struct SearchMultiRequest {
     /// Forces the exact computation.
     #[schema(nullable = false)]
     pub exact: Option<bool>,
+    /// Adds the per-target plan and timings and the per-result ranks
+    /// (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<bool>,
+    /// Ids to explain, each naming a target of `targets` (ADR-0123).
+    #[schema(nullable = false, max_items = 100)]
+    pub explain_ids: Option<Vec<SearchExplainTarget>>,
     /// Deadline of the whole request, 1 to 30000 milliseconds.
     #[schema(minimum = 1, maximum = 30000)]
     #[schema(nullable = false)]
@@ -979,6 +1316,13 @@ pub struct SearchResponse {
     pub took_ms: f64,
     /// Whether the query text was truncated to `max_tokens`.
     pub truncated_query: bool,
+    /// Diagnostic of a `debug` request; absent otherwise (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<SearchDebug>,
+    /// Explanation of `explain_ids`, in the order of the request; absent
+    /// otherwise (ADR-0123).
+    #[schema(nullable = false)]
+    pub explain: Option<Vec<SearchExplainEntry>>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
 }
@@ -1031,8 +1375,302 @@ pub struct SearchMultiResponse {
     pub took_ms: f64,
     /// Whether the query text was truncated to `max_tokens`.
     pub truncated_query: bool,
+    /// Diagnostic of a `debug` multi-index request; absent otherwise
+    /// (ADR-0119).
+    #[schema(nullable = false)]
+    pub debug: Option<SearchMultiDebug>,
+    /// Explanation of `explain_ids`, flat and in the order of the request; each
+    /// entry names its index (ADR-0123).
+    #[schema(nullable = false)]
+    pub explain: Option<Vec<SearchMultiExplainEntry>>,
     /// Identifier of the request (ADR-0098).
     pub request_id: String,
+}
+
+/// One element of `explain_ids` on the multi-index route (ADR-0123).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplainTarget {
+    /// Target of the entry; it must be one of `targets`.
+    pub index: String,
+    /// `doc_id` or passage key to explain.
+    pub id: String,
+}
+
+/// Member `explain` of the simple route (ADR-0123, decision 1).
+///
+/// A list with one entry per requested id, in the order of the request, duplicates
+/// merged. Every member without a value is omitted, never `null`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplain {
+    /// Entries of the explanation, in the order of the request.
+    pub explain: Vec<SearchExplainEntry>,
+}
+
+/// One entry of `explain` on the simple route (ADR-0123, decision 1).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchExplainEntry {
+    /// Identifier as requested, `doc_id` or `doc_id#ord`.
+    pub id: String,
+    /// Document the id belongs to.
+    pub doc_id: String,
+    /// Whether the `documents` row is present (ADR-0041).
+    pub exists: bool,
+    /// Whether the document has at least one living passage; absent when
+    /// `exists` is false.
+    #[schema(nullable = false)]
+    pub alive: Option<bool>,
+    /// Whether the id is in the filtered pool.
+    pub in_pool: bool,
+    /// Leaves of the filter that exclude the id, by JSON path; absent when the
+    /// id is in the pool (ADR-0123, decision 7).
+    #[schema(nullable = false)]
+    pub excluded_by: Option<Vec<String>>,
+    /// Dense branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub dense: Option<ExplainDense>,
+    /// Lexical branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub lexical: Option<ExplainLexical>,
+    /// Fused rank before the regrouping; absent when the id is not in that list.
+    #[schema(nullable = false)]
+    pub fused: Option<ExplainFused>,
+    /// Key of the result that absorbed the passage; absent when it was not
+    /// absorbed.
+    #[schema(nullable = false)]
+    pub grouped_under: Option<String>,
+}
+
+/// Dense branch of one explanation (ADR-0123, decision 5).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainDense {
+    /// Key of the passage the branch describes.
+    pub key: String,
+    /// Rank over the whole filtered pool, independent of `k`.
+    pub exact_rank: u32,
+    /// Rank in the order of the binary selection; absent under `exact`.
+    #[schema(nullable = false)]
+    pub binary_rank: Option<u32>,
+    /// Whether the passage is among the rescorable candidates; absent under
+    /// `exact`.
+    #[schema(nullable = false)]
+    pub in_binary_candidates: Option<bool>,
+}
+
+/// Lexical branch of one explanation (ADR-0123, decision 6).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainLexical {
+    /// Key of the passage the branch describes.
+    pub key: String,
+    /// Rank among the pool passages that have a BM25 score.
+    pub rank: u32,
+    /// BM25 score of the passage.
+    pub score: f64,
+    /// Contribution of each analysed term present in the passage.
+    pub terms: Vec<ExplainTerm>,
+}
+
+/// One analysed term of the query, in the passage of an explanation.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainTerm {
+    /// Analysed term.
+    pub term: String,
+    /// Frequency of the term in the passage.
+    pub tf: u32,
+    /// BM25 contribution of the term, in the unit of `lexical.score`.
+    pub score: f64,
+}
+
+/// Fused branch of one explanation: the rank before the regrouping.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExplainFused {
+    /// Rank in the fused list, from 1.
+    pub rank: u32,
+}
+
+/// One entry of `explain` on the multi-index route: the simple entry plus the
+/// index it names (ADR-0123, decision 2).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchMultiExplainEntry {
+    /// Index the entry explains.
+    pub index: String,
+    /// Identifier as requested, `doc_id` or `doc_id#ord`.
+    pub id: String,
+    /// Document the id belongs to.
+    pub doc_id: String,
+    /// Whether the `documents` row is present (ADR-0041).
+    pub exists: bool,
+    /// Whether the document has at least one living passage; absent when
+    /// `exists` is false.
+    #[schema(nullable = false)]
+    pub alive: Option<bool>,
+    /// Whether the id is in the filtered pool.
+    pub in_pool: bool,
+    /// Leaves of the filter that exclude the id, by JSON path.
+    #[schema(nullable = false)]
+    pub excluded_by: Option<Vec<String>>,
+    /// Dense branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub dense: Option<ExplainDense>,
+    /// Lexical branch; absent when it did not run or the id is out of the pool.
+    #[schema(nullable = false)]
+    pub lexical: Option<ExplainLexical>,
+    /// Fused rank before the regrouping; absent when the id is not in that list.
+    #[schema(nullable = false)]
+    pub fused: Option<ExplainFused>,
+    /// Key of the result that absorbed the passage; absent when it was not
+    /// absorbed.
+    #[schema(nullable = false)]
+    pub grouped_under: Option<String>,
+}
+
+/// Plan of one search, as `debug` reports it (ADR-0119, decision 4).
+///
+/// A closed object: `dense_strategy` and `rescore_candidates` are absent when no
+/// dense branch ran, and `alpha` appears only for `relative_score`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugPlan {
+    /// Effective mode of the request, after the default applied.
+    pub mode: SearchMode,
+    /// `"exact"` or `"binary"`; absent without a dense branch (ADR-0074).
+    #[schema(nullable = false)]
+    pub dense_strategy: Option<String>,
+    /// Effective number of candidates rescored; absent without a dense branch.
+    #[schema(minimum = 0, nullable = false)]
+    pub rescore_candidates: Option<u32>,
+    /// Number of candidates asked of each branch, over-sampled when the
+    /// request regroups (ADR-0075).
+    pub candidates_per_branch: u32,
+    /// `"rrf"` or `"relative_score"` (ADR-0008, ADR-0090).
+    pub fusion: String,
+    /// `"document"`, or `null` when the request regroups nothing.
+    pub group_by: Option<GroupBy>,
+    /// Weight of the dense branch, present only for `relative_score`
+    /// (ADR-0090).
+    #[schema(nullable = false)]
+    pub alpha: Option<f64>,
+}
+
+/// The nine timings of one search, in milliseconds (ADR-0119, decision 5).
+///
+/// Every key is always present; a step the mode did not run is `0.0`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugTimings {
+    /// Step 1, validation.
+    pub validate: f64,
+    /// Step 2, encoding.
+    pub encode: f64,
+    /// Step 3, pool.
+    pub filter: f64,
+    /// Step 4, dense branch.
+    pub dense: f64,
+    /// Step 5, lexical branch.
+    pub lexical: f64,
+    /// Step 6, fusion.
+    pub fusion: f64,
+    /// Step 7, regrouping.
+    pub group: f64,
+    /// Step 8, payload.
+    pub fetch: f64,
+    /// Total of the request, equal to `took_ms` (ADR-0109).
+    pub total: f64,
+}
+
+/// One entry of `per_result` of the simple route (ADR-0119, decisions 1 to 3).
+///
+/// `key` and `fused_rank` are always present; a branch member that has no value
+/// is omitted, never `null` and never `0`.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugResult {
+    /// External key `doc_id#ord`, never an internal id (INV-01).
+    pub key: String,
+    /// Rank in the dense branch, from 1.
+    #[schema(nullable = false)]
+    pub dense_rank: Option<u32>,
+    /// Cosine of the dense branch.
+    #[schema(nullable = false)]
+    pub dense_score: Option<f64>,
+    /// Rank in the lexical branch, from 1.
+    #[schema(nullable = false)]
+    pub lexical_rank: Option<u32>,
+    /// BM25 of the lexical branch.
+    #[schema(nullable = false)]
+    pub lexical_score: Option<f64>,
+    /// Rank in the fusion, or in the single branch, before the regrouping.
+    pub fused_rank: u32,
+}
+
+/// The `debug` member of a search answer (ADR-0119).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchDebug {
+    /// Plan of the request.
+    pub plan: DebugPlan,
+    /// Durations of the nine steps.
+    pub timings_ms: DebugTimings,
+    /// One entry per result, in the order of `results`.
+    pub per_result: Vec<DebugResult>,
+}
+
+/// One target of the `debug` member of a multi-index answer (ADR-0119,
+/// decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugTarget {
+    /// Name of the index of the target.
+    pub index: String,
+    /// Plan of this target.
+    pub plan: DebugPlan,
+    /// Durations of this target; `validate` and `encode` are `0.0`.
+    pub timings_ms: DebugTimings,
+}
+
+/// One entry of `per_result` of the multi-index route (ADR-0119, decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DebugMultiResult {
+    /// Index the entry comes from.
+    pub index: String,
+    /// External key `doc_id#ord`.
+    pub key: String,
+    /// Rank in the dense branch of its index.
+    #[schema(nullable = false)]
+    pub dense_rank: Option<u32>,
+    /// Cosine of the dense branch of its index.
+    #[schema(nullable = false)]
+    pub dense_score: Option<f64>,
+    /// Rank in the lexical branch of its index.
+    #[schema(nullable = false)]
+    pub lexical_rank: Option<u32>,
+    /// BM25 of the lexical branch of its index.
+    #[schema(nullable = false)]
+    pub lexical_score: Option<f64>,
+    /// Rank in the fusion of its index, before its regrouping.
+    pub fused_rank: u32,
+    /// Rank of the unit in the final list of its index, from 1.
+    pub target_rank: u32,
+}
+
+/// The `debug` member of a multi-index answer (ADR-0119, decision 9).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchMultiDebug {
+    /// One entry per target, in the order of the request.
+    pub targets: Vec<DebugTarget>,
+    /// Global durations; `total` is `took_ms`.
+    pub timings_ms: DebugTimings,
+    /// One entry per result, in the order of `results`.
+    pub per_result: Vec<DebugMultiResult>,
 }
 
 /// Adds the `413` of the body bound to every operation.
@@ -1196,6 +1834,8 @@ pub fn snapshots_doc() {}
         crate::http::ready,
         crate::http::list_jobs,
         crate::http::get_job,
+        crate::http::debug_queries,
+        crate::http::stats,
         crate::indexes::create_index,
         crate::indexes::list_indexes,
         crate::indexes::get_index,
@@ -1251,6 +1891,17 @@ pub fn snapshots_doc() {}
         JobError,
         Job,
         JobList,
+        DebugQuery,
+        DebugQueryList,
+        StatsResponse,
+        StatsGroup,
+        StatsBucket,
+        StatsTotals,
+        StatsPercentiles,
+        StatsLatency,
+        StatsIndexCount,
+        StatsFilterShape,
+        StatsIndexState,
         BatchMode,
         OnlinePassage,
         OnlineDocument,
@@ -1275,6 +1926,21 @@ pub fn snapshots_doc() {}
         SearchMultiResult,
         SearchTargetState,
         SearchMultiResponse,
+        DebugPlan,
+        DebugTimings,
+        DebugResult,
+        SearchDebug,
+        DebugTarget,
+        DebugMultiResult,
+        SearchMultiDebug,
+        SearchExplainTarget,
+        SearchExplain,
+        SearchExplainEntry,
+        SearchMultiExplainEntry,
+        ExplainDense,
+        ExplainLexical,
+        ExplainTerm,
+        ExplainFused,
     )),
     modifiers(&BearerAuth, &BodyBound),
     security(("bearerAuth" = []))

@@ -9,6 +9,7 @@
 //! of `docs/05-api.md`, so a script reads the category without parsing prose.
 
 mod commands;
+mod eval;
 mod vector;
 
 use std::path::PathBuf;
@@ -211,6 +212,52 @@ enum Command {
         #[arg(long, value_enum, default_value_t = commands::SearchFormat::Json)]
         format: commands::SearchFormat,
     },
+    /// Evaluate one index against one game of queries, in local mode
+    /// (ADR-0125): fidelity against `exact`, quality against `expected`,
+    /// latencies, and a comparison to a previous report.
+    Eval {
+        /// Root data directory (`<data>/indexes/<index>`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Index name, as declared in its `index.json`.
+        #[arg(long)]
+        index: String,
+        /// JSONL game of queries, `{ "id", "query" | "vector", "filter"?,
+        /// "expected"? }`, one per line (ADR-0125, decision 3).
+        #[arg(long)]
+        queries: PathBuf,
+        /// Root models directory (`[paths] models` of `crible.toml`); required
+        /// when a `dense` or `hybrid` mode has to encode a textual query of the
+        /// game, and never for a `lexical` one.
+        #[arg(long)]
+        models: Option<PathBuf>,
+        /// Comma-separated branches to evaluate: `dense`, `lexical`, `hybrid`;
+        /// `dense` when absent.
+        #[arg(long, value_delimiter = ',', value_enum, default_value = "dense")]
+        modes: Vec<commands::SearchMode>,
+        /// Number of documents of the quality runs.
+        #[arg(long, default_value_t = 10)]
+        k: usize,
+        /// Directory of the two reports; they are never overwritten.
+        #[arg(long)]
+        out: PathBuf,
+        /// Replace `search.exact_threshold` in memory; `0` when absent, which
+        /// forces the binary strategy on a non-empty pool (ADR-0076).
+        #[arg(long)]
+        exact_threshold: Option<u32>,
+        /// Replace `search.rescore_candidates` in memory (ADR-0125,
+        /// decision 7).
+        #[arg(long)]
+        rescore_candidates: Option<u32>,
+        /// Counted repetitions of the game; one warmup pass precedes them and
+        /// enters no percentile (ADR-0125, decision 9).
+        #[arg(long, default_value_t = eval::DEFAULT_REPEAT)]
+        repeat: usize,
+        /// Reference report of a previous campaign; a mean that drops by more
+        /// than 0.005 makes the command exit 1 (ADR-0125, decision 12).
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+    },
     /// Report the state of one index or of every index of an instance.
     Inspect {
         /// Root data directory (`<data>/indexes/<index>`).
@@ -219,6 +266,36 @@ enum Command {
         /// Index name; every index when omitted.
         #[arg(long)]
         index: Option<String>,
+    },
+    /// Report the aggregated analytics of an instance (`GET /v1/stats`), read
+    /// from `<data>/analytics.sqlite` without a server (ADR-0124).
+    Stats {
+        /// Root data directory (`<data>/analytics.sqlite`).
+        #[arg(long)]
+        data: PathBuf,
+        /// Lower bound, included, of the window: an ISO 8601 date with its
+        /// offset; defaults to the oldest retained row.
+        #[arg(long)]
+        from: Option<String>,
+        /// Upper bound, included, of the window: an ISO 8601 date with its
+        /// offset; defaults to the newest retained row.
+        #[arg(long)]
+        to: Option<String>,
+        /// Only the events of that index.
+        #[arg(long)]
+        index: Option<String>,
+        /// Only the events of that operation: `search`, `search_multi`,
+        /// `get_document`, `online_batch`, `attach_batch`, `patch_documents`,
+        /// `compact`, `export`, `snapshot` or `index_admin`.
+        #[arg(long)]
+        operation: Option<String>,
+        /// Width of the buckets: `minute`, `hour` (default) or `day`.
+        #[arg(long, value_name = "minute|hour|day")]
+        group_by: Option<String>,
+        /// Output format: `table` (ASCII tables, default) or `json` (the body
+        /// of `GET /v1/stats`, less `analytics_dropped`).
+        #[arg(long, value_enum, default_value_t = commands::StatsFormat::Table)]
+        format: commands::StatsFormat,
     },
     /// Serve the HTTP API of an instance until SIGTERM or SIGINT (ADR-0099).
     Serve {
@@ -258,10 +335,41 @@ enum KeyCommand {
     Generate,
 }
 
+/// Cuts the telemetry of ONNX Runtime for the whole process.
+///
+/// ONNX Runtime 1.31.0 carries the Microsoft 1DS client: it writes a device id
+/// and a SQLite store under the home directory, sends usage data to a third
+/// party, and can block the exit of the process on a stalled upload (ADR-0128).
+/// The variable is the only switch it reads at creation, and it also stops the
+/// client for every session the process builds, `serve` included.
+///
+/// The value is forced to `1`: the caller cannot reopen the telemetry, and
+/// ADR-0128 (decision 1) makes any reopening a new decision.
+///
+/// # Safety
+///
+/// [`std::env::set_var`] is unsafe in edition 2024 because another thread could
+/// read the environment concurrently. The contract is therefore on the caller:
+/// it guarantees that no other thread reads the environment while this function
+/// writes it. `main` satisfies it trivially, since it calls the function before
+/// `Cli::parse` and before any thread is spawned. The unit test that pins the
+/// forced value satisfies it the same way: no other test of the binary reads
+/// `ORT_DISABLE_TELEMETRY`, and the journal tests pass their filter as an
+/// argument.
+fn disable_ort_telemetry() {
+    // SAFETY: the caller guarantees that no thread reads the environment; see
+    // the doc of this function. `main` has spawned none, and the test that
+    // writes the variable is the only reader of it in this binary.
+    unsafe {
+        std::env::set_var("ORT_DISABLE_TELEMETRY", "1");
+    }
+}
+
 fn main() -> ExitCode {
+    disable_ort_telemetry();
     let cli = Cli::parse();
     match run(cli) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             report(&error);
             ExitCode::FAILURE
@@ -270,7 +378,11 @@ fn main() -> ExitCode {
 }
 
 /// Runs one command, mapping every engine error to the printed report.
-fn run(cli: Cli) -> Result<(), CribleError> {
+///
+/// The exit code is [`ExitCode::SUCCESS`] for every command but `eval`, which
+/// answers `1` when its `--baseline` detects a regression (ADR-0125,
+/// decision 12).
+fn run(cli: Cli) -> Result<ExitCode, CribleError> {
     // The server journals on stdout, in JSON, at the level `RUST_LOG` asks for
     // (ADR-0096): its subscriber replaces the one of the commands, which stays
     // on stderr.
@@ -279,7 +391,44 @@ fn run(cli: Cli) -> Result<(), CribleError> {
     } else {
         init_logging()?;
     }
-    match cli.command {
+    let command = cli.command;
+    if let Command::Eval {
+        data,
+        index,
+        queries,
+        models,
+        modes,
+        k,
+        out,
+        exact_threshold,
+        rescore_candidates,
+        repeat,
+        baseline,
+    } = &command
+    {
+        return eval::run(&eval::EvalRequest {
+            data,
+            index,
+            queries,
+            models: models.as_deref(),
+            modes,
+            k: *k,
+            out,
+            exact_threshold: *exact_threshold,
+            rescore_candidates: *rescore_candidates,
+            repeat: *repeat,
+            baseline: baseline.as_deref(),
+        });
+    }
+    run_command(command)?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Runs one command that answers `0` on success.
+fn run_command(command: Command) -> Result<(), CribleError> {
+    match command {
+        // Handled by [`run`], which returns the code `eval` decides.
+        Command::Eval { .. } => Ok(()),
         Command::Index { command } => match command {
             IndexCommand::Create { data, config } => commands::create_index(&data, &config),
         },
@@ -346,6 +495,23 @@ fn run(cli: Cli) -> Result<(), CribleError> {
             format,
         }),
         Command::Inspect { data, index } => commands::inspect(&data, index.as_deref()),
+        Command::Stats {
+            data,
+            from,
+            to,
+            index,
+            operation,
+            group_by,
+            format,
+        } => commands::stats(&commands::StatsRequest {
+            data: &data,
+            from: from.as_deref(),
+            to: to.as_deref(),
+            index: index.as_deref(),
+            operation: operation.as_deref(),
+            group_by: group_by.as_deref(),
+            format,
+        }),
         Command::Serve { config } => crible_server::serve_blocking(&config),
         Command::Key { command } => match command {
             KeyCommand::Generate => commands::generate_key(),
@@ -533,5 +699,27 @@ mod tests {
             failure.code(),
             crible_core::error::ErrorCode::InvalidRequest
         );
+    }
+
+    #[test]
+    fn the_ort_telemetry_is_disabled_and_forced() {
+        // ADR-0128, decision 2: the value is forced to `1`, so an environment
+        // that asks for the telemetry (`0`) or for another value (`anything`)
+        // is overridden. The variable set here is the one `main` sets, which is
+        // also the one the process passes to every ONNX Runtime session.
+        // SAFETY: this test writes the process environment, and no other test
+        // of this binary reads `ORT_DISABLE_TELEMETRY`; the journal tests read
+        // `RUST_LOG` only through `effective_filter`, which takes its argument.
+        for raw in ["0", "anything", ""] {
+            unsafe {
+                std::env::set_var("ORT_DISABLE_TELEMETRY", raw);
+            }
+            super::disable_ort_telemetry();
+            assert_eq!(
+                std::env::var("ORT_DISABLE_TELEMETRY").as_deref(),
+                Ok("1"),
+                "`{raw}` must be overridden by `1`"
+            );
+        }
     }
 }

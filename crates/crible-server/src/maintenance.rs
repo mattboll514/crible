@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::{Extension, Path as AxumPath, Query, State};
@@ -32,6 +33,8 @@ use crible_store::snapshot;
 use serde_json::json;
 
 use crate::AppState;
+use crate::analytics::{self, Operation};
+use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
 use crate::jobs::JobOutcome;
@@ -76,6 +79,35 @@ fn compact_for_job(
 pub async fn compact(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let started = Instant::now();
+    let answer = compact_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        body,
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::Compact,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`compact`], without the event of its operation.
+async fn compact_inner(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
     Query(query): Query<HashMap<String, String>>,
     body: Bytes,
@@ -105,6 +137,28 @@ pub async fn compact(
 /// `POST /v1/indexes/{index}/exports`: exports the live data to
 /// `exchange/outbox/<index>-g<G>/`.
 pub async fn exports(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let started = Instant::now();
+    let answer = exports_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        body,
+    )
+    .await;
+    analytics::record_operation(&state, Operation::Export, &index, &client, started, &answer);
+    answer
+}
+
+/// The work of [`exports`], without the event of its operation.
+async fn exports_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,
@@ -142,6 +196,35 @@ pub async fn exports(
 /// `POST /v1/indexes/{index}/snapshots`: copies the published epoch to
 /// `exchange/snapshots/<index>-e<E>-g<G>/`.
 pub async fn snapshots(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> Response {
+    let started = Instant::now();
+    let answer = snapshots_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        body,
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::Snapshot,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`snapshots`], without the event of its operation.
+async fn snapshots_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,

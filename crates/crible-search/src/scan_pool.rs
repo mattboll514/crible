@@ -11,8 +11,10 @@
 //! tokio worker would therefore run the scan on the async runtime's threads,
 //! and a CPU-bound scan would starve the reactor the way
 //! `docs/02-architecture.md` forbids. [`ScanPool`] is that dedicated pool: the
-//! caller builds one for the process and runs every scan and every searcher
-//! opening inside [`ScanPool::install`].
+//! caller builds one for the process and runs every scan inside
+//! [`ScanPool::install`]. A searcher opening does no `rayon` work, so
+//! [`DenseSearcher::open_in`](crate::dense::exact::DenseSearcher::open_in) does
+//! not enter the pool: it takes the worker count as an explicit argument.
 //!
 //! The type is deliberately thin: it owns the `rayon::ThreadPool` and offers
 //! only its installation. The CLI of P1 builds one per command; the server of
@@ -24,7 +26,11 @@
 //! must see: it sizes its read-only connection pool on the worker count of the
 //! current rayon pool, so opening the searcher inside `install` gives it the
 //! right capacity. Opening it outside and searching inside stays correct, but
-//! serialises the key reads on one connection.
+//! serialises the key reads on one connection. The **server** no longer opens a
+//! searcher per query: the writers fill the readers of a generation with
+//! `ScanPool::threads()` as the capacity of their payload pool, before they
+//! publish it, and a request composes its searcher from those readers without
+//! any I/O (ADR-0126, decision 1).
 
 use crible_core::error::{CribleError, ErrorCode};
 use rayon::ThreadPool;

@@ -28,6 +28,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::Json;
 use axum::extract::{Extension, Path as AxumPath, Query, State};
@@ -39,6 +40,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::AppState;
+use crate::analytics::{self, Operation};
+use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
 use crate::jobs::{JobOutcome, log_attach_durations};
@@ -78,6 +81,35 @@ struct BatchBody {
     )
 )]
 pub async fn post_batch(
+    State(state): State<Arc<AppState>>,
+    Extension(identifier): Extension<RequestId>,
+    Extension(client): Extension<Client>,
+    AxumPath(index): AxumPath<String>,
+    Query(query): Query<HashMap<String, String>>,
+    Json(body): Json<Value>,
+) -> Response {
+    let started = Instant::now();
+    let answer = post_batch_inner(
+        State(Arc::clone(&state)),
+        Extension(identifier),
+        AxumPath(index.clone()),
+        Query(query),
+        Json(body),
+    )
+    .await;
+    analytics::record_operation(
+        &state,
+        Operation::AttachBatch,
+        &index,
+        &client,
+        started,
+        &answer,
+    );
+    answer
+}
+
+/// The work of [`post_batch`], without the event of its operation.
+async fn post_batch_inner(
     State(state): State<Arc<AppState>>,
     Extension(identifier): Extension<RequestId>,
     AxumPath(index): AxumPath<String>,

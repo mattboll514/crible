@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 /// The tests that walk every operation count them: a loop that visits nothing
 /// would pass. `docs/05-api.md` is the reference (ADR-0111, decision 5).
-const OPERATIONS: usize = 18;
+const OPERATIONS: usize = 20;
 
 /// The reference document, read at compile time.
 const DOCS: &str = include_str!("../../../docs/05-api.md");
@@ -36,13 +36,10 @@ const PUBLICATION: [(&str, &str); 2] = [("GET", "/openapi.json"), ("GET", "/docs
 /// The rows of the table a later task delivers, excepted by name until then.
 ///
 /// ADR-0111, decision 9: the exception is written here with the task that
-/// delivers the route, and the change that mounts the route removes it.
-const LATER: [(&str, &str); 2] = [
-    // ROUTE-STATS, P7 (`docs/phases/P7-observabilite.md`).
-    ("GET", "/v1/stats"),
-    // JOURNAL-DE-DEBUG, P7 (`docs/phases/P7-observabilite.md`).
-    ("GET", "/v1/debug/queries"),
-];
+/// delivers the route, and the change that mounts the route removes it. Every
+/// route of `docs/05-api.md` is delivered: `ROUTE-STATS` removed the last one,
+/// `GET /v1/stats` (ADR-0124, decision 16).
+const LATER: [(&str, &str); 0] = [];
 
 /// One couple (method, path without query string) of the table.
 fn documented_routes() -> BTreeSet<(String, String)> {
