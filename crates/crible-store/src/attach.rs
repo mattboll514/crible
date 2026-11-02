@@ -705,6 +705,7 @@ where
                 CommitDelta {
                     created,
                     rewritten_documents: plan.rewrite.iter().cloned().collect(),
+                    created_documents: counters.added,
                     tombstones: plan.tombstones.clone(),
                     removed_documents: plan.removed.clone(),
                 },

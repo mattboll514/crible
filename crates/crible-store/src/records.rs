@@ -1684,6 +1684,25 @@ pub(crate) fn document_by_id(
     row.map(document_from_row).transpose()
 }
 
+/// True when the `documents` table holds a row of `doc_id`.
+///
+/// The read is bounded by the primary key of `documents`, which ADR-0066 allows
+/// on the commit path: it tells a document the transaction creates from one it
+/// rewrites, without counting the table. It costs one primary-key probe for each
+/// document written through [`crate::generation`]'s `GenerationChange`; the attach
+/// path pays none, since its report already counts the created documents.
+pub(crate) fn document_exists(connection: &Connection, doc_id: &str) -> Result<bool, CribleError> {
+    connection
+        .query_row(
+            "SELECT 1 FROM documents WHERE doc_id = ?1",
+            params![doc_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map(|row| row.is_some())
+        .map_err(|error| database_error("read whether a document exists", &error))
+}
+
 /// Reads the passages of one document, in `ord` order, dead ones included.
 pub(crate) fn passages_of_document(
     connection: &Connection,

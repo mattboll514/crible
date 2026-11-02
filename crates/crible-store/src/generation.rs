@@ -312,6 +312,16 @@ pub struct GenerationChange {
 /// segments it keeps from the previous snapshot and loads only the new ones.
 pub struct Snapshot {
     generation: Generation,
+    /// Documents the reference state of this generation held when the snapshot
+    /// was built.
+    ///
+    /// The count is recorded here rather than read from `records.sqlite` later,
+    /// so the summary of the published state describes the generation the
+    /// readers serve and never a mixture of two (ADR-0105, decision 3).
+    documents: u64,
+    /// Passages the reference state of this generation held when the snapshot
+    /// was built, tombstoned ones included.
+    passages: u64,
     segments: Vec<SegmentMeta>,
     /// Binary codes of `segments`, in the same order.
     codes: Vec<Arc<Vec<u64>>>,
@@ -351,6 +361,48 @@ impl Snapshot {
     #[must_use]
     pub fn generation(&self) -> Generation {
         self.generation
+    }
+
+    /// Documents the reference state of this generation holds, as recorded when
+    /// the snapshot was built.
+    #[must_use]
+    pub fn documents(&self) -> u64 {
+        self.documents
+    }
+
+    /// Passages the reference state of this generation holds, tombstoned ones
+    /// included, as recorded when the snapshot was built.
+    #[must_use]
+    pub fn passages(&self) -> u64 {
+        self.passages
+    }
+
+    /// Passages alive in this generation, tombstoned ones excluded.
+    ///
+    /// The count is the size of the bitmap of the live passages, the only copy
+    /// the snapshot holds (INV-01 keeps the identifiers inside the engine).
+    #[must_use]
+    pub fn live_passages(&self) -> u64 {
+        self.filters.live().len()
+    }
+
+    /// Passages tombstoned at this generation or an earlier one: the passages
+    /// the reference state held when the snapshot was built, minus the live
+    /// ones.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Internal`] when the live bitmap holds more passages than the
+    /// reference state, a state no commit could have produced.
+    pub fn dead_passages(&self) -> Result<u64, CribleError> {
+        self.passages
+            .checked_sub(self.live_passages())
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    "the live bitmap holds more passages than the reference state",
+                )
+            })
     }
 
     /// Epoch holding the reference state and the payloads of this snapshot.
@@ -952,8 +1004,9 @@ impl GenerationStore {
     /// error as "nothing was written".
     pub fn commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError> {
         self.commit_with_rows(|transaction, generation, next_iid| {
-            let next_iid = write_generation_change(transaction, &change, generation, next_iid)?;
-            Ok((next_iid, delta_of(change)))
+            let (next_iid, created_documents) =
+                write_generation_change(transaction, &change, generation, next_iid)?;
+            Ok((next_iid, delta_of(change, created_documents)))
         })
         .map(|committed| committed.generation)
     }
@@ -1258,25 +1311,20 @@ impl GenerationStore {
     /// State of the published generation, as `crible inspect` and the index
     /// state of the API (`docs/05-api.md`) report it.
     ///
-    /// The counts come from `records.sqlite`, the reference state, while the
-    /// filter memory comes from the published snapshot. The store is the only
-    /// writer of its index, so the two describe the same generation.
+    /// Every count describes the published snapshot and nothing else: the
+    /// documents and the passages were recorded when the snapshot was built, and
+    /// the live passages are its bitmap (ADR-0105, decision 3). A store whose
+    /// SQLite state is one generation ahead — a job that committed and then
+    /// failed before publishing its snapshot — therefore reports the generation
+    /// it serves instead of a mixture of two.
     pub fn state(&self) -> Result<IndexState, CribleError> {
         let snapshot = self.snapshot();
-        let counts = self.records.counts()?;
-        let live_passages = snapshot.filters().live().len();
-        let dead_passages = counts.passages.checked_sub(live_passages).ok_or_else(|| {
-            CribleError::new(
-                ErrorCode::Internal,
-                "the live bitmap holds more passages than the reference state",
-            )
-        })?;
         Ok(IndexState {
             epoch: self.lease.epoch,
             generation: snapshot.generation(),
-            documents: counts.documents,
-            live_passages,
-            dead_passages,
+            documents: snapshot.documents(),
+            live_passages: snapshot.live_passages(),
+            dead_passages: snapshot.dead_passages()?,
             segments: snapshot.segments().to_vec(),
             filter_memory: snapshot.filter_memory(),
             codes_memory: snapshot.codes_memory(),
@@ -1413,16 +1461,17 @@ pub struct LastBatch {
 
 /// State of one published generation, for inspection.
 ///
-/// Every count is taken from the reference state; the segments and the filter
-/// memory describe the snapshot the store published. The dead ratio is a simple
-/// `dead / (live + dead)` and is not stored.
+/// Every count is taken from the published snapshot: the documents and the
+/// passages it recorded when it was built, and its bitmap of the live passages.
+/// The segments, the filter memory and the codes describe the same snapshot. The
+/// dead ratio is a simple `dead / (live + dead)` and is not stored.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IndexState {
     /// Epoch directory holding the reference state.
     pub epoch: Epoch,
     /// Published generation.
     pub generation: Generation,
-    /// Documents the reference state holds.
+    /// Documents the reference state of this generation holds.
     pub documents: u64,
     /// Passages alive at this generation.
     pub live_passages: u64,
@@ -1744,7 +1793,7 @@ pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<RebuildOutcome, Cr
         store,
         PublishedLexical::from_observation(observed),
         meta.generation,
-    );
+    )?;
     Ok(RebuildOutcome {
         generation: meta.generation,
         rebuilt: true,
@@ -1752,28 +1801,60 @@ pub fn rebuild_lexical(store: &mut GenerationStore) -> Result<RebuildOutcome, Cr
 }
 
 /// Replaces the lexical branch of the published snapshot by `published`, keeping
-/// every other structure of the snapshot.
+/// every other structure of the snapshot of the **same** generation.
 ///
 /// The rebuild of [`rebuild_lexical`] changes the derived index alone: the
 /// segments, the codes and the filter structures describe the same epoch and the
 /// same `generation`, so the snapshot is rebuilt by sharing them rather than by
 /// reading them again (`docs/02`, "Concurrence"; `ADR-0043`).
+///
+/// The store is not always on the generation the rebuild committed: an earlier
+/// commit may have stopped **after** its SQLite commit and before its manifest,
+/// so the published snapshot is one generation behind (INV-04). Sharing its
+/// structures would then publish the committed generation with the bitmaps, the
+/// codes and the counts of another one, so the snapshot is rebuilt from
+/// `records.sqlite`, as [`GenerationStore::reconfigure`] does (ADR-0105,
+/// decision 4).
+///
+/// That branch is a defence against a caller that rebuilds while the store is
+/// behind, not a path the engine takes today: the CLI opens the store before
+/// rebuilding, whose snapshot then carries the committed generation, and the
+/// server `PATCH` of a lexical setting takes the [`GenerationStore::reconfigure`]
+/// path. A unit test builds the stale state with [`GenerationStore::adopt`] to
+/// cover it.
+///
+/// # Errors
+///
+/// The errors of the rebuild from the reference state.
 fn publish_lexical_reader(
     store: &GenerationStore,
     published: PublishedLexical,
     generation: Generation,
-) {
+) -> Result<(), CribleError> {
     let previous = store.snapshot();
-    let snapshot = Snapshot {
-        generation,
-        segments: previous.segments.clone(),
-        codes: previous.codes.clone(),
-        filters: previous.filters.clone(),
-        lexical: published.reader,
-        lexical_status: published.status,
-        lease: Arc::clone(&previous.lease),
+    let snapshot = if generation == previous.generation() {
+        Snapshot {
+            generation,
+            documents: previous.documents,
+            passages: previous.passages,
+            segments: previous.segments.clone(),
+            codes: previous.codes.clone(),
+            filters: previous.filters.clone(),
+            lexical: published.reader,
+            lexical_status: published.status,
+            lease: Arc::clone(&previous.lease),
+        }
+    } else {
+        build_snapshot(
+            &store.records,
+            &store.epoch_directory(),
+            previous.filters().schema(),
+            published,
+            Arc::clone(&previous.lease),
+        )?
     };
     store.snapshot.store(Arc::new(snapshot));
+    Ok(())
 }
 
 /// Replays into the lexical index of `epoch_dir` the generations after `since`,
@@ -2039,7 +2120,7 @@ fn write_generation_change(
     change: &GenerationChange,
     generation: Generation,
     next_iid: u32,
-) -> Result<u32, CribleError> {
+) -> Result<(u32, u64), CribleError> {
     let GenerationChange {
         segments,
         documents,
@@ -2059,6 +2140,13 @@ fn write_generation_change(
         )?;
         records::insert_segment(transaction, segment)?;
     }
+    // The count of the rows this change creates is what the snapshot of the next
+    // generation holds as `documents` (ADR-0105, decision 3). Reading it here,
+    // before the upsert, keeps the read bounded by the primary key of
+    // `documents`, which ADR-0066 allows on the commit path: one probe per
+    // document written through a `GenerationChange`. The attach path pays no
+    // probe, it takes the count from `counters.added`.
+    let mut created_documents: u64 = 0;
     for document in documents {
         check_generation_matches(
             "document",
@@ -2066,6 +2154,9 @@ fn write_generation_change(
             document.updated_generation,
             generation,
         )?;
+        if !records::document_exists(transaction, &document.doc_id)? {
+            created_documents = created_documents.saturating_add(1);
+        }
         records::insert_document(transaction, document)?;
     }
     for passage in passages {
@@ -2089,7 +2180,7 @@ fn write_generation_change(
     for iid in deletions {
         records::tombstone_passage(transaction, *iid, generation)?;
     }
-    Ok(next_iid)
+    Ok((next_iid, created_documents))
 }
 
 /// The delta one [`GenerationChange`] writes into `passages` and `documents`, in
@@ -2097,7 +2188,7 @@ fn write_generation_change(
 ///
 /// A change never removes a document row: removal belongs to an attach
 /// (ADR-0041), whose plan feeds `removed_documents` itself.
-fn delta_of(change: GenerationChange) -> CommitDelta {
+fn delta_of(change: GenerationChange, created_documents: u64) -> CommitDelta {
     CommitDelta {
         created: change
             .passages
@@ -2109,6 +2200,7 @@ fn delta_of(change: GenerationChange) -> CommitDelta {
             .into_iter()
             .map(|document| document.doc_id)
             .collect(),
+        created_documents,
         tombstones: change.deletions,
         removed_documents: Vec::new(),
     }
@@ -2373,9 +2465,12 @@ fn check_generation_matches(
 
 /// Builds the snapshot of the committed generation from the reference state.
 ///
-/// The generation and every row come from SQLite, the only authority on what is
-/// visible: the bitmap of the live passages is a reading of it, and a snapshot
-/// takes its live iids from that bitmap rather than storing them a second time.
+/// The generation, the counts and every row come from SQLite, the only authority
+/// on what is visible: the bitmap of the live passages is a reading of it, and a
+/// snapshot takes its live iids from that bitmap rather than storing them a
+/// second time. The document and passage counts are recorded on the snapshot
+/// here, so the summary of the published state reads them from it instead of
+/// counting the tables again (ADR-0105, decision 3).
 /// The segment metadata is read from the segments table and
 /// from `segment.json` on disk, which carries the format version and the
 /// precision, then sorted by `iid_start`: a snapshot is read in iid order, and
@@ -2398,10 +2493,14 @@ fn build_snapshot(
     lexical: PublishedLexical,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
+    let meta = records.meta()?;
+    let counts = records.counts()?;
     let segments = segments_of(records, epoch_dir)?;
     let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, None)?;
     Ok(Snapshot {
-        generation: records.meta()?.generation,
+        generation: meta.generation,
+        documents: counts.documents,
+        passages: counts.passages,
         segments,
         codes,
         filters: FilterIndex::from_records(records.connection(), schema)?,
@@ -2433,7 +2532,16 @@ fn build_snapshot_after_commit(
     lexical: PublishedLexical,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
-    let filters = if previous.generation().get().checked_add(1) == Some(generation.get()) {
+    // The delta only describes the whole difference when the previous snapshot is
+    // the generation just before this one. It is not when an earlier commit
+    // stopped **after** its SQLite commit (a manifest that could not be written):
+    // that generation is committed but was never published, so `delta` would
+    // leave its rows out. The filters and the counts are then read from
+    // `records.sqlite`, which is what the next [`GenerationStore::open`] would do
+    // (INV-04). Reading both from the same place keeps the bitmap and the counts
+    // on the same state.
+    let consecutive = previous.generation().get().checked_add(1) == Some(generation.get());
+    let filters = if consecutive {
         previous
             .filters()
             .after_commit(records.connection(), delta)?
@@ -2444,8 +2552,21 @@ fn build_snapshot_after_commit(
     // A segment is immutable: the arrays of the previous snapshot are reused
     // through `Arc`, so a commit reads only the codes of the segments it adds.
     let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, Some(previous))?;
+    // A snapshot must carry the counts of its own generation, so the summary the
+    // server publishes never reads the reference state again (ADR-0105,
+    // decision 3). On the consecutive path the counts come from the delta, since
+    // ADR-0066 forbids counting `documents` and `passages` on the commit path; on
+    // the rebuilt path they come from SQLite with the filters.
+    let (documents, passages) = if consecutive {
+        counts_after_commit(previous, delta)?
+    } else {
+        let counts = records.counts()?;
+        (counts.documents, counts.passages)
+    };
     Ok(Snapshot {
         generation,
+        documents,
+        passages,
         segments,
         codes,
         filters,
@@ -2453,6 +2574,54 @@ fn build_snapshot_after_commit(
         lexical_status: lexical.status,
         lease,
     })
+}
+
+/// Counts of the generation `delta` produces from `previous`, as the snapshot of
+/// that generation records them (ADR-0105, decision 3).
+///
+/// The rows of `documents` and `passages` are never removed inside one epoch: a
+/// deletion is a tombstone, which sets `dead_since_gen` and keeps the row
+/// (ADR-0041), and only an attach removes the row of a deleted document. The
+/// counts are therefore the ones of the previous snapshot, plus the passages the
+/// transaction created, plus the documents it created, minus the documents whose
+/// row it removed. Deriving them keeps the commit path free of a `count(*)` over
+/// the two tables, which ADR-0066 forbids.
+fn counts_after_commit(
+    previous: &Snapshot,
+    delta: &CommitDelta,
+) -> Result<(u64, u64), CribleError> {
+    let created_passages = u64::try_from(delta.created.len()).map_err(|_| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "a generation creates more passages than a u64 can count",
+        )
+    })?;
+    let removed_documents = u64::try_from(delta.removed_documents.len()).map_err(|_| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "a generation removes more documents than a u64 can count",
+        )
+    })?;
+    let documents = previous
+        .documents()
+        .checked_add(delta.created_documents)
+        .and_then(|count| count.checked_sub(removed_documents))
+        .ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the document count of a generation leaves the range of a u64",
+            )
+        })?;
+    let passages = previous
+        .passages()
+        .checked_add(created_passages)
+        .ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the passage count of a generation leaves the range of a u64",
+            )
+        })?;
+    Ok((documents, passages))
 }
 
 /// Binary codes of `segments`, in the same order, shared with `previous` for
@@ -3129,6 +3298,107 @@ mod tests {
             .index_option()
     }
 
+    /// A rebuild of the lexical index publishes the generation `records.sqlite`
+    /// holds, not the one the snapshot it found describes.
+    ///
+    /// The branch is a defence against a caller that rebuilds while the store is
+    /// behind the reference state, as a job that committed and then failed before
+    /// publishing its snapshot leaves it. No production caller does that today:
+    /// the CLI opens the store, whose snapshot then carries the committed
+    /// generation, and the server `PATCH` takes the `reconfigure` path. The test
+    /// builds the state directly, with `adopt`, because no API produces it
+    /// (ADR-0105, decision 4).
+    #[test]
+    fn rebuild_lexical_rebuilds_a_snapshot_that_is_behind_the_reference_state() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let index = temp.path().join("index");
+        write_lexical_config(&index);
+        let mut store = GenerationStore::create(&index, Epoch::new(1), &empty_schema())
+            .expect("the index is created");
+        plan_test_first_generation(&mut store);
+        let first = store.snapshot();
+        assert_eq!(
+            first.generation(),
+            Generation::new(1),
+            "the fixture starts on the first generation"
+        );
+
+        // A second generation commits, then the store is put back on the snapshot
+        // of the first one: generation 2 is committed and unpublished, the state a
+        // failed manifest leaves behind (INV-04).
+        store
+            .commit(GenerationChange {
+                segments: Vec::new(),
+                documents: vec![DocumentRecord {
+                    doc_id: "doc-b".to_owned(),
+                    doc_hash: "blake3:doc-b".to_owned(),
+                    fields: json!({ "annee": 2022 }),
+                    updated_generation: Generation::new(2),
+                }],
+                passages: vec![PassageRecord {
+                    iid: Iid::new(2),
+                    doc_id: "doc-b".to_owned(),
+                    ord: 0,
+                    text: "doc-b#0".to_owned(),
+                    passage_hash: "blake3:passage-2".to_owned(),
+                    fields: json!({ "rang": 0 }),
+                    segment_id: "seg-b".to_owned(),
+                    created_generation: Generation::new(2),
+                    dead_since_gen: None,
+                }],
+                deletions: vec![Iid::new(1)],
+            })
+            .expect("the second generation commits");
+        assert_eq!(store.snapshot().generation(), Generation::new(2));
+        store.adopt(first);
+        assert_eq!(
+            store.snapshot().generation(),
+            Generation::new(1),
+            "the store serves a generation the reference state is ahead of"
+        );
+
+        let counts = store
+            .records
+            .counts()
+            .expect("the reference state counts its rows");
+        let outcome = super::rebuild_lexical(&mut store)
+            .expect("the rebuild reads the reference state, not the stale snapshot");
+        assert_eq!(
+            outcome.generation,
+            Generation::new(2),
+            "the rebuild reports the generation of the reference state"
+        );
+
+        let published = store.snapshot();
+        assert_eq!(
+            published.generation(),
+            Generation::new(2),
+            "the published snapshot leaves the stale generation behind"
+        );
+        assert_eq!(
+            published.documents(),
+            counts.documents,
+            "the rebuilt snapshot counts the documents of the reference state"
+        );
+        assert_eq!(
+            published.passages(),
+            counts.passages,
+            "the rebuilt snapshot counts the passages of the reference state"
+        );
+        assert_eq!(
+            published.live_passages(),
+            2,
+            "doc-a#0 and doc-b#0 are the two live passages"
+        );
+        assert_eq!(
+            published
+                .dead_passages()
+                .expect("the live bitmap is inside the reference state"),
+            counts.passages - 2,
+            "the tombstoned doc-a#1 is counted as dead"
+        );
+    }
+
     /// Opening an index whose `index.json` disappeared is refused: the store
     /// must not rebuild the filter structures from the caller's schema alone.
     #[test]
@@ -3752,6 +4022,8 @@ mod tests {
         let base = store.snapshot();
         let previous = super::Snapshot {
             generation: base.generation(),
+            documents: base.documents(),
+            passages: base.passages(),
             segments: vec![meta.clone()],
             codes: vec![std::sync::Arc::new(vec![0_u64])],
             filters: base.filters().clone(),

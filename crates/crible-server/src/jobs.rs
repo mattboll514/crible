@@ -643,7 +643,7 @@ pub struct IndexSummary {
     pub epoch: u64,
     /// Published generation.
     pub generation: u64,
-    /// Documents the reference state holds.
+    /// Documents the served generation holds.
     pub documents: u64,
     /// Passages alive at this generation.
     pub live_passages: u64,
@@ -667,12 +667,19 @@ impl IndexSummary {
     ///
     /// # Errors
     ///
-    /// The errors of [`GenerationStore::state`] and of the `batches` query.
+    /// The errors of the `batches` queries and of the passage counts of the
+    /// snapshot.
     pub fn of(store: &GenerationStore) -> Result<Self, CribleError> {
         Self::of_snapshot(store, &store.snapshot())
     }
 
     /// Reads the summary of `snapshot`, a generation `store` already holds.
+    ///
+    /// The counts describe `snapshot` alone: the documents and the passages were
+    /// recorded when it was built, and the live passages are its bitmap
+    /// (ADR-0105, decision 3). Only `last_batch` and `batches` still come from
+    /// the reference state, and that asymmetry is wanted: `last_batch` is the
+    /// last row of `batches`, whatever generation served the readers.
     ///
     /// A `PATCH` job builds its snapshot with
     /// [`GenerationStore::reconfigure`](crible_store::generation::GenerationStore::reconfigure)
@@ -681,20 +688,19 @@ impl IndexSummary {
     ///
     /// # Errors
     ///
-    /// The errors of the `batches` query and of the reference state of
+    /// The errors of the `batches` queries and of the passage counts of
     /// `snapshot`.
     pub fn of_snapshot(
         store: &GenerationStore,
         snapshot: &Arc<Snapshot>,
     ) -> Result<Self, CribleError> {
-        let state = store.state()?;
         Ok(Self {
-            epoch: u64::from(state.epoch.get()),
+            epoch: u64::from(snapshot.epoch().get()),
             generation: snapshot.generation().get(),
-            documents: state.documents,
-            live_passages: state.live_passages,
-            dead_passages: state.dead_passages,
-            segments: state.segments.len(),
+            documents: snapshot.documents(),
+            live_passages: snapshot.live_passages(),
+            dead_passages: snapshot.dead_passages()?,
+            segments: snapshot.segments().len(),
             filter_memory_bytes: u64::try_from(snapshot.filter_memory().total())
                 .unwrap_or(u64::MAX),
             codes_memory_bytes: snapshot.codes_memory(),
