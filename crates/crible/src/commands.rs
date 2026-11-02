@@ -392,10 +392,12 @@ pub fn export_index(
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let model = load_model(models, &config.model)?;
-    // The write open runs the recovery of INV-04 and rebuilds a missing
-    // `codes.bin`, whose array the snapshot then loads; `<data>/tmp` is left
-    // alone, as for a read command.
-    let store = GenerationStore::open(&index_dir, &config.schema)?;
+    // The export is a read command (ADR-0116, decision 1): it opens the index
+    // without recovery, so it leaves an index served by a live instance
+    // untouched. The export needs no `codes.bin` on disk; a missing one is
+    // quantized into RAM (`ADR-0069`, decision 2). `<data>/tmp` is left alone, as
+    // for a read command.
+    let store = GenerationStore::open_read_only(&index_dir, &config.schema)?;
     let report = crible_store::export::export(&store, &config, &model, exchange)?;
     println!(
         "index '{}' exported to {}: generation {}, {} document(s), {} passage(s)",
@@ -499,10 +501,10 @@ fn print_report(name: &str, report: &AttachReport) {
 /// `<data>/tmp` are removed first, under the presence lock that protects a live
 /// lot (ADR-0056, decision 4), then the store runs its recovery (INV-04).
 ///
-/// A read command calls [`GenerationStore::open_read_only`] directly: `search`
-/// and `inspect` never modify `<data>/tmp`, so they cannot delete a lot another
-/// index is ingesting, and they never write `codes.bin` (ADR-0056,
-/// `ADR-0069`, decision 2).
+/// A read command calls [`GenerationStore::open_read_only`] directly: `search`,
+/// `inspect` and `export` never modify `<data>/tmp`, so they cannot delete a lot
+/// another index is ingesting, and they write nothing under the index directory,
+/// not even a `codes.bin` (ADR-0056; ADR-0069, decision 2; ADR-0116, decision 1).
 fn open_store_for_write(
     data: &Path,
     index_dir: &Path,
@@ -993,13 +995,15 @@ pub(crate) fn text_encoder(
 
 /// `crible inspect --data <dir> [--index <i>]`.
 ///
-/// Like every read of the store, opening the index runs its recovery
-/// (`docs/02-architecture.md`, "Reprise") and takes the SQLite write lock:
-/// `inspect` removes leftover `tmp-*` entries and segments SQLite does not
-/// reference, and rewrites a missing manifest. It therefore needs a writable
-/// mount, not a read-only one. It leaves the online batches of `<data>/tmp`
-/// alone, and it never rebuilds a missing `codes.bin`: the codes are quantized
-/// in RAM (ADR-0056; ADR-0069, decision 2).
+/// Like every read of the store, opening the index writes nothing under its
+/// directory (`ADR-0116`, decision 1): `inspect` leaves the leftover `tmp-*`
+/// entries, the segments SQLite does not reference and a missing manifest as
+/// they are, and the next write open repairs them (`docs/02-architecture.md`,
+/// "Reprise"). It does not need a writable mount for its own writes; the only
+/// files it may touch are the ones SQLite manages itself in WAL mode (`ADR-0038`).
+/// It leaves the online batches of `<data>/tmp` alone, and it never rebuilds a
+/// missing `codes.bin`: the codes are quantized in RAM (`ADR-0056`; `ADR-0069`,
+/// decision 2).
 pub fn inspect(data: &Path, index: Option<&str>) -> Result<(), CribleError> {
     let names = match index {
         Some(name) => vec![path_component(name, "index name")?.to_owned()],

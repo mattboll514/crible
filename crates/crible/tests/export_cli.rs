@@ -122,6 +122,11 @@ impl Instance {
         }
     }
 
+    /// Directory of the fixture index.
+    fn index_dir(&self) -> PathBuf {
+        self.data.join("indexes").join(INDEX)
+    }
+
     /// Directory the export of generation 1 must write.
     fn expected_directory(&self) -> PathBuf {
         self.exchange.join("outbox").join(format!("{INDEX}-g1"))
@@ -336,5 +341,131 @@ fn a_second_export_of_the_same_generation_is_refused() {
     assert_eq!(
         manifest_before, manifest_after,
         "the refused export must not touch the batch already in place"
+    );
+}
+
+// --- A read-only command leaves the index untouched (ADR-0116, decision 1) ---
+
+/// One entry of the recursive inventory of an index directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexEntry {
+    /// Path relative to the root of the index, with `/` separators.
+    path: String,
+    /// Size in bytes: `0` for a directory.
+    size: u64,
+    /// `blake3:<hex>` of the bytes of a file; `<directory>` for a directory.
+    digest: String,
+}
+
+/// Recursive inventory of `root`: every path, its size and its blake3, sorted
+/// by path, `-wal` and `-shm` excepted (ADR-0116, decision 1).
+fn index_inventory(root: &Path) -> Vec<IndexEntry> {
+    let mut entries = Vec::new();
+    collect_index_entries(root, root, &mut entries);
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries
+}
+
+/// Recursive body of [`index_inventory`].
+fn collect_index_entries(root: &Path, directory: &Path, entries: &mut Vec<IndexEntry>) {
+    let listing = fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("{} must be listable: {error}", directory.display()));
+    for entry in listing {
+        let entry = entry.unwrap_or_else(|error| {
+            panic!(
+                "an entry of {} must be readable: {error}",
+                directory.display()
+            )
+        });
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with("-wal") || name.ends_with("-shm") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} must be under {}: {error}",
+                    path.display(),
+                    root.display()
+                )
+            })
+            .to_string_lossy()
+            .replace('\\', "/");
+        let metadata = fs::symlink_metadata(&path)
+            .unwrap_or_else(|error| panic!("{} must be inspectable: {error}", path.display()));
+        if metadata.is_dir() {
+            entries.push(IndexEntry {
+                path: relative,
+                size: 0,
+                digest: "<directory>".to_owned(),
+            });
+            collect_index_entries(root, &path, entries);
+            continue;
+        }
+        let bytes = fs::read(&path)
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+        entries.push(IndexEntry {
+            path: relative,
+            size: metadata.len(),
+            digest: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+        });
+    }
+}
+
+#[test]
+fn export_on_a_dirty_index_leaves_the_index_directory_untouched() {
+    // `crible export` is a read command (ADR-0116, decision 1): on an index that
+    // an interrupted creation or commit left dirty, it opens for read, writes
+    // its batch under `exchange/outbox/`, and leaves the index directory
+    // identical byte for byte, `-wal` and `-shm` excepted.
+    let instance = Instance::new();
+    let index = instance.index_dir();
+    let epoch = index.join("epochs").join(Epoch::new(1).get().to_string());
+
+    // A `tmp-*` file at the root of the index, as an interrupted creation
+    // leaves one.
+    fs::write(index.join("tmp-CURRENT_EPOCH"), b"1\n")
+        .unwrap_or_else(|error| panic!("the tmp-* fixture file must be writable: {error}"));
+    // A segment directory the `segments` table does not reference.
+    let orphan = epoch.join("segments").join("seg-orphan");
+    fs::create_dir_all(&orphan)
+        .unwrap_or_else(|error| panic!("the orphan segment directory must be creatable: {error}"));
+    fs::write(orphan.join("segment.json"), b"{}")
+        .unwrap_or_else(|error| panic!("the orphan segment file must be writable: {error}"));
+    // A missing manifest of the committed generation.
+    let manifest = epoch
+        .join("manifests")
+        .join(format!("{}.json", Generation::new(1).get()));
+    fs::remove_file(&manifest)
+        .unwrap_or_else(|error| panic!("the manifest fixture must be removable: {error}"));
+
+    let before = index_inventory(&index);
+    let output = instance.export();
+    assert!(
+        output.status.success(),
+        "the export of a dirty index must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let after = index_inventory(&index);
+
+    assert!(
+        index.join("tmp-CURRENT_EPOCH").exists(),
+        "the export removed the tmp-* file at the root of the index"
+    );
+    assert!(
+        orphan.exists(),
+        "the export removed the segment SQLite does not reference"
+    );
+    assert!(
+        !manifest.exists(),
+        "the export rewrote the missing manifest of generation 1"
+    );
+    assert_eq!(
+        after, before,
+        "crible export must not touch the index directory (ADR-0116, decision 1): \
+         the inventory of paths, sizes and blake3 must be identical, -wal and -shm \
+         excepted"
     );
 }
