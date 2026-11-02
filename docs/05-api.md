@@ -79,6 +79,8 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 
 La spécification est **OpenAPI 3.1** et **générée depuis le code** ; elle est servie par `GET /openapi.json`, et `GET /docs` sert Swagger UI. Aucun fichier de spécification n'est versionné. Le schéma de sécurité `bearerAuth` (HTTP Bearer, clé d'API d'ADR-0100) décrit l'authentification des routes à rôle ; `/health` et `/ready` la neutralisent dans la spécification par `security: [{}]`, une exigence vide que `utoipa` écrit à la place de `security: []`, et restent sans authentification. `/openapi.json` et `/docs` ne figurent pas dans la spécification et restent servis sans clé ; `/docs` répond par une redirection `303` vers `/docs/`. Ce tableau est la **référence** de la liste des routes : un test compare, dans les deux sens, l'ensemble des couples (méthode, chemin sans paramètre de requête) de la spécification à celui du tableau. Sont exceptées par leur nom `/openapi.json` et `GET /docs`, ressources statiques hors spécification, et toute ligne du tableau affectée à une tâche d'une phase ultérieure, tant que cette tâche n'est pas faite. `GET /v1/debug/queries` est déclarée dans la spécification par JOURNAL-DE-DEBUG, et son exception a quitté le test dans le même changement (ADR-0122, décision 9). `GET /v1/stats` est déclarée par ROUTE-STATS, et son exception nommée quitte le test dans le même changement (ADR-0124, décision 16). Toute route ajoutée au code est ajoutée ici dans le même changement (ADR-0111, complément du 2026-10-30).
 
+**Deux ajouts décidés par ADR-0130, livrés en P9.** L'interface statique `/ui`, servie sans clé hors de l'espace `/v1` et hors de la spécification, et `GET /v1/indexes/{index}/documents`, liste paginée des documents au rôle `read`, sont décidées par ADR-0130 (décisions 2, 4 et 6). Ni l'une ni l'autre ne figure encore dans le tableau ci-dessus : la tâche qui les livre y ajoute sa ligne **dans le même changement** que l'opération ou l'exception correspondante dans la spécification et dans `openapi_routes.rs` (ADR-0111) — `SERVIR-UI-STATIQUE` pour `/ui`, exception nommée comme `/docs`, et `ROUTE-LISTER-DOCUMENTS` pour la liste des documents. Aucune exception n'est ajoutée au test des routes avant ces tâches.
+
 Dans un `PATCH /v1/indexes/{index}`, une clé **inconnue** est refusée avec `invalid_request` (400), à tous les niveaux du corps, y compris dans les objets imbriqués (`search`, `lexical`, `ingest`, `compaction`). Le message nomme la clé et son chemin JSON. `immutable_setting` (409) reste réservé aux clés connues mais figées (ADR-0031, INV-16).
 
 ### Administration des index
@@ -209,6 +211,8 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 - `text` n'apparaît qu'avec `?text=true` ; aucun vecteur, aucun `iid` (**INV-01**) ;
 - un document inconnu ou retiré rend `404 not_found` ;
 - rôle `read`.
+
+**Liste paginée des documents (ADR-0130, décision 6 ; livrée en P9).** `GET /v1/indexes/{index}/documents?limit=&after=` rend les documents d'un index par `doc_id` croissant, curseur `after` exclusif, rôle `read`, dans un corps `{ "documents": [ … ] }`. Seuls les champs `returned` sont rendus, **sans texte par défaut**, et la liste ne porte aucun id interne. Sa ligne dans le tableau des routes et son opération OpenAPI arrivent avec la tâche `ROUTE-LISTER-DOCUMENTS`, dans le même changement (ADR-0111).
 
 ## Grammaire des filtres
 

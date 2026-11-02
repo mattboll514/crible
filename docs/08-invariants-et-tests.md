@@ -6,7 +6,7 @@ Chaque invariant a au moins un test dédié, nommé `inv_xx_…`. Une tâche qui
 
 | # | Invariant | Comment on le teste |
 |---|---|---|
-| INV-01 | Aucun iid ne sort du moteur : ni API, ni logs, ni analytics, ni exports | Recherche de motifs dans les réponses et les logs des tests d'intégration ; les types de l'API n'ont pas de champ iid |
+| INV-01 | Aucun iid ne sort du moteur : ni API, ni logs, ni analytics, ni exports, ni tableau de bord | Recherche de motifs dans les réponses et les logs des tests d'intégration ; les types de l'API n'ont pas de champ iid ; balayage des actifs embarqués du tableau de bord (ADR-0130, décision 12, point 6) |
 | INV-02 | Une lecture n'est jamais bloquée par une écriture | Charge de recherches concurrentes pendant une attache et une compaction : aucune requête au-delà du p99 de référence × 3 |
 | INV-03 | Une génération est visible entièrement ou pas du tout. Portée : pool, scores et classement ; les payloads n'en font pas partie (ADR-0043) | Lecteurs concurrents pendant des attaches : jamais d'état mixte (ancienne et nouvelle version d'un document, ou aucune des deux) |
 | INV-04 | Au redémarrage, l'état est la dernière génération commitée ; tout le reste est reconstruit ou nettoyé | Injection de pannes : arrêt brutal à chaque étape du protocole d'attache, puis redémarrage et vérification |
@@ -54,7 +54,7 @@ Deux conséquences pratiques :
 | `synth-small` | 10 000 passages, 2 000 documents, 768 dimensions, champs de tous types, vecteurs en grappes. Graine fixe | Généré par `tools/`, dans `data/` ; la somme de contrôle est versionnée |
 | `synth-large` | 8,6 M passages de vecteurs aléatoires normalisés : pour la latence seulement | Généré à la demande, dans `data/` |
 | `legifacile-sample` | ~50 000 passages réels pour chacune des structures, avec leurs vecteurs existants, et un jeu de requêtes de référence | Produit avec le propriétaire (`CONSTITUER-ECHANTILLON-LEGIFACILE`), dans `data/` |
-| `legifacile-full` | Toute la base (8,58 M) | Phase 9 |
+| `legifacile-full` | Toute la base (8,58 M) | P10 (ADR-0129) |
 
 ## Mesures
 

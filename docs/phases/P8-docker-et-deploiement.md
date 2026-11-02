@@ -143,7 +143,7 @@
   - une erreur réseau ou un dépassement du délai rend une erreur nommée et un code de sortie non nul, sans panique ;
   - le test tourne contre un serveur lancé par le test.
 - **Invariants** : INV-13.
-- **Hors périmètre** : un mode API pour `crible stats` (ADR-0124, décision 13) ; recopier les métriques en Python dans le client, ce qui rendrait les rapports non comparables (ADR-0125) ; modifier le mode local ; une interface web ; un démon ou une reprise automatique des requêtes.
+- **Hors périmètre** : un mode API pour `crible stats` (ADR-0124, décision 13) ; recopier les métriques en Python dans le client, ce qui rendrait les rapports non comparables (ADR-0125) ; modifier le mode local ; un démon ou une reprise automatique des requêtes. Le tableau de bord est une autre phase : P9, sous `/ui` (ADR-0130).
 
 ### VERIFIER-ARRET-PROPRE
 - **Objectif** : aucune perte lors d'un `docker stop`.

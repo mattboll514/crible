@@ -21,6 +21,8 @@
                       volumes : data · models · exchange
 ```
 
+La même instance sert le tableau de bord **statique et en lecture seule** sous `/ui`, hors de l'espace `/v1` : les actifs sont embarqués dans le binaire et les appels de la page passent par l'API, avec une clé d'API (ADR-0130).
+
 ## Instance, index, documents, passages
 
 - **Une instance par projet** (ADR-0002). Elle a son conteneur, ses volumes, sa config et ses analytics. Une même image sert à lancer N services.

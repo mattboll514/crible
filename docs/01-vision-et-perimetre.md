@@ -38,7 +38,7 @@ Le nom vient de « passer au crible » : **filtrer** avant de chercher, et **exa
   - mises à jour quotidiennes ;
   - pierres tombales et compaction ;
   - export et instantanés.
-- Interfaces : API REST `/v1` documentée en OpenAPI, CLI `crible`, client Python.
+- Interfaces : API REST `/v1` documentée en OpenAPI, CLI `crible`, client Python, **tableau de bord intégré** au serveur sous `/ui` (ADR-0130).
 - Analytics, journal de debug, explain, éval.
 - Image Docker CPU multi-architecture (arm64 et amd64).
 
@@ -51,10 +51,11 @@ Le nom vient de « passer au crible » : **filtrer** avant de chercher, et **exa
 | Découpage dans le moteur | C'est un savoir métier : le producteur découpe |
 | Serveur partagé entre projets, multi-tenant | Une instance par projet (ADR-0002) |
 | Plusieurs nœuds, réplication | Un seul nœud suffit à l'échelle visée |
-| Interface web, tableau de bord | Les stats passent par l'API et la CLI |
 | Fraîcheur en temps réel (< 1 s) | Un lot est visible en quelques secondes à quelques minutes |
 | Encodage GPU dans le serveur | Les producteurs encodent ; le serveur n'encode que les requêtes (et les petits lots en ligne) |
 | Champs multivalués | Question ouverte Q-03 |
+
+**Le tableau de bord n'est plus hors périmètre.** La ligne « Interface web, tableau de bord », qui renvoyait les statistiques à l'API et à la CLI, a quitté ce tableau le 2026-11-02 : ADR-0130 décide un tableau de bord visuel en lecture seule, intégré à `crible serve` et servi sous `/ui`, en phase P9. C'est un écart de périmètre assumé par le propriétaire.
 
 ## Critère de réussite de la v1 (jalon J10)
 
