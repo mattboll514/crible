@@ -193,7 +193,15 @@ pub struct DebugJournalConfig {
     pub sample_rate: f64,
     /// Life of a recorded entry, in days.
     pub ttl_days: usize,
+    /// Largest number of rows kept (ADR-0127, decision 1).
+    pub max_rows: usize,
+    /// Largest used size of `debug.sqlite`, in bytes (ADR-0127, decisions 1
+    /// and 2).
+    pub max_bytes: usize,
 }
+
+/// Smallest `[debug_journal].max_bytes`, one MiB (ADR-0127, decision 1).
+pub const MIN_DEBUG_JOURNAL_MAX_BYTES: usize = 1_048_576;
 
 /// `[encoder]` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,7 +334,13 @@ impl Config {
         only_keys(
             journal,
             "debug_journal",
-            &["enabled", "sample_rate", "ttl_days"],
+            &[
+                "enabled",
+                "sample_rate",
+                "ttl_days",
+                "max_rows",
+                "max_bytes",
+            ],
         )?;
         let sample_rate = float(journal, "debug_journal", "sample_rate", overrides)?;
         if !(0.0..=1.0).contains(&sample_rate) {
@@ -344,10 +358,31 @@ impl Config {
                 origin(overrides, "debug_journal.ttl_days")
             )));
         }
+        let max_rows = count(journal, "debug_journal", "max_rows", overrides)?;
+        if max_rows == 0 {
+            // ADR-0127, decision 1: `0` would recreate the unbounded journal
+            // this decision removes, under a key that looks set.
+            return Err(invalid(format!(
+                "setting 'max_rows' must be at least 1 at {}, got {max_rows}",
+                origin(overrides, "debug_journal.max_rows")
+            )));
+        }
+        let max_bytes = count(journal, "debug_journal", "max_bytes", overrides)?;
+        if max_bytes < MIN_DEBUG_JOURNAL_MAX_BYTES {
+            // ADR-0127, decision 1: one MiB lets a current row through while
+            // refusing a value that would empty the journal at every flush.
+            return Err(invalid(format!(
+                "setting 'max_bytes' must be at least {MIN_DEBUG_JOURNAL_MAX_BYTES} at {}, \
+                 got {max_bytes}",
+                origin(overrides, "debug_journal.max_bytes")
+            )));
+        }
         let debug_journal = DebugJournalConfig {
             enabled: boolean(journal, "debug_journal", "enabled", overrides)?,
             sample_rate,
             ttl_days,
+            max_rows,
+            max_bytes,
         };
 
         let encoder = section(document, "encoder")?;
@@ -836,6 +871,8 @@ retention_days = 90
 enabled = false
 sample_rate = 0.0
 ttl_days = 7
+max_rows = 500000
+max_bytes = 2147483648
 
 [encoder]
 query_precision = "fp32"
@@ -889,6 +926,9 @@ query_cache_entries = 1024
         assert!(!config.debug_journal.enabled);
         assert_eq!(config.debug_journal.sample_rate, 0.0);
         assert_eq!(config.debug_journal.ttl_days, 7);
+        // ADR-0127, decision 1: the two caps of `docs/07`.
+        assert_eq!(config.debug_journal.max_rows, 500_000);
+        assert_eq!(config.debug_journal.max_bytes, 2_147_483_648);
         // ADR-0052: `[encoder].query_precision` decides the precision of the
         // queries, and fp32 is the documented default.
         assert_eq!(config.encoder.query_precision, Precision::Fp32);
@@ -1048,6 +1088,78 @@ query_cache_entries = 1024
             message.contains("CRIBLE_DEBUG_JOURNAL__TTL_DAYS"),
             "got {message}"
         );
+    }
+
+    #[test]
+    fn the_two_caps_of_the_journal_are_read_and_overridden() {
+        // ADR-0127, decision 1 and ADR-0097: the two keys are scalars of the
+        // section, and their `CRIBLE_*` variables reach them.
+        let config = load(
+            EXAMPLE,
+            &[
+                ("CRIBLE_DEBUG_JOURNAL__MAX_ROWS", "1000"),
+                ("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", "1048576"),
+            ],
+        )
+        .expect("the two overrides are accepted");
+        assert_eq!(config.debug_journal.max_rows, 1_000);
+        assert_eq!(config.debug_journal.max_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn a_max_rows_of_zero_is_refused_naming_the_key() {
+        // ADR-0127, decision 1: `0` would recreate the unbounded journal under
+        // a key that looks set.
+        let error = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_ROWS", "0")])
+            .expect_err("a row cap of zero is refused");
+        let message = message(error);
+        assert!(message.contains("max_rows"), "got {message}");
+        assert!(
+            message.contains("CRIBLE_DEBUG_JOURNAL__MAX_ROWS"),
+            "got {message}"
+        );
+    }
+
+    #[test]
+    fn a_max_bytes_below_one_mebibyte_is_refused_naming_the_key() {
+        // ADR-0127, decision 1: the floor is one MiB, so a current row fits and
+        // a value that would empty the journal at every flush is refused.
+        for refused in ["0", "1048575"] {
+            let error = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", refused)])
+                .expect_err("a byte cap below one MiB is refused");
+            let message = message(error);
+            assert!(message.contains("max_bytes"), "got {message}");
+            assert!(
+                message.contains("CRIBLE_DEBUG_JOURNAL__MAX_BYTES"),
+                "got {message}"
+            );
+        }
+        let accepted = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", "1048576")])
+            .expect("one MiB is accepted");
+        assert_eq!(accepted.debug_journal.max_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn a_missing_cap_is_refused() {
+        // The keys belong to the closed list of the section: neither has a
+        // silent default (ADR-0031, ADR-0127).
+        for key in ["max_rows = 500000\n", "max_bytes = 2147483648\n"] {
+            let raw = EXAMPLE.replace(key, "");
+            let error = load(&raw, &[]).expect_err("a missing cap is refused");
+            let message = message(error);
+            assert!(
+                message.contains(key.split(' ').next().unwrap_or_default()),
+                "got {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_of_the_journal_section_is_refused() {
+        let raw = EXAMPLE.replace("max_rows = 500000", "max_rows = 500000\nmax_row = 4");
+        let error = load(&raw, &[]).expect_err("an unknown key is refused");
+        let text = message(error);
+        assert!(text.contains("max_row"), "got {text}");
     }
 
     #[test]

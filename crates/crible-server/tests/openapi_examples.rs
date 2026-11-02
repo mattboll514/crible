@@ -299,6 +299,61 @@ fn debug_is_an_optional_boolean_of_both_request_schemas() {
     );
 }
 
+/// The route of the debug journal is a closed object of seven members, four of
+/// them the counters of the cap (ADR-0127, decision 6).
+#[test]
+fn the_debug_query_list_is_closed_and_carries_the_cap_counters() {
+    let validator = validator("DebugQueryList");
+    let documented = serde_json::json!({
+        "enabled": true,
+        "dropped": 0,
+        "capped": false,
+        "rows": 0,
+        "bytes": 0,
+        "trimmed": 0,
+        "queries": [],
+    });
+    assert!(
+        validator.validate(&documented).is_ok(),
+        "the documented answer is accepted"
+    );
+    assert!(
+        validator
+            .validate(&serde_json::json!({
+                "enabled": false,
+                "dropped": 0,
+                "capped": false,
+                "rows": 0,
+                "bytes": 0,
+                "trimmed": 0,
+                "queries": [],
+                "extra": 1,
+            }))
+            .is_err(),
+        "an unknown member is refused, as the route refuses it"
+    );
+    for counter in ["capped", "rows", "bytes", "trimmed"] {
+        let mut missing = documented.clone();
+        missing
+            .as_object_mut()
+            .expect("the documented answer is an object")
+            .remove(counter);
+        assert!(
+            validator.validate(&missing).is_err(),
+            "the counter `{counter}` is always rendered"
+        );
+    }
+    let mut wrong = documented.clone();
+    wrong["capped"] = serde_json::json!("yes");
+    assert!(validator.validate(&wrong).is_err(), "`capped` is a boolean");
+    let mut wrong = documented.clone();
+    wrong["bytes"] = serde_json::json!(-1);
+    assert!(
+        validator.validate(&wrong).is_err(),
+        "`bytes` is an unsigned number"
+    );
+}
+
 #[test]
 fn every_marker_is_a_valid_component_or_none() {
     let specification = crible_server::openapi::specification()

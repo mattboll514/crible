@@ -31,15 +31,27 @@
 //! [`FLUSH_INTERVAL`] and when asked. The timestamp is read by SQLite, so the
 //! code owns no clock (ADR-0121, decision 3). The purge of the retention runs at
 //! the open and then at the first flush whose previous purge is older than
-//! [`PURGE_INTERVAL`] (ADR-0122, decision 8). At the shutdown the writer drains
-//! the queue and flushes, bounded by [`STOP_BOUND`]; a failure is logged and the
-//! instance keeps stopping.
+//! [`PURGE_INTERVAL`] (ADR-0122, decision 8), before the cap is applied
+//! (ADR-0127, decision 7). At the shutdown the writer drains the queue and
+//! flushes, bounded by [`STOP_BOUND`]; a failure is logged and the instance
+//! keeps stopping.
+//!
+//! # The size cap
+//!
+//! The store applies the cap inside the transaction of every flush, empty flush
+//! included, and once at the open (ADR-0127, decisions 3 and 4). This module
+//! owns the process counters the route renders — `capped`, `rows`, `bytes` and
+//! `trimmed` — and gives the pages back with a bounded `incremental_vacuum`
+//! after a purge or a trim, outside the transaction (decision 5). The cap is
+//! never checked on the request path: a request only deposits a row.
 //!
 //! # No content in a log
 //!
 //! The journal **holds** the text and the filter by design; no line of this
 //! module ever logs one (ADR-0122, decision 10). The only lines are `warn`s of
-//! counting: dropped rows, a failed flush, a failed purge.
+//! counting: dropped rows, a failed flush, a failed purge, a failed reclaim and
+//! the cap, whose numbers only are `rows`, `bytes`, `file_bytes` and `trimmed`
+//! (ADR-0127, decision 6).
 
 use std::collections::VecDeque;
 use std::path::Path;
@@ -52,7 +64,8 @@ use crible_core::error::{CribleError, ErrorCode};
 use crible_search::debug::{CapturedEntry, DebugCapture};
 use crible_search::pipeline::Mode;
 use crible_store::debug_journal::{
-    DEBUG_JOURNAL_FILE_NAME, DebugJournalStore, DebugQueryRow, JournalFilter, read_page,
+    DEBUG_JOURNAL_FILE_NAME, DebugJournalStore, DebugQueryRow, FlushReport, JournalCap,
+    JournalFilter, JournalMeasure, read_page,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, mpsc, oneshot};
@@ -104,6 +117,72 @@ pub fn dropped() -> u64 {
 /// Counts one refused row.
 fn count_dropped() {
     let _ = DROPPED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// The counters of the size cap a route renders (ADR-0127, decision 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CapCounters {
+    /// Whether a cap check found the journal above a cap since the start.
+    pub capped: bool,
+    /// Number of rows of the journal, at the last measurement.
+    pub rows: u64,
+    /// Used size of the journal, at the last measurement.
+    pub bytes: u64,
+    /// Rows the cap deleted since the start of the process.
+    pub trimmed: u64,
+}
+
+/// The process counters of the cap, shared by the writer and the route.
+///
+/// They are process-wide like [`DROPPED`], never persisted: they describe a
+/// running instance, and a restart resets them (ADR-0127, decision 6).
+#[derive(Debug, Default)]
+struct CapState {
+    /// `true` once a check found the journal above a cap.
+    capped: AtomicBool,
+    /// Rows of the journal, as the last measurement read them.
+    rows: AtomicU64,
+    /// Used size of the journal, as the last measurement read it.
+    bytes: AtomicU64,
+    /// Physical size of the file, for the `warn` only (ADR-0127, decision 2).
+    file_bytes: AtomicU64,
+    /// Rows the cap deleted since the start of the process.
+    trimmed: AtomicU64,
+}
+
+impl CapState {
+    /// The counters the route renders.
+    fn report(&self) -> CapCounters {
+        CapCounters {
+            capped: self.capped.load(Ordering::Relaxed),
+            rows: self.rows.load(Ordering::Relaxed),
+            bytes: self.bytes.load(Ordering::Relaxed),
+            trimmed: self.trimmed.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Physical size of the file, for the `warn` (ADR-0127, decision 6).
+    fn file_bytes(&self) -> u64 {
+        self.file_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Records what one flush did.
+    fn observe(&self, report: &FlushReport) {
+        self.measure(report.measure);
+        let _ = self.trimmed.fetch_add(report.trimmed, Ordering::Relaxed);
+        if report.capped {
+            // `capped` stays true until the next start of the process
+            // (ADR-0127, decision 3).
+            self.capped.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Records a measurement of the file.
+    fn measure(&self, measure: JournalMeasure) {
+        self.rows.store(measure.rows, Ordering::Relaxed);
+        self.bytes.store(measure.bytes, Ordering::Relaxed);
+        self.file_bytes.store(measure.file_bytes, Ordering::Relaxed);
+    }
 }
 
 /// Whether a request is recorded by the draw of `rate`, for an integer in
@@ -218,6 +297,8 @@ pub struct DebugJournal {
     control: Arc<Control>,
     /// `true` once the shutdown started the drain (ADR-0122, decision 7).
     closed: AtomicBool,
+    /// Process counters of the size cap (ADR-0127, decision 6).
+    counters: Arc<CapState>,
 }
 
 impl DebugJournal {
@@ -225,10 +306,11 @@ impl DebugJournal {
     ///
     /// A disabled journal writes no file and opens none: `None` is returned
     /// before any path is touched (ADR-0121, decision 1). When it is enabled, the
-    /// purge of the retention runs at the open (ADR-0122, decision 8). The writer
-    /// is spawned when a tokio runtime is present, which is the case of the
-    /// server and of any test that drives the routes; an instance loaded outside
-    /// a runtime records nothing and answers an empty flush.
+    /// purge of the retention runs at the open (ADR-0122, decision 8), then the
+    /// cap is checked once (ADR-0127, decision 4). The writer is spawned when a
+    /// tokio runtime is present, which is the case of the server and of any test
+    /// that drives the routes; an instance loaded outside a runtime records
+    /// nothing and answers an empty flush.
     ///
     /// # Errors
     ///
@@ -241,18 +323,41 @@ impl DebugJournal {
         if !config.enabled {
             return Ok(None);
         }
+        let cap = JournalCap {
+            max_rows: config.max_rows,
+            max_bytes: config.max_bytes,
+        };
         let store = DebugJournalStore::open_or_create(&data.join(DEBUG_JOURNAL_FILE_NAME))?;
+        let mut purged = 0;
         match store.purge(config.ttl_days) {
-            Ok(purged) => debug!(
-                purged,
-                ttl_days = config.ttl_days,
-                "the debug journal retention is purged at the open"
-            ),
+            Ok(count) => {
+                purged = count;
+                debug!(
+                    purged,
+                    ttl_days = config.ttl_days,
+                    "the debug journal retention is purged at the open"
+                );
+            }
             Err(failure) => warn!(
                 code = failure.code().as_str(),
                 cause = failure.message(),
                 "the debug journal retention could not be purged at the open"
             ),
+        }
+        // ADR-0127, decision 4: the cap is checked once at the open, after the
+        // purge, so a file left above its bounds by a crash or a lower
+        // configuration comes back under them before anything writes.
+        let counters = Arc::new(CapState::default());
+        match store.flush(&[], cap) {
+            Ok(report) => counters.observe(&report),
+            Err(failure) => warn!(
+                code = failure.code().as_str(),
+                cause = failure.message(),
+                "the debug journal cap could not be checked at the open"
+            ),
+        }
+        if purged > 0 || counters.report().trimmed > 0 {
+            reclaim(&store, &counters);
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             // No runtime: no writer. Nothing records, and a flush answers `Ok`
@@ -265,13 +370,23 @@ impl DebugJournal {
             receiver,
             Arc::clone(&control),
             Arc::new(store),
+            cap,
             config.ttl_days,
+            Arc::clone(&counters),
         ));
         Ok(Some(Arc::new(Self {
             sender,
             control,
             closed: AtomicBool::new(false),
+            counters,
         })))
+    }
+
+    /// Counters of the size cap, as `GET /v1/debug/queries` renders them
+    /// (ADR-0127, decision 6).
+    #[must_use]
+    pub fn cap(&self) -> CapCounters {
+        self.counters.report()
     }
 
     /// Deposits one row, or counts its loss (ADR-0122, decision 6).
@@ -368,11 +483,14 @@ async fn writer(
     mut receiver: mpsc::Receiver<Deposit>,
     control: Arc<Control>,
     store: Arc<DebugJournalStore>,
+    cap: JournalCap,
     ttl_days: usize,
+    counters: Arc<CapState>,
 ) {
     let mut pending: Vec<Deposit> = Vec::new();
     let mut last_purge = Instant::now();
     let mut last_dropped = dropped();
+    let mut last_cap_warning: Option<Instant> = None;
     let mut next_flush = Instant::now() + FLUSH_INTERVAL;
     loop {
         // Head of the loop, before anything is received: a test fills the
@@ -391,9 +509,12 @@ async fn writer(
             let flush = Flush {
                 store: Arc::clone(&store),
                 rows: std::mem::take(&mut pending),
+                cap,
                 ttl_days,
                 last_purge,
                 last_dropped,
+                count_capped: Arc::clone(&counters),
+                last_cap_warning,
             };
             let flushed = match tokio::task::spawn_blocking(move || flush.run()).await {
                 Ok(flushed) => flushed,
@@ -402,11 +523,12 @@ async fn writer(
                         cause = %failure,
                         "the debug journal flush task failed; the rows of this flush are lost"
                     );
-                    Flushed::lost(last_purge, last_dropped)
+                    Flushed::lost(last_purge, last_dropped, last_cap_warning)
                 }
             };
             last_purge = flushed.last_purge;
             last_dropped = flushed.last_dropped;
+            last_cap_warning = flushed.last_cap_warning;
             next_flush = Instant::now() + FLUSH_INTERVAL;
             if let Some(Command::Flush(reply) | Command::Stop(reply)) = command {
                 let _ = reply.send(flushed.result);
@@ -435,12 +557,18 @@ struct Flush {
     store: Arc<DebugJournalStore>,
     /// Rows received since the previous flush.
     rows: Vec<Deposit>,
+    /// The two caps of the file (ADR-0127, decision 1).
+    cap: JournalCap,
     /// Days of history kept (ADR-0122, decision 8).
     ttl_days: usize,
     /// Instant of the previous purge.
     last_purge: Instant,
     /// Value of [`dropped`] already reported.
     last_dropped: u64,
+    /// Process counters of the cap, shared with the route.
+    count_capped: Arc<CapState>,
+    /// Instant of the previous cap `warn`; `None` before the first one.
+    last_cap_warning: Option<Instant>,
 }
 
 /// What a flush gives back: the counters the writer carries to the next one.
@@ -451,11 +579,13 @@ struct Flushed {
     last_purge: Instant,
     /// Value of [`dropped`] reported by this flush.
     last_dropped: u64,
+    /// Instant of the previous cap `warn`, moved when this flush warned.
+    last_cap_warning: Option<Instant>,
 }
 
 impl Flushed {
     /// The result of a flush whose blocking task panicked.
-    fn lost(last_purge: Instant, last_dropped: u64) -> Self {
+    fn lost(last_purge: Instant, last_dropped: u64, last_cap_warning: Option<Instant>) -> Self {
         Self {
             result: Err(CribleError::new(
                 ErrorCode::Internal,
@@ -463,24 +593,75 @@ impl Flushed {
             )),
             last_purge,
             last_dropped,
+            last_cap_warning,
         }
     }
 }
 
 impl Flush {
-    /// Writes the rows, then purges if due.
+    /// Purges if due, writes the rows, applies the cap, then reclaims.
+    ///
+    /// The purge of the retention precedes the trim, so `trimmed` counts the cap
+    /// alone (ADR-0127, decision 7). The recovery of pages follows a purge or a
+    /// trim and stays outside the transaction (decision 5).
     fn run(mut self) -> Flushed {
         let events = self.rows.len();
         let rows = self.rows.drain(..).map(row_of).collect::<Vec<_>>();
-        let result = self.store.write(&rows);
-        match &result {
+        let mut purged = 0;
+        if self.last_purge.elapsed() >= PURGE_INTERVAL {
+            match self.store.purge(self.ttl_days) {
+                Ok(count) => {
+                    purged = count;
+                    debug!(purged, "the debug journal retention is purged");
+                }
+                Err(failure) => warn!(
+                    code = failure.code().as_str(),
+                    cause = failure.message(),
+                    "the debug journal retention could not be purged"
+                ),
+            }
+            self.last_purge = Instant::now();
+        }
+        #[cfg(feature = "failpoints")]
+        let written = self.store.flush_with_observer(
+            &rows,
+            self.cap,
+            crate::barriers::wait_debug_journal_trim,
+        );
+        #[cfg(not(feature = "failpoints"))]
+        let written = self.store.flush(&rows, self.cap);
+        match &written {
+            Ok(report) => {
+                self.count_capped.observe(report);
+                debug!(
+                    rows = events,
+                    trimmed = report.trimmed,
+                    "the debug journal is flushed"
+                );
+            }
             Err(failure) => warn!(
                 code = failure.code().as_str(),
                 cause = failure.message(),
                 rows = events,
                 "the debug journal flush failed; the rows of this flush are lost"
             ),
-            Ok(()) => debug!(rows = events, "the debug journal is flushed"),
+        }
+        let trimmed = written.as_ref().map(|report| report.trimmed).unwrap_or(0);
+        if trimmed > 0 || purged > 0 {
+            reclaim(&self.store, &self.count_capped);
+        }
+        if written.as_ref().is_ok_and(|report| report.capped) && self.cap_warning_due() {
+            // ADR-0127, decision 6: numbers only, at most once per purge
+            // interval, never a text, a filter value or a key.
+            let counters = self.count_capped.report();
+            warn!(
+                rows = counters.rows,
+                bytes = counters.bytes,
+                file_bytes = self.count_capped.file_bytes(),
+                trimmed = counters.trimmed,
+                "the debug journal is at its cap; the oldest rows are trimmed (ADR-0127)"
+            );
+            self.last_cap_warning = Some(Instant::now());
         }
         let total = dropped();
         if total > self.last_dropped {
@@ -490,22 +671,40 @@ impl Flush {
             );
             self.last_dropped = total;
         }
-        if self.last_purge.elapsed() >= PURGE_INTERVAL {
-            match self.store.purge(self.ttl_days) {
-                Ok(purged) => debug!(purged, "the debug journal retention is purged"),
-                Err(failure) => warn!(
-                    code = failure.code().as_str(),
-                    cause = failure.message(),
-                    "the debug journal retention could not be purged"
-                ),
-            }
-            self.last_purge = Instant::now();
-        }
         Flushed {
-            result,
+            result: written.map(|_| ()),
             last_purge: self.last_purge,
             last_dropped: self.last_dropped,
+            last_cap_warning: self.last_cap_warning,
         }
+    }
+
+    /// Whether the cap `warn` is due, at most once per purge interval.
+    fn cap_warning_due(&self) -> bool {
+        self.last_cap_warning
+            .is_none_or(|instant| instant.elapsed() >= PURGE_INTERVAL)
+    }
+}
+
+/// Gives bounded pages back to the system, then refreshes the counters.
+///
+/// A failed recovery is a `warn` without retry, like a failed purge: the trim
+/// already brought the journal under the cap (ADR-0127, decision 5).
+fn reclaim(store: &DebugJournalStore, counters: &CapState) {
+    if let Err(failure) = store.reclaim() {
+        warn!(
+            code = failure.code().as_str(),
+            cause = failure.message(),
+            "the debug journal pages could not be reclaimed"
+        );
+    }
+    match store.measure() {
+        Ok(measure) => counters.measure(measure),
+        Err(failure) => warn!(
+            code = failure.code().as_str(),
+            cause = failure.message(),
+            "the debug journal could not be measured after the reclaim"
+        ),
     }
 }
 
@@ -675,7 +874,17 @@ pub(crate) async fn page(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_PAGE, PURGE_INTERVAL, QUEUE_CAPACITY, STOP_BOUND, should_sample};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use crible_store::debug_journal::{
+        DEBUG_JOURNAL_FILE_NAME, DebugJournalStore, DebugQueryRow, JournalCap, read_queries,
+    };
+
+    use super::{
+        CapState, Deposit, Flush, MAX_PAGE, PURGE_INTERVAL, QUEUE_CAPACITY, STOP_BOUND, dropped,
+        should_sample,
+    };
 
     #[test]
     fn the_queue_capacity_is_the_constant_of_the_decision() {
@@ -717,6 +926,105 @@ mod tests {
         assert!(
             !should_sample(0.5, 1u64 << 63),
             "a draw at a half is refused"
+        );
+    }
+
+    /// A row the writer received from the route.
+    fn deposit(request_id: &str) -> Deposit {
+        Deposit {
+            request_id: request_id.to_owned(),
+            index: Some("alpha".to_owned()),
+            client: "reader".to_owned(),
+            mode: "dense".to_owned(),
+            status: "ok".to_owned(),
+            total_ms: Some(1.0),
+            payload: serde_json::json!({}),
+        }
+    }
+
+    /// A row written straight to the store, without a cap.
+    fn stored_row(request_id: &str) -> DebugQueryRow {
+        DebugQueryRow {
+            created_at: String::new(),
+            request_id: request_id.to_owned(),
+            index: Some("alpha".to_owned()),
+            client: "reader".to_owned(),
+            mode: "dense".to_owned(),
+            status: "ok".to_owned(),
+            total_ms: Some(1.0),
+            payload: "{}".to_owned(),
+        }
+    }
+
+    /// Ages every row of the journal, so the retention purge has something to
+    /// delete without a clock.
+    fn age_every_row(path: &std::path::Path) {
+        let connection = rusqlite::Connection::open(path).expect("the journal file opens");
+        connection
+            .execute(
+                "UPDATE queries SET created_at = '2000-01-01T00:00:00.000Z'",
+                [],
+            )
+            .expect("the rows are datable");
+    }
+
+    #[test]
+    fn the_purge_and_the_trim_share_one_flush() {
+        // The card (`docs/phases/P8-docker-et-deploiement.md`, « purge de durée
+        // et trim dans le même vidage »): `Flush::run` purges first, then writes
+        // and trims, and `trimmed` counts the cap alone (ADR-0127, decision 7).
+        // This is the order of the production writer; the store-level test of
+        // the same rule calls the two store methods by hand.
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join(DEBUG_JOURNAL_FILE_NAME);
+        let store = Arc::new(DebugJournalStore::open_or_create(&path).expect("the journal opens"));
+        let uncapped = JournalCap {
+            max_rows: usize::MAX,
+            max_bytes: usize::MAX,
+        };
+        for position in 0..3 {
+            store
+                .flush(&[stored_row(&format!("old-{position}"))], uncapped)
+                .expect("the aged row is written");
+        }
+        age_every_row(&path);
+
+        let counters = Arc::new(CapState::default());
+        let flush = Flush {
+            store: Arc::clone(&store),
+            rows: (0..3)
+                .map(|position| deposit(&format!("new-{position}")))
+                .collect(),
+            cap: JournalCap {
+                max_rows: 1,
+                max_bytes: usize::MAX,
+            },
+            ttl_days: 1,
+            last_purge: Instant::now()
+                .checked_sub(PURGE_INTERVAL + Duration::from_secs(1))
+                .expect("the previous purge is in the past"),
+            last_dropped: dropped(),
+            count_capped: Arc::clone(&counters),
+            last_cap_warning: None,
+        };
+        let flushed = flush.run();
+        if let Err(failure) = &flushed.result {
+            panic!("the flush and the trim succeed: {}", failure.message());
+        }
+        assert_eq!(
+            counters.report().trimmed,
+            2,
+            "only the two rows of the trim are counted; the three purged rows are not: {:?}",
+            counters.report()
+        );
+        assert_eq!(counters.report().rows, 1, "the cap left one row");
+        let rows = read_queries(&path).expect("the journal reads");
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["new-2"],
+            "the purge removed the aged rows, then the cap removed the oldest new ones: {rows:?}"
         );
     }
 }

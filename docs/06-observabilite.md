@@ -108,12 +108,28 @@ La CLI `crible stats` affiche la même chose en tableau (ADR-0124, décisions 13
 - **Vidage** : toutes les 10 secondes et à l'arrêt. À l'arrêt, la file est fermée avant son drainage, et le journal est vidé **après les analytics**, avec une borne de 2 secondes ; un échec est journalisé en `warn` sans reprise (ADR-0122, décision 7).
 - **Purge** : selon `ttl_days`, à l'ouverture puis au premier vidage dont la dernière purge date de plus de 24 heures ; pas de minuteur dédié (ADR-0122, décision 8).
 - **Plafond de taille** (ADR-0127) : deux bornes indépendantes, `max_rows` et `max_bytes`, et la première atteinte déclenche la suppression des lignes les plus anciennes. `max_bytes` porte sur la **taille utilisée** du fichier, `(page_count - freelist_count) × page_size` ; la taille physique, pages libres comprises et WAL exclu, est `file_bytes`, rapportée à l'opérateur et absente de la route (décisions 1 et 2).
-- **Contrôle du plafond** : à **chaque vidage**, dans la transaction, et **une fois à l'ouverture**, après la purge de rétention. La transaction insère d'abord les lignes du vidage, puis supprime les plus anciennes — ordre `created_at ASC, id ASC` — jusqu'à repasser sous les deux bornes ; elle compte les lignes supprimées dans `trimmed` et arme `capped`. Le dépassement est ainsi borné à un intervalle de vidage (décisions 3 et 4).
+- **Contrôle du plafond** : à **chaque vidage**, dans la transaction, et **une fois à l'ouverture**, après la purge de rétention. La transaction insère d'abord les lignes du vidage, puis supprime les plus anciennes — ordre `created_at ASC, id ASC` — jusqu'à repasser sous les deux bornes ; elle compte les lignes supprimées dans `trimmed` et arme `capped`. Le dépassement est ainsi borné à un intervalle de vidage (décisions 3 et 4). Un vidage sans ligne à insérer et sous les deux bornes se contente d'une lecture, sans transaction d'écriture.
 - **Compteurs du plafond** : `rows` est le nombre de lignes, `bytes` la taille utilisée, `trimmed` le nombre de lignes supprimées par le plafond depuis le démarrage, `capped` vrai quand le dernier contrôle a trouvé le journal au plafond et jusqu'au démarrage suivant. Compteurs de processus, jamais persistés (décision 3).
 - **Récupération d'espace** : aucun `VACUUM` complet ; un fichier neuf est créé avec `auto_vacuum = INCREMENTAL`, et une récupération `incremental_vacuum` bornée à 256 pages par vidage suit une purge ou un trim, hors de la transaction. Un fichier existant sans ce mode garde son plus haut niveau ; un `VACUUM` hors ligne, journal désactivé, est documenté pour l'opérateur (décision 5).
 - **Rétention effective** : le **minimum** de `ttl_days` et de ce que les plafonds laissent tenir. La purge de durée précède le trim, et le plafond peut raccourcir la rétention, jamais l'allonger : `ttl_days` reste la borne de confidentialité, le plafond la borne de disque (décision 7).
 - **Logs** : le journal n'écrit jamais `query`, `filter`, la clé ni le payload, à aucun niveau et quel que soit `RUST_LOG` ; seules des lignes `warn` de comptage (pertes, échec de vidage ou de purge, plafond atteint) sont permises, et celle du plafond porte des nombres seulement — `rows`, `bytes`, `file_bytes`, `trimmed` —, au plus une fois par intervalle de purge (ADR-0122, décision 10 ; ADR-0127, décision 6).
 - **Pourquoi** : les requêtes de Legifacile peuvent être sensibles. Le journal est donc désactivé par défaut, sa durée de vie est courte, et il n'est lisible que par un admin. Il **contient** le texte et le filtre par conception : INV-13 ne vise que les analytics (ADR-0014 ; ADR-0121, décision 6). Sa taille est bornée en lignes et en octets, indépendamment de `sample_rate` (ADR-0127).
+
+### Récupérer l'espace de `debug.sqlite` hors ligne
+
+Le serveur ne lance **jamais** de `VACUUM` complet (ADR-0127, décision 5) : il récupère au plus 256 pages par vidage, sur un fichier créé avec `auto_vacuum = INCREMENTAL`. Un fichier plus ancien, créé sans ce mode, garde son plus haut niveau de `freelist_count`, et seul l'opérateur peut le compacter, hors ligne.
+
+1. Arrêter l'instance, ou la redémarrer avec `debug_journal.enabled = false` : le fichier n'est alors ni ouvert ni créé (ADR-0121).
+2. Vérifier qu'aucun autre processus ne tient le fichier, notamment un `sqlite3` resté ouvert.
+3. Lancer le `VACUUM` sur le fichier, sans le serveur :
+
+   ```
+   sqlite3 data/debug.sqlite 'VACUUM;'
+   ```
+
+4. Contrôler le résultat, puis redémarrer l'instance : `PRAGMA page_count;` et `PRAGMA freelist_count;` doivent montrer un `freelist_count` proche de zéro et une taille utilisée, `(page_count - freelist_count) × page_size`, sous `max_bytes`.
+
+Le `VACUUM` réécrit le fichier en place : il demande de l'espace libre au moins égal à la taille du fichier, et il n'est pas interruptible sans laisser un fichier à reconstruire depuis une sauvegarde. Il ne change ni `format_version` ni le contenu des lignes (INV-15).
 
 ## Debug dans la réponse et explain
 

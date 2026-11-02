@@ -256,6 +256,23 @@ pub(crate) async fn wait_debug_journal_flush() {
     }
 }
 
+/// Name of the mark a test writes to arm the trim step of a flush.
+///
+/// The trim runs in every flush above the cap, so the step is opt-in: without
+/// this mark a flush of an armed directory trims at full speed.
+const DEBUG_JOURNAL_TRIM_ARMED: &str = "armed-debug-journal-trim";
+
+/// Holds the blocking task of a flush once its rows are inserted and before the
+/// trim deletes the oldest ones (ADR-0127, decision 3).
+///
+/// It is **blocking**, like [`hold`]: the flush runs on `spawn_blocking`, so a
+/// blocking wait here never stops the async runtime, and the searches of the
+/// test answer while the trim is held (INV-17). The scope
+/// `debug-journal-trim` is distinct from `debug-journal-flush`.
+pub(crate) fn wait_debug_journal_trim() {
+    wait_armed(DEBUG_JOURNAL_TRIM_ARMED, "debug-journal-trim");
+}
+
 /// Holds the calling job until the test writes `<dir>/go-<scope>`.
 ///
 /// `scope` names the barrier: a test that arms two of them in one binary uses

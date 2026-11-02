@@ -289,10 +289,19 @@ async fn debug_queries(
     let enabled = state
         .loaded()
         .is_some_and(|loaded| loaded.debug_journal_config().enabled);
+    let cap = state
+        .debug_journal()
+        .map_or(crate::debug_journal::CapCounters::default(), |journal| {
+            journal.cap()
+        });
     if !enabled {
         let list = crate::openapi::DebugQueryList {
             enabled: false,
             dropped: crate::debug_journal::dropped(),
+            capped: cap.capped,
+            rows: cap.rows,
+            bytes: cap.bytes,
+            trimmed: cap.trimmed,
             queries: Vec::new(),
         };
         return Json(list).into_response();
@@ -335,6 +344,10 @@ async fn debug_queries(
     let list = crate::openapi::DebugQueryList {
         enabled: true,
         dropped: crate::debug_journal::dropped(),
+        capped: cap.capped,
+        rows: cap.rows,
+        bytes: cap.bytes,
+        trimmed: cap.trimmed,
         queries,
     };
     Json(list).into_response()

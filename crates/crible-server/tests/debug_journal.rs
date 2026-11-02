@@ -46,9 +46,9 @@ use axum::Router;
 use axum::http::{Method, StatusCode};
 use crible_server::http::build_router;
 use crible_server::state::AppState;
-use crible_store::debug_journal::{DEBUG_JOURNAL_FILE_NAME, DebugQuery, read_queries};
-#[cfg(feature = "failpoints")]
-use crible_store::debug_journal::{DebugJournalStore, DebugQueryRow};
+use crible_store::debug_journal::{
+    DEBUG_JOURNAL_FILE_NAME, DebugJournalStore, DebugQuery, DebugQueryRow, JournalCap, read_queries,
+};
 use serde_json::{Value, json};
 
 use common::{
@@ -82,6 +82,25 @@ fn journal_path(instance: &Instance) -> std::path::PathBuf {
 /// Every row of the journal file of `instance`, in `id` order.
 fn rows(instance: &Instance) -> Vec<DebugQuery> {
     read_queries(&journal_path(instance)).expect("the debug journal file is readable")
+}
+
+/// Used size of the journal file, read on a second connection with the pragmas
+/// of ADR-0127, decision 2: `(page_count - freelist_count) × page_size`.
+///
+/// This is the independent measurement the route is compared to; it shares no
+/// code with the store, so a wrong formula on either side shows up.
+fn used_bytes(instance: &Instance) -> u64 {
+    let connection =
+        rusqlite::Connection::open(journal_path(instance)).expect("the journal file opens");
+    let pragma = |name: &str| -> i64 {
+        connection
+            .query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))
+            .unwrap_or_else(|error| panic!("PRAGMA {name} is readable: {error}"))
+    };
+    let used = pragma("page_count") - pragma("freelist_count");
+    let page_size = pragma("page_size");
+    u64::try_from(used).expect("the used page count is positive")
+        * u64::try_from(page_size).expect("the page size is positive")
 }
 
 /// Flushes the journal and reads its rows.
@@ -815,6 +834,7 @@ async fn the_purge_removes_the_entries_older_than_the_ttl() {
         enabled: true,
         sample_rate: 0.0,
         ttl_days: 1,
+        ..Journal::default()
     };
     let (instance, state, router) = instance_with_alpha_journal(journal).await;
     debug_search(&router).await;
@@ -886,4 +906,202 @@ async fn the_route_renders_the_payload_as_an_object() {
             .is_some_and(|date| date.ends_with('Z') && date.contains('T')),
         "`created_at` is RFC 3339 in UTC, read by SQLite (ADR-0121, decision 3): {entry}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Plafond de taille (ADR-0127).
+// ---------------------------------------------------------------------------
+
+/// A row of the journal, as a test writes it before an instance starts.
+fn stored_row(request_id: &str) -> DebugQueryRow {
+    DebugQueryRow {
+        created_at: String::new(),
+        request_id: request_id.to_owned(),
+        index: Some(INDEX.to_owned()),
+        client: "reader".to_owned(),
+        mode: "dense".to_owned(),
+        status: "ok".to_owned(),
+        total_ms: Some(1.0),
+        payload: "{}".to_owned(),
+    }
+}
+
+/// The route renders the four members of the cap, with their documented values
+/// (ADR-0127, decision 6).
+///
+/// The journal keeps two rows, and the third search takes it above the cap:
+/// `capped` is true, `rows` is the row count of the last measurement, `bytes` is
+/// the used size, and `trimmed` counts the row the cap deleted.
+#[tokio::test]
+async fn the_route_renders_the_cap_counters() {
+    let (instance, state, router) =
+        instance_with_alpha_journal(Journal::with_max_rows(0.0, 2)).await;
+    let path = journal_path(&instance);
+    let mut written = Vec::new();
+    for _ in 0..3 {
+        debug_search(&router).await;
+        written.extend(flushed_rows(&instance, &state).await);
+    }
+    let kept = read_queries(&path).expect("the debug journal file is readable");
+    assert_eq!(kept.len(), 2, "the cap keeps two rows: {kept:?}");
+
+    let body = admin_queries(&router, "").await;
+    assert_eq!(body["enabled"], true, "{body}");
+    assert_eq!(body["capped"], true, "{body}");
+    assert_eq!(body["rows"], 2, "{body}");
+    assert_eq!(body["trimmed"], 1, "{body}");
+    assert_eq!(
+        body["bytes"].as_u64(),
+        Some(used_bytes(&instance)),
+        "the route renders the used size of the file, `(page_count - freelist_count) × page_size`: {body}"
+    );
+    let mut expected = kept.iter().map(|row| row.id).collect::<Vec<_>>();
+    expected.sort_unstable_by(|left, right| right.cmp(left));
+    assert_eq!(
+        ids(&body),
+        expected,
+        "the route serves the rows the cap kept, newest first: {body}"
+    );
+    assert!(
+        body["dropped"].as_u64().is_some(),
+        "the loss counter stays a number: {body}"
+    );
+}
+
+/// The route always carries the seven members of the closed object
+/// (ADR-0111, ADR-0127, decision 6), and the four counters are zero when the
+/// journal is disabled.
+#[tokio::test]
+async fn the_schema_of_the_route_is_closed_and_the_counters_are_zero() {
+    let (_instance, _state, router) = instance_with_alpha().await;
+    let body = admin_queries(&router, "").await;
+    let mut members = body
+        .as_object()
+        .expect("the answer is an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    members.sort();
+    assert_eq!(
+        members,
+        vec![
+            "bytes", "capped", "dropped", "enabled", "queries", "rows", "trimmed"
+        ],
+        "the object is closed and carries the four members of the cap: {body}"
+    );
+    assert_eq!(body["enabled"], false, "{body}");
+    assert_eq!(body["capped"], false, "{body}");
+    assert_eq!(body["rows"], 0, "{body}");
+    assert_eq!(body["bytes"], 0, "{body}");
+    assert_eq!(body["trimmed"], 0, "{body}");
+}
+
+/// The cap is checked once at the open, so a file left above it comes back
+/// under its bounds before the instance serves (ADR-0127, decision 4).
+///
+/// The file is written before the state is loaded, as a crash or a lower
+/// configuration would leave it: four rows, and a cap of two.
+#[tokio::test]
+async fn the_open_control_trims_a_file_left_above_the_cap() {
+    let instance = Instance::with_journal(Journal::with_max_rows(0.0, 2));
+    let path = instance.root().join("data").join(DEBUG_JOURNAL_FILE_NAME);
+    {
+        let store = DebugJournalStore::open_or_create(&path).expect("the journal opens");
+        for position in 0..4 {
+            store
+                .flush(
+                    &[stored_row(&format!("left-{position}"))],
+                    JournalCap {
+                        max_rows: usize::MAX,
+                        max_bytes: usize::MAX,
+                    },
+                )
+                .expect("the row is written");
+        }
+        assert_eq!(read_queries(&path).expect("the journal reads").len(), 4);
+    }
+
+    let state = instance.state();
+    let router = build_router(Arc::clone(&state));
+    let rows = read_queries(&path).expect("the journal reads");
+    assert_eq!(
+        rows.len(),
+        2,
+        "the open control keeps the newest rows: {rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.request_id.clone())
+            .collect::<Vec<_>>(),
+        vec!["left-2", "left-3"],
+        "the oldest rows left at the open: {rows:?}"
+    );
+
+    let body = admin_queries(&router, "").await;
+    assert_eq!(body["capped"], true, "{body}");
+    assert_eq!(body["rows"], 2, "{body}");
+    assert_eq!(body["trimmed"], 2, "{body}");
+}
+
+/// The `warn` of the cap carries numbers only: no query text, no filter value
+/// and no key (ADR-0122, decision 10; ADR-0127, decision 6).
+#[tokio::test]
+async fn the_cap_warning_carries_numbers_only() {
+    let sink = common::journal();
+    let (instance, state, router) =
+        instance_with_alpha_journal(Journal::with_max_rows(0.0, 1)).await;
+    for _ in 0..2 {
+        debug_search(&router).await;
+    }
+    state
+        .flush_debug_journal()
+        .await
+        .expect("the flush trims at the cap");
+    assert_eq!(
+        read_queries(&journal_path(&instance))
+            .expect("the journal reads")
+            .len(),
+        1,
+        "the cap is reached"
+    );
+
+    let logged = sink.contents();
+    let cap_lines = logged
+        .lines()
+        .filter(|line| line.contains("at its cap"))
+        .collect::<Vec<_>>();
+    assert!(
+        !cap_lines.is_empty(),
+        "the cap warning is journalised once: {logged}"
+    );
+    for line in cap_lines {
+        assert!(
+            line.contains("\"rows\":"),
+            "the warn counts the rows: {line}"
+        );
+        assert!(
+            line.contains("\"bytes\":"),
+            "the warn counts the bytes: {line}"
+        );
+        assert!(
+            line.contains("\"file_bytes\":"),
+            "the warn gives the physical size: {line}"
+        );
+        assert!(
+            line.contains("\"trimmed\":"),
+            "the warn counts the trimmed rows: {line}"
+        );
+        assert!(
+            !line.contains(FILTER_MARKER),
+            "the warn carries no filter value: {line}"
+        );
+        assert!(
+            !line.contains("contrat"),
+            "the warn carries no query text: {line}"
+        );
+        assert!(
+            !line.contains("request") && !line.contains("payload"),
+            "the warn carries no payload: {line}"
+        );
+    }
 }
