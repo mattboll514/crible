@@ -15,7 +15,7 @@
 //! | `metrics_on_a_hand_built_case_are_exact` | quality at the document, hand-computed recall@k and MRR@k (decisions 4 and 5) |
 //! | `fidelity_compares_the_plan_against_exact` | fidelity against `exact: true`, hand-computed recall@10 and overlap@10 (decision 6) |
 //! | `latencies_are_reported_per_stage_at_nearest_rank` | keys per stage, p50 ≤ p95 ≤ p99, absent stage omitted (decision 9) |
-//! | `the_report_is_closed_and_carries_no_query_text` | closed JSON, `format_version: 1`, ids only (decisions 11 and 16) |
+//! | `the_report_is_closed_and_carries_no_query_text` | closed JSON, `format_version: 2`, `source`, ids only (decisions 11 and 16 of ADR-0125, decision 7 of ADR-0131) |
 //! | `an_empty_exact_answer_is_excluded_and_counted` | empty exact answer excluded and counted, denominator written when not 10 (complément du 2026-11-01, point C1) |
 //! | `a_text_query_never_reaches_the_reports` | no query text in either report, lexical fixture without an encoder (decision 16) |
 //! | `an_invalid_line_stops_the_command_with_its_number` | closed input, line number and cause (decision 3) |
@@ -425,7 +425,7 @@ fn metrics_on_a_hand_built_case_are_exact() {
     let (json_path, _) = eval_ok(&instance, &lines, &["--modes", "dense", "--k", "3"]);
     let report = read_report(&json_path);
 
-    assert_eq!(report["format_version"], 1);
+    assert_eq!(report["format_version"], 2);
     assert_eq!(report["k"], 3);
     assert_eq!(report["queries"], 3);
     assert_eq!(
@@ -617,6 +617,7 @@ fn the_report_is_closed_and_carries_no_query_text() {
         BTreeSet::from([
             "format_version",
             "command",
+            "source",
             "date",
             "game",
             "index",

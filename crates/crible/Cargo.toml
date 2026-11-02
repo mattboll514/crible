@@ -21,6 +21,16 @@ crible-store = { path = "../crible-store" }
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# The HTTP client of `crible eval --url`, in a private module of this crate and
+# nowhere else (ADR-0131, decision 2). `hyper`, `hyper-util` and
+# `http-body-util` are already in `Cargo.lock`, pulled by `axum`; enabling
+# `client-legacy` adds `want`, `try-lock` and `futures-channel` there. No TLS,
+# no other HTTP client, and the runtime is the `current_thread` one `eval`
+# builds: the requests are sequential (decisions 2 and 10).
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tokio.workspace = true
 
 [features]
 # Off by default: it turns on the failpoints of `crible-store` for the test
@@ -31,11 +41,10 @@ tracing-subscriber.workspace = true
 failpoints = ["crible-store/failpoints"]
 
 [dev-dependencies]
-# The `API = CLI` proof drives the axum router of the server in the test and
-# needs a tokio runtime; both crates are already the server's own stack
-# (ADR-0109, decision 3).
+# The `API = CLI` proof drives the axum router of the server in the test; the
+# crate is already the server's own stack (ADR-0109, decision 3), and the tokio
+# runtime it needs is now a direct dependency of this crate (ADR-0131).
 axum.workspace = true
-tokio.workspace = true
 arrow.workspace = true
 blake3.workspace = true
 half.workspace = true

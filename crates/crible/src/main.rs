@@ -10,6 +10,7 @@
 
 mod commands;
 mod eval;
+mod eval_api;
 mod vector;
 
 use std::path::PathBuf;
@@ -213,12 +214,19 @@ enum Command {
         format: commands::SearchFormat,
     },
     /// Evaluate one index against one game of queries, in local mode
-    /// (ADR-0125): fidelity against `exact`, quality against `expected`,
-    /// latencies, and a comparison to a previous report.
+    /// (`--data`, ADR-0125) or against a running instance (`--url`, ADR-0131):
+    /// fidelity against `exact`, quality against `expected`, latencies, and a
+    /// comparison to a previous report.
     Eval {
-        /// Root data directory (`<data>/indexes/<index>`).
+        /// Root data directory (`<data>/indexes/<index>`); exclusive with
+        /// `--url`, and required without it (ADR-0131, decision 6).
         #[arg(long)]
-        data: PathBuf,
+        data: Option<PathBuf>,
+        /// Base of a running instance, `http://host:port`; the campaign then
+        /// asks the instance instead of opening the index (ADR-0131,
+        /// decision 1). The `read` key comes from `CRIBLE_EVAL_API_KEY`.
+        #[arg(long)]
+        url: Option<String>,
         /// Index name, as declared in its `index.json`.
         #[arg(long)]
         index: String,
@@ -228,7 +236,7 @@ enum Command {
         queries: PathBuf,
         /// Root models directory (`[paths] models` of `crible.toml`); required
         /// when a `dense` or `hybrid` mode has to encode a textual query of the
-        /// game, and never for a `lexical` one.
+        /// game, never for a `lexical` one, and refused with `--url`.
         #[arg(long)]
         models: Option<PathBuf>,
         /// Comma-separated branches to evaluate: `dense`, `lexical`, `hybrid`;
@@ -242,11 +250,13 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
         /// Replace `search.exact_threshold` in memory; `0` when absent, which
-        /// forces the binary strategy on a non-empty pool (ADR-0076).
+        /// forces the binary strategy on a non-empty pool (ADR-0076). Refused
+        /// with `--url`, where it is a precondition of the instance.
         #[arg(long)]
         exact_threshold: Option<u32>,
         /// Replace `search.rescore_candidates` in memory (ADR-0125,
-        /// decision 7).
+        /// decision 7). Refused with `--url`, where it is a precondition of the
+        /// instance.
         #[arg(long)]
         rescore_candidates: Option<u32>,
         /// Counted repetitions of the game; one warmup pass precedes them and
@@ -394,6 +404,7 @@ fn run(cli: Cli) -> Result<ExitCode, CribleError> {
     let command = cli.command;
     if let Command::Eval {
         data,
+        url,
         index,
         queries,
         models,
@@ -407,7 +418,8 @@ fn run(cli: Cli) -> Result<ExitCode, CribleError> {
     } = &command
     {
         return eval::run(&eval::EvalRequest {
-            data,
+            data: data.as_deref(),
+            url: url.as_deref(),
             index,
             queries,
             models: models.as_deref(),

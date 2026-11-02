@@ -54,7 +54,7 @@ const SECTION_SEPARATOR: &str = "__";
 ///
 /// The list is closed. These variables name no key of `crible.toml`, so they
 /// escape the three refusals above and are ignored without error.
-const EXCLUDED_VARIABLES: [&str; 7] = [
+const EXCLUDED_VARIABLES: [&str; 8] = [
     "CRIBLE_FAILPOINT",
     "CRIBLE_BIN",
     "CRIBLE_PYTHON",
@@ -62,6 +62,10 @@ const EXCLUDED_VARIABLES: [&str; 7] = [
     "CRIBLE_CRASH_CHILD",
     "CRIBLE_CRASH_BATCH",
     "CRIBLE_CRASH_INDEX",
+    // The `read` key of `crible eval --url` (ADR-0131, decision 4): the server
+    // never reads it, and an operator who exported it before starting the
+    // server must not be stopped by the closed list.
+    "CRIBLE_EVAL_API_KEY",
 ];
 
 /// Key path of `crible.toml` to the `CRIBLE_*` variable that set it.
@@ -1047,12 +1051,26 @@ query_cache_entries = 1024
 
     #[test]
     fn a_variable_documented_outside_the_configuration_is_ignored() {
-        // ADR-0097: the list is closed, and these seven variables name no key.
+        // ADR-0097: the list is closed, and these eight variables name no key.
         let env: Vec<(&str, &str)> = super::EXCLUDED_VARIABLES
             .iter()
             .map(|name| (*name, "ignored"))
             .collect();
         let config = load(EXAMPLE, &env).expect("the excluded variables are ignored without error");
+        assert_eq!(config.server.bind, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn crible_eval_api_key_does_not_stop_the_server() {
+        // ADR-0131, decision 4: the key of `crible eval --url` lives in the
+        // environment, and the closed list of ADR-0097 must know it; otherwise
+        // `crible serve` would refuse to start on a host that exported it.
+        assert!(
+            super::EXCLUDED_VARIABLES.contains(&"CRIBLE_EVAL_API_KEY"),
+            "the key of the API mode belongs to the closed list"
+        );
+        let config = load(EXAMPLE, &[("CRIBLE_EVAL_API_KEY", "an-example-key")])
+            .expect("the server starts with the key of `crible eval` in its environment");
         assert_eq!(config.server.bind, "0.0.0.0:8080");
     }
 

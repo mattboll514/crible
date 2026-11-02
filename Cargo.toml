@@ -39,6 +39,12 @@ tower-http = { version = "=0.7.1", features = [
     "catch-panic",
 ] }
 
+# HTTP client of `crible eval --url` (ADR-0131, decision 2): one version table
+# for the whole workspace, and the `hyper` that `axum` already pulls. No TLS.
+http-body-util = "=0.1.5"
+hyper = "=1.12.0"
+hyper-util = { version = "=0.1.21", features = ["client-legacy", "http1"] }
+
 # OpenAPI
 # `axum_extras` lets the macros read the extractors of an axum handler;
 # `vendored` embeds Swagger UI, so the build downloads nothing (ADR-0111,

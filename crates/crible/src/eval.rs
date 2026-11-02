@@ -1,20 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! `crible eval`: the owner's validation instrument (phase P7).
+//! `crible eval`: the owner's validation instrument (phases P7 and P8).
 //!
 //! References: `docs/phases/P7-observabilite.md` (task `COMMANDE-EVAL` and its
-//! two dated notes), `docs/06-observabilite.md` ("Éval"), `docs/03-recherche.md`
-//! (the pipeline and its nine timing keys), `docs/mesures/README.md` (the
-//! report model) and ADR-0125, whose seventeen decisions this module applies.
+//! two dated notes), `docs/phases/P8-docker-et-deploiement.md` (task
+//! `EVALUER-PAR-API` and its note of 2026-11-02), `docs/06-observabilite.md`
+//! ("Éval"), `docs/03-recherche.md` (the pipeline and its nine timing keys),
+//! `docs/mesures/README.md` (the report model), ADR-0125, whose seventeen
+//! decisions this module applies in local mode, and ADR-0131, which adds the
+//! API mode without duplicating a metric.
 //!
 //! # What one campaign does
 //!
 //! One invocation evaluates **one index** against **one game of queries**, in
-//! **local mode only**: the index is opened read-only, exactly as
-//! `crible search` opens it (ADR-0116), so a campaign runs beside a live server
-//! and writes nothing under the data root.
+//! **local mode** by default and in **API mode** when `--url` names a running
+//! instance (ADR-0131, decision 1).
 //!
-//! Per mode, per query, the module runs the same pipeline a search route runs,
+//! In local mode the index is opened read-only, exactly as `crible search` opens
+//! it (ADR-0116), so a campaign runs beside a live server and writes nothing
+//! under the data root. In API mode every request goes to
+//! `POST /v1/indexes/{index}/search` of the instance, with the key read in
+//! `CRIBLE_EVAL_API_KEY` and the generation pinned at the start
+//! (`crate::eval_api`).
+//!
+//! Per mode, per query, the module runs the same work a search route runs,
 //! three times:
 //!
 //! - a **flat** run, `k = 10`, the timed one: its durations feed the latency
@@ -23,6 +32,10 @@
 //!   (ADR-0076, decision 1);
 //! - a run **grouped by document**, `k` documents, the **quality** run
 //!   (ADR-0092, decision 2).
+//!
+//! The three runs come from a [`Runner`]: the local pipeline, or the route of
+//! an instance. The metrics below are computed once for both modes, so the two
+//! reports cannot drift apart (ADR-0131, decision 8).
 //!
 //! One **warmup pass** precedes the `--repeat` counted repetitions and enters no
 //! percentile (ADR-0125, decision 9). Only the first counted repetition pays the
@@ -35,8 +48,9 @@
 //! - **quality**: recall@k and MRR@k at the document, on the grouped answer,
 //!   over the queries that carry a non-empty `expected`;
 //! - **latency**: p50, p95 and p99 per stage and for `total`, at the nearest
-//!   rank (ADR-0117, decision 4), in milliseconds. They are indicative and never
-//!   change the exit code;
+//!   rank (ADR-0117, decision 4), in milliseconds. In API mode only `total` is
+//!   measured, and it is the HTTP round trip seen by the client (ADR-0131,
+//!   decision 7). They are indicative and never change the exit code;
 //! - **baseline**: the mean drops of quality and fidelity of a previous report,
 //!   and the queries that lost an expected document.
 //!
@@ -48,13 +62,16 @@
 //!
 //! Two files, named `eval-<game>-<AAAA-MM-JJ>`, written into `--out` and never
 //! over an existing file (ADR-0125, decisions 11 and 13): a closed JSON of
-//! `format_version: 1`, and a Markdown that follows the model of
-//! `docs/mesures/README.md`. Neither carries the text of a query, the value of a
-//! filter or an internal id: a query is identified by its `id` alone
-//! (ADR-0125, decision 16).
+//! `format_version: 2`, and a Markdown that follows the model of
+//! `docs/mesures/README.md`. The version 2 adds `source` (the mode, and the URL
+//! in API mode) and a `latency_basis` per mode, so a local and an API campaign
+//! cannot be confused (ADR-0131, decision 7); `--baseline` reads versions 1 and
+//! 2. Neither report carries the text of a query, the value of a filter or an
+//! internal id: a query is identified by its `id` alone (ADR-0125, decision 16).
 //!
 //! ```text
 //! cargo test -p crible --test eval_cli
+//! cargo test -p crible --test eval_api_cli
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -80,6 +97,7 @@ use crible_store::generation::{GenerationStore, Snapshot};
 use serde_json::{Map, Value, json};
 
 use crate::commands::{self, SearchMode, TextEncoder};
+use crate::eval_api::{self, Preconditions};
 
 /// Number of results compared by the fidelity runs (ADR-0076, decision 1).
 const FIDELITY_K: usize = 10;
@@ -92,8 +110,34 @@ pub const DEFAULT_REPEAT: usize = 3;
 /// (ADR-0125, decision 12).
 const REGRESSION_THRESHOLD: f64 = 0.005;
 
-/// Version of the report format (ADR-0125, decision 11).
-const FORMAT_VERSION: u64 = 1;
+/// Version of the report format (ADR-0125, decision 11; ADR-0131, decision 7).
+const FORMAT_VERSION: u64 = 2;
+
+/// Versions of a reference report `--baseline` reads (ADR-0131, decision 7).
+///
+/// Version 1 carries no `latency_basis`: its latencies are read, but they are
+/// said non-comparable with the ones of a version 2 report.
+const BASELINE_VERSIONS: [u64; 2] = [1, 2];
+
+/// How a campaign measured its figures (ADR-0131, decision 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Basis {
+    /// Local mode: the stages of the pipeline, as `debug.timings_ms` carries
+    /// them.
+    ServerStages,
+    /// API mode: the HTTP round trip, measured by the client.
+    ClientRoundTrip,
+}
+
+impl Basis {
+    /// Value of the `latency_basis` member of a mode.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ServerStages => "server_stages",
+            Self::ClientRoundTrip => "client_round_trip",
+        }
+    }
+}
 
 /// Seconds in a day, for the date of a campaign.
 const SECONDS_PER_DAY: u64 = 86_400;
@@ -101,14 +145,19 @@ const SECONDS_PER_DAY: u64 = 86_400;
 /// One `crible eval` invocation.
 #[derive(Clone, Copy)]
 pub struct EvalRequest<'a> {
-    /// Root data directory (`<data>/indexes/<index>`).
-    pub data: &'a Path,
+    /// Root data directory (`<data>/indexes/<index>`); required without `url`
+    /// (ADR-0131, decision 6).
+    pub data: Option<&'a Path>,
+    /// Base of a running instance, `http://host:port`; the mode is API when it
+    /// is present (ADR-0131, decision 1).
+    pub url: Option<&'a str>,
     /// Index name, as declared in its `index.json`.
     pub index: &'a str,
     /// JSONL game of queries (ADR-0125, decision 3).
     pub queries: &'a Path,
     /// Root models directory; required when a `dense` or `hybrid` mode has to
-    /// encode a textual query of the game (ADR-0125, decision 2).
+    /// encode a textual query of the game (ADR-0125, decision 2), and refused
+    /// in API mode (ADR-0131, decision 6).
     pub models: Option<&'a Path>,
     /// Branches to evaluate; `dense` when absent.
     pub modes: &'a [SearchMode],
@@ -116,9 +165,11 @@ pub struct EvalRequest<'a> {
     pub k: usize,
     /// Directory the two reports are written into; never under the data root.
     pub out: &'a Path,
-    /// In-memory replacement of `search.exact_threshold`; `0` when absent.
+    /// In-memory replacement of `search.exact_threshold`; `0` when absent, and
+    /// refused in API mode (ADR-0131, decisions 6 and 9).
     pub exact_threshold: Option<u32>,
-    /// In-memory replacement of `search.rescore_candidates`.
+    /// In-memory replacement of `search.rescore_candidates`, refused in API mode
+    /// (ADR-0131, decisions 6 and 9).
     pub rescore_candidates: Option<u32>,
     /// Number of counted repetitions; [`DEFAULT_REPEAT`] when absent.
     pub repeat: usize,
@@ -188,7 +239,7 @@ struct ModeReport {
     latencies: BTreeMap<&'static str, Vec<f64>>,
 }
 
-/// State of one campaign: what every run reads.
+/// State of one local campaign: what every run reads.
 struct Campaign<'a> {
     /// Configuration of the index, with the in-memory overrides applied.
     config: IndexConfig,
@@ -202,15 +253,30 @@ struct Campaign<'a> {
     models: Option<&'a Path>,
     /// Encoder, built on the first textual query and reused after (ADR-0051).
     encoder: Option<TextEncoder>,
-    /// Game of queries, in file order.
-    queries: &'a [Query],
-    /// Number of documents of the quality runs.
-    k: usize,
-    /// Number of counted repetitions.
-    repeat: usize,
 }
 
-/// `crible eval --data <dir> --index <i> --queries <file> --out <dir>`.
+/// What one campaign can run: the local pipeline, or the route of an instance
+/// (ADR-0131, decision 1).
+///
+/// The metrics of [`evaluate`] read runs through this trait, so the two modes
+/// share them instead of carrying two copies (ADR-0131, decision 8).
+trait Runner {
+    /// Runs `plan` once for `query` in `mode`.
+    fn run(&mut self, mode: Mode, query: &Query, plan: &Plan) -> Result<Run, CribleError>;
+}
+
+/// One run of a campaign, as the metrics ask for it.
+#[derive(Debug, Clone, Copy)]
+struct Plan {
+    /// Fidelity reference of ADR-0076, decision 1.
+    exact: bool,
+    /// Quality run: grouped by document, one passage per document.
+    grouped: bool,
+    /// Number of results, or of documents under `grouped`.
+    k: usize,
+}
+
+/// `crible eval --data <dir> …` or `crible eval --url <base> …`.
 ///
 /// Returns [`ExitCode::SUCCESS`], or `1` when `--baseline` detects a regression
 /// of a mean (ADR-0125, decision 12). The two reports are written before the
@@ -219,10 +285,11 @@ struct Campaign<'a> {
 /// # Errors
 ///
 /// [`ErrorCode::InvalidRequest`](crible_core::error::ErrorCode::InvalidRequest)
-/// for a malformed game, an unusable mode, a report that would be overwritten
-/// or a refused baseline; the store and search errors of the pipeline
-/// otherwise.
+/// for a malformed game, an unusable mode, an option the mode does not take, a
+/// refused URL, a missing key, a report that would be overwritten or a refused
+/// baseline; the store, search and HTTP errors of the campaign otherwise.
 pub fn run(request: &EvalRequest<'_>) -> Result<ExitCode, CribleError> {
+    let target = where_of(request)?;
     api::check_k(request.k)?;
     if request.repeat == 0 {
         return Err(commands::invalid_request(
@@ -230,9 +297,132 @@ pub fn run(request: &EvalRequest<'_>) -> Result<ExitCode, CribleError> {
         ));
     }
     let name = path_component(request.index, "index name")?;
-    let (index_dir, mut config) = commands::load_index(request.data, name)?;
     let modes = modes_of(request.modes)?;
-    for mode in &modes {
+    let queries = read_queries(request.queries)?;
+    if queries.is_empty() {
+        return Err(commands::invalid_request(format!(
+            "the game {} holds no query",
+            request.queries.display()
+        )));
+    }
+    let game = game_of(request.queries)?;
+    let date = today()?;
+    let (json_path, markdown_path) = report_paths(request.out, &game, &date)?;
+
+    let (mut report, preconditions) = match &target {
+        Where::Local(data) => (
+            local_campaign(request, data, name, &modes, &queries, &game, &date)?,
+            None,
+        ),
+        Where::Api(base) => {
+            let (report, preconditions) =
+                api_campaign(request, base, name, &modes, &queries, &game, &date)?;
+            (report, Some(preconditions))
+        }
+    };
+
+    let regression = match request.baseline {
+        Some(path) => {
+            let baseline = read_baseline(path)?;
+            let (comparison, regression) = compare(&baseline, &report, request.k)?;
+            report["baseline"] = comparison;
+            regression
+        }
+        None => false,
+    };
+
+    let markdown = markdown(&report, preconditions.as_ref());
+    fs::write(&json_path, format!("{}\n", pretty(&report)?)).map_err(|error| {
+        commands::internal(format!("cannot write {}: {error}", json_path.display()))
+    })?;
+    fs::write(&markdown_path, markdown).map_err(|error| {
+        commands::internal(format!("cannot write {}: {error}", markdown_path.display()))
+    })?;
+    println!("json: {}", json_path.display());
+    println!("markdown: {}", markdown_path.display());
+    println!(
+        "regression: {}",
+        if regression { "detected" } else { "none" }
+    );
+    Ok(if regression {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Where the campaign reads its figures, decided before any I/O.
+enum Where<'a> {
+    /// The index under `<data>/indexes/<index>`.
+    Local(&'a Path),
+    /// A running instance, from the base `--url` gives.
+    Api(eval_api::Base),
+}
+
+/// Decides the mode, and refuses what the command does not take (ADR-0131,
+/// decisions 3 and 6).
+///
+/// `--data` and `--url` are exclusive and one of them is required; the three
+/// overrides of the local mode are refused by name in API mode. Every refusal
+/// is `invalid_request`, which is the code of every other entry point, and none
+/// of them touches the network or the data root.
+fn where_of<'a>(request: &EvalRequest<'a>) -> Result<Where<'a>, CribleError> {
+    match (request.data, request.url) {
+        (Some(_), Some(_)) => Err(commands::invalid_request(
+            "--data and --url are exclusive: --data evaluates a local index, --url a running \
+             instance, and a campaign measures one of the two (ADR-0131, decision 6)",
+        )),
+        (None, None) => Err(commands::invalid_request(
+            "--data is required without --url: give the data root of the index to evaluate, or \
+             --url <base> to evaluate a running instance (ADR-0131, decision 6)",
+        )),
+        (Some(data), None) => Ok(Where::Local(data)),
+        (None, Some(url)) => {
+            let refused = [
+                (
+                    "--models",
+                    request.models.is_some(),
+                    "the server encodes the queries of the game itself",
+                ),
+                (
+                    "--exact-threshold",
+                    request.exact_threshold.is_some(),
+                    "`exact_threshold` is a precondition of the evaluated instance, not a field of \
+                     a request: change it with the administration `PATCH` or in the configuration",
+                ),
+                (
+                    "--rescore-candidates",
+                    request.rescore_candidates.is_some(),
+                    "N (rescoring) is a precondition of the evaluated instance, not a field of a \
+                     request: change it with the administration `PATCH` or in the configuration",
+                ),
+            ];
+            for (option, given, reason) in refused {
+                if given {
+                    return Err(commands::invalid_request(format!(
+                        "{option} has no meaning in API mode: {reason} (ADR-0131, decisions 6 \
+                         and 9)"
+                    )));
+                }
+            }
+            Ok(Where::Api(eval_api::Base::parse(url)?))
+        }
+    }
+}
+
+/// One local campaign: the index opened read-only, the pipeline of
+/// `crible search`, the report of the local mode.
+fn local_campaign(
+    request: &EvalRequest<'_>,
+    data: &Path,
+    name: &str,
+    modes: &[Mode],
+    queries: &[Query],
+    game: &str,
+    date: &str,
+) -> Result<Value, CribleError> {
+    let (index_dir, mut config) = commands::load_index(data, name)?;
+    for mode in modes {
         if mode.uses_lexical() && !config.lexical.enabled {
             return Err(commands::invalid_request(format!(
                 "--modes {}: the lexical branch is disabled for index '{}'",
@@ -247,17 +437,6 @@ pub fn run(request: &EvalRequest<'_>) -> Result<ExitCode, CribleError> {
     if let Some(candidates) = request.rescore_candidates {
         config.search.rescore_candidates = candidates;
     }
-    let queries = read_queries(request.queries)?;
-    if queries.is_empty() {
-        return Err(commands::invalid_request(format!(
-            "the game {} holds no query",
-            request.queries.display()
-        )));
-    }
-    let game = game_of(request.queries)?;
-    let date = today()?;
-    let (json_path, markdown_path) = report_paths(request.out, &game, &date)?;
-
     // A textual query needs the encoder of the index only when a dense branch
     // has to encode it; a vector-only dense run and a lexical run do not
     // (ADR-0125, decision 2). `synth-small` has no encoder at all.
@@ -288,83 +467,148 @@ pub fn run(request: &EvalRequest<'_>) -> Result<ExitCode, CribleError> {
         scan: &scan,
         models: request.models,
         encoder: None,
-        queries: &queries,
-        k: request.k,
-        repeat: request.repeat,
     };
     let mut reports: BTreeMap<&'static str, ModeReport> = BTreeMap::new();
-    for mode in &modes {
-        reports.insert(mode.as_str(), campaign.evaluate(*mode)?);
+    for mode in modes {
+        reports.insert(
+            mode.as_str(),
+            evaluate(&mut campaign, *mode, queries, request.k, request.repeat)?,
+        );
     }
 
+    let mut report = header(
+        request,
+        name,
+        date,
+        game,
+        state.generation.get(),
+        state.live_passages,
+        queries,
+        modes,
+        json!({ "mode": "local" }),
+    );
+    report.insert(
+        "exact_threshold".to_owned(),
+        json!(campaign.config.search.exact_threshold),
+    );
+    report.insert(
+        "rescore_candidates".to_owned(),
+        json!(campaign.config.search.rescore_candidates),
+    );
+    report.insert(
+        "rescore_candidates_source".to_owned(),
+        json!(if request.rescore_candidates.is_some() {
+            "--rescore-candidates"
+        } else {
+            "configuration"
+        }),
+    );
+    report.insert(
+        "modes".to_owned(),
+        modes_value(&reports, modes, Basis::ServerStages),
+    );
+    Ok(Value::Object(report))
+}
+
+/// One campaign against a running instance (ADR-0131).
+///
+/// The generation is pinned before the first search, the requests are
+/// sequential, and the report carries neither the server stages nor
+/// `dense_strategy`: decision 8 keeps `debug` out of every request.
+fn api_campaign(
+    request: &EvalRequest<'_>,
+    base: &eval_api::Base,
+    name: &str,
+    modes: &[Mode],
+    queries: &[Query],
+    game: &str,
+    date: &str,
+) -> Result<(Value, Preconditions), CribleError> {
+    let mut session = eval_api::Session::open(base.clone(), name)?;
+    let mut reports: BTreeMap<&'static str, ModeReport> = BTreeMap::new();
+    for mode in modes {
+        reports.insert(
+            mode.as_str(),
+            evaluate(&mut session, *mode, queries, request.k, request.repeat)?,
+        );
+    }
+    let mut report = header(
+        request,
+        name,
+        date,
+        game,
+        session.generation(),
+        session.pool_size(),
+        queries,
+        modes,
+        json!({ "mode": "api", "url": session.base() }),
+    );
+    report.insert(
+        "modes".to_owned(),
+        modes_value(&reports, modes, Basis::ClientRoundTrip),
+    );
+    Ok((Value::Object(report), session.preconditions()))
+}
+
+/// The members both modes carry, with the `source` of the campaign.
+///
+/// `exact_threshold` and N stay out of it in API mode: decision 9 of ADR-0131
+/// makes them preconditions of the instance, and a report that carried them
+/// would let a reader believe the campaign applied them.
+#[allow(clippy::too_many_arguments)]
+fn header(
+    request: &EvalRequest<'_>,
+    name: &str,
+    date: &str,
+    game: &str,
+    generation: u64,
+    pool_size: u64,
+    queries: &[Query],
+    modes: &[Mode],
+    source: Value,
+) -> Map<String, Value> {
     let queries_with_expected = queries
         .iter()
         .filter(|query| !query.expected.is_empty())
         .count();
-    let mut report = json!({
-        "format_version": FORMAT_VERSION,
-        "command": command_of(request, &modes),
-        "date": date,
-        "game": game,
-        "index": name,
-        "generation": state.generation.get(),
-        "pool_size": state.live_passages,
-        "version": env!("CARGO_PKG_VERSION"),
-        "k": request.k,
-        "repeat": request.repeat,
-        "exact_threshold": campaign.config.search.exact_threshold,
-        "rescore_candidates": campaign.config.search.rescore_candidates,
-        "rescore_candidates_source": if request.rescore_candidates.is_some() {
-            "--rescore-candidates"
-        } else {
-            "configuration"
-        },
-        "queries": queries.len(),
-        "queries_with_expected": queries_with_expected,
-        "modes": modes_value(&reports, &modes),
-    });
-
-    let regression = match request.baseline {
-        Some(path) => {
-            let baseline = read_baseline(path)?;
-            let (comparison, regression) = compare(&baseline, &report, request.k)?;
-            report["baseline"] = comparison;
-            regression
-        }
-        None => false,
-    };
-
-    let markdown = markdown(&report);
-    fs::write(&json_path, format!("{}\n", pretty(&report)?)).map_err(|error| {
-        commands::internal(format!("cannot write {}: {error}", json_path.display()))
-    })?;
-    fs::write(&markdown_path, markdown).map_err(|error| {
-        commands::internal(format!("cannot write {}: {error}", markdown_path.display()))
-    })?;
-    println!("json: {}", json_path.display());
-    println!("markdown: {}", markdown_path.display());
-    println!(
-        "regression: {}",
-        if regression { "detected" } else { "none" }
+    let mut report = Map::new();
+    report.insert("format_version".to_owned(), json!(FORMAT_VERSION));
+    report.insert(
+        "command".to_owned(),
+        json!(command_of(request, modes, request.url)),
     );
-    Ok(if regression {
-        ExitCode::from(1)
-    } else {
-        ExitCode::SUCCESS
-    })
+    report.insert("source".to_owned(), source);
+    report.insert("date".to_owned(), json!(date));
+    report.insert("game".to_owned(), json!(game));
+    report.insert("index".to_owned(), json!(name));
+    report.insert("generation".to_owned(), json!(generation));
+    report.insert("pool_size".to_owned(), json!(pool_size));
+    report.insert("version".to_owned(), json!(env!("CARGO_PKG_VERSION")));
+    report.insert("k".to_owned(), json!(request.k));
+    report.insert("repeat".to_owned(), json!(request.repeat));
+    report.insert("queries".to_owned(), json!(queries.len()));
+    report.insert(
+        "queries_with_expected".to_owned(),
+        json!(queries_with_expected),
+    );
+    report
 }
 
 /// The command line of the campaign, as the reader can replay it.
 ///
 /// The report carries the paths such as the command received them (ADR-0125,
 /// decision 11), so the line is complete without any secret nor any query text.
-fn command_of(request: &EvalRequest<'_>, modes: &[Mode]) -> String {
-    let mut parts = vec![
-        "crible eval".to_owned(),
-        format!("--data {}", request.data.display()),
-        format!("--index {}", request.index),
-        format!("--queries {}", request.queries.display()),
-    ];
+/// In API mode the line carries `--url` and never `--data` (ADR-0131,
+/// decision 6).
+fn command_of(request: &EvalRequest<'_>, modes: &[Mode], url: Option<&str>) -> String {
+    let mut parts = vec!["crible eval".to_owned()];
+    match (url, request.data) {
+        (Some(base), _) => parts.push(format!("--url {base}")),
+        (None, Some(data)) => parts.push(format!("--data {}", data.display())),
+        (None, None) => {}
+    }
+    parts.push(format!("--index {}", request.index));
+    parts.push(format!("--queries {}", request.queries.display()));
     if let Some(models) = request.models {
         parts.push(format!("--models {}", models.display()));
     }
@@ -391,65 +635,153 @@ fn command_of(request: &EvalRequest<'_>, modes: &[Mode]) -> String {
     parts.join(" ")
 }
 
-impl Campaign<'_> {
-    /// Evaluates one mode and returns its figures.
+/// Evaluates one mode and returns its figures.
+///
+/// Pass 0 is the uncounted warmup; passes `1..=repeat` are the counted
+/// repetitions of ADR-0125, decision 9. Only the first counted pass pays the
+/// exact and the grouped run. The metrics come from [`fidelity`] and
+/// [`quality`] whatever the [`Runner`], so the local and the API reports share
+/// them (ADR-0131, decision 8).
+fn evaluate<R: Runner>(
+    runner: &mut R,
+    mode: Mode,
+    queries: &[Query],
+    k: usize,
+    repeat: usize,
+) -> Result<ModeReport, CribleError> {
+    let mut report = ModeReport::default();
+    for pass in 0..=repeat {
+        for query in queries {
+            let normal = runner.run(
+                mode,
+                query,
+                &Plan {
+                    exact: false,
+                    grouped: false,
+                    k: FIDELITY_K,
+                },
+            )?;
+            if pass > 0 {
+                record_latencies(&mut report.latencies, &normal.stages);
+            }
+            if pass != 1 {
+                continue;
+            }
+            let strategy = normal.strategy.map(Strategy::as_str);
+            if let Some(strategy) = strategy {
+                *report.strategies.entry(strategy).or_insert(0) += 1;
+            }
+            let mut outcome = QueryOutcome {
+                id: query.id.clone(),
+                fidelity: None,
+                quality: None,
+            };
+            if mode.uses_dense() {
+                let exact = runner.run(
+                    mode,
+                    query,
+                    &Plan {
+                        exact: true,
+                        grouped: false,
+                        k: FIDELITY_K,
+                    },
+                )?;
+                if let Some(fidelity) = fidelity(&normal, &exact) {
+                    report.fidelity.push((fidelity.0, fidelity.1));
+                    outcome.fidelity = Some(fidelity);
+                } else {
+                    report.fidelity_excluded.push(query.id.clone());
+                }
+            }
+            let quality_run = runner.run(
+                mode,
+                query,
+                &Plan {
+                    exact: false,
+                    grouped: true,
+                    k,
+                },
+            )?;
+            if let Some(quality) = quality(&quality_run.docs, &query.expected) {
+                report.quality.push((quality.0, quality.1));
+                outcome.quality = Some(quality);
+            }
+            report.rows.push(outcome);
+        }
+    }
+    Ok(report)
+}
+
+impl Runner for Campaign<'_> {
+    /// Runs the local pipeline once for `query`, in `mode`.
+    fn run(&mut self, mode: Mode, query: &Query, plan: &Plan) -> Result<Run, CribleError> {
+        self.run_once(mode, query, plan)
+    }
+}
+
+impl Runner for eval_api::Session {
+    /// Runs the request once against the instance, and reads what the metrics
+    /// need from the answer.
     ///
-    /// Pass 0 is the uncounted warmup; passes `1..=repeat` are the counted
-    /// repetitions of ADR-0125, decision 9. Only the first counted pass pays the
-    /// exact and the grouped run.
-    fn evaluate(&mut self, mode: Mode) -> Result<ModeReport, CribleError> {
-        let mut report = ModeReport::default();
-        let flat = Grouping::none();
+    /// The filter of the line travels as it was parsed, and no `debug` flag is
+    /// sent: the answer carries no server stage, so `total` alone feeds the
+    /// latency table (ADR-0131, decision 8).
+    fn run(&mut self, mode: Mode, query: &Query, plan: &Plan) -> Result<Run, CribleError> {
+        let filter = match &query.filter {
+            Some(raw) => Some(serde_json::from_str::<Value>(raw).map_err(|error| {
+                commands::internal(format!(
+                    "query '{}': the filter of the game is not JSON: {error}",
+                    query.id
+                ))
+            })?),
+            None => None,
+        };
+        let text = match mode {
+            Mode::Dense => query.text.as_deref(),
+            Mode::Lexical | Mode::Hybrid => Some(text_of(query, mode)?),
+        };
+        let answer = self
+            .search(&eval_api::Search {
+                mode,
+                text,
+                vector: query.vector.as_deref(),
+                filter: filter.as_ref(),
+                k: plan.k,
+                exact: plan.exact,
+                grouped: plan.grouped,
+            })
+            .map_err(|error| {
+                // Decision 5: the first error names the `id` of the query of
+                // the game, never its text, and keeps the code of the failure.
+                CribleError::new(
+                    error.code(),
+                    format!("query '{}': {}", query.id, error.message()),
+                )
+            })?;
+        let stages = StageDurations {
+            total: Some(answer.elapsed),
+            ..StageDurations::default()
+        };
+        Ok(Run {
+            keys: answer.keys,
+            docs: answer.docs,
+            stages,
+            strategy: None,
+        })
+    }
+}
+
+impl Campaign<'_> {
+    /// Runs the pipeline once for `query`, in `mode`, under the plan.
+    fn run_once(&mut self, mode: Mode, query: &Query, plan: &Plan) -> Result<Run, CribleError> {
         // The grouped run of the quality metrics is the one of `crible search`
         // and of the route, built and validated by the same constructor.
-        let grouped = api::grouping(true, 1, false)?;
-        for pass in 0..=self.repeat {
-            for query in self.queries {
-                let normal = self.run_once(mode, query, false, &flat, FIDELITY_K)?;
-                if pass > 0 {
-                    record_latencies(&mut report.latencies, &normal.stages);
-                }
-                if pass != 1 {
-                    continue;
-                }
-                let strategy = normal.strategy.map(Strategy::as_str);
-                if let Some(strategy) = strategy {
-                    *report.strategies.entry(strategy).or_insert(0) += 1;
-                }
-                let mut outcome = QueryOutcome {
-                    id: query.id.clone(),
-                    fidelity: None,
-                    quality: None,
-                };
-                if mode.uses_dense() {
-                    let exact = self.run_once(mode, query, true, &flat, FIDELITY_K)?;
-                    if let Some(fidelity) = fidelity(&normal, &exact) {
-                        report.fidelity.push((fidelity.0, fidelity.1));
-                        outcome.fidelity = Some(fidelity);
-                    } else {
-                        report.fidelity_excluded.push(query.id.clone());
-                    }
-                }
-                let quality_run = self.run_once(mode, query, false, &grouped, self.k)?;
-                if let Some(quality) = quality(&quality_run.docs, &query.expected) {
-                    report.quality.push((quality.0, quality.1));
-                    outcome.quality = Some(quality);
-                }
-                report.rows.push(outcome);
-            }
-        }
-        Ok(report)
-    }
-
-    /// Runs the pipeline once for `query`, in `mode`, under `grouping`.
-    fn run_once(
-        &mut self,
-        mode: Mode,
-        query: &Query,
-        exact: bool,
-        grouping: &Grouping,
-        k: usize,
-    ) -> Result<Run, CribleError> {
+        let grouping = if plan.grouped {
+            api::grouping(true, 1, false)?
+        } else {
+            Grouping::none()
+        };
+        let (exact, k) = (plan.exact, plan.k);
         let started = Instant::now();
         // Step 1: the filter is parsed and validated on every run, as a route
         // does for every request, so `validate` is a measured sample.
@@ -506,7 +838,7 @@ impl Campaign<'_> {
                     text,
                     k,
                     exact,
-                    grouping,
+                    grouping: &grouping,
                     fusion: search.fusion,
                 },
                 search,
@@ -688,26 +1020,38 @@ fn mean(samples: impl Iterator<Item = f64>, n: usize) -> f64 {
 }
 
 /// The `modes` member of the report: one object per mode, in evaluation order.
-fn modes_value(reports: &BTreeMap<&'static str, ModeReport>, modes: &[Mode]) -> Value {
+fn modes_value(
+    reports: &BTreeMap<&'static str, ModeReport>,
+    modes: &[Mode],
+    basis: Basis,
+) -> Value {
     let mut object = Map::new();
     for mode in modes {
         if let Some(report) = reports.get(mode.as_str()) {
-            object.insert(mode.as_str().to_owned(), mode_value(report, *mode));
+            object.insert(mode.as_str().to_owned(), mode_value(report, *mode, basis));
         }
     }
     Value::Object(object)
 }
 
 /// One mode of the report: strategies, means, latency, per-query rows.
-fn mode_value(report: &ModeReport, mode: Mode) -> Value {
+///
+/// `dense_strategy` is a member of the local mode only: the API mode keeps
+/// `debug` out of its requests, so the answer carries no plan and no stage
+/// (ADR-0131, decision 8). `latency_basis` names what the latency column
+/// measures, and keeps a local report from being read as an API one (decision
+/// 7).
+fn mode_value(report: &ModeReport, mode: Mode, basis: Basis) -> Value {
     let mut object = Map::new();
     if mode.uses_dense() {
-        let counts: Map<String, Value> = report
-            .strategies
-            .iter()
-            .map(|(strategy, count)| ((*strategy).to_owned(), json!(count)))
-            .collect();
-        object.insert("dense_strategy".to_owned(), Value::Object(counts));
+        if basis == Basis::ServerStages {
+            let counts: Map<String, Value> = report
+                .strategies
+                .iter()
+                .map(|(strategy, count)| ((*strategy).to_owned(), json!(count)))
+                .collect();
+            object.insert("dense_strategy".to_owned(), Value::Object(counts));
+        }
         object.insert(
             "fidelity_excluded".to_owned(),
             json!(report.fidelity_excluded),
@@ -739,6 +1083,7 @@ fn mode_value(report: &ModeReport, mode: Mode) -> Value {
     quality.insert("n".to_owned(), json!(n));
     object.insert("quality".to_owned(), Value::Object(quality));
     let mut latency = Map::new();
+    latency.insert("latency_basis".to_owned(), json!(basis.as_str()));
     for key in TIMING_KEYS {
         let Some(samples) = report.latencies.get(key) else {
             continue;
@@ -1018,6 +1363,10 @@ fn civil_date(days: i64) -> String {
 }
 
 /// Reads a reference report, refusing a version this command does not know.
+///
+/// Versions 1 and 2 are read (ADR-0131, decision 7): version 1 carries no
+/// `latency_basis`, so its latencies are said non-comparable rather than
+/// invented.
 fn read_baseline(path: &Path) -> Result<Value, CribleError> {
     let raw = fs::read_to_string(path).map_err(|error| {
         commands::invalid_request(format!(
@@ -1032,12 +1381,13 @@ fn read_baseline(path: &Path) -> Result<Value, CribleError> {
         ))
     })?;
     let version = value.get("format_version").and_then(Value::as_u64);
-    if version != Some(FORMAT_VERSION) {
+    if !version.is_some_and(|version| BASELINE_VERSIONS.contains(&version)) {
         return Err(commands::invalid_request(format!(
-            "the baseline {} carries format_version {}, and this command reads {} only",
+            "the baseline {} carries format_version {}, and this command reads {} and {} only",
             path.display(),
             version.map_or_else(|| "none".to_owned(), |version| version.to_string()),
-            FORMAT_VERSION
+            BASELINE_VERSIONS[0],
+            BASELINE_VERSIONS[1]
         )));
     }
     Ok(value)
@@ -1096,9 +1446,25 @@ fn compare(baseline: &Value, current: &Value, k: usize) -> Result<(Value, bool),
         // The queries that lost an expected document the reference found.
         let lost = lost_queries(mode, reference);
         entry.insert("lost".to_owned(), json!(lost));
-        // Latencies: reported, never blocking.
-        if let Some(latency) = latency_comparison(mode, reference) {
-            entry.insert("latency".to_owned(), latency);
+        // Latencies: reported, never blocking, and compared only on the same
+        // basis (ADR-0131, decision 7).
+        match latency_comparison(mode, reference) {
+            Ok(latency) => {
+                entry.insert("latency".to_owned(), latency);
+            }
+            Err(current_basis) => {
+                let mut uncomparable = Map::new();
+                if let Some(basis) = basis_of(reference) {
+                    uncomparable.insert("reference_basis".to_owned(), json!(basis));
+                }
+                if let Some(basis) = current_basis {
+                    uncomparable.insert("current_basis".to_owned(), json!(basis));
+                }
+                entry.insert(
+                    "latency_not_compared".to_owned(),
+                    Value::Object(uncomparable),
+                );
+            }
         }
         modes.insert(name.clone(), Value::Object(entry));
     }
@@ -1158,9 +1524,24 @@ fn indices(row: &Value, member: &str) -> Vec<u64> {
 }
 
 /// Relative gap of the p50 and p95 of every stage both reports carry.
-fn latency_comparison(current: &Value, reference: &Value) -> Option<Value> {
-    let before = reference.get("latency")?.as_object()?;
-    let after = current.get("latency")?.as_object()?;
+///
+/// The comparison happens only when both reports name the same `latency_basis`
+/// (ADR-0131, decision 7): the stages of the server and an HTTP round trip are
+/// not the same measure, and a version 1 report names no basis at all. The two
+/// bases of a refused comparison are returned for the report to say so.
+fn latency_comparison<'a>(
+    current: &'a Value,
+    reference: &'a Value,
+) -> Result<Value, Option<&'a str>> {
+    let current_basis = basis_of(current);
+    if current_basis.is_none() || current_basis != basis_of(reference) {
+        return Err(current_basis);
+    }
+    let before = reference.get("latency").and_then(Value::as_object);
+    let after = current.get("latency").and_then(Value::as_object);
+    let (Some(before), Some(after)) = (before, after) else {
+        return Err(current_basis);
+    };
     let mut stages = Map::new();
     for (stage, entry) in after {
         let Some(previous) = before.get(stage) else {
@@ -1188,9 +1569,13 @@ fn latency_comparison(current: &Value, reference: &Value) -> Option<Value> {
             stages.insert(stage.clone(), Value::Object(compared));
         }
     }
-    Some(Value::Object(stages))
+    Ok(Value::Object(stages))
 }
 
+/// `latency_basis` of one mode of a report, when it carries one.
+fn basis_of(mode: &Value) -> Option<&str> {
+    mode.get("latency")?.get("latency_basis")?.as_str()
+}
 /// Serializes the report as pretty JSON, or reports the fault.
 fn pretty(value: &Value) -> Result<String, CribleError> {
     serde_json::to_string_pretty(value)
@@ -1202,7 +1587,7 @@ fn pretty(value: &Value) -> Result<String, CribleError> {
 /// It follows the model of `docs/mesures/README.md` — goal, machine, data,
 /// parameters, results, reading — and carries no text of a query nor a filter
 /// value (ADR-0125, decisions 11 and 16).
-fn markdown(report: &Value) -> String {
+fn markdown(report: &Value, preconditions: Option<&Preconditions>) -> String {
     let text = |pointer: &str| {
         report
             .pointer(pointer)
@@ -1218,11 +1603,16 @@ fn markdown(report: &Value) -> String {
         text("/date")
     ));
     out.push_str("## But\n\n");
-    out.push_str(
+    out.push_str(&format!(
         "Mesurer, sur l'index évalué, la fidélité de la recherche rapide contre la recherche \
-         exacte, la qualité des résultats contre les documents attendus, et les latences par \
-         étape. Campagne produite par `crible eval` (ADR-0125).\n\n",
-    );
+         exacte, la qualité des résultats contre les documents attendus, et les latences {} \
+         Campagne produite par `crible eval` (ADR-0125, ADR-0131).\n\n",
+        if preconditions.is_some() {
+            "de l'aller-retour HTTP vu par le client. "
+        } else {
+            "par étape. "
+        },
+    ));
     out.push_str("## Machine\n\n");
     out.push_str(&format!(
         "- Système : {} {}\n- Cœurs disponibles : {}\n- Version de Crible : {}\n\n",
@@ -1244,23 +1634,49 @@ fn markdown(report: &Value) -> String {
         number("/queries").unwrap_or(0),
         number("/queries_with_expected").unwrap_or(0),
     ));
+    if preconditions.is_some() {
+        out.push_str(&format!("- Instance : {}\n\n", text("/source/url")));
+    }
     out.push_str("## Paramètres\n\n");
     out.push_str(&format!("- Commande : `{}`\n", text("/command")));
     out.push_str(&format!(
-        "- Modes : {}\n- `k` de la qualité : {}\n- `exact_threshold` : {} \
-         (0 force la stratégie binaire en mémoire, ADR-0076)\n- `rescore_candidates` (N) : {} \
-         (valeur de `search.rescore_candidates` de l'index ; la campagne la remplace quand \
-         `--rescore-candidates` est donné). Source de N : `{}`\n- Répétitions comptées : {} \
-         (une passe d'échauffement non comptée précède)\n",
+        "- Modes : {}\n- `k` de la qualité : {}\n",
         report
             .get("modes")
             .and_then(Value::as_object)
             .map(|modes| modes.keys().cloned().collect::<Vec<_>>().join(", "))
             .unwrap_or_else(|| "-".to_owned()),
         number("/k").unwrap_or(0),
-        number("/exact_threshold").unwrap_or(0),
-        number("/rescore_candidates").unwrap_or(0),
-        text("/rescore_candidates_source"),
+    ));
+    match preconditions {
+        // API mode: the two settings are preconditions of the instance, read
+        // from it and never changed by the campaign (ADR-0131, decision 9).
+        Some(preconditions) => {
+            out.push_str(&format!(
+                "- `exact_threshold` : {} (précondition de l'instance, lue sur \
+                 `GET /v1/indexes/{}` ; 0 force la stratégie binaire en mémoire, ADR-0076)\n\
+                 - `rescore_candidates` (N) : {} (précondition de l'instance, lue sur \
+                 `GET /v1/indexes/{}`)\n",
+                preconditions.exact_threshold,
+                text("/index"),
+                preconditions.rescore_candidates,
+                text("/index"),
+            ));
+        }
+        None => {
+            out.push_str(&format!(
+                "- `exact_threshold` : {} (0 force la stratégie binaire en mémoire, ADR-0076)\n\
+                 - `rescore_candidates` (N) : {} (valeur de `search.rescore_candidates` de \
+                 l'index ; la campagne la remplace quand `--rescore-candidates` est donné). \
+                 Source de N : `{}`\n",
+                number("/exact_threshold").unwrap_or(0),
+                number("/rescore_candidates").unwrap_or(0),
+                text("/rescore_candidates_source"),
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "- Répétitions comptées : {} (une passe d'échauffement non comptée précède)\n",
         number("/repeat").unwrap_or(0),
     ));
     out.push_str("\n## Résultats\n\n");
@@ -1331,8 +1747,17 @@ fn markdown(report: &Value) -> String {
             }
             out.push('\n');
             if let Some(latency) = entry.get("latency").and_then(Value::as_object) {
+                if preconditions.is_some() {
+                    // API mode: the only latency is the client round trip
+                    // (ADR-0131, decision 7), so the table says so.
+                    out.push_str("Latence côté client (aller-retour HTTP) :\n\n");
+                }
                 out.push_str("| Étape | p50 (ms) | p95 (ms) | p99 (ms) |\n|---|---|---|---|\n");
                 for (stage, values) in latency {
+                    // `latency_basis` is a string, not a stage.
+                    if !values.is_object() {
+                        continue;
+                    }
                     out.push_str(&format!(
                         "| `{stage}` | {:.3} | {:.3} | {:.3} |\n",
                         values.get("p50").and_then(Value::as_f64).unwrap_or(0.0),
@@ -1389,6 +1814,20 @@ fn markdown(report: &Value) -> String {
                         ids.join(", ")
                     ));
                 }
+                if let Some(uncomparable) = entry.get("latency_not_compared") {
+                    let reference = uncomparable
+                        .get("reference_basis")
+                        .and_then(Value::as_str)
+                        .unwrap_or("inconnue");
+                    let current = uncomparable
+                        .get("current_basis")
+                        .and_then(Value::as_str)
+                        .unwrap_or("inconnue");
+                    out.push_str(&format!(
+                        "- `{mode}` : latences non comparées, référence en `{reference}` et \
+                         campagne en `{current}` (ADR-0131, décision 7)\n"
+                    ));
+                }
             }
         }
         if let Some(skipped) = baseline.get("modes_not_compared").and_then(Value::as_array)
@@ -1407,6 +1846,18 @@ fn markdown(report: &Value) -> String {
         out.push('\n');
     }
     out.push_str("## Lecture\n\n");
+    if preconditions.is_some() {
+        out.push_str(
+            "- En mode API, la seule latence est l'aller-retour HTTP mesuré par le client \
+             (`total`) : elle inclut le réseau, la file du serveur et son encodage, et ne se \
+             compare pas aux étapes du mode local (`server_stages`). Le serveur encode les \
+             requêtes du jeu ; son `exact_threshold` et son N sont des préconditions lues au \
+             début de la campagne (ADR-0131, décisions 7 et 9).\n\
+             - Les requêtes partent l'une après l'autre, sur la génération épinglée au début de \
+             la campagne : une génération qui change en cours de route arrête la campagne \
+             (ADR-0131, décision 10).\n",
+        );
+    }
     out.push_str(
         "- La cible de fidélité est 0,99 de recall@10 au passage, **au N par défaut de 5000** et \
          en moyenne sur les requêtes dont la liste exacte n'est pas vide (ADR-0076, ADR-0078, \
@@ -1421,18 +1872,116 @@ fn markdown(report: &Value) -> String {
          - La qualité ne porte que sur les requêtes qui portent des documents attendus : `n` la \
          borne, et un `n` faible rend chaque requête plus lourde que le seuil de régression de \
          0,005. Un attendu absent du jeu mesuré compte simplement comme non trouvé\n\
-         (ADR-0125, décision 4).\n\
-         - Les latences sont **indicatives** : elles viennent de `debug.timings_ms`, ne valent pas \
-         une mesure MES-xx et ne changent jamais le code de sortie. La passe d'échauffement \
-         charge lecteurs, modèle et cache de requêtes (ADR-0051), donc `encode` mesure le chemin \
-         d'un cache déjà chaud, pas le premier encodage.\n\
-         - La machine est décrite par son système, son architecture et ses cœurs : un rapport de \
+         (ADR-0125, décision 4).\n",
+    );
+    // The two bullets below are the ones of the local mode: in API mode the
+    // latencies are not `debug.timings_ms`, and two bases that differ are not
+    // compared at all (ADR-0131, decision 7).
+    if preconditions.is_none() {
+        out.push_str(
+            "- Les latences sont **indicatives** : elles viennent de `debug.timings_ms`, ne \
+             valent pas une mesure MES-xx et ne changent jamais le code de sortie. La passe \
+             d'échauffement charge lecteurs, modèle et cache de requêtes (ADR-0051), donc \
+             `encode` mesure le chemin d'un cache déjà chaud, pas le premier encodage.\n",
+        );
+    }
+    out.push_str(
+        "- La machine est décrite par son système, son architecture et ses cœurs : un rapport de \
          mesure MES-xx, lui, nomme le processeur et la RAM.\n\
          - Les chiffres portent sur cette génération et ce jeu : ils ne valent pas preuve à \
-         8,58 M passages, où la fidélité se confirme en P9 (ADR-0076).\n\
-         - Une régression de `--baseline` est une baisse de plus de 0,005 en valeur absolue d'une \
-         moyenne de qualité ou de fidélité ; le code de sortie vaut alors 1. Les latences sont \
-         comparées et rapportées, jamais bloquantes.\n",
+         8,58 M passages, où la fidélité se confirme en P9 (ADR-0076).\n",
     );
+    if preconditions.is_none() {
+        out.push_str(
+            "- Une régression de `--baseline` est une baisse de plus de 0,005 en valeur absolue \
+             d'une moyenne de qualité ou de fidélité ; le code de sortie vaut alors 1. Les \
+             latences sont comparées et rapportées, jamais bloquantes.\n",
+        );
+    }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use crible_core::error::ErrorCode;
+
+    use super::*;
+
+    /// One minimal request, with `data` and `url` as the mode tests need them.
+    fn request<'a>(data: Option<&'a Path>, url: Option<&'a str>) -> EvalRequest<'a> {
+        EvalRequest {
+            data,
+            url,
+            index: "fixture",
+            queries: Path::new("game.jsonl"),
+            models: None,
+            modes: &[],
+            k: 10,
+            out: Path::new("out"),
+            exact_threshold: None,
+            rescore_candidates: None,
+            repeat: 1,
+            baseline: None,
+        }
+    }
+
+    /// The refusal of `where_of`, checked as `invalid_request`.
+    fn refusal(request: &EvalRequest<'_>) -> String {
+        let error = match where_of(request) {
+            Ok(_) => panic!("the request must be refused"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "a refused option is a request fault: {error}"
+        );
+        error.message().to_owned()
+    }
+
+    #[test]
+    fn api_mode_refuses_the_three_local_overrides_by_name() {
+        // ADR-0131, decisions 6 and 9: the mode decides before any I/O, and
+        // each override is named in its own refusal.
+        let base = "http://127.0.0.1:8080";
+        let mut models = request(None, Some(base));
+        models.models = Some(Path::new("models"));
+        let message = refusal(&models);
+        assert!(
+            message.contains("--models") && message.contains("API mode"),
+            "the refusal names --models: {message}"
+        );
+        let mut threshold = request(None, Some(base));
+        threshold.exact_threshold = Some(0);
+        let message = refusal(&threshold);
+        assert!(
+            message.contains("--exact-threshold") && message.contains("precondition"),
+            "the refusal names --exact-threshold and its reason: {message}"
+        );
+        let mut candidates = request(None, Some(base));
+        candidates.rescore_candidates = Some(5_000);
+        let message = refusal(&candidates);
+        assert!(
+            message.contains("--rescore-candidates") && message.contains("precondition"),
+            "the refusal names --rescore-candidates and its reason: {message}"
+        );
+    }
+
+    #[test]
+    fn one_target_is_required_and_the_two_are_exclusive() {
+        // ADR-0131, decision 6: `--data` and `--url` pick the mode, and the
+        // command takes exactly one of them.
+        let message = refusal(&request(Some(Path::new("data")), Some("http://host:1")));
+        assert!(
+            message.contains("--data")
+                && message.contains("--url")
+                && message.contains("exclusive"),
+            "the refusal names both options: {message}"
+        );
+        let message = refusal(&request(None, None));
+        assert!(
+            message.contains("--data") && message.contains("--url"),
+            "the refusal says one of the two is required: {message}"
+        );
+    }
 }
