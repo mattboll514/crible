@@ -1,7 +1,7 @@
 # ADR-0127 — Plafond de taille de `debug.sqlite` : deux bornes, trim au vidage et récupération incrémentale
 
-- **Statut** : Proposé
-- **Date** : 2026-11-02
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-02, avec les recommandations de l'ADR : valeurs par défaut `max_rows = 500000` et `max_bytes = 2147483648`, membres `capped`, `rows`, `bytes` et `trimmed` sur `GET /v1/debug/queries`, tâche `PLAFONNER-JOURNAL-DE-DEBUG` hors plan en P8)
+- **Date** : 2026-11-02 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, sur demande du propriétaire du 2026-11-02 (« tu peux faire un adr pour le plafond de taille de debug.sqlite »), à partir de l'analyse de `@architecte` du 2026-11-02 rendue au contrôle de fin de P7 (verdict `NON-COUVERT`, tâche `NETTOYER-P7`)
 - **Remplace** : — (complète ADR-0121 et ADR-0122 par renvoi, sans réécrire leur corps ; ne remplace aucune décision)
@@ -46,7 +46,7 @@ Il manque une **borne de disque**, indépendante de `sample_rate`, de `ttl_days`
 
 ## Décision
 
-**Décision proposée au propriétaire.** Les valeurs marquées « recommandé » et les trois points de la section « Points laissés au propriétaire » sont soumis à sa décision ; l'ADR reste `Proposé` tant qu'il ne l'a pas prise.
+**Décision acceptée par le propriétaire le 2026-11-02.** Les valeurs par défaut, les membres de la route et la place de la tâche d'implémentation sont tranchés dans la section « Décision du propriétaire du 2026-11-02 » ; le corps ci-dessous est celui qui a été accepté.
 
 ### Décision 1 — deux plafonds dans `[debug_journal]`, `0` refusé au démarrage
 
@@ -104,7 +104,7 @@ Précisions :
 - `auto_vacuum` ne s'active que sur un fichier neuf ou par un `VACUUM` : c'est pourquoi la décision ne l'impose pas aux fichiers existants, et pourquoi la documentation d'exploitation donne la procédure ;
 - le `VACUUM` complet est écarté : il demande jusqu'au double de la place, bloque la connexion et échoue précisément quand le disque est plein, c'est-à-dire dans le cas où on en aurait besoin ;
 - `auto_vacuum = FULL` est écarté : il déplace des pages à chaque transaction, donc sur le chemin de chaque vidage, pour un gain que la récupération bornée donne sans ce coût ;
-- la récupération est bornée par un budget de pages par vidage, proposé à 256 pages (1 Mio à 4 Kio de page) : un vidage ne peut pas être monopolisé par la récupération, et le fichier redescend sur plusieurs vidages ;
+- la récupération est bornée par un budget de pages par vidage, fixé à 256 pages (1 Mio à 4 Kio de page) : un vidage ne peut pas être monopolisé par la récupération, et le fichier redescend sur plusieurs vidages ;
 - sans récupération, un trim réduit la taille utilisée mais jamais la taille physique : c'est suffisant pour ne pas dépasser le plafond logique, insuffisant pour rendre la place au système, d'où la récupération bornée ;
 - la récupération n'a pas lieu dans la transaction : elle prend le verrou d'écriture pour elle seule, et un échec est journalisé en `warn` sans reprise, comme la purge.
 
@@ -149,29 +149,29 @@ Le schéma de `debug.sqlite` et son `format_version = 1` ne changent pas : aucun
 - `format_version` reste `1` : un fichier écrit par la version bornée est relu par la version précédente, et inversement (INV-15) ;
 - le `warn` de plafond ne porte aucun texte de requête, aucun filtre et aucune clé : des nombres seulement (ADR-0122, décision 10 ; INV-13 ne vise que `analytics.sqlite`).
 
-## Points laissés au propriétaire
+## Décision du propriétaire du 2026-11-02
 
-Trois choix restent à trancher ; l'ADR est `Proposé` tant qu'ils ne le sont pas. Les recommandations sont celles de l'analyse de `@architecte` du 2026-11-02.
+Le propriétaire a accepté l'ADR le 2026-11-02, avec les recommandations. Les trois points qui étaient laissés ouverts sont tranchés comme suit.
 
-### (a) Le couple de valeurs par défaut
+### (a) Valeurs par défaut
+
+`max_rows = 500000` et `max_bytes = 2147483648` (2 Gio), retenus. Le tableau ci-dessous garde les deux autres couples comme référence de configuration : ils restent jouables sans changement de code.
 
 | Couple | Taille utilisée à 3,5 Ko par ligne | Rétention à 1 requête/s, `sample_rate = 1.0` | Ce qu'il change |
 |---|---|---|---|
 | 250 000 lignes et 1 Gio | ≈ 0,85 Gio | ≈ 2,9 jours | marge disque plus large, rétention plus courte que `ttl_days` |
-| **500 000 lignes et 2 Gio (recommandé)** | ≈ 1,7 Gio, donc sous le plafond d'octets | ≈ 5,8 jours | proche des 7 jours de `ttl_days` à 1 requête/s ; le plafond mord vers 1,2 jour à 5 requêtes/s |
+| **500 000 lignes et 2 Gio (retenu)** | ≈ 1,7 Gio, donc sous le plafond d'octets | ≈ 5,8 jours | proche des 7 jours de `ttl_days` à 1 requête/s ; le plafond mord vers 1,2 jour à 5 requêtes/s |
 | 1 000 000 lignes et 4 Gio | ≈ 3,3 Gio | `ttl_days` mord d'abord | plafond rarement atteint, 4 Gio sur un hôte de 16 Go |
 
-Le couple recommandé laisse le plafond d'octets inerte tant que les lignes font 3,5 Ko, et le rend actif dès qu'elles grossissent : c'est le comportement voulu d'une borne de disque. Les deux autres couples sont jouables sans changement de code, seulement par la configuration.
+Le couple retenu laisse le plafond d'octets inerte tant que les lignes font 3,5 Ko, et le rend actif dès qu'elles grossissent : c'est le comportement voulu d'une borne de disque.
 
 ### (b) Les membres ajoutés à `GET /v1/debug/queries`
 
-Recommandé : `capped`, `rows`, `bytes` et `trimmed`, comme la décision 6. L'alternative est de n'exposer aucun membre et de se contenter du `warn` : le journal resterait borné, mais un opérateur ne verrait l'état qu'en lisant les logs, et une baisse de plafond ne se vérifierait pas par l'API. Un cinquième membre `file_bytes` est écarté par la décision 2 pour ne pas mêler taille logique et taille physique dans une réponse de lecture.
+`capped`, `rows`, `bytes` et `trimmed` sont retenus, comme la décision 6. `file_bytes` reste hors de la route (décision 2) : il est écrit dans le `warn` de plafond et documenté pour l'opérateur, pour ne pas mêler taille logique et taille physique dans une réponse de lecture.
 
 ### (c) Le placement de la tâche d'implémentation
 
-Recommandé : une tâche hors plan **`PLAFONNER-JOURNAL-DE-DEBUG`**, en P8, **avant `MESURER-EN-CONTENEUR-MAC`**, qui mesure le journal en conteneur et doit le faire sur une version déjà bornée. L'ampleur est petite à moyenne : environ 500 à 700 lignes de diff, un passage de `@dev`, un passage de `@testeur` pour INV-17, une relecture.
-
-Les deux autres places sont possibles : `NETTOYER-P8`, si le propriétaire préfère ne pas ouvrir une tâche hors plan, la correction rejoignant alors le nettoyage de fin de phase ; ou une insertion dans le plan de P8, au prix d'une modification du plan lui-même.
+La tâche hors plan **`PLAFONNER-JOURNAL-DE-DEBUG`** est retenue, en P8, **avant `MESURER-EN-CONTENEUR-MAC`**, qui mesure le journal en conteneur et doit le faire sur une version déjà bornée. L'ampleur est petite à moyenne : environ 500 à 700 lignes de diff, un passage de `@dev`, un passage de `@testeur` pour INV-17, une relecture. Les deux autres places envisagées, `NETTOYER-P8` et une insertion dans le plan de P8, ne sont pas retenues.
 
 ## Conséquences
 
@@ -225,7 +225,7 @@ Les deux autres places sont possibles : `NETTOYER-P8`, si le propriétaire préf
 - Code : `crates/crible-store/src/debug_journal.rs:140-160` (`open_or_create`), `:170-209` (`write`, une transaction), `:220-241` (`purge`) ; `crates/crible-server/src/debug_journal.rs:76` (`FLUSH_INTERVAL`), `:79` (`STOP_BOUND`), `:82` (`PURGE_INTERVAL`), `:367-430` (écrivain), `:472-510` (`Flush::run`, `warn` d'échec) ; `crates/crible-server/src/config.rs:189-196` (`DebugJournalConfig`), `:329` (liste fermée des clés), `:338-347` (`ttl_days = 0` refusé) ; `crates/crible-store/src/records.rs:1296-1304` (`database_error`) ; `crates/crible-server/src/http.rs:632-641` (`/ready`) ; `crates/crible-store/src/snapshot.rs:1009` (seul `VACUUM` du dépôt).
 - ADR : ADR-0014 (analytics sans contenu, journal à la demande), ADR-0031 (clé inconnue refusée), ADR-0038 (`SQLITE_BUSY` en `overloaded`), ADR-0097 (surcharges `CRIBLE_*`), ADR-0099 (`/ready`), ADR-0102 (limite de corps de 32 Mio), ADR-0111 (objets fermés, exemples OpenAPI), ADR-0119 (décision 8, capture sans coût), ADR-0121 (stockage, schéma, payload, protections), ADR-0122 (exécution, file, vidage, purge, route, preuves), ADR-0124 (réponse fermée de `GET /v1/stats`).
 
-## Documents à modifier à l'acceptation
+## Documents modifiés à l'acceptation
 
 | Document | Modification |
 |---|---|
@@ -233,7 +233,7 @@ Les deux autres places sont possibles : `NETTOYER-P8`, si le propriétaire préf
 | `docs/07-stack-et-deploiement.md:89-92` | `max_rows` et `max_bytes` dans la section `[debug_journal]`, avec leurs surcharges `CRIBLE_*` et le refus de `0` |
 | `docs/05-api.md:451-477` | membres `capped`, `rows`, `bytes` et `trimmed` de `GET /v1/debug/queries`, et l'exemple mis à jour |
 | Composant OpenAPI `DebugQueryList` | quatre membres ajoutés, objet toujours fermé (ADR-0111) |
-| `docs/phases/P8-docker-et-deploiement.md` | tâche `PLAFONNER-JOURNAL-DE-DEBUG` ou son rattachement à `NETTOYER-P8`, selon le point (c) |
+| `docs/phases/P8-docker-et-deploiement.md` | fiche `PLAFONNER-JOURNAL-DE-DEBUG`, hors plan en P8, avant `MESURER-EN-CONTENEUR-MAC` (point (c)) |
 | `docs/adr/README.md` | ligne d'index de cet ADR |
 
-Sont **non modifiés** : `docs/01` à `docs/04`, `docs/08`, le corps d'ADR-0121 et d'ADR-0122, et `docs/suivi.md` (tenu par l'orchestrateur). Le code n'est pas touché par cet ADR : il est livré par la tâche du point (c), si le propriétaire l'ouvre.
+Sont **non modifiés** : `docs/01` à `docs/04`, `docs/08`, le corps d'ADR-0121 et d'ADR-0122, et `docs/suivi.md` (tenu par l'orchestrateur). Le code n'est pas touché par cet ADR : il est livré par `PLAFONNER-JOURNAL-DE-DEBUG`, ouverte en P8.

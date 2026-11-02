@@ -1,6 +1,6 @@
 # ADR-0122 — Journal de debug : activation, capture, file, vidage, purge, route et preuves
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01 ; délégation du propriétaire pour la série de P7 ; les décisions 1 et 2, prises par l'orchestrateur, sont confirmées par le propriétaire après explication, avec la consigne d'exploitation écrite dans l'index)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-10-31, confirmé par le propriétaire le 2026-11-01 ; délégation du propriétaire pour la série de P7 ; les décisions 1 et 2, prises par l'orchestrateur, sont confirmées par le propriétaire après explication, avec la consigne d'exploitation écrite dans l'index) — complété par ADR-0127 (plafond de taille de `debug.sqlite`, décision du propriétaire du 2026-11-02), sans modification du corps
 - **Date** : 2026-10-31
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche JOURNAL-DE-DEBUG (phase P7), sur les options recommandées par `@architecte` et retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-10-31 pour la série de P7

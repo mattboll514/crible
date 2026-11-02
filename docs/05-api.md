@@ -461,7 +461,8 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 
 <!-- openapi: DebugQueryList -->
 ```json
-{ "enabled": true, "dropped": 0,
+{ "enabled": true, "dropped": 0, "capped": false,
+  "rows": 4591, "bytes": 16232448, "trimmed": 0,
   "queries": [
     { "id": 42, "created_at": "2026-10-31T10:00:00.123Z", "request_id": "…",
       "index": "decisions", "client": "legifacile-mcp", "mode": "hybrid",
@@ -475,6 +476,8 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 - `payload` est rendu comme un **objet JSON**, jamais comme une chaîne ; sa forme est celle d'ADR-0121, décision 4. Un `payload` illisible rend `internal`.
 - En multi-index, `index` vaut `null` et `payload.targets[]` porte les cibles, avec leur filtre, leur génération et leur capture (ADR-0122, décision 4).
 - `dropped` est le compteur de pertes de file du processus, `debug_journal_dropped` (ADR-0122, décision 6).
+- `capped`, `rows`, `bytes` et `trimmed` décrivent le plafond de taille de `debug.sqlite` (ADR-0127, décisions 3 et 6) : `capped` vaut vrai quand le dernier contrôle a trouvé le journal au plafond, et reste vrai jusqu'au redémarrage ; `rows` est le nombre de lignes du journal ; `bytes` est sa taille **utilisée**, `(page_count - freelist_count) × page_size` ; `trimmed` est le nombre de lignes supprimées par le plafond depuis le démarrage. Ce sont des compteurs de processus, jamais persistés. Journal désactivé, ils valent `false`, `0`, `0` et `0`. La taille physique du fichier n'est pas exposée : elle s'obtient avec les outils du système.
+- L'objet reste **fermé** (ADR-0111) : ces quatre membres existent toujours, `enabled`, `dropped` et `queries` compris, que le journal soit activé ou non (ADR-0127, décision 6).
 - Un paramètre **inconnu** ou **invalide** (`limit` hors de `[1, 1 000]`, `before_id` négatif, date qui n'est pas ISO 8601, `min_total_ms` négatif ou non numérique) rend `400 invalid_request`, avec un message qui nomme le paramètre (ADR-0109 ; ADR-0122, décision 9).
 - La route est déclarée dans la spécification OpenAPI et son exception nommée est retirée du test des routes dans le même changement (ADR-0111, complément du 2026-10-30).
 

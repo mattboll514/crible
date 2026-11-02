@@ -90,6 +90,8 @@ retention_days = 90
 enabled = false
 sample_rate = 0.0            # fraction des requêtes SANS `debug: true`, dans [0, 1] ; `debug: true` est toujours enregistré (ADR-0122)
 ttl_days = 7                 # 0 refusé au démarrage (ADR-0122)
+max_rows = 500000            # 0 refusé au démarrage ; minimum 1 ; surcharge CRIBLE_DEBUG_JOURNAL__MAX_ROWS (ADR-0127)
+max_bytes = 2147483648       # 2 Gio ; taille UTILISÉE de debug.sqlite ; 0 refusé, minimum 1 Mio ; surcharge CRIBLE_DEBUG_JOURNAL__MAX_BYTES (ADR-0127)
 
 [encoder]
 query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-0052)
