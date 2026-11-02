@@ -7,9 +7,9 @@
 //! vector are encoded here, in fp32, on CPU; passages with a vector keep it.
 //! Every document then goes through the same door as a batch produced
 //! elsewhere: this module writes a real batch directory (format v1) into
-//! `<data>/tmp/online-<hash>/`, and [`attach`] validates and applies it. The
-//! controls, the semantic table, the report and the recovery are those of
-//! `attach`, unchanged (ADR-0055).
+//! `<data>/tmp/online-<hash>/`, and [`crate::attach::attach`] validates and
+//! applies it. The controls, the semantic table, the report and the recovery
+//! are those of `attach`, unchanged (ADR-0055).
 //!
 //! # Determinism and idempotence
 //!
@@ -56,11 +56,12 @@
 //!
 //! An ingestion takes an exclusive [`File::try_lock`] on
 //! `<data>/tmp/online-<batch_id>.lock` before it creates the batch directory,
-//! and holds it until after [`attach`]. Two ingestions of the same file
-//! therefore serialise: the second fails with [`ErrorCode::Overloaded`] without
-//! creating anything, and the caller retries once the first has finished
-//! (ADR-0056). [`remove_stale_batches`] uses the same lock to tell a live lot
-//! from a leftover: it deletes only what it can lock.
+//! and holds it until after [`crate::attach::attach`]. Two ingestions of the
+//! same file therefore serialise: the second fails with
+//! [`ErrorCode::Overloaded`] without creating anything, and the caller retries
+//! once the first has finished (ADR-0056). [`remove_stale_batches`] uses the
+//! same lock to tell a live lot from a leftover: it deletes only what it can
+//! lock.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
@@ -236,18 +237,18 @@ pub struct OnlineIngest<'a> {
 }
 
 /// Ingests one JSONL file of documents into `store`, then applies the internal
-/// batch with [`attach`].
+/// batch with [`crate::attach::attach`].
 ///
 /// `data_dir` is the root data directory of the instance: the internal batch is
 /// built under `<data_dir>/tmp`, outside the index, and removed before the call
 /// returns.
 ///
-/// `token_counter` and `document_encoder` follow [`attach`]: the tokenizer
-/// counts the passages (control 8, INV-11), the loader gives the fp32 encoder
-/// (control 9, INV-12). Both are required for an `onnx` model and absent for an
-/// `external` one. The loader is called at most once here: the encoder it
-/// returns serves the online encoding and the acceptance check of `attach`, so
-/// a single fp32 graph is loaded.
+/// `token_counter` and `document_encoder` follow [`crate::attach::attach`]:
+/// the tokenizer counts the passages (control 8, INV-11), the loader gives the
+/// fp32 encoder (control 9, INV-12). Both are required for an `onnx` model and
+/// absent for an `external` one. The loader is called at most once here: the
+/// encoder it returns serves the online encoding and the acceptance check of
+/// `attach`, so a single fp32 graph is loaded.
 ///
 /// `mode` is the mode of the internal manifest. The online lot accepts `upsert`
 /// only, for the CLI as for the route of P6: `replace_all` is refused with
@@ -262,8 +263,8 @@ pub struct OnlineIngest<'a> {
 ///   or mistyped field, a passage longer than `max_tokens`, or `replace_all`;
 /// - [`ErrorCode::Overloaded`] when another ingestion already holds the
 ///   presence lock of this batch (same input bytes, ADR-0056);
-/// - the errors of [`attach`], which validates the internal batch (model,
-///   checksums, lengths, acceptance, conflict).
+/// - the errors of [`crate::attach::attach`], which validates the internal
+///   batch (model, checksums, lengths, acceptance, conflict).
 pub fn ingest(
     store: &mut GenerationStore,
     request: &OnlineIngest<'_>,
@@ -352,10 +353,9 @@ pub fn ingest_documents(
 /// Same as [`ingest_documents`], and reports the commit protocol of the attach
 /// to `observer`.
 ///
-/// Test hook: like
-/// [`attach_with_observer`](crate::attach::attach_with_observer), it only
-/// exists with the `failpoints` cargo feature. A test that blocks in `observer`
-/// holds the online attach exactly before or exactly after the SQLite `COMMIT`
+/// Test hook: like [`crate::attach::attach_with_observer`], it only exists with
+/// the `failpoints` cargo feature. A test that blocks in `observer` holds the
+/// online attach exactly before or exactly after the SQLite `COMMIT`
 /// while a search reads the published generation (INV-02).
 #[cfg(feature = "failpoints")]
 pub fn ingest_documents_with_observer<F>(
@@ -617,7 +617,7 @@ fn attached(
 /// - on `WouldBlock`, a writer holds it: it is left untouched.
 ///
 /// The lock is taken on the file the path currently names (see
-/// [`crate::file_lock::lock_exclusive`]), so a path replaced under the caller
+/// `crate::file_lock::lock_exclusive`), so a path replaced under the caller
 /// never yields a lock on a vanished inode.
 ///
 /// Two kinds of residue are handled: the usual pair
