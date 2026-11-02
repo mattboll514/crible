@@ -406,3 +406,72 @@ Aucune correction n'est exigée pour valider J7. Les propositions suivantes sont
 Les corrections qu'un relecteur demanderait après un refus deviendraient, elles, des tâches `CORRIGER-…` dans `docs/phases/P7-observabilite.md`, avec leurs critères d'acceptation.
 
 **Complément du 2026-11-02.** Sur décision du propriétaire, les deux propositions ci-dessus sont appliquées à `docs/jalons/J7-demo.md` : l'étape 6 attend le vidage du journal avant de le lire, et l'exception de qualité de `decisions` hybride n'y est plus dite qu'une fois, chiffres inchangés.
+
+## 9. Rejeu de la démo corrigée (2026-11-02)
+
+Ce complément rapporte le rejeu de `docs/jalons/J7-demo.md` demandé par le propriétaire le 2026-11-02, après les deux corrections de la démo du commit `8888c61`. Le rejeu a été joué par `@jalon` sur la branche `phase/P7-observabilite`, tête `2a67754`, le 2026-11-02. Aucune suite de tests n'a été relancée : les résultats de la section 2 restent ceux du rapport. La section « Nettoyage » n'a pas été appliquée, sur décision du propriétaire, qui garde `data/j7-demo/` ; le préambule, lui, a bien supprimé puis recréé ce dossier. La démo ne demande aucune étape dans un navigateur.
+
+Le rejeu a duré environ 10 min 25 s, dont 8 min 57 s pour l'attache des six lots. Toutes les commandes ont été lancées au premier plan.
+
+| Étape | Durée | Résultat |
+|---|---|---|
+| Préambule — état propre, binaire, environnement | 0,37 s (build à 0,27 s, `target/` chaud) | Conforme |
+| Étape 1 — créer les six index | 0,68 s | Conforme, six lignes au modèle |
+| Étape 2 — attacher les six lots | 536,75 s | Conforme, comptes et recette au document |
+| Étape 3 — convertir les questions | 0,03 s | Conforme, 300 requêtes en six jeux |
+| Étape 4 — campagne sur trois modes | 45,00 s au total | Conforme, chiffres identiques aux rapports versionnés |
+| Étape 5 — régression injectée | 16,14 s | Conforme, `regression: detected` et `exit=1` |
+| Étape 6 — serveur : debug, explain, journal, stats | environ 26 s, `sleep 11` compris | Conforme, journal lu après le vidage |
+
+### 9.1. Préambule et étapes 1 à 3
+
+Le préambule se termine par `Finished release profile [optimized] target(s) in 0.27s`, et `ORT_DYLIB_PATH` vaut `/Users/mattboll/MattCorp/crible/tools/.venv/lib/python3.13/site-packages/onnxruntime/capi/libonnxruntime.1.31.0.dylib`. Conforme à l'attendu.
+
+L'étape 1 rend six fois `index '<jeu>' created at data/j7-demo/data/indexes/<jeu> (epoch 1, generation 0)`, dans l'ordre `articles`, `decisions`, `dole`, `jorf`, `sarde`, `titres`. Conforme.
+
+L'étape 2 rend pour chaque lot la ligne `added` attendue : 42 417 pour `articles`, 20 120 pour `decisions`, 3 593 pour `dole`, 39 457 pour `jorf`, 49 674 pour `sarde` et 50 000 pour `titres`, avec tous les autres comptes à zéro et la génération 1. La recette ré-encode 200 passages par lot, avec une cosinus minimale de 0,999975 à 0,999995 selon le lot, donc au-dessus du seuil de 0,999. `crible inspect` rend ensuite 50 000 passages vivants pour `articles`, `jorf`, `sarde` et `titres`, 49 998 pour `decisions` et 7 628 pour `dole`. Conforme au document.
+
+L'étape 3 rend `300 queries in 6 game(s)` avec la répartition `articles: 63`, `decisions: 200`, `dole: 8`, `jorf: 12`, `sarde: 9`, `titres: 8`, puis une ligne de chemin par jeu. Conforme.
+
+### 9.2. Étape 4 — la campagne sur les trois modes
+
+Les six campagnes rendent chacune les trois lignes `json`, `markdown` et `regression: none`, avec un rapport `data/j7-demo/reports/eval-<jeu>-2026-11-02.{json,md}`. Durées : 9,17 s pour `articles`, 24,50 s pour `decisions`, 2,41 s pour `dole`, 3,18 s pour `jorf`, 3,01 s pour `sarde` et 2,68 s pour `titres`.
+
+Les champs `fidelity.recall_at_10` des modes dense et hybride et `quality.recall_at_k` des trois modes ont été comparés aux six rapports versionnés `docs/mesures/eval-<jeu>-2026-11-02.json`. Les 30 valeurs sont identiques au chiffre près, pour les six jeux :
+
+| Jeu | Requêtes | Avec attendus | Fidélité dense | Fidélité hybride | Qualité dense | Qualité lexicale | Qualité hybride |
+|---|---|---|---|---|---|---|---|
+| `articles` | 63 | 13 | 1,0000 | 0,9952 | 0,0000 | 0,0000 | 0,0000 |
+| `decisions` | 200 | 200 | 0,9965 | 0,9890 | 0,5063 | 0,5800 | 0,5638 |
+| `dole` | 8 | 8 | 1,0000 | 1,0000 | 1,0000 | 1,0000 | 1,0000 |
+| `jorf` | 12 | 12 | 1,0000 | 1,0000 | 0,5833 | 0,5833 | 0,5833 |
+| `sarde` | 9 | 9 | 1,0000 | 1,0000 | 0,6667 | 0,6667 | 0,6667 |
+| `titres` | 8 | 8 | 1,0000 | 1,0000 | 1,0000 | 1,0000 | 1,0000 |
+
+Les six rapports portent `rescore_candidates: 5000` et `rescore_candidates_source: configuration`, comme le document l'annonce. Les latences varient d'un rejeu à l'autre et restent indicatives. Conforme.
+
+### 9.3. Étape 5 — la régression injectée
+
+La commande rend `regression: detected` et `exit=1`, avec les deux rapports sous `data/j7-demo/regression/`. La section « Comparaison à la référence » du rapport produit reprend à l'identique les onze lignes attendues, de `- Régression détectée : oui` aux deux listes de requêtes ayant perdu un attendu (`J005`, `J111`, `J131` en dense ; `J005`, `J066`, `J096`, `J111`, `J136`, `J155` en hybride), chiffres et flèches compris. Conforme.
+
+### 9.4. Étape 6 — le serveur : debug, explain, journal, stats
+
+Les deux clés sont générées et le `crible.toml` est écrit sans message, avec deux empreintes de 64 caractères hexadécimaux. Le serveur démarre, écrit dans `data/j7-demo/serve.log` la ligne `"the server is bound"` avec `127.0.0.1:8080`, et `/ready` rend `200` après 3 s, après des `503`. Il s'arrête ensuite sur `SIGINT` avec le code `0`.
+
+- **Recherche `debug: true`** : `200`. Premier résultat `JURITEXT000044525272#6`, de rangs dense 3 et lexical 2, donc de rang fusionné 1. `debug.per_result` porte les trois résultats avec rangs et scores des deux branches ; `debug.plan` porte `dense_strategy: binary` et `rescore_candidates: 5000` ; `debug.timings_ms` porte les neuf clés `validate`, `encode`, `filter`, `dense`, `lexical`, `fusion`, `group`, `fetch`, `total` ; `pool_size` vaut 49 998 et `took_ms` 36,24 ms sur ce passage.
+- **`explain_ids`** : `200`, avec le tableau frère attendu, `exists: true`, `alive: true`, `in_pool: false` et `excluded_by: ["$.filter.annee"]`. La recherche filtrée rend deux résultats.
+- **Journal de debug** : l'appel `admin` est joué après `sleep 11`, et rend `200` avec `enabled: true`, `dropped: 0` et **une** entrée `index: "decisions"`, `mode: "hybrid"`, `status: "ok"`, `total_ms`, `payload.capture` et les cinq clés `capture`, `generation`, `plan`, `request`, `timings_ms` ; la capture porte 20 rangs par branche. L'appel `read` rend `403`. L'entrée est bien présente après l'attente : la correction de la démo est vérifiée. Le dossier `data/j7-demo` étant neuf, le journal ne contient qu'une entrée, celle de ce passage.
+- **`GET /v1/stats`** : `200` pour `admin`, avec `buckets`, `totals` et les sections par étape (`count: 2`, latence par étape, `zero_results_rate: 0.0`), puis `403` pour `read`.
+- **`crible stats --data data/j7-demo/data --format table`**, sans serveur : tableaux ASCII `buckets` (2 recherches, 0 erreur, taux sans résultat 0,0000), `latency` (une ligne par étape et par seau, plus `totals`), `top indexes` (`decisions` 2), `top filter shapes` (`annee:eq` 1) et `indexes` (les six index à la génération 1, leurs passages vivants et leurs octets sur disque). Conforme.
+
+Un premier passage du bloc serveur a rendu `401` sur tous les appels, à cause d'une erreur de script de `@jalon` dans l'extraction des clés, sans lien avec la démo ni avec le serveur. Le bloc a été rejoué avec les clés lues au bon endroit ; c'est ce second passage qui est rapporté ci-dessus.
+
+### 9.5. Écarts
+
+Aucun écart entre la démo et son attendu. Les deux corrections du commit `8888c61` sont vérifiées : l'étape 6 attend le vidage du journal et rend une entrée, et la note sur la qualité de `decisions` hybride n'apparaît qu'une fois dans `docs/jalons/J7-demo.md`.
+
+Les latences et les horodatages varient d'un rejeu à l'autre, comme le document l'annonce ; les comptes, les index, la fidélité et la qualité ne varient pas.
+
+### 9.6. Verdict
+
+La démo corrigée est jouée de bout en bout et rend les sorties attendues. Aucune correction n'est demandée. J7 reste `PRET-POUR-VALIDATION`. La CI distante verte citée en tête de ce rapport reste celle de `3ca63b7` ; les commits qui ont suivi ne touchent que `docs/`, et la branche n'est pas poussée sur `2a67754`.
