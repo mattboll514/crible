@@ -143,3 +143,26 @@
   - si le cache est fait : la latence avant/après est mesurée.
 - **Invariants** : INV-02 (si le cache est fait).
 - **Note du 2026-11-01 (application d'ADR-0126)** : le livrable 3 est précisé sans changer son but. Les lecteurs sont mis en cache **par segment**, clé `segment_id`, et le pool de charges utiles **par époque** ; « une fois par génération publiée » se lit donc comme « une fois par segment et par processus, publiés avec la génération ». Le sceau blake3 reste vérifié à chaque ouverture de lecteur, donc une fois par segment et par processus, pendant le remplissage. Le remplissage a lieu **avant** la publication de la génération, hors du verrou d'écriture : le critère « aucune ouverture sur le chemin d'une requête d'une génération déjà servie » se lit alors comme « aucune génération n'est servie sans ses lecteurs », et le cas de la première requête d'une génération non remplie n'existe pas. Le critère de rétention porte sur les **instantanés** : un lecteur lâché ne tient aucune `EpochLease`. Le critère de latence est prouvé par le **serveur** en `--release` sur `synth-large`, `k` et N fixes, au moins 300 requêtes à cache chaud, `debug: true`, p50/p95/p99 de `total` et de `fetch` avant/après, plus le temps de démarrage ; `crible eval` n'est pas l'outil de cette preuve (ADR-0125, décision 9), et le harnais reproductible est `crates/crible/examples/dense_latency.rs`.
+
+### COUPER-TELEMETRIE-ONNX
+- **Origine** : hors plan, 2026-11-02, préparation de J7. La série locale `cargo test --release -- --include-ignored` s'est bloquée deux fois sur deux sur `api_and_cli_return_the_same_results_on_the_legifacile_sample` : un `crible search` fini tourne indéfiniment dans `exit()`, sur le client de télémétrie 1DS embarqué par ONNX Runtime 1.31.0. Le verdict de `@architecte` est `NON-COUVERT` : la conception ne prévoit ni n'interdit cette télémétrie, qui envoie des données d'usage à un tiers, production comprise.
+- **Objectif** : couper la télémétrie d'ONNX Runtime partout où Crible le charge, pour débloquer la sortie de processus et supprimer l'envoi à un tiers, sans changer les résultats de recherche.
+- **Dépend de** : —
+- **À lire** : `adr/0128-couper-la-telemetrie-d-onnx-runtime.md` (décisions 1 à 10) ; `adr/0057-onnx-runtime-et-vrai-modele-mdenseon-en-integration-continue.md` (job `rust-onnx`, `--include-ignored`) ; `docs/07-stack-et-deploiement.md:54` et `:59` (chargement d'ORT), `:116-123` (image Docker) ; `docs/06-observabilite.md:8` et `:36-40` (INV-13) ; la fiche `CONSTRUIRE-IMAGE-DOCKER` de `docs/phases/P8-docker-et-deploiement.md` ; `tools/README.md`.
+- **Livrables** :
+  1. `ORT_DISABLE_TELEMETRY=1` posé au tout début de `main` (`crates/crible/src/main.rs`, avant `Cli::parse()`), valeur forcée à `1`, avec un commentaire `// SAFETY:` (aucun fil n'existe encore) et un test ;
+  2. `with_telemetry(false)` sur l'`EnvironmentBuilder` de `crates/crible-encode/src/model.rs`, sans effet sur la sûreté, et aucune pose de variable dans `crible-encode` ;
+  3. `.cargo/config.toml`, section `[env]`, `ORT_DISABLE_TELEMETRY = { value = "1", force = true }`, pour les binaires de test qui chargent ORT dans leur processus ;
+  4. un test `#[ignore]` qui lance un enfant `crible search` avec `HOME`, `XDG_DATA_HOME` et `XDG_CONFIG_HOME` temporaires, retire de son environnement `ORT_DISABLE_TELEMETRY`, `TF_BUILD`, `GITHUB_ACTIONS`, `GITLAB_CI`, `CI` et `ORT_RUNNING_UNIT_TESTS`, et vérifie l'exit `0` et l'absence de tout `.onnxruntime` ou `onnxruntime.db` sous ces dossiers ; il tourne dans le job `rust-onnx` (ADR-0057) ;
+  5. la vérification que `docs/07`, `docs/06`, la fiche P8 et `tools/README.md` sont à jour selon ADR-0128 (appliqués par `@greffier` à l'acceptation : la tâche vérifie, ne réécrit pas).
+- **Critères d'acceptation** :
+  1. aucun fichier du client 1DS créé sous un `HOME` temporaire par `crible search` (test `#[ignore]` vert en local et dans `rust-onnx`) ;
+  2. `ORT_DISABLE_TELEMETRY=1` posée au début de `main`, avec `// SAFETY:` et un test ;
+  3. `with_telemetry(false)` sur l'environnement ORT ;
+  4. `.cargo/config.toml` `[env]` en place ;
+  5. résultats de recherche inchangés et `api_and_cli_return_the_same_results_on_the_legifacile_sample` vert en local sans variable posée à la main ;
+  6. `docs/07`, `docs/06`, fiche P8 et `tools/README.md` à jour selon ADR-0128 (déjà appliqués par `@greffier` à l'acceptation : la tâche vérifie, ne réécrit pas).
+
+  `cargo fmt`, `clippy -D warnings` et `cargo test` verts.
+- **Invariants** : aucun (pas d'INV-18 : décision 9 d'ADR-0128).
+- **Hors périmètre** : `clients/python/` (HTTP seulement) et tout code dans `tools/` ; la réouverture de la télémétrie ; la mesure d'un gain de latence à la sortie.
