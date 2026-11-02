@@ -117,7 +117,7 @@ pub struct FlushReport {
 
 /// One row of `queries`, as a writer deposits it or a reader receives it.
 ///
-/// The same type is the input of [`DebugJournalStore::write`] and the output of
+/// The same type is the input of [`DebugJournalStore::flush`] and the output of
 /// [`read_queries`]: a writer leaves [`DebugQueryRow::created_at`] empty and
 /// SQLite fills it at the insertion (ADR-0121, decision 3), a reader receives
 /// the stored value.
