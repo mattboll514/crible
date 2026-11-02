@@ -55,8 +55,9 @@ index 'articles' created at data/j7-demo/data/indexes/articles (epoch 1, generat
 ```
 
 Les six configurations activent la branche lexicale et posent un
-`rescore_candidates` de 1000 (le réglage de l'échantillon), ce qui rend les
-trois modes disponibles.
+`rescore_candidates` de 5000 (le défaut d'ADR-0078, appliqué à l'échantillon),
+avec un `exact_threshold` de 5000 qui suit N à la création (ADR-0074), ce qui
+rend les trois modes disponibles.
 
 ## Étape 2 — attacher les six lots
 
@@ -141,29 +142,52 @@ done
 Attendu, trois lignes par index (`json`, `markdown`, `regression`) :
 
 ```text
-json: data/j7-demo/reports/eval-articles-2026-11-01.json
-markdown: data/j7-demo/reports/eval-articles-2026-11-01.md
+json: data/j7-demo/reports/eval-articles-2026-11-02.json
+markdown: data/j7-demo/reports/eval-articles-2026-11-02.md
 regression: none
 ```
 
-Les rapports versionnés de `docs/mesures/` ont été produits par la **même**
-commande, avec `--out docs/mesures` : leurs chiffres de fidélité et de qualité
-sont identiques à ceux du rejeu, seules les latences diffèrent. La commande
-refuse d'écraser un rapport existant, ce qui interdit de rejouer la campagne
-dans `docs/mesures/` sans supprimer les fichiers avant ; le rejeu écrit donc
-sous `data/`.
+Les deux campagnes versionnées de `docs/mesures/` ont été produites par la
+**même** commande, avec `--out docs/mesures` : celle du 2026-11-01 à N = 1000 et
+celle du 2026-11-02 à N = 5000. Seuls les rapports régénérés à N = 5000
+partagent la fidélité et la qualité du rejeu ; ceux du 2026-11-01 en diffèrent
+par la fidélité et par les latences (la qualité n'y bouge qu'à la marge :
+`decisions` hybride, 0,5563 contre 0,5638). La commande refuse d'écraser un rapport
+existant, ce qui interdit de rejouer une campagne dans `docs/mesures/` sans
+supprimer les fichiers avant ; un rejeu d'essai s'écrit donc sous `data/`.
 
-Les chiffres de `docs/mesures/` (fidélité : recall@10 au passage contre la
-recherche exacte ; qualité : recall@k au document contre les attendus) :
+La campagne antérieure du 2026-11-01, produite à N = 1000, reste dans
+`docs/mesures/` ; la campagne à N = 5000 y est écrite sous un nouveau nom daté,
+sans écraser l'ancien (ADR-0125, décision 13). Les deux campagnes portent la
+même commande et les mêmes données ; N, la date du rapport et, par
+conséquent, la fidélité et les latences changent, la qualité ne bougeant qu'à
+la marge sur `decisions` hybride. La note
+`docs/mesures/eval-n5000-2026-11-02.md` met les deux campagnes en regard.
+
+Les chiffres de la campagne à N = 5000 ci-dessous sont ceux des six rapports
+`docs/mesures/eval-<jeu>-2026-11-02.{json,md}` (fidélité : recall@10 au passage
+contre la recherche exacte ; qualité : recall@k au document contre les
+attendus) :
 
 | Jeu | Requêtes | Avec attendus | Fidélité dense | Fidélité hybride | Qualité dense | Qualité lexicale | Qualité hybride |
 |---|---|---|---|---|---|---|---|
-| `articles` | 63 | 13 | 0,9825 | 0,9508 | 0,0000 | 0,0000 | 0,0000 |
-| `decisions` | 200 | 200 | 0,9705 | 0,9345 | 0,5063 | 0,5800 | 0,5563 |
+| `articles` | 63 | 13 | 1,0000 | 0,9952 | 0,0000 | 0,0000 | 0,0000 |
+| `decisions` | 200 | 200 | 0,9965 | 0,9890 | 0,5063 | 0,5800 | 0,5638 |
 | `dole` | 8 | 8 | 1,0000 | 1,0000 | 1,0000 | 1,0000 | 1,0000 |
-| `jorf` | 12 | 12 | 0,9750 | 0,9417 | 0,5833 | 0,5833 | 0,5833 |
-| `sarde` | 9 | 9 | 1,0000 | 0,9778 | 0,6667 | 0,6667 | 0,6667 |
-| `titres` | 8 | 8 | 1,0000 | 0,9875 | 1,0000 | 1,0000 | 1,0000 |
+| `jorf` | 12 | 12 | 1,0000 | 1,0000 | 0,5833 | 0,5833 | 0,5833 |
+| `sarde` | 9 | 9 | 1,0000 | 1,0000 | 0,6667 | 0,6667 | 0,6667 |
+| `titres` | 8 | 8 | 1,0000 | 1,0000 | 1,0000 | 1,0000 | 1,0000 |
+
+À l'échelle de l'échantillon entier, la fidélité moyenne passe de 0,9757 à
+N = 1000 à 0,9977 à N = 5000 en dense, et de 0,9427 à 0,9917 en hybride : la
+cible de 0,99 de `docs/08-invariants-et-tests.md` est atteinte en moyenne,
+`decisions` hybride seul valant 0,9890. C'est la seule structure sous 0,99 :
+20 de ses 200 requêtes perdent un passage du top-10 exact, soit 22 passages sur
+2 000, et 16 de ces requêtes ont pourtant un top-10 dense exact. Rejoué à
+`--rescore-candidates 50000`, `decisions` retrouve 1,0000 dans les deux modes :
+la perte vient de la troncature à 5 000 candidats du scan binaire, que la fusion
+`rrf` amplifie en travaillant sur les rangs. L'analyse chiffrée, requête par
+requête, est dans `docs/mesures/eval-n5000-2026-11-02.md`.
 
 Le mode `lexical` n'a pas de fidélité : il n'y a pas de recherche exacte à
 laquelle le comparer, donc les membres `fidelity` et `fidelity_excluded` sont
@@ -176,18 +200,20 @@ pas de la recherche, et le rapport la montre telle quelle.
 Chaque rapport reprend sa ligne de commande complète et dit si N vient de la
 configuration de l'index (`rescore_candidates_source: configuration`) ou de
 `--rescore-candidates` : les six campagnes de l'échantillon lisent les
-configurations de l'étape 1, donc N = 1000.
+configurations de l'étape 1, donc N = 5000.
 
-Les latences de ces rapports (p50 du total, mode par mode) vont de 0,517 ms
-(`dole` lexical) à 1,716 ms (`decisions` dense) ; le p95 le plus haut est
-3,637 ms et le p99 le plus haut 4,371 ms, tous deux sur `articles`, en hybride
-pour le p95 et en dense pour le p99. Elles sont **indicatives** : elles viennent
-de `debug.timings_ms` et ne valent pas une mesure MES-xx (règle 7 d'`AGENTS.md`).
-Elles varient d'un rejeu à l'autre ; la fidélité et la qualité, non.
+Les latences de ces rapports (p50 du total) restent de l'ordre de quelques
+dixièmes de milliseconde à quelques millisecondes : à N = 5000, les branches
+dense et hybride valent environ deux à deux fois et demie celles de la campagne
+à N = 1000 (p50 ×1,85 à ×2,35), et le lexical reste du même ordre (p50 ×0,91 à
+×1,33), N ne touchant pas BM25. Elles varient d'un rejeu à l'autre. Elles sont
+**indicatives** : elles viennent de `debug.timings_ms` et ne valent pas une
+mesure MES-xx (règle 7 d'`AGENTS.md`). La fidélité et la qualité, elles, ne
+varient pas d'un rejeu à l'autre à N fixé.
 
 ## Étape 5 — la régression injectée
 
-Un `rescore_candidates` de 20 au lieu de 1000 réduit les candidats re-scorés,
+Un `rescore_candidates` de 20 au lieu de 5000 réduit les candidats re-scorés,
 donc la fidélité. La campagne se compare au rapport de `decisions` :
 
 ```sh
@@ -195,7 +221,7 @@ donc la fidélité. La campagne se compare au rapport de `decisions` :
     --data data/j7-demo/data --index decisions \
     --queries data/j7-demo/queries/decisions.jsonl --models data/models \
     --modes dense,hybrid --k 10 --rescore-candidates 20 \
-    --baseline docs/mesures/eval-decisions-2026-11-01.json \
+    --baseline docs/mesures/eval-decisions-2026-11-02.json \
     --out data/j7-demo/regression
 echo "exit=$?"
 ```
@@ -203,8 +229,8 @@ echo "exit=$?"
 Attendu :
 
 ```text
-json: data/j7-demo/regression/eval-decisions-2026-11-01.json
-markdown: data/j7-demo/regression/eval-decisions-2026-11-01.md
+json: data/j7-demo/regression/eval-decisions-2026-11-02.json
+markdown: data/j7-demo/regression/eval-decisions-2026-11-02.md
 regression: detected
 exit=1
 ```
@@ -213,17 +239,28 @@ Et dans le rapport produit, section « Comparaison à la référence » :
 
 ```text
 - Régression détectée : oui
-- `dense` fidelity.overlap_at_10 : 0.9709 → 0.8123 (-0.1585)
-- `dense` fidelity.recall_at_10 : 0.9705 → 0.8045 (-0.1660)
+- `dense` fidelity.overlap_at_10 : 0.9975 → 0.8123 (-0.1852)
+- `dense` fidelity.recall_at_10 : 0.9965 → 0.8045 (-0.1920)
+- `dense` quality.mrr_at_k : 0.5068 → 0.5043 (-0.0025)
+- `dense` quality.recall_at_k : 0.5063 → 0.4938 (-0.0125)
 - `dense` : requêtes ayant perdu un attendu — `J005`, `J111`, `J131`
-- `hybrid` fidelity.recall_at_10 : 0.9345 → 0.7350 (-0.1995)
-- `hybrid` : requêtes ayant perdu un attendu — `J005`, `J111`, `J136`, `J155`
+- `hybrid` fidelity.overlap_at_10 : 0.9891 → 0.7519 (-0.2373)
+- `hybrid` fidelity.recall_at_10 : 0.9890 → 0.7350 (-0.2540)
+- `hybrid` quality.mrr_at_k : 0.5701 → 0.5609 (-0.0092)
+- `hybrid` quality.recall_at_k : 0.5638 → 0.5413 (-0.0225)
+- `hybrid` : requêtes ayant perdu un attendu — `J005`, `J066`, `J096`, `J111`, `J136`, `J155`
 ```
 
 Le code de sortie 1 est le contrat : une baisse de plus de 0,005 en valeur
 absolue d'une moyenne de fidélité ou de qualité rend `regression: detected` et
 `1`. Les latences sont rapportées, jamais bloquantes. Les identifiants de
 requêtes perdus sont des `id` du jeu, jamais des documents.
+
+La référence citée est le rapport de `decisions` du 2026-11-02, produit à
+N = 5000 : c'est la campagne courante, et le rejeu injecté force
+`--rescore-candidates 20` sans lire la configuration. Le rapport du 2026-11-01
+(N = 1000) peut aussi servir de référence ; depuis ses moyennes, la baisse vaut
+-0,1660 en dense et -0,1995 en hybride, donc au-delà du seuil de 0,005.
 
 ## Étape 6 — le serveur : debug, explain, journal, stats
 
@@ -307,7 +344,7 @@ curl -s -H "Authorization: Bearer $READ" -H 'content-type: application/json' \
 
 Attendu : `200` avec `debug.per_result` (un rang dense, un score dense, un rang
 lexical, un score lexical et un rang fusionné par résultat), `debug.plan`
-(`dense_strategy: binary`, `rescore_candidates: 1000`) et `debug.timings_ms`
+(`dense_strategy: binary`, `rescore_candidates: 5000`) et `debug.timings_ms`
 aux clés `validate`, `encode`, `filter`, `dense`, `lexical`, `fusion`, `group`,
 `fetch`, `total`. Le premier résultat est `JURITEXT000044525272#6`, de rangs
 dense 3 et lexical 2, donc de rang fusionné 1.
