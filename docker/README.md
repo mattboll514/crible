@@ -150,6 +150,53 @@ au-dessus de cette valeur : `--stop-timeout 65` à la création du conteneur, ou
 `docker stop -t 65`. Le délai par défaut de Docker (10 s) tuerait le processus
 au milieu du drainage.
 
+## Vérifier l'arrêt propre pendant une attache
+
+`crates/crible/tests/docker_stop_during_attach.rs` envoie un `docker stop` au
+milieu d'une attache, redémarre le conteneur, et vérifie l'état sur disque
+(`VERIFIER-ARRET-PROPRE`, INV-03 et INV-04) :
+
+- les analytics servies avant l'arrêt sont sur le disque, écrites par l'arrêt
+  lui-même (ADR-0118, décision 3), lues sur le conteneur arrêté, avant tout
+  redémarrage ;
+- la génération publiée est celle d'avant l'attache (G) ou celle d'après
+  (G+1), entière : ses comptes y correspondent, tous les documents du lot sont
+  visibles avec G+1 et aucun avec G ;
+- l'index ne garde aucun `tmp-*` de l'attache interrompue, et le job est
+  terminal, ou le même dossier de lot est rejoué avec succès.
+
+Un second test, `inv_04_…`, refait la séquence avec un `[limits].wait_timeout_ms`
+d'une seconde : l'arrêt tombe alors **dans** l'attache au lieu d'attendre sa
+fin, le job revient `failed` avec le message fixe de `docs/05-api.md`, la
+génération reste la dernière commitée, et le même dossier de lot passe ensuite.
+
+Le test est marqué `#[ignore]` : la CI n'a pas de Docker. Construire l'image de
+la machine (voir « Construire »), puis lancer les deux tests, un à la fois
+puisque chacun pilote ses propres conteneurs :
+
+```
+docker buildx build --platform linux/arm64 --progress=plain --load \
+  -t crible:dev -f docker/Dockerfile .
+
+CRIBLE_DOCKER_IMAGE=crible:dev cargo test -p crible \
+  --test docker_stop_during_attach -- --include-ignored --test-threads=1
+```
+
+Le nom de l'image vient de `CRIBLE_DOCKER_IMAGE`, `crible:dev` par défaut.
+Compter une quinzaine de secondes par test, attache, arrêt, redémarrage et
+rejeu compris ; le lot de 200 000 passages dure quelques secondes, pour que
+l'arrêt tombe pendant l'attache.
+
+Le test crée un volume nommé et un conteneur dont le nom porte son numéro de
+processus (`crible-stop-<pid>-<n>`, `crible-stop-data-<pid>-<n>`), et les
+supprime lui-même, même en cas d'échec. Après une exécution, `docker ps -a` et
+`docker volume ls` filtrés sur `crible-stop-` doivent être vides :
+
+```
+docker ps -a --filter name=crible-stop- --format '{{.Names}}'
+docker volume ls --filter name=crible-stop-data- --format '{{.Name}}'
+```
+
 ## Taille de l'image
 
 Mesurée le 2026-11-02 avec `docker image ls`, binaire release, ONNX Runtime
