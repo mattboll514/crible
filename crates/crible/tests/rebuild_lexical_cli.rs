@@ -430,6 +430,7 @@ fn rebuild_lexical(prepared: &Prepared) -> std::process::Output {
 /// lexical index of the committed generation, without a write open by the test.
 #[test]
 fn rebuild_lexical_command_rebuilds_a_missing_lexical_index_at_the_committed_generation() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = prepare();
     let (generation, before) = indexed_state(&prepared).unwrap_or_else(|| {
         panic!("the attach of three batches must leave a committed lexical index")
@@ -468,6 +469,7 @@ fn rebuild_lexical_command_rebuilds_a_missing_lexical_index_at_the_committed_gen
 /// never deleted it.
 #[test]
 fn rebuild_lexical_command_rebuilds_from_the_live_passages_only() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = prepare();
     let live = live_iids(&prepared);
     assert!(
@@ -501,6 +503,7 @@ fn rebuild_lexical_command_rebuilds_from_the_live_passages_only() {
 /// passages at the same generation.
 #[test]
 fn rebuild_lexical_command_applies_a_changed_analysis_chain() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = prepare();
     let before = indexed_state(&prepared)
         .unwrap_or_else(|| panic!("the attach of three batches must leave a lexical index"));
@@ -551,6 +554,7 @@ fn rebuild_lexical_command_applies_a_changed_analysis_chain() {
 /// says so instead of reporting a rebuild that wrote nothing (`docs/02`, step 4).
 #[test]
 fn rebuild_lexical_command_reports_an_epoch_without_passage_as_nothing_to_rebuild() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = create_empty();
     assert_eq!(
         indexed_state(&prepared),
@@ -587,6 +591,7 @@ fn rebuild_lexical_command_reports_an_epoch_without_passage_as_nothing_to_rebuil
 /// batch then removes every remaining document.
 #[test]
 fn rebuild_lexical_command_rebuilds_an_epoch_emptied_by_deletions() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = prepare();
     let documents = live_doc_ids(&prepared);
     assert!(
@@ -644,6 +649,7 @@ fn rebuild_lexical_command_rebuilds_an_epoch_emptied_by_deletions() {
 /// and running the command twice leaves the same index (`docs/02`, ADR-0088).
 #[test]
 fn rebuild_lexical_command_publishes_no_generation_and_no_manifest() {
+    let _serial = common::SerialGuard::acquire();
     let prepared = prepare();
     let epoch = read_current_epoch(&prepared.index_dir);
     let manifests_before = manifests(&prepared.epoch_dir);

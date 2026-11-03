@@ -416,6 +416,7 @@ fn assert_close(actual: f64, expected: f64, label: &str) {
 
 #[test]
 fn metrics_on_a_hand_built_case_are_exact() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let lines = [
         query("q1", &[1.0, 0.0, 0.0, 0.0], &["B", "C"]),
@@ -476,6 +477,7 @@ fn metrics_on_a_hand_built_case_are_exact() {
 
 #[test]
 fn fidelity_compares_the_plan_against_exact() {
+    let _serial = common::SerialGuard::acquire();
     // The denominator is the size of the exact top-10, not a fixed 10
     // (ADR-0125, complément du 2026-11-01, point C1): on this pool of 305
     // passages it is 10, so the figures are those of ADR-0076, decision 1.
@@ -547,6 +549,7 @@ fn fidelity_compares_the_plan_against_exact() {
 
 #[test]
 fn latencies_are_reported_per_stage_at_nearest_rank() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let lines = [query("q1", &[1.0, 0.0, 0.0, 0.0], &["B"])];
     let (json_path, _) = eval_ok(&instance, &lines, &["--modes", "dense", "--repeat", "3"]);
@@ -596,6 +599,7 @@ fn latencies_are_reported_per_stage_at_nearest_rank() {
 
 #[test]
 fn the_report_is_closed_and_carries_no_query_text() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let line = json!({
         "id": "q1",
@@ -717,6 +721,7 @@ fn the_report_is_closed_and_carries_no_query_text() {
 
 #[test]
 fn an_empty_exact_answer_is_excluded_and_counted() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let lines = [
         query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"]),
@@ -774,6 +779,7 @@ fn an_empty_exact_answer_is_excluded_and_counted() {
 
 #[test]
 fn a_text_query_never_reaches_the_reports() {
+    let _serial = common::SerialGuard::acquire();
     // A lexical index is scored without an encoder, so a text query can be
     // exercised without ONNX Runtime and without `--models`.
     let instance = Instance::new(&lexical_fixture());
@@ -799,6 +805,7 @@ fn a_text_query_never_reaches_the_reports() {
 
 #[test]
 fn an_invalid_line_stops_the_command_with_its_number() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
 
     let cases = [
@@ -846,6 +853,7 @@ fn an_invalid_line_stops_the_command_with_its_number() {
 
 #[test]
 fn an_existing_report_is_never_overwritten() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let lines = [query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"])];
     let (json_path, markdown_path) = eval_ok(&instance, &lines, &["--modes", "dense"]);
@@ -882,6 +890,7 @@ fn an_existing_report_is_never_overwritten() {
 
 #[test]
 fn a_baseline_of_an_unknown_version_or_another_k_is_refused() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&quality_fixture());
     let lines = [query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"])];
     let (reference, _) = eval_ok(&instance, &lines, &["--modes", "dense", "--k", "3"]);
@@ -934,6 +943,7 @@ fn a_baseline_of_an_unknown_version_or_another_k_is_refused() {
 
 #[test]
 fn a_baseline_detects_the_rescore_candidates_20_regression() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&fidelity_fixture());
     let lines = fidelity_lines();
     let (reference, _) = eval_ok(&instance, &lines, &["--modes", "dense"]);
@@ -990,6 +1000,7 @@ fn a_baseline_detects_the_rescore_candidates_20_regression() {
 
 #[test]
 fn an_identical_replay_regresses_nothing() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&fidelity_fixture());
     let lines = fidelity_lines();
     let (reference, _) = eval_ok(&instance, &lines, &["--modes", "dense"]);
@@ -1045,6 +1056,7 @@ fn inventory(root: &Path) -> BTreeSet<String> {
 
 #[test]
 fn the_command_writes_nothing_under_the_data_directory() {
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new(&fidelity_fixture());
     let before = inventory(&instance.data);
     let (json_path, markdown_path) = eval_ok(&instance, &fidelity_lines(), &["--modes", "dense"]);
@@ -1166,6 +1178,7 @@ fn synth_instance() -> (Instance, PathBuf) {
 
 #[test]
 fn synth_small_regression_is_detected_by_the_baseline() {
+    let _serial = common::SerialGuard::acquire();
     let (instance, queries) = synth_instance();
     let reference = instance.eval_file_at(
         "synth-small",
@@ -1220,6 +1233,7 @@ fn synth_small_regression_is_detected_by_the_baseline() {
 
 #[test]
 fn the_help_states_when_models_is_needed() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0125, decision 2: `--models` is required only when a `dense` or
     // `hybrid` mode has to encode a textual query, never for a `lexical` run
     // (`@relecteur`, NETTOYER-P7).

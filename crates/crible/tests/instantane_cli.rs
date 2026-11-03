@@ -23,6 +23,18 @@
 //! | `a_second_snapshot_of_the_same_epoch_is_refused` | ADR-0064 §3; `invalid_request` |
 //! | `restore_into_a_fresh_data_root_creates_the_index` | ADR-0065 §2, §3 |
 //! | `restore_refuses_an_incomplete_snapshot` | task criterion 2; ADR-0064 §1 |
+//!
+//! # Why the tests of this binary are serialised
+//!
+//! The fixture reopens the store in [`Instance::advance`] after the same test
+//! spawned children, and every test of this binary spawns `crible` children.
+//! A `fork` duplicates the file descriptions of the whole process, including a
+//! `WRITER_LOCK` another test holds (ADR-0116, decision 2): the reopen is then
+//! refused as `overloaded` until the forked child execs. Every test therefore
+//! holds [`common::SerialGuard`] for its whole body, so no fork runs while
+//! another test holds a store, and no test waits or retries.
+
+mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -327,6 +339,7 @@ fn snapshot_then_restore_gives_the_same_generation_and_search_results() {
     // The task criterion: the restore gives back the generation of the snapshot
     // and answers the same queries identically. The index first moves to
     // generation 2, so the comparison is meaningful.
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new();
     let before = instance.search(&instance.data);
     assert_eq!(before["generation"], 1);
@@ -418,6 +431,7 @@ fn snapshot_then_restore_gives_the_same_generation_and_search_results() {
 fn a_second_snapshot_of_the_same_epoch_is_refused() {
     // ADR-0064 decision 3: the destination is refused in `invalid_request`, and
     // the first snapshot stays exactly as it was.
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new();
     let first = instance.snapshot();
     assert!(
@@ -454,6 +468,7 @@ fn restore_into_a_fresh_data_root_creates_the_index() {
     // ADR-0065 decision 3: the name comes from `snapshot.json`; an absent index
     // is created from the snapshot's `index.json`, at the initial epoch and with
     // the generation of the snapshot.
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new();
     let taken = instance.snapshot();
     assert!(
@@ -489,6 +504,7 @@ fn restore_into_a_fresh_data_root_creates_the_index() {
 fn restore_refuses_an_incomplete_snapshot() {
     // The task criterion 2 at the CLI boundary: a snapshot missing one of its
     // files is refused in `invalid_request`, and the target is not touched.
+    let _serial = common::SerialGuard::acquire();
     let instance = Instance::new();
     let taken = instance.snapshot();
     assert!(

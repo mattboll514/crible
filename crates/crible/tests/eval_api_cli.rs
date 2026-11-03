@@ -17,6 +17,7 @@
 //! |---|---|
 //! | `inv_13_eval_api_mode_never_writes_query_text_or_key` | no query text and no key in stdout, stderr, server journal, JSON or Markdown (INV-13, decisions 4 and 16) |
 //! | `eval_api_and_local_reports_agree_on_fidelity_and_quality` | same fidelity and quality figures, server at `exact_threshold = 0` against a local `--exact-threshold 0` (acceptance criterion 1, decision 10) |
+//! | `eval_api_stops_when_the_generation_moves_during_the_campaign` | an answer of another generation stops the campaign naming both (decision 10) |
 //! | `eval_api_report_names_its_source_and_client_latency` | `format_version: 2`, `source.mode`/`source.url`, `latency_basis`, `total` only in API (criterion 2, decision 7) |
 //! | `eval_api_names_a_refused_connection_without_panicking` | a refused connection is a named error, exit 1, no panic, no partial report (criterion 4, decision 5) |
 //! | `eval_api_returns_the_401_of_a_wrong_key_without_panicking` | a non-2xx answer is a named error, exit 1, no panic (criterion 4, decision 5) |
@@ -43,9 +44,10 @@ mod common;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -711,10 +713,150 @@ fn url_of(server: &Server) -> String {
     format!("http://{}", server.address())
 }
 
+/// A tiny HTTP/1.1 instance that answers two generations of the fixture index.
+///
+/// `crible eval` runs in its own process and prints nothing between two
+/// requests, so a real `crible serve` cannot be moved at a known point of the
+/// campaign without a race. This server instead answers the campaign in order:
+/// the state route and the first search pin generation 1, and every later
+/// search answers generation 2. The switch is therefore deterministic, with no
+/// sleep and no retry.
+struct TwoGenerationInstance {
+    /// Address the listener bound.
+    address: SocketAddr,
+    /// Number of search answers served so far.
+    searches: Arc<Mutex<u64>>,
+    /// Set by `Drop` to stop the accept loop.
+    stop: Arc<AtomicBool>,
+    /// Thread serving the connections, joined by `Drop`.
+    thread: Option<JoinHandle<()>>,
+}
+
+impl TwoGenerationInstance {
+    /// Binds an ephemeral port and starts serving on a thread.
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .unwrap_or_else(|error| panic!("the test instance must bind: {error}"));
+        let address = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("the test instance must know its address: {error}"));
+        let searches = Arc::new(Mutex::new(0_u64));
+        let stop = Arc::new(AtomicBool::new(false));
+        let counter = Arc::clone(&searches);
+        let flag = Arc::clone(&stop);
+        let thread = thread::spawn(move || {
+            for stream in listener.incoming() {
+                if flag.load(Ordering::SeqCst) {
+                    break;
+                }
+                let Ok(stream) = stream else { continue };
+                answer_one(stream, &counter);
+            }
+        });
+        Self {
+            address,
+            searches,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    /// The base, as `--url` takes it.
+    fn url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    /// Number of search answers served so far.
+    fn searches(&self) -> u64 {
+        *self
+            .searches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl Drop for TwoGenerationInstance {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        // Wakes the blocked `accept`: the loop checks the flag and exits.
+        let _ = TcpStream::connect(self.address);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Reads one HTTP/1.1 request and answers it with one JSON body.
+///
+/// The state route always names generation 1; the first search answer names
+/// generation 1 too, and every later one generation 2.
+fn answer_one(stream: TcpStream, searches: &Arc<Mutex<u64>>) {
+    let Ok(mut writer) = stream.try_clone() else {
+        return;
+    };
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+        return;
+    }
+    let mut content_length = 0_usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            return;
+        }
+        if line == "\r\n" || line == "\n" || line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
+    }
+    let mut body = vec![0_u8; content_length];
+    if reader.read_exact(&mut body).is_err() {
+        return;
+    }
+
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let path = parts.next().unwrap_or_default();
+    let payload = if method == "GET" && path.starts_with("/v1/indexes/") {
+        json!({
+            "state": { "generation": 1, "live_passages": 3 },
+            "config": { "search": { "exact_threshold": 10, "rescore_candidates": 100 } }
+        })
+        .to_string()
+    } else if method == "POST" && path.ends_with("/search") {
+        let mut counter = searches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *counter += 1;
+        let generation = if *counter == 1 { 1 } else { 2 };
+        json!({
+            "generation": generation,
+            "pool_size": 3,
+            "results": [{ "key": "A#0", "doc_id": "A" }]
+        })
+        .to_string()
+    } else {
+        "{}".to_owned()
+    };
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    let _ = writer.write_all(response.as_bytes());
+    let _ = writer.flush();
+}
+
 // --- INV-13: neither the query text nor the key leaves a trace ---
 
 #[test]
 fn inv_13_eval_api_mode_never_writes_query_text_or_key() {
+    let _serial = common::SerialGuard::acquire();
     // INV-13: "les analytics ne contiennent ni texte de requête…", and
     // ADR-0131, decisions 4 and 16, extend it to the journal and to both
     // reports. A lexical query carries text, which the API mode sends in the
@@ -779,6 +921,7 @@ fn inv_13_eval_api_mode_never_writes_query_text_or_key() {
 
 #[test]
 fn eval_api_and_local_reports_agree_on_fidelity_and_quality() {
+    let _serial = common::SerialGuard::acquire();
     // Acceptance criterion 1 and ADR-0131, decision 10: the server is configured
     // `exact_threshold = 0` and the local campaign runs `--exact-threshold 0`,
     // so both take the binary strategy on the same 305-passage fixture.
@@ -852,6 +995,7 @@ fn eval_api_and_local_reports_agree_on_fidelity_and_quality() {
 
 #[test]
 fn eval_api_report_names_its_source_and_client_latency() {
+    let _serial = common::SerialGuard::acquire();
     // Criterion 2 and ADR-0131, decision 7: `format_version: 2`, a `source`
     // member, `latency_basis` per mode, and in API mode a `latency` that carries
     // `total` only.
@@ -955,10 +1099,56 @@ fn eval_api_report_names_its_source_and_client_latency() {
     );
 }
 
+// --- The generation is pinned for the whole campaign ---
+
+#[test]
+fn eval_api_stops_when_the_generation_moves_during_the_campaign() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0131, decision 10: the generation is pinned by the first state read,
+    // and an answer of another generation stops the campaign naming both. The
+    // test instance answers generation 1 to the first search and generation 2
+    // to every later one, in the order of the campaign: the switch is
+    // deterministic, with no sleep and no retry.
+    let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
+    let game = fixture.game(
+        "queries.jsonl",
+        &[
+            json!({ "id": "q1", "vector": [1.0, 0.0, 0.0, 0.0] }),
+            json!({ "id": "q2", "vector": [0.9, 0.1, 0.0, 0.0] }),
+        ],
+    );
+    let out = fixture.out("out-api");
+    let instance = TwoGenerationInstance::start();
+
+    let output = api_eval(&game, &out, &instance.url(), Some(READ_KEY), &[]);
+    let stderr = named_failure(&output);
+    assert!(
+        stderr.contains("internal"),
+        "a campaign that spans two generations is `internal` (decision 10), got {stderr:?}"
+    );
+    assert!(
+        stderr.contains("pinned generation 1")
+            && stderr.contains("answered generation 2")
+            && stderr.contains("the index moved during the campaign"),
+        "the stop names both generations and the cause (decision 10), got {stderr:?}"
+    );
+    assert!(
+        !stderr.contains(READ_KEY),
+        "the failure never carries the key, got {stderr:?}"
+    );
+    assert!(
+        instance.searches() >= 2,
+        "the campaign sent at least two searches, so generation 2 was a real answer, got {}",
+        instance.searches()
+    );
+    assert_no_partial_report(&out);
+}
+
 // --- A refused connection is a named error ---
 
 #[test]
 fn eval_api_names_a_refused_connection_without_panicking() {
+    let _serial = common::SerialGuard::acquire();
     // Criterion 4 and ADR-0131, decision 5: a transport error is `internal`,
     // exits 1, names the URL without the key, and writes no partial report.
     //
@@ -1002,6 +1192,7 @@ fn eval_api_names_a_refused_connection_without_panicking() {
 
 #[test]
 fn eval_api_returns_the_401_of_a_wrong_key_without_panicking() {
+    let _serial = common::SerialGuard::acquire();
     // Criterion 4 and ADR-0131, decision 5: the status code and the message of
     // the server body are resumed, with a non-zero exit code and no panic.
     let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
@@ -1035,6 +1226,7 @@ fn eval_api_returns_the_401_of_a_wrong_key_without_panicking() {
 
 #[test]
 fn eval_api_refuses_a_missing_or_empty_key_before_any_io() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0131, decision 4: "une variable absente ou vide rend une erreur claire
     // qui nomme `CRIBLE_EVAL_API_KEY`, sans valeur". The key has no option and
     // no file, and the port nothing listens on proves the refusal comes before
@@ -1069,6 +1261,7 @@ fn eval_api_refuses_a_missing_or_empty_key_before_any_io() {
 
 #[test]
 fn eval_api_baseline_reads_format_version_1_and_names_uncomparable_latencies() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0131, decision 7: `--baseline` keeps reading a `format_version: 1`
     // report, whose latencies are server stages. The API campaign does not
     // subtract them from its client round trips: it records
@@ -1137,6 +1330,7 @@ fn eval_api_baseline_reads_format_version_1_and_names_uncomparable_latencies() {
 
 #[test]
 fn eval_api_refuses_https_before_any_io() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0131, decision 3: `https://` is refused in `invalid_request`, with a
     // message that names the scheme and says TLS would need an ADR. The port is
     // one nothing listens on: a message about a refused connection would prove
@@ -1171,6 +1365,7 @@ fn eval_api_refuses_https_before_any_io() {
 
 #[test]
 fn eval_api_refuses_data_and_url_together() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0131, decision 6: `--data` and `--url` are exclusive; the refusal
     // names both options.
     let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
@@ -1210,6 +1405,7 @@ fn eval_api_refuses_data_and_url_together() {
 
 #[test]
 fn eval_api_refuses_exact_threshold_with_url() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0131, decisions 6 and 9: `--exact-threshold` is a precondition of the
     // instance in API mode; the refusal names the option.
     let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
