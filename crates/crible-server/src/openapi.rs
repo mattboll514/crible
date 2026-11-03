@@ -553,8 +553,10 @@ pub enum JobKind {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct JobProgress {
-    /// Step the job reached.
-    #[schema(example = "commit")]
+    /// Step the job reached: `validation`, `segment`, `transaction`, `lexical`,
+    /// `manifest` or `snapshot` for an attach, `transaction`, `manifest` or
+    /// `snapshot` for a metadata patch (ADR-0134).
+    #[schema(example = "snapshot")]
     pub step: String,
     /// Units already treated.
     pub done: u64,

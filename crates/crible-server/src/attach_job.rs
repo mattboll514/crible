@@ -23,29 +23,34 @@ use crible_core::error::CribleError;
 use crible_core::model::ModelConfig;
 use crible_encode::{Model, TokenCounter};
 use crible_store::attach::AttachReport;
-use crible_store::generation::GenerationStore;
+use crible_store::generation::{GenerationStore, ProtocolStep};
 use crible_store::online::OnlineDocuments;
 
 /// Attaches a deposited batch, holding it at the barriers of a test when the
 /// `failpoints` build is armed.
 #[cfg(feature = "failpoints")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn attach_batch(
+pub(crate) fn attach_batch<P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-) -> Result<AttachReport, CribleError> {
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     if std::env::var(crate::barriers::BARRIER_ENV).is_err() {
-        return crible_store::attach::attach(
+        return crible_store::attach::attach_with_progress(
             store,
             batch_dir,
             index_config,
             model_config,
             token_counter,
             document_encoder,
+            progress,
         );
     }
     crible_store::attach::attach_with_observer(
@@ -56,52 +61,67 @@ pub(crate) fn attach_batch(
         token_counter,
         document_encoder,
         crate::barriers::hold_attach,
+        progress,
     )
 }
 
 /// Attaches a deposited batch; a normal build carries no barrier.
 #[cfg(not(feature = "failpoints"))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn attach_batch(
+pub(crate) fn attach_batch<P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-) -> Result<AttachReport, CribleError> {
-    crible_store::attach::attach(
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    crible_store::attach::attach_with_progress(
         store,
         batch_dir,
         index_config,
         model_config,
         token_counter,
         document_encoder,
+        progress,
     )
 }
 
 /// Ingests an online batch, holding it at the barriers of a test when the
 /// `failpoints` build is armed.
 #[cfg(feature = "failpoints")]
-pub(crate) fn ingest_documents(
+pub(crate) fn ingest_documents<P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
-) -> Result<AttachReport, CribleError> {
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     if std::env::var(crate::barriers::BARRIER_ENV).is_err() {
-        return crible_store::online::ingest_documents(store, request);
+        return crible_store::online::ingest_documents_with_progress(store, request, progress);
     }
     crible_store::online::ingest_documents_with_observer(
         store,
         request,
         crate::barriers::hold_attach,
+        progress,
     )
 }
 
 /// Ingests an online batch; a normal build carries no barrier.
 #[cfg(not(feature = "failpoints"))]
-pub(crate) fn ingest_documents(
+pub(crate) fn ingest_documents<P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
-) -> Result<AttachReport, CribleError> {
-    crible_store::online::ingest_documents(store, request)
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    crible_store::online::ingest_documents_with_progress(store, request, progress)
 }

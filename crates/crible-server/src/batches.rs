@@ -181,6 +181,7 @@ async fn post_batch_inner(
             &model.config,
             token_counter.as_ref(),
             Some(&encoder),
+            &mut |step, total| progress.set(step.as_str(), 0, total),
         )
         .map_err(|failure| {
             CribleError::new(

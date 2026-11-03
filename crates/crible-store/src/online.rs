@@ -91,13 +91,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::attach::AttachReport;
-#[cfg(not(feature = "failpoints"))]
-use crate::attach::attach;
 #[cfg(feature = "failpoints")]
 use crate::attach::attach_with_observer;
+#[cfg(not(feature = "failpoints"))]
+use crate::attach::attach_with_progress;
 use crate::batch_reader::{parquet_type, vector_width};
 use crate::file_lock::{LockAttempt, lock_exclusive};
 use crate::filters_index::date_days;
+use crate::generation::ProtocolStep;
 use crate::generation::{CommitStep, GenerationStore};
 use crate::records;
 
@@ -289,6 +290,7 @@ pub fn ingest(
         document_encoder,
         mode,
         &mut |_step| {},
+        &mut |_step, _total| {},
     )
 }
 
@@ -347,7 +349,26 @@ pub fn ingest_documents(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
 ) -> Result<AttachReport, CribleError> {
-    ingest_documents_observed(store, request, &mut |_step| {})
+    ingest_documents_with_progress(store, request, &mut |_step, _total| {})
+}
+
+/// Same as [`ingest_documents`], and reports each step boundary of the attach
+/// to `progress`, with the number of passages of the internal batch
+/// (ADR-0134).
+///
+/// The encoding of the online batch runs before the internal batch and its
+/// manifest exist, so it reports nothing: `progress` stays unpublished until
+/// the attach, and the unit is passages from the first publication on
+/// (ADR-0134, decision 5).
+pub fn ingest_documents_with_progress<P>(
+    store: &mut GenerationStore,
+    request: &OnlineDocuments<'_>,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    ingest_documents_observed(store, request, &mut |_step| {}, progress)
 }
 
 /// Same as [`ingest_documents`], and reports the commit protocol of the attach
@@ -358,24 +379,31 @@ pub fn ingest_documents(
 /// online attach exactly before or exactly after the SQLite `COMMIT`
 /// while a search reads the published generation (INV-02).
 #[cfg(feature = "failpoints")]
-pub fn ingest_documents_with_observer<F>(
+pub fn ingest_documents_with_observer<F, P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
     observer: F,
+    progress: &mut P,
 ) -> Result<AttachReport, CribleError>
 where
     F: FnMut(CommitStep),
+    P: FnMut(ProtocolStep, u64) + ?Sized,
 {
     let mut observer = observer;
-    ingest_documents_observed(store, request, &mut observer)
+    ingest_documents_observed(store, request, &mut observer, progress)
 }
 
 /// The single body of the two online entry points.
-fn ingest_documents_observed(
+fn ingest_documents_observed<F, P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     let OnlineDocuments {
         batch_id,
         documents,
@@ -400,6 +428,7 @@ fn ingest_documents_observed(
         document_encoder,
         BatchMode::Upsert,
         observer,
+        progress,
     )
 }
 
@@ -417,7 +446,7 @@ enum Source<'a> {
 
 /// The single path of an online batch: survey, internal lot, attach.
 #[allow(clippy::too_many_arguments)]
-fn run(
+fn run<F, P>(
     store: &mut GenerationStore,
     source: Source<'_>,
     identity: OnlineIdentity<'_>,
@@ -427,8 +456,13 @@ fn run(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     mode: BatchMode,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     if mode != BatchMode::Upsert {
         return Err(invalid(format!(
             "the online lot accepts mode '{}' only, got '{}': at most 10 000 passages per \
@@ -556,6 +590,7 @@ fn run(
         token_counter,
         loader,
         observer,
+        progress,
     )
 }
 
@@ -563,15 +598,20 @@ fn run(
 /// to `observer` when the `failpoints` build offers the hold.
 #[cfg(feature = "failpoints")]
 #[allow(clippy::too_many_arguments)]
-fn attached(
+fn attached<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     attach_with_observer(
         store,
         batch_dir,
@@ -580,6 +620,7 @@ fn attached(
         token_counter,
         document_encoder,
         observer,
+        progress,
     )
 }
 
@@ -587,22 +628,28 @@ fn attached(
 /// normal build.
 #[cfg(not(feature = "failpoints"))]
 #[allow(clippy::too_many_arguments)]
-fn attached(
+fn attached<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-    _observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
-    attach(
+    _observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    attach_with_progress(
         store,
         batch_dir,
         index_config,
         model_config,
         token_counter,
         document_encoder,
+        progress,
     )
 }
 

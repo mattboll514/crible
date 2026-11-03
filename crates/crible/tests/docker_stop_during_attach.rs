@@ -657,9 +657,10 @@ impl Lab {
     /// A queued job is fine; a terminal one is a failure: the attach ended
     /// before the stop, so the test would prove nothing.
     ///
-    /// The `progress` member is never published by this build — no job calls
-    /// `JobProgress::set`, so the proof rests on the `running` state alone,
-    /// which is the one `docs/phases/P8-docker-et-deploiement.md` names.
+    /// A running attach publishes its `progress` (ADR-0134), but the exact step
+    /// depends on how far the write got, so the proof rests on the `running`
+    /// state alone, which is the one `docs/phases/P8-docker-et-deploiement.md`
+    /// names.
     fn wait_running(&self, id: &str) {
         let deadline = Instant::now() + JOB_PATIENCE;
         loop {
