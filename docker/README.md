@@ -150,6 +150,114 @@ au-dessus de cette valeur : `--stop-timeout 65` à la création du conteneur, ou
 `docker stop -t 65`. Le délai par défaut de Docker (10 s) tuerait le processus
 au milieu du drainage.
 
+## Démarrer la démonstration Compose
+
+`docker/compose.example.yml` est le modèle de déploiement d'un projet : le
+service `crible` (l'image de `docker/Dockerfile`), un service `client`
+(conteneur Python qui interroge l'API avec `crible.Client`) et un réseau
+**interne**. Crible ne publie aucun port : le service n'a pas de `ports:`, et le
+réseau est déclaré `internal: true`, donc il n'a pas de passerelle et les deux
+conteneurs ne joignent rien d'autre.
+
+L'échantillon retenu est `data/indexes/synth-small` (36 Mo, 1 950 documents,
+9 750 passages vivants) et son modèle `data/models/synthetic-external` (4 Ko,
+modèle `external`, donc sans session ONNX Runtime). C'est le plus petit jeu de
+`data/` qui donne une démo parlante : `data/indexes/j3-demo` est plus petit
+(56 Ko) mais ne porte aucun passage, donc une recherche y rend une liste vide.
+
+Ces deux dossiers vivent dans `data/`, gitignoré : un clone n'en a aucun, et le
+`-v` de la préparation monterait alors une source absente. Les produire depuis la
+racine du dépôt, comme la démo du jalon J1 (`docs/jalons/J1-demo.md`) :
+
+```
+cd tools
+uv sync
+uv run python gen_synth.py --out ../data/synth-small --overwrite
+cd ..
+mkdir -p data/models/synthetic-external
+cat > data/models/synthetic-external/model.json <<'JSON'
+{ "name": "synthetic-external", "kind": "external", "dims": 768, "normalize": true }
+JSON
+cargo build --release
+./target/release/crible index create --data data --config data/synth-small/index.json
+./target/release/crible attach --data data --models data/models --index synth-small data/synth-small/l1
+./target/release/crible attach --data data --models data/models --index synth-small data/synth-small/l2
+./target/release/crible attach --data data --models data/models --index synth-small data/synth-small/l3
+```
+
+Attendu, dans l'ordre : `1950 documents, 9750 live passages`, puis
+`index 'synth-small' created at data/indexes/synth-small (epoch 1, generation 0)`,
+puis `generation 1`, `generation 2` et `generation 3` à l'attache des trois lots.
+
+La configuration de la démo est `docker/crible.demo.toml` : le modèle complet de
+`docker/crible.example.toml`, avec **une clé de démonstration** nommée
+`compose-demo` et de rôle `read`. La clé elle-même, `crible-compose-demo-key`,
+est écrite dans le fichier compose où tout le monde la lit : elle ne protège
+rien et ne doit jamais servir ailleurs.
+
+Les volumes nommés ne viennent pas de l'image : la préparation y recopie l'index
+et le modèle avec l'utilisateur du conteneur, `crible` (uid 1000), parce qu'un
+index s'ouvre en écriture au démarrage. Elle suppose des volumes neufs ; pour
+recommencer sur des volumes déjà remplis, passer d'abord par le `down -v` de la
+fin de section.
+
+```
+mkdir -p exchange
+docker compose -f docker/compose.example.yml -p crible-demo build
+docker compose -f docker/compose.example.yml -p crible-demo run --rm --no-deps \
+  -v "$PWD/data/indexes/synth-small:/seed/index:ro" \
+  -v "$PWD/data/models/synthetic-external:/seed/model:ro" \
+  --entrypoint sh crible -c 'mkdir -p /data/indexes /models && cp -a /seed/index /data/indexes/synth-small && cp -a /seed/model /models/synthetic-external'
+```
+
+Lancer la démo. Le client attend que le serveur soit sain sur `/ready`
+(`depends_on` avec `condition: service_healthy`), rend le code 0 quand la
+recherche donne le résultat attendu, et un code non nul sinon :
+
+```
+docker compose -f docker/compose.example.yml -p crible-demo up --build \
+  --abort-on-container-exit --exit-code-from client
+```
+
+Sortie attendue, à la génération près de l'index :
+
+```
+client-1  | querying synth-small on http://crible:8080
+client-1  | top result: synth-01872 passage 2 (categorie=cat-00), score 0.9481
+client-1  | 3 results out of 9750 passages, generation 5
+```
+
+Le contrôle du service remplace celui de l'image : `/health` dit que le
+processus vit, `/ready` dit que le modèle est chargé et les index ouverts
+(ADR-0099), ce dont la démo a besoin. Ses délais (`start_period: 10s`, puis
+15 essais à 2 s) visent l'échantillon, qui s'ouvre en moins d'une seconde ; un
+projet à 8,58 M passages charge bien plus longtemps, et ADR-0099 garde ce temps
+de démarrage sous surveillance : relever alors `start_period`, sans quoi le
+conteneur serait déclaré `unhealthy` avant d'être prêt. Le délai d'arrêt reste
+au-dessus de `wait_timeout_ms` (`stop_grace_period: 65s`), et le serveur sort
+proprement sur le `SIGTERM` du `down`.
+
+`docker/client/search_demo.py` est la démo **et** son test. Il recalcule le
+vecteur de requête, le premier centre de cluster du jeu synthétique, à partir de
+la graine de `tools/gen_synth.py`, puis exige que le premier résultat
+appartienne à `categorie: "cat-00"` ; sinon il écrit `demo failed: …` sur la
+sortie d'erreur et sort en 1. Un index absent le montre : lancer `up` sur des
+volumes neufs sans préparation rend
+`demo failed: unknown_index: unknown index 'synth-small'`.
+
+Tout nettoyer, volumes compris. Le préfixe `-p` est propre à la démo : d'autres
+projets peuvent tourner sur la même machine.
+
+```
+docker compose -f docker/compose.example.yml -p crible-demo down -v
+```
+
+Le contexte de l'image du client est `clients/python`, parce que le
+`.dockerignore` de la racine exclut `clients/` et ne doit pas être affaibli. Le
+script de démonstration est monté en lecture seule depuis `docker/client/`, et
+le `.dockerignore` de `clients/python` écarte le même interdit qu'à la racine :
+aucun fichier `.env*` n'entre dans un contexte (ADR-0032).
+
 ## Vérifier l'arrêt propre pendant une attache
 
 `crates/crible/tests/docker_stop_during_attach.rs` envoie un `docker stop` au
