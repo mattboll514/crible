@@ -24,6 +24,7 @@
 //! | `a_delete_without_or_with_a_wrong_confirm_is_refused` | `DELETE` requires `confirm` |
 //! | `a_detail_read_between_the_rename_and_the_deregistration_is_a_404` | a read that interleaves a delete answers `404`, never `500` |
 //! | `a_delete_removes_the_index_and_keeps_its_job_history` | delete protocol, `404`, folder gone, history kept |
+//! | `a_deleted_index_releases_the_store_of_its_writer` | the writer task ends after a `DELETE` and frees its store (NETTOYER-P8, `failpoints` build) |
 //! | `the_startup_purges_the_quarantined_directories` | `deleted-*` purged at startup |
 //! | `the_write_key_is_forbidden_on_the_administration_routes` | `admin` only for `POST`, `PATCH`, `DELETE` |
 //! | `the_read_key_reads_the_two_get_routes` | `read` for the two `GET` |
@@ -679,6 +680,65 @@ async fn a_delete_removes_the_index_and_keeps_its_job_history() {
     // renamed, and refused while the index is still in the registry.
     let body = create(&router, INDEX).await;
     assert_eq!(body["name"], INDEX);
+}
+
+/// A deleted index ends the task of its writer and frees its store.
+///
+/// The `failpoints` hook of `crible_store::testhooks` records the release of a
+/// store, and a weak reference on the writer proves that nothing keeps it alive
+/// either. Before the fix the task never ended: the only sender of its queue was
+/// held by the `Arc<IndexWriter>` the task itself held, so `recv` never returned
+/// `None` (NETTOYER-P8).
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_deleted_index_releases_the_store_of_its_writer() {
+    use std::time::{Duration, Instant};
+
+    use crible_store::testhooks::dropped_store_directories;
+
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+    let writer = {
+        let handle = state
+            .index(INDEX)
+            .expect("the registry is readable")
+            .expect("the fixture index is served");
+        Arc::downgrade(&handle.writer)
+    };
+
+    let (status, _headers, body) = send(
+        &router,
+        Method::DELETE,
+        "/v1/indexes/alpha?confirm=alpha&wait=true",
+        ADMIN_SECRET,
+        None,
+    )
+    .await;
+    assert!(
+        status == StatusCode::OK || status == StatusCode::ACCEPTED,
+        "{body}"
+    );
+
+    // A bounded wait on the two conditions, never a fixed sleep: the store is
+    // released by the task once the delete job is terminal, which the answer
+    // above does not order against the end of the task.
+    let directory = instance.data().join("indexes").join(INDEX);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let store_released = dropped_store_directories().contains(&directory);
+        let writer_released = writer.upgrade().is_none();
+        if store_released && writer_released {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the deleted index still holds a task 10 s after the DELETE: store released = \
+             {store_released}, writer released = {writer_released}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]
