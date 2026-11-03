@@ -53,7 +53,7 @@ Le nom vient de « passer au crible » : **filtrer** avant de chercher, et **exa
 | Plusieurs nœuds, réplication | Un seul nœud suffit à l'échelle visée |
 | Fraîcheur en temps réel (< 1 s) | Un lot est visible en quelques secondes à quelques minutes |
 | Encodage GPU dans le serveur | Les producteurs encodent ; le serveur n'encode que les requêtes (et les petits lots en ligne) |
-| Champs multivalués | Question ouverte Q-03 |
+| Champs multivalués | **Écartés en v1 (ADR-0137)** : tous les filtres de Legifacile sont scalaires, les listes du MCP s'expriment par `in` et `nin` ; rouverts par un nouvel ADR si un projet demande de vraies listes |
 | Tableau de bord (interface web, `/ui`) | **Après J10 (ADR-0136)** : sorti de la v1 le 2026-11-03 ; contenu à redécider à la reprise |
 
 **Le tableau de bord est reporté après J10.** La ligne « Interface web, tableau de bord » avait quitté ce tableau le 2026-11-02 : ADR-0130 décidait un tableau de bord visuel en lecture seule, intégré à `crible serve` et servi sous `/ui`, en phase P9. Le propriétaire a changé d'avis le 2026-11-03 : l'interface sort de la v1 et revient au hors-périmètre, pour être reprise **après J10** (ADR-0136). P9 et J9 restent dans le plan, exécutées après J10 ; leur contenu sera redécidé par un nouvel ADR, écrit à la reprise et avant toute tâche de P9. ADR-0130 reste `Accepté`, son application suspendue (ADR-0136).

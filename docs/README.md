@@ -27,6 +27,7 @@
 - [`adr/`](adr/) : une décision par fichier ; nouveau sujet → `/adr <sujet>` (statut `Proposé`), décision → le propriétaire.
 - [`jalons/`](jalons/) : rapports et démos de jalon (`_modele-rapport.md`).
 - [`mesures/`](mesures/) : rapports de mesure (`README.md` pour le modèle).
+- [`legifacile/`](legifacile/) : les six configurations d'index de Legifacile et leur document de définition, base des tâches d'export et de branchement du MCP.
 
 ## Phases
 
