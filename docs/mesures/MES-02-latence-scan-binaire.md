@@ -249,3 +249,146 @@ Résultat : **le clairsemé n'est jamais plus lent : dix-sept gains et un match 
 complet est confirmée (−19,2 % à N = 5000, −21,7 % à N = 1000), et celle de 1 M contigu se réduit à un
 match nul à N = 1000 puis à −5,6 % à N = 5000. La conclusion sur le seuil d'ADR-0071, et la
 proposition qui en découle, sont dans ce rapport dédié ; ce complément ne les reprend pas.
+
+## Campagne en conteneur (P8, ADR-0135) — 2026-11-03
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe A, mesure MES-02.
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié.** L'exemple
+  `crates/crible/examples/dense_latency.rs` est modifié pour Linux (éviction `madvise`/`fadvise`,
+  `mincore`, lecture cgroup, `--evict`, `--engine-limit`) et **non commité au moment de la mesure** :
+  la campagne porte sur ce commit plus ce harnais. Binaire `crible` du conteneur, SHA-256
+  `a9658ecbe10d78ed2fd11dd6d7a8263109830cda2d3ed9fc7833c89a5a399c54` ; harnais,
+  `0eb8487f53a64bc20b3438d69c725e29e8759dcae759d4e93a5f43821307c4fe`.
+- **Machine** : MacBook Air M3, 8 cœurs, 24 Go, macOS 15.7.7 (24G720), **en conteneur** : Docker
+  Desktop 28.5.1, VM Linux `aarch64` de **12 529 836 032 octets (11,67 Gio)** de RAM et **8 vCPU**,
+  **page de 4 096 octets**, volume Docker nommé `crible-mes-p8-data` monté sur `/data`, aucun montage
+  d'hôte, **aucune limite `--memory`** (`memory.max = max`). La charge de l'hôte n'a pas été relevée
+  pendant la campagne, contrairement aux campagnes natives : c'est une limite déclarée.
+- **Jeu de données** : `synth-large`, génération 2, époque 1, **7 740 000 passages vivants** et
+  860 000 morts sur un segment `seg-large-0001` de 8 600 000 vecteurs `f16` (13 209 600 000 octets),
+  copie de mesure portant `exact_threshold = 0` et `scan = "binary"`. Codes binaires :
+  825 600 000 octets. Bitmaps et colonnes : 361 661 936 octets. Une seconde copie,
+  `synth-large-9seg`, a été construite par `crible compact` en **8 segments** d'au plus 1 M passages
+  (13 min 47 s), pour le cas « nombre de segments réel » de la décision 2 d'ADR-0135 ; **elle n'a pas
+  été mesurée dans cette passe**, ce qui est déclaré plus bas.
+- **Requêtes** : les 300 vecteurs `f32` d'ADR-0077, graine 20261021, flux 7, SHA-256 de la matrice
+  `03cb2a2b3bb7951892179ee8d612b0970626f0f041fe6b3e18c2f0393452948b`, identique aux campagnes
+  natives. `queries.f32` est copié dans le volume et lu par le harnais.
+- **Configuration** : `candidates_per_branch = 100` (k), 8 fils de scan, mode `scan` du harnais (scan
+  seul, sans rescoring ni payload). Le parcours est **clairsemé sur tous les points** : ADR-0081 a
+  supprimé le parcours dense, et le harnais de ce commit n'en a plus qu'un.
+
+### Protocole
+
+Le protocole est celui d'ADR-0077 et d'ADR-0135 :
+
+- **échauffement** : une passe complète de 300 requêtes, écartée, à N = 1000 puis à N = 5000
+  (`warmup-scan-n1000.json`, `warmup-scan-n5000.json`, conservés) ;
+- **deux exécutions indépendantes** des mêmes points (`scan-main` puis `scan-all`), **3 passes de
+  300 requêtes** chacune, soit **900 échantillons par point** ;
+- points : 1 k, 10 k, 100 k et 1 M vivants en pool contigu et dispersé, puis le pool complet
+  (7 740 000), à **N = 1000, 2000 et 5000**, soit 54 points ;
+- percentiles par rang le plus proche, `ceil(ratio × n)`, sans interpolation ; aucun échantillon
+  écarté ; `tools/bench/mes-p8-conteneur/aggregate.py` recalcule chaque percentile depuis les durées
+  par requête et **refuse** un chiffre qui diffère du résumé du harnais.
+
+Commandes (recette complète : `tools/bench/mes-p8-conteneur/`, un conteneur par invocation) :
+
+```sh
+sh tools/bench/mes-p8-conteneur/prepare.sh
+sh tools/bench/mes-p8-conteneur/run.sh mes02
+```
+
+soit, par N, `dense_latency scan --data /data --index synth-large --vectors /data/queries.f32
+--ns <N> --out /data/raw/scan-main-n<N>.json`, puis la même chose vers `scan-all-n<N>.json`.
+
+Écarts au protocole, déclarés :
+
+- **Pas d'échauffement dédié à N = 2000** : les deux documents d'échauffement portent sur N = 1000 et
+  N = 5000. La décision 7 d'ADR-0135 demande « une passe complète » avant chaque campagne ; elle est
+  faite deux fois sur trois, et l'écart n'est pas rattrapé.
+- **La copie à 8 segments n'est pas mesurée.** La décision 2 d'ADR-0135 prépare cette copie pour le
+  cas multi-segments ; la passe A ne l'exerce pas. La mesure multi-segments native du 2026-10-27
+  (`MES-02-parcours-dense-clairseme.md`, `synth-large-8seg` et `synth-large-multi`) reste la seule
+  disponible sur ce point.
+- **La charge de l'hôte n'est pas relevée**, alors que les campagnes natives la consignent. Aucun
+  chiffre n'est écarté pour cette raison, mais l'écart favorable au conteneur sur les grands pools
+  n'est pas attribuable sans elle.
+- **Le « froid » ne s'applique pas** : les codes binaires sont en RAM et parcourus en entier à chaque
+  requête (ADR-0069, décision 3). Aucune série froide n'est mesurée, comme ADR-0077 le prévoit.
+
+### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/scan-{main,all}-n{1000,2000,5000}.json` (gitignorés) ;
+artefact versionné : `MES-02-latence-scan-binaire.2026-11-03.conteneur.json`, qui porte les 54 points,
+leurs résumés par passe, les 900 durées par point et la référence native retenue.
+
+Scan seul, en millisecondes, **N = 1000**, 900 échantillons par point, 8 fils, conteneur :
+
+| Pool | Forme | Conteneur p50 / p95 / p99 / max | Référence native p50 / p95 | Écart p50 | Nature de la référence |
+|---|---|---|---|---|---|
+| 1 000 | contigu | 0,180 / 0,231 / 0,294 / 0,788 | 0,055 / 0,089 | +227 % | dense, **hors comparaison** |
+| 1 000 | dispersé | 0,176 / 0,232 / 0,260 / 0,549 | 0,063 / 0,097 | +179 % | clairsemé |
+| 10 000 | contigu | 0,487 / 0,573 / 0,670 / 1,021 | 0,375 / 0,431 | +30 % | dense, **hors comparaison** |
+| 10 000 | dispersé | 0,516 / 0,576 / 0,629 / 18,284 | 0,400 / 0,467 | +29 % | clairsemé |
+| 100 000 | contigu | 1,002 / 1,078 / 1,241 / 1,663 | 0,978 / 1,061 | +2,5 % | dense, **hors comparaison** |
+| 100 000 | dispersé | 1,261 / 1,913 / 2,019 / 44,367 | 1,261 / 1,399 | 0,0 % | clairsemé |
+| 1 000 000 | contigu | 4,026 / 4,474 / 4,818 / 5,272 | 5,445 / 6,441 | −26,1 % | clairsemé (complément) |
+| 1 000 000 | dispersé | 10,910 / 12,804 / 15,506 / 25,896 | 11,785 / 14,081 | −7,4 % | clairsemé |
+| 7 740 000 | complet | 27,622 / 31,201 / 33,220 / 37,574 | 39,719 / 43,204 | −30,5 % | clairsemé (complément) |
+
+La colonne « référence » distingue deux cas. ADR-0081 a supprimé le parcours dense le 2026-10-27 ;
+les trois points contigus de 1 k à 100 k n'ont donc **pas** de référence native au même parcours, et
+leur écart n'est donné que pour information. Pour 1 M contigu et le pool complet, la référence est la
+série **clairsemée** du complément du 2026-10-27, au même N.
+
+Effet de N dans le conteneur, p50 en millisecondes (`scan-main`) :
+
+| Pool | Forme | N = 1000 | N = 2000 | N = 5000 |
+|---|---|---|---|---|
+| 1 000 | contigu | 0,180 | 0,188 | 0,184 |
+| 1 000 | dispersé | 0,176 | 0,180 | 0,181 |
+| 10 000 | contigu | 0,487 | 0,537 | 0,532 |
+| 10 000 | dispersé | 0,516 | 0,562 | 0,566 |
+| 100 000 | contigu | 1,002 | 1,391 | 2,316 |
+| 100 000 | dispersé | 1,261 | 1,892 | 2,990 |
+| 1 000 000 | contigu | 4,026 | 4,805 | 6,753 |
+| 1 000 000 | dispersé | 10,910 | 11,507 | 12,953 |
+| 7 740 000 | complet | 27,622 | 29,271 | 33,449 |
+
+**Dispersion.** Sur les 54 points, l'écart entre les p50 des trois passes a une médiane de **1,9 %**
+et un maximum de **34,7 %** — ce maximum porte sur 1 k contigu à N = 5000, où 34,7 % valent 45 µs
+(0,132 / 0,177 / 0,178 ms). Sur les 9 points du tableau à N = 1000, le maximum est de **5,4 %**
+(1 k dispersé, 0,171 à 0,180 ms). Entre `scan-main` et `scan-all`, la médiane des 27 écarts vaut
+**1,6 %** et le maximum **11,3 %** (pool complet, N = 5000 : 33,449 contre 37,221 ms). Cette
+dispersion est plus faible que celle de la campagne native (16,1 % entre exécutions).
+
+### Conclusion
+
+- **Le conteneur ne change pas la nature du scan** : aucun accès disque ne s'y intercale, et les
+  grands pools se comportent comme en natif. À N = 1000 et à parcours identique (dispersé), l'écart
+  va de **+179 % à 1 k** — soit 0,113 ms pour un scan de 0,063 ms — à **0,0 % à 100 k** et **−7,4 % à
+  1 M dispersé**, ce dernier écart restant **dans** la dispersion native de 16,1 %.
+- **Deux écarts dépassent la dispersion publiée.** À parcours identique, 1 k dispersé (+179 %) et
+  10 k dispersé (+29 %) la dépassent largement ; le pool complet à parcours clairsemé est
+  **30,5 % plus rapide** en conteneur, au-delà des 2,2 % de dispersion de la série native
+  correspondante. Les chiffres des pools contigus de 1 k à 100 k ne se comparent pas (référence
+  dense) et ne sont pas comptés ici. **Aucun des deux n'a de mécanisme établi** : le coût fixe de la répartition
+  sur 8 fils, de l'ordre de 0,1 ms, explique une partie des petits pools mais pas les 100 k ; la
+  campagne native du complément a été prise sous une charge montée de 2,28 à 6,62, ce qui est un
+  candidat pour l'écart favorable aux grands pools, pas une démonstration.
+- **Aucune comparaison à un budget n'est faite ici.** La cible de latence de `docs/08` (p95 au plus
+  égal à pgvector à l'échelle de Legifacile) se mesure sur le Mac mini en conteneur, par
+  `MESURER-SUR-MAC-MINI` (P10) ; ailleurs, la latence est **indicative** (ADR-0129). Ces chiffres ne
+  valident ni n'invalident la cible.
+- **La case multi-segments reste ouverte** : la copie à 8 segments est prête dans le volume, mais
+  aucune mesure ne l'exerce. C'est le premier point que la passe B doit reprendre, ou que le
+  propriétaire doit déclarer couvert par la campagne native du 2026-10-27.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- le comportement d'un index multi-segments en conteneur (copie préparée, non mesurée) ;
+- l'effet du nombre de segments sur le curseur `segment_of` ;
+- la cause des écarts de +179 à +227 % sur les petits pools et de −30,5 % sur le pool complet ;
+- la reproductibilité sur une machine au repos : la charge de l'hôte n'a pas été relevée.

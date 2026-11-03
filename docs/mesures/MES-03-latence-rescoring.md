@@ -1602,3 +1602,467 @@ Ce que la mesure **ne** permet pas d'affirmer :
 parallèle, tampon transitoire libéré avant le tri), retirer `madvise` sans trace, et **ne pas coder
 l'option 9**. Le découpage des lots et la profondeur de file du tampon restent à figer par la tâche
 d'implémentation, sur la base de ces chiffres.
+
+## Campagne en conteneur (P8, ADR-0135) — 2026-11-03
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe A, mesure MES-03, **à chaud et à froid**.
+  La fiche fait foi pour le périmètre : elle **ajoute le rescoring fp16** à la décision 7 d'ADR-0080,
+  qui ne citait que MES-02, MES-05 et MES-09 (ADR-0135, décision 8).
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié.** L'exemple
+  `crates/crible/examples/dense_latency.rs` est modifié pour Linux et **non commité au moment de la
+  mesure** : la campagne porte sur ce commit plus ce harnais. Binaire `crible`, SHA-256
+  `a9658ecb…a399c54` ; harnais, `0eb8487f…307c4fe`.
+- **Machine** : MacBook Air M3, 8 cœurs, 24 Go, macOS 15.7.7 (24G720), **en conteneur** : Docker
+  Desktop 28.5.1, VM Linux `aarch64` de **12 529 836 032 octets (11,67 Gio)** de RAM et **8 vCPU**,
+  **page de 4 096 octets**, volume nommé `crible-mes-p8-data` sur `/data`, **aucune limite
+  `--memory`**. La charge de l'hôte n'a pas été relevée : limite déclarée.
+- **Jeu de données** : `synth-large`, **7 740 000 passages vivants**, 860 000 morts, un segment
+  `seg-large-0001`, `vectors.f16` de 13 209 600 000 octets, `records.sqlite` de 3,7 Go, copie de
+  mesure avec `exact_threshold = 0` et `scan = "binary"`. Mêmes 300 requêtes qu'en natif, SHA-256
+  `03cb2a2b…52948b`.
+- **Configuration** : `candidates_per_branch = 100` (k), 8 fils de scan, N ∈ {1000, 2000, 5000}.
+  Le mode `rescore` du harnais mesure trois séries : le **moteur** (`ExactSearcher::rescore`), sa
+  réplique **produit scalaire seul** (`kernels::dot` sur la ligne mappée) et sa réplique **lecture des
+  clés seule** (même requête SQLite que la production).
+
+### Protocole
+
+**À chaud** : une passe complète de 300 requêtes, écartée (`warmup-rescore.json`), puis trois passes
+de 300 requêtes par point et par série, soit 900 échantillons ; une seconde invocation mesure la
+réplique des clés seule, moteur absent (`key-only.json`).
+
+**À froid**, au pied de la décision 1 d'ADR-0135 :
+
+- `rescore --cold --evict` appelle **`madvise(MADV_PAGEOUT)`** sur les pages du fichier de vecteurs que
+  le processus projette, puis **`posix_fadvise(POSIX_FADV_DONTNEED)`** sur le descripteur ;
+- la **résidence est lue par `mincore`** et publiée **par point**, moyenne et maximum sur les 300
+  requêtes ;
+- `drop_caches` dans un conteneur privilégié sert de **contre-contrôle**, déclaré **global à la VM** ;
+  il a été appliqué **neuf fois**, avant chaque série, et a réussi (`purge.txt` :
+  `drop_caches: applied`, `purge-error.txt` vide) ;
+- **chaque série froide tourne dans un conteneur neuf**, une seule passe de 300 requêtes, après la
+  purge globale.
+
+Commandes (recette : `tools/bench/mes-p8-conteneur/run.sh`) :
+
+```sh
+sh tools/bench/mes-p8-conteneur/run.sh mes03-warm
+sh tools/bench/mes-p8-conteneur/run.sh mes03-cold
+```
+
+soit, pour le froid et par N : `dense_latency rescore … --cold --evict --ns <N> --passes 1`, puis la
+même invocation avec `--skip-engine --dot-only`, puis avec `--skip-engine --key-only`.
+
+Écarts au protocole, déclarés :
+
+- **La série « moteur » à froid n'est pas froide** : sa résidence moyenne vaut 0,47, 0,63 et 0,71 aux
+  trois N. Elle s'appelle donc **« froid partiel, résidence r »** (ADR-0084, décision 7) et jamais
+  « à froid ». La cause est nommée : `MADV_PAGEOUT` ne rend que les pages que le processus a déjà
+  fautées, et la vérification du sceau blake3 à l'ouverture a déjà touché le fichier.
+- **La réplique des clés n'est pas refroidie par `--evict`** : celui-ci n'évince que les pages du
+  fichier de vecteurs. La résidence publiée (0,000) porte sur les vecteurs, **pas sur
+  `records.sqlite`** ; la série n'est froide que par la purge globale et le conteneur neuf.
+- **La série chaude a duré 27 min** (10 h 18 → 10 h 45 d'après les horodatages), dont 18 min pour la
+  série complète ; aucune commande n'a dépassé 30 min. Une commande silencieuse de plus de 3 min est
+  un écart au protocole de conduite de la tâche, déclaré ici.
+- **Pas de série froide native au même harnais** : le contrôle natif rejoué porte sur la série chaude
+  seulement. Les séries froides ne se comparent donc qu'à la dernière campagne publiée.
+
+### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/rescore-warm.json`, `key-only.json`,
+`rescore-cold-evict-{n1000,n2000,n5000}.json`, `rescore-cold-evict-{dot,keys}-n*.json`, et le contrôle
+natif `data/mes-p8-conteneur/native/raw/rescore-warm.json` ; artefact versionné :
+`MES-03-latence-rescoring.2026-11-03.conteneur.json`.
+
+**À chaud**, en millisecondes, 900 échantillons par point, conteneur :
+
+| Série | N | p50 | p95 | p99 | max |
+|---|---:|---:|---:|---:|---:|
+| moteur | 1000 | 135,990 | 203,617 | 238,686 | 294,043 |
+| moteur | 2000 | 126,573 | 259,478 | 298,940 | 443,193 |
+| moteur | 5000 | 785,278 | 895,131 | 1 033,011 | 2 086,896 |
+| dot seul | 1000 | 1,307 | 2,497 | 4,125 | 10,699 |
+| dot seul | 2000 | 1,930 | 2,871 | 3,709 | 7,678 |
+| dot seul | 5000 | 6,929 | 10,968 | 15,553 | 43,141 |
+| clés seules | 1000 | 4,817 | 6,043 | 8,441 | 10,540 |
+| clés seules | 2000 | 8,519 | 12,089 | 16,853 | 48,792 |
+| clés seules | 5000 | 22,624 | 31,124 | 39,679 | 85,622 |
+
+Le p50 combiné du moteur masque un **état de cache qui change d'une passe à l'autre**. p50 de chaque
+passe, conteneur contre le contrôle natif au même harnais et même arbre :
+
+| N | conteneur, passes 1 / 2 / 3 | natif, passes 1 / 2 / 3 | dernier rejeu publié, `grouped` |
+|---:|---|---|---|
+| 1000 | 176,33 / 136,54 / **11,27** | 108,55 / 87,09 / 58,70 | 0,79 (p95 14,67) |
+| 2000 | 218,79 / 127,06 / **17,12** | 184,56 / 181,72 / 172,85 | 1,13 (p95 20,61) |
+| 5000 | 707,39 / 782,89 / 812,38 | 435,24 / 425,79 / 387,13 | 2,17 (p95 23,17) |
+
+La dernière colonne est la **moyenne des deux rondes** du rejeu d'ADR-0080 qui a livré l'option 1
+(lecture groupée) ; le rapport donne chaque ronde. La comparaison avec elle est **indirecte** : ce
+rejeu passe par un autre harnais (`rescore_ab`), pas par `dense_latency`.
+
+**À froid**, une passe de 300 requêtes par point, conteneur neuf après purge globale :
+
+| Série | N | p50 | p95 | p99 | résidence moyenne | résidence max | Nom |
+|---|---:|---:|---:|---:|---:|---:|---|
+| moteur | 1000 | 135,063 | 193,299 | 217,818 | 0,467 | 0,775 | froid partiel, résidence 0,47 |
+| moteur | 2000 | 263,272 | 383,635 | 450,539 | 0,633 | 0,849 | froid partiel, résidence 0,63 |
+| moteur | 5000 | 680,260 | 917,050 | 1 050,296 | 0,708 | 0,817 | froid partiel, résidence 0,71 |
+| dot seul | 1000 | 204,064 | 230,045 | 259,163 | 0,000 | 0,000 | froid |
+| dot seul | 2000 | 409,478 | 453,686 | 511,392 | 0,000 | 0,001 | froid |
+| dot seul | 5000 | 1 176,291 | 1 341,419 | 1 400,372 | 0,000 | 0,000 | froid |
+| clés seules | 1000 | 96,189 | 152,559 | 174,708 | — | — | froid par la purge |
+| clés seules | 2000 | 143,746 | 276,531 | 334,207 | — | — | froid par la purge |
+| clés seules | 5000 | 105,213 | 585,655 | 745,391 | — | — | froid par la purge |
+
+Deux faits de lecture :
+
+- **Le coût froid du produit scalaire suit les IOPS du volume, comme ADR-0080, décision 7, l'avait
+  prévu.** Les 1 000, 2 000 et 5 000 lignes de 1 536 octets couvrent environ **1 375, 2 750 et 6 875
+  pages de 4 Kio** (une ligne sur 2,7 chevauche deux pages). Le p50 divisé par ce nombre donne
+  **0,148 / 0,149 / 0,171 ms par page froide**, soit **6 700 à 5 900 pages par seconde**. C'est un
+  calcul arithmétique sur des pages estimées, pas une mesure des pages réellement lues ; la
+  résidence de 0,000 est, elle, mesurée.
+- **Le moteur à froid partiel (135 / 263 / 680 ms) n'est pas la somme de ses répliques froides**
+  (204 + 96 = 300 ms à N = 1000) : ses propres pages sont résidentes à 0,47 et il ne relit donc pas ce
+  que la réplique du produit scalaire relit.
+
+Contrôle natif au même harnais, à chaud : moteur 84,907 / 178,256 / 422,076 ms, dot 1,103 / 2,128 /
+5,098 ms, clés 4,385 / 9,605 / 25,987 ms (p50). Les répliques sont à **± 36 %** du natif, dans les deux
+sens selon le point, sans que la dispersion native par passe des répliques soit publiée : ces écarts
+ne reçoivent pas de verdict.
+
+> **Lecture corrigée** : ce diagnostic a été instruit par la sous-section « Diagnostic de l'écart du
+> moteur (passage A-bis) », plus bas. C'est elle qui explique pourquoi la série « moteur » de cette
+> campagne ne se lit pas comme le chemin livré, et la sous-section « Moteur à limite de consommation,
+> en conteneur (passage B) » mesure ce dernier.
+
+Diagnostic `--engine-limit 1` (limite de consommation à un résultat, toutes les lignes lues) :
+**22,779 ms** en natif et **27,858 ms** en conteneur à N = 1000, **166,267 ms** en conteneur à
+N = 5000. La lecture seule des vecteurs coûte donc environ **20 fois** le produit scalaire de la
+réplique, dans le même processus et sur les mêmes lignes, ce qui localise l'écart dans le chemin
+d'accès du moteur et non dans le noyau de calcul.
+
+### Conclusion
+
+- **Le froid demandé est obtenu, et il est nommé.** Les séries « dot » et « clés » ont une résidence
+  de vecteurs nulle ; la série « moteur » reste **partiellement froide** (0,47 à 0,71) et porte ce
+  nom. `drop_caches` a été appliqué neuf fois mais reste un contre-contrôle global, jamais la série
+  principale.
+- **Le coût froid est dominé par la taille de page et les IOPS du volume**, et c'est le fait que
+  la décision 7 d'ADR-0080 demandait de vérifier : 0,148 à 0,171 ms par page de 4 Kio, soit 5 900 à
+  6 700 pages par seconde, sur 1,5 à 7,7 Mo de lignes lues au hasard. La même lecture coûtait
+  85,0 ms en p50 à N = 1000 sous `F_NOCACHE` sur macOS (campagne du 2026-10-27), avec des pages de
+  16 Kio et un disque interne : les deux protocoles ne se comparent pas terme à terme, et aucun
+  rapport de proportion n'est tiré ici.
+- **Face au dernier rejeu publié, l'écart est important et il n'est pas entièrement celui du
+  conteneur.** À chaud, la troisième passe du conteneur vaut 11,27 / 17,12 / 812,38 ms contre
+  0,79 / 1,13 / 2,17 ms publiés ; à froid, le moteur partiel vaut 6,0 / 9,1 / 21,9 fois le p50 publié,
+  à résidence comparable (0,47–0,71 contre 0,55–0,79). Le contrôle natif au même harnais montre que
+  **le chemin mesuré dans l'arbre courant est déjà 108 à 195 fois plus lent que le rejeu publié**
+  (84,9 à 422,1 ms contre 0,79 à 2,17 ms) : la part du conteneur est le rapport conteneur/natif
+  (+60 %, −29 %, +86 %), pas le rapport au rejeu publié.
+- **Cet écart entre le moteur du harnais et ses propres répliques n'a pas de mécanisme établi** :
+  le moteur lit 1 000 lignes en 22,8 ms en natif quand la réplique fait le même produit scalaire en
+  1,1 ms, et la réplique n'est pas une borne inférieure commode — depuis l'option 1, le moteur copie
+  lui aussi les lignes dans un tampon groupé, donc la copie n'explique pas l'écart. Un second
+  candidat est visible au code : le moteur alloue et remplit de zéros un tampon de N × dims à chaque
+  requête (7,7 Mo à N = 5000), là où la réplique réutilise un tampon d'une ligne ; ce candidat n'est
+  pas chiffré. La mention « non expliqué » est celle qu'ADR-0135, décision 4, demande.
+- **Aucune comparaison au budget n'est faite.** Le budget de `docs/03-recherche.md` et la cible de
+  `docs/08` se mesurent sur le Mac mini en conteneur (P10) ; ces chiffres sont **indicatifs**
+  (ADR-0129). Le rapport ne tranche pas la borne de 60 à 90 ms d'ADR-0084.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la latence du rescoring **livré** en conteneur : le harnais n'exerce pas la même fonction que le
+  rejeu publié, et l'écart entre les deux n'est pas expliqué ;
+- le froid du fichier `records.sqlite` : `--evict` ne vise que les vecteurs, et la résidence publiée
+  ne le couvre pas ;
+- l'effet d'un froid réellement complet sur le moteur, la résidence n'étant jamais nulle pour lui ;
+- la reproductibilité sur une machine au repos : la charge de l'hôte n'est pas relevée.
+
+**Recommandation, à valider par le propriétaire** : avant toute conclusion de P8 sur le rescoring,
+instruire l'écart entre le moteur du harnais et ses répliques, par une mesure qui isole l'accès
+(`vector_f16_into` contre l'accès mmap direct) sur un seul N et une seule passe, dans les deux
+environnements. Tant qu'il n'est pas expliqué, aucun chiffre de la série « moteur » ne doit servir de
+budget à froid.
+
+### Diagnostic de l'écart du moteur (passage A-bis) — 2026-11-03
+
+La recommandation ci-dessus a été suivie. Cette sous-section **ajoute** son résultat à la section
+datée ; elle ne réécrit aucune de ses phrases, et c'est ici que la lecture des chiffres de la série
+« moteur » est corrigée.
+
+- **Ce qui est mesuré** : la série « moteur » de `dense_latency` et le rejeu publié d'ADR-0080, à la
+  tête de la branche **et** au commit de ce rejeu, **en natif seulement**, à chaud, à N = 1000 et
+  N = 5000. Deux harnais sont comparés au même instant, sur la même copie, avec les mêmes 300
+  requêtes : `rescore_ab` (le harnais du rejeu publié) et `dense_latency` (celui de la campagne
+  MES-03). Protocole : une passe d'échauffement **jetée**, puis une passe mesurée de 300 requêtes ;
+  les deux passes restent dans l'artefact.
+- **Commit** : tête `3fb33439aa3349a31593b8281920af7ce51938bb`, rejeu
+  `07a82d773db3245e6fc680b48baabe61fbd4ac21`. Le commit du rejeu est construit **hors de l'arbre**,
+  par `git archive <commit> | tar -x`, avec un `CARGO_TARGET_DIR` sous `data/` : `git archive` ne
+  porte que des fichiers suivis, donc `.env.prod` n'entre pas dans l'arbre extrait, et aucun
+  `git worktree`, `checkout` ni `bisect` n'est employé. `rescore_ab` y est **suivi**, et le binaire
+  obtenu a le SHA-256 `078b5f09…6f6ae`, celui que la campagne de confirmation d'ADR-0083 avait
+  mesuré : c'est bien le harnais du rejeu.
+- **Machine** : MacBook Air M3, 24 Go, page de **16 Kio**, natif. Au début : charge `1,78 2,35 3,00`,
+  swap occupé **2 167,38 Mio sur 3 072**, pages libres **22 729 (355 Mio)**. À la fin : charge
+  `2,63 2,49 2,43`, swap **3 923,94 Mio sur 5 120**, pages libres **3 685 (58 Mio)**. Aucun relevé
+  intermédiaire n'a été pris : limite déclarée.
+- **Jeu de données** : la copie native `data/mes-p8-conteneur/native/indexes/synth-large`,
+  **7 740 000 vivants**, un segment, `vectors.f16` de 13 209 600 000 octets, `records.sqlite` de
+  3,7 Go ; `data/mes02/queries.f32` (SHA-256 `03cb2a2b…52948b`), `candidates_per_branch = 100`,
+  8 fils.
+
+| Harnais | N | tête, passe 1 / 2 (p50) | rejeu `07a82d7`, passe 1 / 2 (p50) |
+|---|---:|---:|---:|
+| `rescore_ab`, `limit = k = 100` | 1000 | 31,257 · **12,613** | 85,180 · **11,453** |
+| `dense_latency`, moteur, `limit = N` | 1000 | 90 600,875 · **41 590,000** | 151 933,250 · **45 183,791** |
+| `rescore_ab`, `limit = k = 100` | 5000 | 76,029 · **76,698** | 335,650 · **330,782** |
+| `dense_latency`, moteur, `limit = N` | 5000 | 407 540,500 · **398 762,917** | 738 217,334 · **726 901,500** |
+
+- **Verdict : (a), un artefact du harnais, et non une régression.** Aux deux extrémités de
+  l'intervalle, la tête n'est **jamais** plus lente que le commit du rejeu : la série « moteur » y
+  coûte **45,184 ms** à N = 1000 et **726,902 ms** à N = 5000, contre 41,590 et 398,763 à la tête.
+  Aucune dégradation n'est donc à chercher entre les deux, et la dichotomie prévue par le protocole
+  n'a pas eu lieu. Le contrôle `rescore_ab` va dans le même sens : 12,613
+  contre 11,453 ms à N = 1000 (+10,1 %, dans la dispersion de la machine), et 76,698 contre
+  330,782 ms à N = 5000 (−76,8 %, le groupement d'ADR-0080 faisant son travail quand les pages ne
+  sont pas résidentes).
+- **Premier mécanisme, mesuré : le harnais passe `limit = candidates.len()`, la production passe
+  `k`.** `dense_latency` appelle `DenseSearcher::rescore(query, candidates, candidates.len())`
+  (`crates/crible/examples/dense_latency.rs`), convention assumée pour rester comparable à la
+  campagne MES-03 (« every key read ») ; le serveur appelle la **même** fonction avec un autre
+  troisième argument : `dense/planner.rs`, `searcher.rescore(query, &candidates, k)` où
+  `k = candidates_per_branch(request.k, grouping)`, soit `k.max(100)` sans regroupement et
+  `k × 20` borné à [200, 1000] avec regroupement (`group.rs`). `rescore` ne lit donc pas les clés de
+  `N` candidats mais celles des `k` premiers, plus le groupe d'égalité qui les chevauche
+  (ADR-0079, décision 3). Le contrôle décisif ne change **que** cet argument, à la tête, sans
+  toucher au code :
+
+  | N | `rescore_ab` (`limit = k`) | `dense_latency --engine-limit 100` | `dense_latency` (`limit = N`) |
+  |---:|---:|---:|---:|
+  | 1000 | 12,613 | 10,192 (−19,2 % contre `rescore_ab`) | 41,590 (+229,7 %) |
+  | 5000 | 76,698 | 75,172 (−2,0 %) | 398,763 (+419,9 %) |
+
+  Le harnais ramené au compte de la production retombe au niveau de `rescore_ab` : −19,2 % à
+  N = 1000 (2,4 ms d'écart, dans la dispersion de la machine) et −2,0 % à N = 5000. **Tout l'écart
+  entre les deux harnais est donc la lecture des clés**, soit 1 000 à 5 000 lectures aléatoires dans
+  `records.sqlite` que le chemin livré ne fait pas.
+- **Second mécanisme : l'ordre des séries.** Dans la boucle du harnais, le moteur passe **avant** ses
+  répliques, sur les mêmes `iid` ; les répliques héritent donc des pages que le moteur vient de
+  toucher. La réplique « produit scalaire » (0,600 ms à N = 1000, 4,561 à N = 5000) et la réplique
+  « clés » (3,894 et 24,345 ms) mesurent un coût **chaud** que la série « moteur » vient de rendre
+  chaud ; elles ne bornent pas son coût. C'est aussi pourquoi la série « moteur » de la campagne en
+  conteneur décroissait d'une passe à l'autre (176,33 · 136,54 · 11,27 ms) : elle paie les défauts de
+  page, qui s'amortissent.
+- **Troisième mécanisme, pour la part restante face au rejeu publié : l'état du cache de pages.**
+  Les 0,79 / 2,17 ms publiés supposent les lignes des candidats **résidentes** ; la campagne
+  d'ADR-0080 le montre elle-même, sa première passe coûtant 15,07 ms (N = 1000) et 13,90 ms
+  (N = 5000) avant de tomber à 0,76 et 1,97 ms. Aujourd'hui, la résidence mesurée par `mincore` sur
+  les pages que les candidats touchent, sans rien évincer, est de **0,456 en moyenne** (première
+  requête 0,411, minimum 0,282, maximum 0,838) sur 1 061 pages par requête, avec 355 Mio de pages
+  libres : les 4,8 Go de pages touchées par les 300 requêtes ne tiennent pas, la deuxième passe ne
+  descend qu'à 12,613 ms, et le même harnais donne 24,650 ms sur une passe unique instrumentée. La
+  part restante n'est donc **ni** le conteneur **ni** une régression : c'est la mémoire disponible
+  de la machine au moment de la mesure.
+- **Profil** (`sample <pid> 10`, période 1 ms, pendant une passe de la série « moteur » à N = 1000 à
+  la tête) : sur **7 634 échantillons** du fil principal, `DenseSearcher::rescore` en porte 6 626
+  (**86,8 %**), dont `key_of` 6 611 (**86,6 %**), `ReadPool::read_passage_key` 6 410,
+  `sqlite3BtreeTableMoveto` 6 328, `readDbPage` 6 308 et `pread` **6 305 (82,6 %)** ; le noyau de
+  calcul `kernels::neon::dot` n'en porte que 14 (**0,2 %**). La lecture groupée des `f16` s'exécute
+  sur les fils du pool rayon, où elle n'apparaît pas dans ces comptes du fil principal : le harnais
+  appelle `rescore` **hors** de `ScanPool::install`, là où `rescore_ab` et le serveur l'y placent ;
+  cette différence de placement n'a pas d'effet mesurable ici (−2,0 % au même `limit` à N = 5000),
+  mais elle est réelle et déclarée.
+- **Ce que cela change pour la passe A.** Le rapport « 108 à 195 fois plus lent que le rejeu publié »
+  de la section précédente est exact comme mesure, mais il ne décrit **pas** le chemin livré : il
+  compare deux harnais qui ne lisent pas le même nombre de clés, sur une machine dont le cache ne
+  tient pas les pages. Les chiffres de la série « moteur » de la passe A (84,9 à 422,1 ms en natif,
+  11,27 à 812,38 ms en conteneur) ne doivent servir **ni de budget ni de borne** ; la série
+  utilisable pour le rescoring livré est celle de `rescore_ab`, ou de `dense_latency` avec
+  `--engine-limit` égal à `candidates_per_branch`.
+- **Ce que le diagnostic n'établit pas** : la part exacte du cache de pages dans l'écart 12,613 ms
+  contre 0,79 ms, faute d'une mesure où les pages des candidats seraient tenues résidentes sur
+  cette machine ; la charge de l'hôte entre les deux relevés ; le comportement en conteneur, la
+  passe A-bis étant **native seulement** par protocole.
+- **Artefact** : `docs/mesures/MES-03-diagnostic-moteur.2026-11-03.json`, produit par
+  `tools/bench/mes-p8-conteneur/aggregate-ab.py` à partir des documents bruts de
+  `data/mes-p8-conteneur/ab/raw/`. Recette : `tools/bench/mes-p8-conteneur/ab-engine.sh`
+  (`head`, `replay`, `limit`, `profile`, `aggregate`). Les dossiers de construction de
+  `data/mes-p8-conteneur/ab/` sont supprimés après la mesure ; seules les sorties brutes restent.
+
+**Recommandation, à valider par le propriétaire** : ne plus mesurer le rescoring livré avec la
+série « moteur » de `dense_latency` ; la remplacer par `rescore_ab`, ou par
+`dense_latency --engine-limit <candidates_per_branch>`, et déclarer la résidence des pages des
+candidats à côté de chaque point. Pour la passe B, aucun chiffre de rescoring ne devrait être publié
+sans cette résidence.
+
+### Moteur à limite de consommation, en conteneur (passage B) — 2026-11-03
+
+La recommandation ci-dessus a été suivie pour le conteneur : cette sous-section mesure le **chemin
+de rescoring livré**, c'est-à-dire `dense_latency --engine-limit 100`, où 100 est
+`candidates_per_branch` de la configuration de la campagne. Le serveur passe ce nombre comme `limit`
+à `DenseSearcher::rescore(query, &candidates, limit)`
+(`crates/crible-search/src/dense/rescore.rs:131` pour l'`impl`, `:167` pour la fonction). La campagne
+le fixe à **100** ; ce n'est pas le défaut de l'API, qui est `k = 10` **résultats**
+(`docs/05-api.md:267`) : la limite dite « moteur » ci-dessous est celle de la campagne, pas le nombre
+de résultats du serveur. Les sous-sections antérieures nomment ce chemin `ExactSearcher::rescore` :
+le type s'appelle aujourd'hui `DenseSearcher` (`crates/crible-search/src/dense/rescore.rs:167`), et
+ces sous-sections ne sont pas réécrites. La sous-section ci-dessous **ajoute** ses chiffres à la
+section datée et ne réécrit aucune phrase de la passe A ni de la passe A-bis.
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe B, mesure MES-03, **à chaud et à froid**.
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié.** Harnais
+  `crates/crible/examples/dense_latency.rs` (modifié pour Linux, non commité au moment de la mesure),
+  `crates/crible/examples/rescore_ab.rs` (+ un affichage de progression). L'image de harnais
+  `crible-mes-p8-harness:dev` est reconstruite à partir de l'arbre courant
+  (`tools/bench/mes-p8-conteneur/Dockerfile.harness`) ; elle embarque désormais aussi
+  `measure_queries`, `acceptance_sweep` et `server_costs` pour la même passe.
+- **Machine et jeu de données** : identiques à la passe A (VM Docker Desktop de 12 529 836 032
+  octets, 8 vCPU, **page de 4 096 octets**, volume nommé `crible-mes-p8-data`, `synth-large`,
+  7 740 000 passages vivants, mêmes 300 requêtes SHA-256 `03cb2a2b…52948b`, `records.sqlite` de
+  3,7 Go, `vectors.f16` de 13 209 600 000 octets). La charge de l'hôte n'est pas relevée : limite
+  déclarée, comme en passe A.
+- **Configuration** : `candidates_per_branch = 100`, plan `binary`, N ∈ {1000, 2000, 5000}.
+
+#### Protocole
+
+**À chaud**, par point et par conteneur : **quatre passes** de 300 requêtes, la **première écartée**
+(ADR-0135, décision 7), donc 900 échantillons mesurés. Le harnais garde les quatre passes dans son
+document et marque la première comme écartée.
+
+**À froid** : conteneur neuf, purge globale (`sync; echo 3 > /proc/sys/vm/drop_caches` dans un
+conteneur privilégié, **réussie** les trois fois, code de sortie 0), puis
+`rescore --cold --evict --engine-limit 100 --passes 1`, soit 300 échantillons par point.
+
+```sh
+# à chaud, par N (une invocation par point, ~2 à 13 min)
+docker run --rm -v crible-mes-p8-data:/data crible-mes-p8-harness:dev \
+    rescore --data /data --index synth-large --vectors /data/queries.f32 \
+    --ns <N> --passes 4 --engine-limit 100 --out /data/raw/b-rescore-warm-only-n<N>.json
+
+# à froid, par N, après la purge globale et dans un conteneur neuf
+docker run --rm -v crible-mes-p8-data:/data crible-mes-p8-harness:dev \
+    rescore --data /data --index synth-large --vectors /data/queries.f32 \
+    --ns <N> --passes 1 --cold --evict --engine-limit 100 --out /data/raw/b-rescore-cold-n<N>.json
+```
+
+Écarts au protocole, déclarés :
+
+- **Aucune réplique (`--dot-only`, `--key-only`) dans cette série.** La passe A les mesurait dans la
+  même invocation ; ici elles ont été mesurées une fois pour calibrer, puis retirées, parce que la
+  réplique des clés évince les pages de vecteurs et perturbe la série du moteur. Ces répliques
+  apparaissent seulement dans l'échauffement écarté (`b-warmup-rescore-limit100.json`) et **ne sont
+  pas** des chiffres de cette sous-section.
+- **Une commande de 13 min 15 s** pour la série chaude à N = 5000 : elle imprime une ligne par
+  passe, donc elle n'est pas silencieuse, et elle reste sous la borne de 30 min.
+- **Pas de série froide native au même harnais** : le protocole de la passe B ne la demande pas et la
+  passe A n'en avait pas.
+- **`--evict` ne refroidit que les vecteurs** : la résidence publiée ci-dessous porte sur les pages
+  du fichier de vecteurs, jamais sur `records.sqlite` (même limite qu'en passe A).
+
+#### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/b-rescore-warm-only-n{1000,2000,5000}.json`,
+`b-rescore-cold-n{1000,2000,5000}.json`, `b-warmup-rescore-limit100.json` (gitignorés) ; artefact
+versionné : `docs/mesures/MES-03-latence-rescoring.2026-11-03.conteneur-limite.json`, écrit par
+`tools/bench/mes-p8-conteneur/aggregate-b.py`, qui recalcule chaque percentile depuis les durées
+par requête et **refuse** une série dont le nombre d'appels, le minimum, le maximum ou la moyenne
+s'écarte de ceux du harnais.
+
+Tous les percentiles de cette sous-section et de l'artefact sont pris au **rang le plus proche**
+(ADR-0077, décision 4), jamais par interpolation ; l'artefact a été régénéré depuis les sorties
+brutes le 2026-11-03, après alignement de l'agrégateur sur cette méthode, et les deux concordent.
+
+**À chaud**, p50 de chaque passe en millisecondes (la passe 0 est écartée) :
+
+| N | passe 0 (jetée) | passe 1 | passe 2 | passe 3 | p95 des passes 1–3 |
+|---:|---:|---:|---:|---:|---|
+| 1000 | 36,748 | 17,739 | 1,320 | **1,101** | 49,603 / 1,679 / 1,439 |
+| 2000 | 68,629 | 74,984 | 15,819 | **1,643** | 120,381 / 21,369 / 1,947 |
+| 5000 | 227,831 | 254,243 | 293,618 | **288,212** | 326,576 / 342,820 / 351,128 |
+
+La résidence des pages **n'est pas relue** dans cette série chaude : la descente des p50 d'une passe
+à l'autre est le seul indicateur. À N = 1000 et N = 2000 le p50 s'effondre à la deuxième ou troisième
+passe, à N = 5000 il ne descend pas.
+
+**À froid**, une passe de 300 requêtes, conteneur neuf après purge globale :
+
+| N | p50 | p95 | p99 | max | pages lues à la 1ʳᵉ requête | résidence moyenne | résidence max |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | 55,422 | 95,815 | 136,213 | 181,821 | 1 214 | 0,466 | 0,769 |
+| 2000 | 66,238 | 134,245 | 174,659 | 393,278 | 2 448 | 0,628 | 0,816 |
+| 5000 | 173,970 | 287,703 | 402,168 | 764,758 | 6 210 | 0,740 | 0,844 |
+
+La résidence n'est jamais nulle : la série est **« froid partiel, résidence r »**, comme en passe A,
+pour la même raison (`MADV_PAGEOUT` ne rend que les pages déjà fautées, et la vérification du sceau
+blake3 à l'ouverture a déjà touché le fichier).
+
+**Comparaison au natif au même harnais** (`dense_latency --engine-limit 100`, passe A-bis, p50 de la
+seconde passe) : **10,192 ms** à N = 1000 et **75,172 ms** à N = 5000 ; le point N = 2000 n'a pas été
+mesuré en natif. Contre ces chiffres, la dernière passe du conteneur vaut **1,101 ms** (−89,2 %) à
+N = 1000 et **288,212 ms** (×3,83) à N = 5000.
+
+**Comparaison au rejeu publié d'ADR-0080** (`grouped`, moyenne des deux rondes : 0,79 / 1,13 /
+2,17 ms) : **+39,4 %**, **+45,4 %** et **×132,8**. La comparaison reste indirecte (autre harnais,
+autre machine) et les pages du rejeu publié étaient résidentes sur ces points.
+
+Trois faits de lecture, avec leur mécanisme :
+
+- **Le cache de pages de la VM décide, et il se calcule.** Les pages touchées par une passe valent
+  300 × 1 214 = 364 200 pages à N = 1000, 300 × 2 448 = 734 400 à N = 2000 et 300 × 6 210 = 1 863 000
+  à N = 5000, soit **1,39 / 2,80 / 7,11 Gio** en pages de 4 Kio. Les deux premiers tiennent dans la
+  VM de 11,67 Go, le troisième non : c'est exactement là que le p50 cesse de descendre. Le nombre de
+  pages est lu par le harnais à la première requête (`mincore` sur les iid des candidats) ; le volume
+  en Gio est une multiplication déclarée, pas une mesure.
+- **Le « chaud » à N = 5000 est plus lent que le « froid partiel » du même point** (288,212 ms contre
+  173,970 ms). Le mécanisme probable est un **étranglement du cache** : en régime, chaque page
+  insérée en évince une autre, alors qu'une série au cache vide ne fait que lire. Ce mécanisme n'est
+  **pas prouvé** ici — le harnais ne lit ni `pgsteal_kswapd` ni `pgmajfault` pour cette série — et
+  aucun chiffre n'en est déduit.
+- **L'écart avec le natif au même harnais change de signe selon N** : le conteneur est plus rapide à
+  N = 1000 parce que la VM avait du cache libre, alors que la machine native mesurait à
+  **355 MiB libres et une résidence de 0,456** (passe A-bis) ; à N = 5000 les deux sont limités par
+  les IOPS, et le conteneur paie en plus le disque virtuel de la VM. Aucun rapport de proportion
+  n'est tiré entre les deux environnements.
+
+#### Conclusion
+
+- **Le chemin livré est mesuré, et il n'a pas la latence du chiffre publié en conteneur.** Tant que
+  les pages des candidats tiennent dans la VM, le rescoring livré vaut **1,10 ms (N = 1000) et
+  1,64 ms (N = 2000)** en p50, soit l'ordre de grandeur du rejeu publié (+39 % et +45 %) ; à
+  N = 5000, il vaut **288 ms** en p50 et **351 ms** en p95, et **aucun réglage du harnais ne le
+  ramène à 2,17 ms** : la VM ne peut pas garder 7,11 Gio de pages de candidats.
+- **Le froid est partiel et nommé, comme en passe A** (résidence 0,466 à 0,740). Les chiffres froids
+  servent de borne haute, pas de budget.
+- **Aucune comparaison au budget n'est faite.** Le budget de `docs/03-recherche.md` et la cible de
+  `docs/08-invariants-et-tests.md` se mesurent sur le Mac mini en conteneur (P10) ; ces chiffres sont
+  **indicatifs** (ADR-0129). Le rapport ne tranche pas la borne de 60 à 90 ms d'ADR-0084.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la latence du rescoring livré sur la machine de production : le Mac mini M1 n'a pas été mesuré ;
+- la part du disque virtuel dans l'écart à N = 5000 : aucune mesure d'IOPS du volume n'a été faite ;
+- que le régime à N = 5000 soit reproductible sur une VM plus grande : seule celle de 11,67 Go a été
+  mesurée ;
+- le coût du rescoring quand `records.sqlite` est froid : `--evict` ne le vise pas.
+
+**Recommandation, à valider par le propriétaire** : pour un déploiement en conteneur à 8,58 M
+passages, retenir **N = 2000** (`rescore_candidates`) tant que la VM ne dispose pas d'au moins
+~5 Gio de cache pour les pages de candidats, et **documenter la résidence** à côté de chaque point
+publié ; garder N = 5000 comme réglage natif, où le disque interne et les pages de 16 Kio le
+supportent. La RAM de la VM qui rendrait N = 5000 tenable est chiffrée dans la sous-section
+« Recommandation de RAM pour la VM » de MES-09.
+
+Ce choix a un **coût de fidélité**, qu'il faut nommer : à N = 2000, le rappel@10 de la campagne
+principale vaut **0,9887** et manque la cible de **0,99** (`docs/mesures/MES-01-fidelite-scan-binaire.md:145`
+et `:206`, rappelé par ADR-0078). N = 5000 est la seule valeur qui atteint la cible dans les deux
+campagnes. Retenir N = 2000 revient donc à **accepter 0,9887 au lieu de 0,99**, et changer le défaut
+`rescore_candidates` de 5000 à 2000 demande un **nouvel ADR** qui porte ce coût ; ce rapport ne
+tranche ni l'un ni l'autre.

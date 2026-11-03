@@ -59,7 +59,9 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashSet};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::Read;
+#[cfg(target_os = "macos")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -625,6 +627,9 @@ fn read_matrix(path: &Path, dims: usize) -> Result<Vec<Vec<f32>>, Box<dyn std::e
 struct FlatVectors {
     map: Mmap,
     dims: usize,
+    /// The descriptor of the mapped file, kept for `posix_fadvise` (ADR-0135,
+    /// decision 1). It is never read through: the mapping is the only access.
+    file: File,
 }
 
 impl FlatVectors {
@@ -634,7 +639,7 @@ impl FlatVectors {
         // while the mapping is alive; a measurement copy is written before it
         // is mapped.
         let map = unsafe { Mmap::map(&file)? };
-        Ok(Self { map, dims })
+        Ok(Self { map, dims, file })
     }
 
     fn row(&self, iid: u32) -> Option<&[u8]> {
@@ -742,8 +747,56 @@ fn pages_of_iids(iids: &[u32], dims: usize) -> Vec<u64> {
 
 // ------------------------------------------------------------ uncached copy --
 
+/// Evicts the given pages of a mapped vector file from the page cache, from the
+/// process itself, then asks the kernel to drop what is left of the file
+/// (ADR-0135, decision 1).
+///
+/// `madvise(MADV_PAGEOUT)` drops the resident pages of the mapping the harness
+/// itself projects, which `posix_fadvise(POSIX_FADV_DONTNEED)` alone cannot do:
+/// the kernel never evicts pages that a live mapping has faulted in. Runs of
+/// consecutive pages are passed to one call each, as for `mincore`.
+#[cfg(target_os = "linux")]
+fn evict_pages(map: &Mmap, file: &File, pages: &[u64]) -> Result<(), Box<dyn std::error::Error>> {
+    let size = page_size();
+    let mut sorted = pages.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let mut index = 0;
+    while index < sorted.len() {
+        let first = sorted[index];
+        let mut last = first;
+        index += 1;
+        while index < sorted.len() && sorted[index] == last + 1 {
+            last = sorted[index];
+            index += 1;
+        }
+        let length = usize::try_from(last - first + 1)? * size;
+        let offset = usize::try_from(first)? * size;
+        // SAFETY: the range lies inside the mapping and is page aligned, which
+        // is what `madvise` requires.
+        let status = unsafe {
+            madvise(
+                map.as_ptr().add(offset) as *mut c_void,
+                length,
+                MADV_PAGEOUT,
+            )
+        };
+        if status != 0 {
+            return Err(format!("madvise(MADV_PAGEOUT) failed at offset {offset}").into());
+        }
+    }
+    // SAFETY: `posix_fadvise` takes a valid descriptor and a length; `0, 0`
+    // means the whole file.
+    let status = unsafe { posix_fadvise(file.as_raw_fd(), 0, 0, POSIX_FADV_DONTNEED) };
+    if status != 0 {
+        return Err(format!("posix_fadvise(POSIX_FADV_DONTNEED) returned {status}").into());
+    }
+    Ok(())
+}
+
 /// Copies `source` to `destination` with `F_NOCACHE` on both descriptors, so
 /// neither the read nor the write leaves pages in the unified buffer cache.
+#[cfg(target_os = "macos")]
 fn copy_nocache(source: &Path, destination: &Path) -> Result<u64, Box<dyn std::error::Error>> {
     let mut input = File::open(source)?;
     let mut output = File::create(destination)?;
@@ -770,9 +823,35 @@ fn copy_nocache(source: &Path, destination: &Path) -> Result<u64, Box<dyn std::e
     Ok(copied)
 }
 
-// SAFETY: these are the four C functions of `libc` the harness needs, declared
-// with their macOS ABI (`F_NOCACHE` is 48 on macOS, and `mincore` writes one
-// byte per page of the range it is given). No other unsafe code touches them.
+/// Copy without the unified buffer cache only exists on macOS (`F_NOCACHE`).
+/// Under Linux the cold protocol of ADR-0135, decision 1, replaces it.
+#[cfg(not(target_os = "macos"))]
+fn copy_nocache(_source: &Path, _destination: &Path) -> Result<u64, Box<dyn std::error::Error>> {
+    Err(
+        "copy-nocache uses F_NOCACHE and exists on macOS only; under Linux use \
+         `rescore --cold --evict` (ADR-0135, decision 1)"
+            .into(),
+    )
+}
+
+/// Eviction from the process is a Linux protocol (ADR-0135, decision 1).
+#[cfg(not(target_os = "linux"))]
+fn evict_pages(
+    _map: &Mmap,
+    _file: &File,
+    _pages: &[u64],
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err(
+        "`--evict` implements the Linux cold protocol of ADR-0135, decision 1 \
+         (madvise MADV_PAGEOUT, then posix_fadvise DONTNEED)"
+            .into(),
+    )
+}
+
+// SAFETY: these are the C functions of `libc` the harness needs, declared with
+// their macOS ABI (`F_NOCACHE` is 48 on macOS, and `mincore` writes one byte per
+// page of the range it is given). No other unsafe code touches them.
+#[cfg(target_os = "macos")]
 #[allow(dead_code)]
 mod system {
     use core::ffi::c_void;
@@ -786,7 +865,37 @@ mod system {
     }
 }
 
+#[cfg(target_os = "macos")]
 use system::{F_NOCACHE, fcntl, getpagesize, mincore};
+
+// SAFETY: these are the C functions of `libc` the harness needs under Linux,
+// with their Linux ABI: `madvise` (ADR-0135, `MADV_PAGEOUT`),
+// `posix_fadvise` (`POSIX_FADV_DONTNEED`), `mincore` and `getpagesize`. No other
+// unsafe code touches them.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod system {
+    use core::ffi::c_void;
+
+    /// `POSIX_FADV_DONTNEED`, from `<fcntl.h>` on Linux.
+    pub const POSIX_FADV_DONTNEED: i32 = 4;
+    /// `MADV_PAGEOUT`, from `<sys/mman.h>` on Linux.
+    pub const MADV_PAGEOUT: i32 = 21;
+
+    unsafe extern "C" {
+        pub fn mincore(address: *mut c_void, length: usize, vector: *mut u8) -> i32;
+        pub fn madvise(address: *mut c_void, length: usize, advice: i32) -> i32;
+        pub fn posix_fadvise(descriptor: i32, offset: i64, length: i64, advice: i32) -> i32;
+        pub fn getpagesize() -> i32;
+    }
+}
+
+#[cfg(target_os = "linux")]
+use core::ffi::c_void;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use system::{MADV_PAGEOUT, POSIX_FADV_DONTNEED, getpagesize, madvise, mincore, posix_fadvise};
 
 // ----------------------------------------------------------------- scan ------
 
@@ -1320,6 +1429,14 @@ fn rescore_mode(
         .unwrap_or(3);
     let ns = optional(arguments, "--ns").unwrap_or_else(|| "1000,2000,5000".into());
     let cold = arguments.iter().any(|argument| argument == "--cold");
+    // ADR-0135, decision 1: the Linux cold protocol evicts from the process
+    // (`madvise(MADV_PAGEOUT)`) before `posix_fadvise(DONTNEED)`, then checks the
+    // residency with `mincore`. Without `--evict`, `--cold` only *reports* the
+    // residency of the pages a point touches, it does not displace anything.
+    let evict = arguments.iter().any(|argument| argument == "--evict");
+    if evict && !cold {
+        return Err("`--evict` belongs to a cold series: pass `--cold` too".into());
+    }
     let displace_gb: Option<f64> = optional(arguments, "--displace-gb")
         .map(|value| value.parse())
         .transpose()?;
@@ -1327,6 +1444,24 @@ fn rescore_mode(
     let skip_engine = arguments.iter().any(|argument| argument == "--skip-engine");
     let key_only = arguments.iter().any(|argument| argument == "--key-only");
     let dot_vectors_file = optional(arguments, "--dot-vectors-file");
+    // Diagnostic only: the number of candidates whose key the engine is asked
+    // for. Production passes `k`; this harness passes the whole list by default
+    // (the convention of the MES-03 campaign, every key read), and
+    // `--engine-limit` isolates the key reads from the vector reads.
+    let engine_limit: Option<usize> = optional(arguments, "--engine-limit")
+        .map(|value| value.parse())
+        .transpose()?;
+    // Passage A measured this series with the whole candidate list handed to the
+    // engine, which is not what the server does: `DenseSearcher::rescore`
+    // receives `k` (`candidates_per_branch`, 100 in this campaign). The default
+    // is kept so the passage A series replays unchanged, and the harness now
+    // says on stderr that the figure is not the shipped path (MES-03, passage B).
+    if engine_limit.is_none() && !skip_engine {
+        eprintln!(
+            "warning: --engine-limit absent, the engine rescoring covers every candidate; \
+             the server passes k (candidates_per_branch), see MES-03, passage B"
+        );
+    }
     let snapshot = opened.snapshot();
     let dims = snapshot
         .segments()
@@ -1422,6 +1557,9 @@ fn rescore_mode(
                     .map(|candidate| candidate.iid.get())
                     .collect();
                 let pages = pages_of_iids(&iids, dims);
+                if evict {
+                    evict_pages(&flat.map, &flat.file, &pages)?;
+                }
                 if let Some(map) = &residency_map {
                     let resident = resident_pages(map, &pages)?;
                     resident_fractions.push(resident as f64 / pages.len() as f64);
@@ -1443,7 +1581,8 @@ fn rescore_mode(
                     totals.push(f64::NAN);
                 } else {
                     let started = Instant::now();
-                    let scored = searcher.rescore(query, candidates, candidates.len())?;
+                    let limit = engine_limit.unwrap_or(candidates.len());
+                    let scored = searcher.rescore(query, candidates, limit)?;
                     totals.push(started.elapsed().as_secs_f64() * 1e6);
                     for pair in scored.windows(2) {
                         if pair[0].score == pair[1].score {
@@ -1534,6 +1673,7 @@ fn rescore_mode(
             .map(|(_, sources)| sources.iter().map(|path| path.display().to_string()).collect::<Vec<_>>()),
         "queries": queries.len(),
         "cold": cold,
+        "evict": evict,
         "points": points,
     });
     fs::write(out, serde_json::to_vec(&report)?)?;
@@ -1953,6 +2093,7 @@ fn rss_mode(
 
 /// Resident, dirty and mapped-file footprint of this process, read from
 /// `vmmap -summary`, which needs no privilege on its own process.
+#[cfg(target_os = "macos")]
 fn vmmap_summary() -> Result<Value, Box<dyn std::error::Error>> {
     let pid = std::process::id().to_string();
     let output = std::process::Command::new("/usr/bin/vmmap")
@@ -2047,7 +2188,86 @@ fn vmmap_summary() -> Result<Value, Box<dyn std::error::Error>> {
     }))
 }
 
+/// Resident footprint of this process under Linux, read from `/proc/self/status`
+/// (`VmRSS`, `RssAnon`, `RssFile`, `RssShmem`) and, when the container exposes
+/// cgroup v2, from `memory.current` and `memory.stat` (ADR-0135, decision 7).
+///
+/// The names match the macOS keys where they exist, so one analyser reads both
+/// campaigns: `resident_bytes` is the RSS, `anon_bytes` the anonymous part and
+/// `file_backed_bytes` the file-backed part (mmapped vectors included).
+#[cfg(target_os = "linux")]
+fn vmmap_summary() -> Result<Value, Box<dyn std::error::Error>> {
+    let status = std::fs::read_to_string("/proc/self/status")?;
+    let mut rss = 0_u64;
+    let mut anon = 0_u64;
+    let mut file = 0_u64;
+    let mut shmem = 0_u64;
+    let mut vm_size = 0_u64;
+    for line in status.lines() {
+        let field = |name: &str| -> Option<u64> {
+            let rest = line.strip_prefix(name)?;
+            rest.split_whitespace().next()?.parse().ok()
+        };
+        if let Some(value) = field("VmRSS:") {
+            rss = value.saturating_mul(1024);
+        } else if let Some(value) = field("RssAnon:") {
+            anon = value.saturating_mul(1024);
+        } else if let Some(value) = field("RssFile:") {
+            file = value.saturating_mul(1024);
+        } else if let Some(value) = field("RssShmem:") {
+            shmem = value.saturating_mul(1024);
+        } else if let Some(value) = field("VmSize:") {
+            vm_size = value.saturating_mul(1024);
+        }
+    }
+    Ok(json!({
+        "resident_bytes": rss,
+        "anon_bytes": anon,
+        "file_backed_bytes": file,
+        "shmem_bytes": shmem,
+        "virtual_bytes": vm_size,
+        "cgroup": cgroup_memory(),
+    }))
+}
+
+/// `memory.current` and the useful fields of `memory.stat` of the cgroup that
+/// holds this process, or `null` when the container does not expose cgroup v2.
+///
+/// `file` covers the page cache of the container, mmapped vectors included;
+/// `anon` is the memory the instance owns. `file_mapped` is the part of `file`
+/// that a mapping of this process projects.
+#[cfg(target_os = "linux")]
+fn cgroup_memory() -> Value {
+    let current = std::fs::read_to_string("/sys/fs/cgroup/memory.current")
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok());
+    let stat = std::fs::read_to_string("/sys/fs/cgroup/memory.stat").ok();
+    let Some(stat) = stat else {
+        return Value::Null;
+    };
+    let mut fields = serde_json::Map::new();
+    for line in stat.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(value)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(value) = value.parse::<u64>() else {
+            continue;
+        };
+        fields.insert(name.to_string(), json!(value));
+    }
+    let max = std::fs::read_to_string("/sys/fs/cgroup/memory.max")
+        .ok()
+        .map(|text| text.trim().to_string());
+    json!({
+        "memory_current_bytes": current,
+        "memory_max": max,
+        "stat": Value::Object(fields),
+    })
+}
+
 /// Tells whether a `vmmap` field is a size (`0K`, `787.4M`, `2.7G`).
+#[cfg(target_os = "macos")]
 fn is_size(text: &str) -> bool {
     let body = text.strip_suffix(['K', 'M', 'G', 'T']).unwrap_or(text);
     !body.is_empty()
@@ -2059,6 +2279,7 @@ fn is_size(text: &str) -> bool {
 
 /// Parses a `vmmap` summary line such as
 /// `Writable regions: Total=1.8G written=357.9M resident=583.6M(32%)`.
+#[cfg(target_os = "macos")]
 fn summary_fields(line: &str) -> Value {
     let mut fields = serde_json::Map::new();
     for word in line.split_whitespace() {
@@ -2074,6 +2295,7 @@ fn summary_fields(line: &str) -> Value {
 }
 
 /// Parses a `vmmap` size such as `1313K`, `56.5M` or `1.2G` into bytes.
+#[cfg(target_os = "macos")]
 fn parse_bytes(text: &str) -> u64 {
     let text = text.trim();
     let (number, scale) = match text.char_indices().last() {

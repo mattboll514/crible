@@ -1047,7 +1047,8 @@ la surcharge croît avec B dans tous les cas.
 réglages par défaut d'ONNX Runtime** : le temps total croît de +3,6 % à +21,5 %
 dès B = 4, et le coût par jeton croît avec B. La valeur mesurée de la taille de
 lot interne est donc **1**, ce que le code du livrable (b) portait déjà
-(`ACCEPTANCE_BATCH_SIZE = 1`) sur la foi d'un relevé rapide de `@dev` ; cette
+(`ACCEPTANCE_BATCH_SIZE = 1`, constante et encodage par lots depuis **retirés** par ADR-0073) sur la
+foi d'un relevé rapide de `@dev` ; cette
 campagne le confirme avec trois tours entrelacés, deux lots et un encadrement par
 le chemin de production.
 
@@ -1142,3 +1143,164 @@ Le pilote `crates/crible-store/examples/acceptance_split.rs` gagne un mode `dump
 qui écrit l'échantillon tiré ; il ne référence ni `encode_batch` ni le code du
 livrable (b), qui peuvent donc être retirés sans casser la reproductibilité de
 cette campagne (le harnais, lui, ne dépend d'aucune crate de Crible).
+
+## Campagne en conteneur (P8, ADR-0135) — 2026-11-03
+
+Cette section **ajoute** la tranche « recette » demandée par la fiche `MESURER-EN-CONTENEUR-MAC`
+(passe B) : le coût par jeton ré-encodé et le temps de ré-encodage des 200 passages tirés, pour
+B ∈ {1, 4, 8}, avec le protocole de la campagne du 2026-10-27. Elle ne réécrit ni ses chiffres ni sa
+conclusion, qui restent ceux du **natif**.
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe B.
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié** : la recette
+  reste encodée **un passage à la fois**, aucune constante de taille de lot n'existe dans l'arbre
+  depuis ADR-0073 (elle a été retirée avec l'encodage par lots, qui n'apportait aucun gain).
+- **Harnais** : `crates/crible-encode/examples/acceptance_sweep.rs`, **fichier suivi**, porté depuis
+  le crate temporaire de la campagne du 2026-10-27 (`data/accelere-recette/harness/`, gitignoré). Le
+  portage est une **déviation déclarée** à la règle « harnais hors des fichiers versionnés » de cette
+  campagne : `.dockerignore` exclut `tools/` et `data/`, donc un crate sous `data/` ne peut pas être
+  copié dans le contexte de construction. Le code du balayage est le même (même appel de graphe,
+  `input_ids` et `attention_mask` de forme `[rows, length]`, remplissage après les vrais jetons,
+  pooling CLS de la ligne 0, normalisation selon `model.json`, session par défaut d'ONNX Runtime,
+  dépendances épinglées `ort = 2.0.0-rc.15`, `tokenizers = 0.23.2`). Le crate temporaire reste sur
+  disque et reste la source de comparaison.
+- **Machine** : MacBook Air M3, 8 cœurs, 24 Go, macOS 15.7.7 (24G720), **en conteneur** : Docker
+  Desktop 28.5.1, VM Linux `aarch64` de **12 529 836 032 octets (11,67 Gio)**, 8 vCPU, page de
+  4 096 octets. Aucune limite `--memory`. La charge de l'hôte n'est pas relevée : limite déclarée.
+- **Échantillon** : `sample-daily-articles-1000.json`, **200 passages, 54 991 jetons**, le même
+  document qu'au 2026-10-27, copié dans le volume (`/data/staging/`).
+- **Modèle** : `mdenseon`, graphe **fp32** (`model.onnx`) pour les deux environnements. Aucun
+  changement de fournisseur d'exécution ni de ré-export du graphe : la fiche l'exclut.
+
+### Protocole
+
+Celui du 2026-10-27, aux trois points près qui sont déclarés plus bas :
+
+- tailles **entrelacées** dans un même tour (B = 1, puis 4, puis 8), **trois tours** par série,
+  l'ordre de tailles répété à chaque tour ;
+- chaque série **encadrée par B = 1** : une passe de chauffe et de cadrage B = 1 (**un tour**,
+  `b-sweep-calibrate`, `rounds: 1` dans l'artefact), les quatre tours entrelacés, puis une série
+  B = 1 seule après (`b-sweep-frame-after`), qui vérifie l'absence de dérive ;
+- **linéarité** : le plus long passage tiré (1 026 jetons), dupliqué B fois dans **un seul** appel
+  (aucun remplissage par construction), trois tours ;
+- coût par jeton = temps total ÷ les jetons **avec remplissage** de la taille de lot (54 991, 56 448 et
+  58 504), **même base dans les trois environnements** ;
+  la surcharge de remplissage est celle que le harnais imprime (`padded`).
+
+```sh
+sh tools/bench/mes-p8-conteneur/run.sh mes08
+```
+
+soit, dans un conteneur neuf à `ENTRYPOINT` remplacé, une invocation de cadrage
+`acceptance_sweep sweep --sizes 1 --rounds 1`, deux invocations
+`acceptance_sweep sweep --sizes 1,4,8 --rounds 2`, l'encadrement
+`acceptance_sweep sweep --sizes 1 --rounds 3` après les tours, et une invocation
+`acceptance_sweep longest --copies 1,4,8 --rounds 3` ; puis, en natif, une invocation
+`--sizes 1,4,8 --rounds 1` et une invocation `longest --copies 1,4,8 --rounds 3`, même binaire
+(`target/release/examples/acceptance_sweep`), `ORT_DYLIB_PATH` sur la bibliothèque 1.31.0.
+
+Écarts au protocole, déclarés :
+
+- **Quatre tours entrelacés au lieu de trois**, en deux invocations de deux tours. Une invocation
+  unique de trois tours aurait additionné trois fois les trois tailles, soit environ 22 min de calcul
+  (3 × (168,8 + 132,8 + 129,1) s), auxquelles s'ajoutent le démarrage du conteneur et le chargement du
+  graphe, et un tour de B = 1 a valu 207,0 s : la marge sous la borne de 30 min que la conduite de la
+  tâche s'impose aurait été mince. Le découpage est donc un **choix de conduite**, et il ajoute un
+  tour au lieu d'en retirer un.
+- **Le contrôle natif ne fait qu'un tour** par taille, au lieu de trois : il sert d'échelle du jour,
+  pas de série. La campagne du 2026-10-27 reste la référence native à trois tours.
+- **Les lignes de progression sont imprimées dans l'intervalle chronométré** (une tous les 25
+  passages) pour qu'aucune commande ne reste muette plus de 3 min ; leur coût est très inférieur à la
+  milliseconde, mais il est déclaré.
+- **Un tour de B = 1 vaut 207,0 s**, contre 167,7 à 169,0 s pour les trois autres tours entrelacés de
+  B = 1 de la même série (mesuré avant, pendant et après). C'est un **point aberrant conservé**, non filtré : la
+  médiane des quatre tours entrelacés en tient compte (168,8 s).
+
+### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/b-sweep-{calibrate,a,b,frame-after}.json`,
+`b-longest.json`, `native-sweep.json`, `native-longest.json` (gitignorés) ; artefact versionné :
+`docs/mesures/MES-08-duree-attache-quotidienne.2026-11-03.conteneur.json`, écrit par
+`tools/bench/mes-p8-conteneur/aggregate-b.py`.
+
+Les agrégats **par tour** de ce tableau sont des **médianes vraies** : sur un nombre pair de tours,
+la moyenne des deux valeurs centrales (168 530,9 et 169 008,1 pour B = 1, d'où 168 769,5). Le harnais,
+lui, écrit la plus haute des deux ; l'artefact conserve ce chiffre sous `harness_median_ms` et ne
+publie que la médiane vraie. Les séries de latence des autres rapports gardent, elles, le percentile
+au rang le plus proche d'ADR-0077 : deux règles, une par nature de série.
+
+Temps total de ré-encodage des 200 passages, en millisecondes ; quatre tours entrelacés, `[min–max]`
+entre crochets, puis coût par jeton et jetons avec remplissage. **Le coût par jeton est rapporté aux
+jetons avec remplissage** (54 991, 56 448, 58 504) dans les trois environnements ; les trois lignes
+publiées du 2026-10-27 sont recalculées sur cette base, alors que la sous-section du 2026-10-27
+(`:974`) les donne sur les jetons réels :
+
+| Environnement | B | temps total (ms) | µs / jeton (jetons remplis) | jetons avec remplissage |
+|---|---|---:|---:|---:|
+| conteneur | **1** | **168 769,5 [167 686,8–207 002,9]** | 3 069 | 54 991 (+0,0 %) |
+| | 4 | 132 764,6 [126 615,7–140 651,1] | 2 352 | 56 448 (+2,6 %) |
+| | 8 | **129 063,5 [112 674,5–144 529,0]** | **2 206** | 58 504 (+6,4 %) |
+| natif, même harnais, 1 tour | 1 | 98 965,9 | 1 800 | 54 991 (+0,0 %) |
+| | 4 | 99 721,2 | 1 767 | 56 448 (+2,6 %) |
+| | 8 | 108 346,2 | 1 852 | 58 504 (+6,4 %) |
+| natif publié, 2026-10-27 | 1 | 56 314,7 [53 728,3–57 428,7] | 1 024 | 54 991 (+0,0 %) |
+| | 4 | 59 681,1 [56 540,7–60 143,3] | 1 057 | 56 448 (+2,6 %) |
+| | 8 | 63 633,4 [60 143,9–65 078,7] | 1 088 | 58 504 (+6,4 %) |
+
+Les jetons avec remplissage sont **identiques** aux trois environnements, ce qui confirme que le
+portage du harnais encode les mêmes textes.
+
+**Linéarité**, le plus long passage (1 026 jetons) dupliqué B fois dans un appel, médiane de trois
+tours :
+
+| Environnement | 1 copie | 4 copies | 8 copies | rapport au B = 1 (4 / 8) |
+|---|---:|---:|---:|---|
+| conteneur | 3 340,9 ms | 10 288,3 ms | 18 948,6 ms | **3,08 / 5,67** |
+| natif, même harnais | 2 229,9 ms | 8 346,0 ms | 16 455,8 ms | 3,74 / 7,38 |
+| natif publié | 1 338,1 ms | 5 317,2 ms | 10 786,7 ms | 3,97 / 8,05 |
+
+Trois constats :
+
+1. **En conteneur, un lot accélère la recette, et le sens de l'effet s'inverse.** Contre B = 1, B = 8
+   coûte **−23,5 %** de temps pour **+6,4 %** de jetons, soit **−28,1 %** de coût par jeton ; B = 4
+   vaut −21,3 % et −23,4 %. B = 8 est plus rapide que B = 4 dans trois tours sur quatre et la
+   médiane des quatre tours ne se recouvre pas avec celle de B = 1. Au 2026-10-27, en natif, B = 8
+   coûtait **+13,0 %** : la conclusion « aucune taille de lot n'accélère la recette » **ne vaut pas
+   en conteneur**.
+2. **Les lignes d'un lot se partagent donc du travail en conteneur, et pas en natif au même harnais.**
+   Huit copies du plus long passage coûtent 5,67 appels seuls en conteneur, 7,38 en natif aujourd'hui,
+   8,05 en natif publié. Le mécanisme **probable** est celui de l'occupation des fils : avec une
+   seule ligne, les produits matriciels sont étroits et le pool intra-opération reste peu occupé ;
+   avec huit lignes, il a plus de travail à répartir. Ce mécanisme **n'est pas prouvé** : aucun relevé
+   d'occupation par fil n'a été fait, ni en conteneur ni en natif.
+3. **Le conteneur coûte ×1,71 le natif du même jour à B = 1** (168 769,5 contre 98 965,9 ms), ×1,33 à
+   B = 4 et ×1,19 à B = 8 : le surcoût du conteneur **décroît avec la taille de lot**, ce qui va dans
+   le sens du constat 1. Le natif du jour vaut lui-même ×1,76 la campagne publiée : la machine était
+   plus lente qu'au 2026-10-27, et cette part n'est pas celle du conteneur.
+
+### Conclusion
+
+- **En conteneur, B = 8 l'emporte**, sous réserve d'un ADR et d'une mesure sur la cible : il minimise
+  le temps total comme le coût par jeton sur quatre tours entrelacés (129 063,5 ms ; 2 206 µs par
+  jeton). Ce n'est **pas** une remise en cause de la campagne du 2026-10-27 : en natif, le même
+  harnais redonne aujourd'hui le classement publié (B = 1 ≤ B = 4 < B = 8), et la production reste
+  encodée un passage à la fois, sans aucune constante de taille de lot (ADR-0073).
+- **Le gain est modeste et il ne se transpose pas sans mesure** : −23,5 % sur cette VM de 11,67 Go,
+  avec un mécanisme seulement probable. Il ne justifie pas d'ajouter une taille de lot à la
+  production avant une mesure sur la cible (Mac mini M1 en conteneur, P10), et il faudrait alors un
+  **nouvel ADR** qui rouvre l'encodage par lots qu'ADR-0073 a fermé.
+- **Aucune comparaison au budget n'est faite.** La durée d'attache de bout en bout n'est pas mesurée
+  ici : cette tranche ne couvre que la ré-encodage de contrôle, qui est une partie de `validation`.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- le temps d'attache complet en conteneur : seuls les 200 ré-encodages sont mesurés ;
+- le mécanisme du gain par lot : aucun compte d'occupation par fil ;
+- la reproductibilité du point aberrant de 207,0 s : la charge de l'hôte n'est pas relevée ;
+- le comportement de B = 16 et B = 32 en conteneur : la fiche demande B ∈ {1, 4, 8} seulement.
+
+**Recommandation, à valider par le propriétaire** : mesurer B ∈ {1, 4, 8, 16} sur la cible Mac mini
+en conteneur avant de choisir une taille de lot de production ; si le gain par lot s'y confirme,
+retenir **B = 8** — ce qui demande un **nouvel ADR**, puisque ADR-0073 a retiré l'encodage par lots et
+la constante de taille de lot —, sinon garder **B = 1**, comme la campagne native l'a établi.

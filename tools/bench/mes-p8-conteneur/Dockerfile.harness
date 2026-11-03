@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+#
+# Harness image of the container campaign of MES-02, MES-03 and MES-09
+# (task MESURER-EN-CONTENEUR-MAC, ADR-0135).
+#
+# The measurement harnesses are examples of the workspace, not binaries of the
+# image: `docker/Dockerfile` builds `-p crible` only, and this session must not
+# touch the production image recipe. This file therefore builds the examples from
+# the same tree and grafts them onto `crible:dev`, which already carries the
+# runtime (glibc, ONNX Runtime, non-root user) they need:
+#
+# - `dense_latency` (crible): scan, rescoring, RSS, and the passage A-bis flags;
+# - `measure_queries` (crible-encode): MES-05, query encoding latency;
+# - `acceptance_sweep` (crible-encode): MES-08, batch-size sweep of control 9;
+# - `server_costs` (crible-store): `sizes.disk_bytes` and the `ReadPool` opening
+#   of the documents route, which no timer of the engine reports.
+#
+# Build, from the repository root, after `docker build -f docker/Dockerfile -t
+# crible:dev .`:
+#
+#   docker build -f tools/bench/mes-p8-conteneur/Dockerfile.harness \
+#     -t crible-mes-p8-harness:dev .
+#
+# The context is the repository root, filtered by `.dockerignore`, which excludes
+# `.env*`, `data/`, `models/` and `tools/`. Only the workspace manifests and
+# `crates/` cross into the builder.
+
+ARG RUST_VERSION=1.99.1
+ARG DEBIAN_VERSION=bookworm
+
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+# Same build dependencies as `docker/Dockerfile`: `rusqlite` bundled and `zstd`
+# are C code, and some crates probe `cmake` at build time.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+
+RUN cargo build --release --locked \
+        --example dense_latency -p crible \
+        --example measure_queries --example acceptance_sweep -p crible-encode \
+        --example server_costs -p crible-store
+
+FROM crible:dev
+
+COPY --from=builder /build/target/release/examples/dense_latency /usr/local/bin/dense_latency
+COPY --from=builder /build/target/release/examples/measure_queries /usr/local/bin/measure_queries
+COPY --from=builder /build/target/release/examples/acceptance_sweep /usr/local/bin/acceptance_sweep
+COPY --from=builder /build/target/release/examples/server_costs /usr/local/bin/server_costs
+
+# The harness and `crible` both run as the `crible` user of the runtime image;
+# the data lives in the named volume mounted on `/data`.
+USER crible
+WORKDIR /data
+ENTRYPOINT ["dense_latency"]
