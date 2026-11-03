@@ -1,8 +1,8 @@
 # P10 — Validation à l'échelle réelle
 
-**But** : valider Crible sur la vraie base de Legifacile — six configs d'index, export de migration, import complet, jeu de référence, comparaison avec pgvector, mesure sur le Mac mini — puis écrire le bilan. C'est la dernière phase du plan (ADR-0129).
+**But** : valider Crible sur la vraie base de Legifacile — six configs d'index, export de migration, import complet, jeu de référence, comparaison avec pgvector, mesure sur le Mac mini — puis écrire le bilan. C'est la dernière phase de la **v1** ; le plan continue ensuite avec P9, après J10 (ADR-0136).
 
-**Jalon J10 — fin du plan, « v1 » de Crible** (ADR-0129, décision 7) :
+**Jalon J10 — fin de la v1** (ADR-0129, décision 7 ; ADR-0136 distingue la fin de la v1 de la fin du plan, qui est J9) :
 
 1. Les **six configs** d'index sont définies et validées par le propriétaire.
 2. Les **8,58 M passages** sont importés ; les comptes par index sont égaux à pgvector ou les écarts sont expliqués ; MES-07 et MES-09 sont faites à l'échelle réelle.
@@ -25,7 +25,7 @@ La **tâche quotidienne stable 14 jours** et le **retour arrière testé** ne co
 
 ### DEFINIR-INDEX-LEGIFACILE
 - **Objectif** : les six configs d'index définitives.
-- **Dépend de** : J9 validé (ADR-0129)
+- **Dépend de** : J8 validé (ADR-0136 ; ADR-0129 écrivait J9 validé)
 - **À lire** : `02-architecture.md` (découpage validé) ; `04-donnees-et-ingestion.md` (configuration). Dans Legifacile : les vues `vec.src_*`, `scripts/db/sync_vecteurs.py` et `serveur_mcp/outils.py` (filtres exposés).
 - **Livrables** :
   - `articles`, `jorf`, `decisions`, `titres`, `sarde` et `dole`, avec leurs champs, leurs types et leur niveau ;

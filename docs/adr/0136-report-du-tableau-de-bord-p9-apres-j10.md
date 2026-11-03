@@ -1,7 +1,7 @@
 # ADR-0136 — Report du tableau de bord (P9) après J10
 
-- **Statut** : Proposé
-- **Date** : 2026-11-03 (proposition)
+- **Statut** : Accepté — décidé par le propriétaire le 2026-11-03 (« ok ça me vas »), avec les deux recommandations
+- **Date** : 2026-11-03 (proposition et décision le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : `@greffier`, à la demande de l'orchestrateur, sur demande du propriétaire du 2026-11-03 (conversation avec l'orchestrateur) ; travail **hors tâche**, aucune tâche du plan ne le porte
 - **Remplace** : — (ne remplace aucun ADR ; touche l'**ordre d'exécution** fixé par ADR-0129, décision 5, et la **place** de P9 fixée par ADR-0130, décision 1 ; voir « Points laissés au propriétaire »)
@@ -114,7 +114,7 @@ Ce souhait **contredirait** les décisions suivantes d'ADR-0130, et c'est pourqu
 
 ## Application
 
-Rien n'est appliqué tant que le propriétaire n'a pas accepté cet ADR. À l'acceptation, `@greffier` met à jour les documents suivants, en citant `ADR-0136`.
+Rien n'est appliqué tant que le propriétaire n'a pas accepté cet ADR. À l'acceptation, `@greffier` met à jour les documents suivants, en citant `ADR-0136`. **Application faite le 2026-11-03**, le jour de l'acceptation ; `docs/suivi.md` reste tenu par l'orchestrateur.
 
 **Documents de conception**
 
@@ -140,10 +140,15 @@ Rien n'est appliqué tant que le propriétaire n'a pas accepté cet ADR. À l'ac
 
 ### Points laissés au propriétaire
 
-Deux questions que le contexte fourni ne tranche pas, et que cet ADR ne tranche pas non plus :
+Deux questions que le contexte fourni ne tranche pas, et que cet ADR ne tranchait pas non plus. **Le propriétaire les a tranchées le 2026-11-03**, en répondant « ok ça me vas » aux recommandations de l'orchestrateur : les deux recommandations sont suivies.
 
 1. **ADR-0129.** Sa décision 5 fixe l'ordre `P8 → P9 → P10` et en tire une justification. Faut-il, à l'acceptation d'ADR-0136, inscrire dans l'index une note de renvoi sur ADR-0129 (comme pour les ADR partiellement remplacés), ou laisser ADR-0129 en l'état et ne compter que sur le présent ADR pour l'ordre ? L'application ci-dessus n'écrit aucune note de ce type sans décision.
+
+   **Réponse (2026-11-03)** : note de renvoi dans l'index. La ligne d'ADR-0129 de `docs/adr/README.md` porte désormais « ordre des phases (décision 5) modifié par ADR-0136 : P8 → P10 → P9 ». Le fichier d'ADR-0129 lui-même n'est pas modifié.
+
 2. **ADR-0130.** Restera-t-il `Accepté` jusqu'au nouvel ADR de reprise, avec une simple note « application suspendue », ou passe-t-il dès maintenant en `Déprécié` ? Cet ADR propose de le laisser `Accepté` : ses décisions de fond — lecture seule, confidentialité, périmètre, rôles — sont reprises par l'intention du propriétaire.
+
+   **Réponse (2026-11-03)** : ADR-0130 reste `Accepté`, avec une note dans l'index. Sa ligne porte « application suspendue par ADR-0136 jusqu'à la reprise de P9 après J10 ». Son fichier n'est pas modifié.
 
 ## Conséquences
 

@@ -2,7 +2,7 @@
 
 ## Règles du jeu
 
-1. **Onze phases, de P0 à P10.** Chaque phase se termine par un **jalon** (J0 à J10) que **seul le propriétaire valide** (ADR-0129).
+1. **Onze phases, de P0 à P10.** Chaque phase se termine par un **jalon** (J0 à J10) que **seul le propriétaire valide** (ADR-0129). L'ordre d'exécution est `P0 → … → P8 → P10 → P9` : la validation à l'échelle réelle (P10) passe avant le tableau de bord (P9), reporté après J10 (ADR-0136).
 2. **Une phase ne commence que si le jalon précédent est validé** (voir `docs/suivi.md`).
 3. **Chaque phase se découpe en tâches** nommées `NOM-EN-MAJUSCULE`.
    - Une tâche est petite : idéalement moins de 500 lignes de diff.
@@ -76,18 +76,20 @@ Les sous-agents ne s'appellent pas entre eux : c'est l'orchestrateur qui enchaî
 | P6 | `phases/P6-serveur-et-api.md` | Serveur axum, auth, erreurs, écrivain et jobs, routes, multi-index, OpenAPI, client Python | **J6** : démo par Swagger et le client Python ; INV-02 sous charge ; INV-16 |
 | P7 | `phases/P7-observabilite.md` | Analytics, journal, debug, explain, stats, éval | **J7** : `crible eval` produit un rapport ; `explain_ids` explique un document absent ; INV-13 et INV-17 verts |
 | P8 | `phases/P8-docker-et-deploiement.md` | Image multi-arch, volumes, arrêt propre, compose, mesures en conteneur sur la machine de développement | **J8** : l'image tourne sur la machine de développement (arm64) et se construit en amd64 ; MES-02, MES-05 et MES-09 refaites en conteneur, à titre indicatif ; arrêt propre vérifié (`VERIFIER-ARRET-PROPRE`) |
-| P9 | `phases/P9-tableau-de-bord.md` | Tableau de bord visuel en lecture seule, intégré à `crible serve` sous `/ui` : parcourir les données, tester une recherche, voir les analytics ; HTML/CSS/JS sans framework ni build, sans dépendance nouvelle (ADR-0130) | **J9** : `/ui` servi sans clé avec la CSP et sans hôte externe ; clé `read` pour parcourir index et documents et pour le bac à sable (`dense`, `lexical`, `hybride`, mono et multi-index, `debug` et `explain`) ; analytics avec `admin`, message explicite avec `read` ; aucun id interne à l'écran ni dans le DOM ; `cargo build` suffit, CI sans étape nouvelle (ADR-0130, décision 13) |
-| P10 | `phases/P10-validation-a-l-echelle-reelle.md` | Six index Legifacile, export de migration, import complet, jeu de référence, comparaison avec pgvector, mesure sur le Mac mini, bilan | **J10** : critères de la décision 7 d'ADR-0129 |
+| P9 | `phases/P9-tableau-de-bord.md` | **Reportée après J10 (ADR-0136), hors de la v1** ; fiches à réécrire à la reprise. Tableau de bord visuel en lecture seule, intégré à `crible serve` sous `/ui` : parcourir les données, tester une recherche, voir les analytics ; HTML/CSS/JS sans framework ni build, sans dépendance nouvelle (ADR-0130, dont l'application est suspendue) | **J9** : après J10. `/ui` servi sans clé avec la CSP et sans hôte externe ; clé `read` pour parcourir index et documents et pour le bac à sable (`dense`, `lexical`, `hybride`, mono et multi-index, `debug` et `explain`) ; analytics avec `admin`, message explicite avec `read` ; aucun id interne à l'écran ni dans le DOM ; `cargo build` suffit, CI sans étape nouvelle (ADR-0130, décision 13 ; critères à réécrire avec le contenu à la reprise) |
+| P10 | `phases/P10-validation-a-l-echelle-reelle.md` | Six index Legifacile, export de migration, import complet, jeu de référence, comparaison avec pgvector, mesure sur le Mac mini, bilan | **J10** : critères de la décision 7 d'ADR-0129. **J10 est la fin de la v1, pas la fin du plan** : P9 et J9 viennent après (ADR-0136) |
 
 ## Dépendances entre phases
 
 ```
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10
+P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P10 → P9
               ├── l'échantillon Legifacile (P2) sert à P4, P5 et P7
               └── le jeu de référence de P10 sert au projet Legifacile (nouveau dépôt)
 ```
 
-L'ordre est strictement séquentiel jusqu'à J10, pour garder une seule phase ouverte à la fois. ADR-0129 fixe cet ordre : le tableau de bord (P9) passe **avant** la validation à l'échelle réelle (P10). Le serveur (P6) arrive tard exprès : jusqu'à P5, tout se valide par la CLI et les tests, sur un cœur stable.
+L'ordre reste strictement séquentiel, pour garder une seule phase ouverte à la fois. **Depuis ADR-0136, la validation à l'échelle réelle (P10) passe avant le tableau de bord (P9)** : P10 dépend du jalon J8, et P9 est reportée après J10. ADR-0129 décidait l'inverse (P9 avant P10) ; c'est cette conclusion qui tombe, pas la règle « une seule phase ouverte ».
+
+**Deux fins distinctes.** **J10 est la fin de la v1** : il valide Crible sur la base réelle, sans interface. **La fin du plan est J9** : P9 et J9 s'exécutent après J10, hors de la v1 (ADR-0136). Les numéros de phase et de jalon ne changent pas ; c'est pourquoi l'ordre s'écrit ici explicitement. Le serveur (P6) arrive tard exprès : jusqu'à P5, tout se valide par la CLI et les tests, sur un cœur stable.
 
 **Lecture des documents antérieurs au 2026-11-02 (ADR-0129, décision 3).** Dans un document écrit avant ADR-0129, `P9` se lit `P10`, `J9` se lit `J10`, et « la v1 » désigne l'horizon J10. La règle est bornée : elle ne touche ni le format de lot v1, ni l'API REST v1, ni les titres d'ADR portant « v1 » (voir `adr/README.md`).
 
