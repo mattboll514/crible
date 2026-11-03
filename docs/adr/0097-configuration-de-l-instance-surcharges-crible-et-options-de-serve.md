@@ -1,6 +1,6 @@
 # ADR-0097 — Configuration de l'instance : surcharges `CRIBLE_*`, chemin de `crible.toml`, options de `crible serve`
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé) — complété par ADR-0131 (variable `CRIBLE_EVAL_API_KEY`), puis par le complément du 2026-11-03 sur la liste actuelle des variables exclues, accepté par anticipation et à confirmer par le propriétaire, sans modification du corps
+- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé) — complété par ADR-0131 (variable `CRIBLE_EVAL_API_KEY`), puis par le complément du 2026-11-03 sur la liste actuelle des variables exclues, accepté par anticipation, confirmé par le propriétaire le 2026-11-03, sans modification du corps
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEMARRER-SERVEUR-AXUM (phase P6), sur la demande du propriétaire et le verdict de `@architecte` du 2026-10-29
