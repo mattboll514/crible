@@ -164,6 +164,7 @@
 - **Dépend de** : CONSTRUIRE-IMAGE-DOCKER, CONFIGURER-QUALITE-ET-CI
 - **Livrables** : un workflow sur tag `v*` qui construit l'image multi-arch avec buildx et la pousse sur GHCR (`ghcr.io/<owner>/crible:<version>` et `:cpu`).
 - **Critères d'acceptation** : le workflow est valide ; **le premier tag est poussé par le propriétaire** (l'agent ne pousse jamais).
+- **Note du 2026-11-03** : `<version>` et `:cpu` sont définis par ADR-0133. `<version>` est le tag sans son `v` et doit valoir `[workspace.package] version` de `Cargo.toml`, sinon le workflow échoue avant toute construction. `:cpu` est l'étiquette mobile de la dernière version **stable** publiée : elle ne se déplace ni sur une pré-version, ni sur un correctif d'une version antérieure.
 
 ### MESURER-EN-CONTENEUR-MAC
 - **Objectif** : les chiffres en conteneur, à titre **indicatif**, sur la machine de développement. ADR-0129 (décision 4) déplace la portée : cette tâche garde son nom et sa place en P8, mais elle éprouve l'image et le conteneur ; elle ne porte plus la cible de `docs/08:88`. La mesure contraignante est `MESURER-SUR-MAC-MINI`, en P10.
