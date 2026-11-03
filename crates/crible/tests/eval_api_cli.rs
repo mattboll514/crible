@@ -24,6 +24,8 @@
 //! | `eval_api_refuses_https_before_any_io` | `https://` refused in `invalid_request`, naming the scheme and TLS (decision 3) |
 //! | `eval_api_refuses_data_and_url_together` | `--data` and `--url` are exclusive (decision 6) |
 //! | `eval_api_refuses_exact_threshold_with_url` | `--exact-threshold` is refused in API mode (decision 6) |
+//! | `eval_api_refuses_a_missing_or_empty_key_before_any_io` | key absent or empty refused in `invalid_request`, naming `CRIBLE_EVAL_API_KEY`, before any I/O (decision 4) |
+//! | `eval_api_baseline_reads_format_version_1_and_names_uncomparable_latencies` | a `format_version: 1` baseline is still read, `latency_not_compared` instead of a guessed comparison (decision 7) |
 //!
 //! Every test drives the `crible` binary, and every API test starts a real
 //! `crible serve` child on a port the kernel picks (`127.0.0.1:0`), waits for the
@@ -35,6 +37,14 @@
 //! makes the binary strategy lose the best five passages (the same fixture as
 //! `eval_cli.rs`): its fidelity is `0.5`, not `1`, so an equality between the two
 //! modes is not the equality of two vacuous figures.
+//!
+//! # Why the tests of this binary are serialised
+//!
+//! Every test of this binary holds [`common::SerialGuard`] for its whole body,
+//! because the fixture opens a store for writing in this process while another
+//! test spawns a `crible serve` or `crible eval` child: a `fork` duplicates the
+//! `WRITER_LOCK` of that store, which would refuse a later reopen as
+//! `overloaded` (ADR-0116, decision 2; see [`common::SerialGuard`]).
 //!
 //! ```text
 //! cargo test -p crible --test eval_api_cli

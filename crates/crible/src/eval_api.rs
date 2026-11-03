@@ -58,9 +58,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// ceiling of the route, so the server has time to answer its own `504`.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(35);
 
-/// Bound of a response body, in bytes: the same MiB the server puts on its own
-/// bodies, and far above an answer of `k <= 1000` without text nor field
-/// (decision 8).
+/// Bound of a response body, in bytes: one MiB, chosen for an answer of
+/// `k <= 1000` without text nor field (decision 8).
 const MAX_BODY_BYTES: usize = 1 << 20;
 
 /// Where the API mode sends its requests.

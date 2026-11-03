@@ -523,8 +523,8 @@ pub fn crible_ok(arguments: &[&str]) {
     );
 }
 
-/// Serialises the tests of a binary that both open a store in this process and
-/// spawn children.
+/// Serialises the tests of a binary that both opens a store in this process and
+/// spawns children.
 ///
 /// A `fork` duplicates every open file description of the process, and the
 /// writer lock of an index is an `flock` held by such a description (ADR-0116,
@@ -535,11 +535,12 @@ pub fn crible_ok(arguments: &[&str]) {
 /// `O_CLOEXEC` closes the descriptor at `exec`, not between `fork` and `exec`.
 ///
 /// A binary is serialised when a store opened for writing in the test process
-/// — even one closed at once — coexists with another test that spawns a child,
-/// or when a child then takes the `WRITER_LOCK` of the same index:
-/// `lock_exclusive` returns `Busy` without retrying, so that child's open fails
-/// as `overloaded` while the forked descriptor lives. Such a binary holds this
-/// guard for the whole body of every test; no test waits or retries.
+/// — even one closed at once — can be duplicated by another test's fork, and a
+/// later writer of the same index, in the process or in a child, then takes the
+/// `WRITER_LOCK`: `lock_exclusive` returns `Busy` without retrying, so that
+/// later open fails as `overloaded` while the forked descriptor lives. Such a
+/// binary holds this guard for the whole body of every test; no test waits or
+/// retries.
 pub struct SerialGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }

@@ -661,6 +661,11 @@ fn collect_strings(value: &Value, out: &mut Vec<String>) {
 /// commits normally would observe each other's value, and cargo runs the
 /// tests of one binary concurrently. Every test of a binary that commits must
 /// therefore hold this guard, not only the tests that arm a failpoint.
+///
+/// The guard also keeps another test's fork from duplicating a `WRITER_LOCK`
+/// this process holds, which would refuse the reopen of the same index with
+/// `overloaded`; the section "Why the tests of this binary are serialised" of
+/// `inv_04_crash_recovery.rs` states that reason.
 pub struct SerialGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
 }

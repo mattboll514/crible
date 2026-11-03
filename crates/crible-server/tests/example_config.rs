@@ -36,6 +36,24 @@ fn docker_path(name: &str) -> std::path::PathBuf {
         })
 }
 
+/// The demonstration key the `client` service sends, read from the Compose file.
+///
+/// The Compose file is the only source: repeating the key here would let the two
+/// drift apart without a red test.
+fn compose_demo_key() -> String {
+    let path = docker_path("compose.example.yml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+    text.lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("CRIBLE_API_KEY:")?;
+            Some(value.trim().trim_matches('"').trim_matches('\'').to_owned())
+        })
+        .unwrap_or_else(|| {
+            panic!("docker/compose.example.yml must set the demonstration key in `CRIBLE_API_KEY`")
+        })
+}
+
 #[test]
 fn the_docker_example_configuration_is_accepted() {
     // `load_with_env` is the loader of `crible serve`, with the environment
@@ -86,8 +104,8 @@ fn the_compose_demo_configuration_is_accepted() {
     assert_eq!(config.paths.exchange, Path::new("/exchange"));
 
     // One read key, the one the `client` service sends. Its digest is compared
-    // to the demonstration key written in `docker/compose.example.yml`, so the
-    // two files cannot drift apart and turn the demo into a `401`.
+    // to the demonstration key read in `docker/compose.example.yml`, so the two
+    // files cannot drift apart and turn the demo into a `401`.
     assert_eq!(
         config.auth.keys.len(),
         1,
@@ -96,9 +114,10 @@ fn the_compose_demo_configuration_is_accepted() {
     let key = &config.auth.keys[0];
     assert_eq!(key.name, "compose-demo");
     assert_eq!(key.role, Role::Read);
+    let demo_key = compose_demo_key();
     assert_eq!(
         key.sha256,
-        hex_encode(&Sha256::digest(b"crible-compose-demo-key")),
+        hex_encode(&Sha256::digest(demo_key.as_bytes())),
         "the digest of docker/crible.demo.toml must be the one of the key of \
          docker/compose.example.yml"
     );

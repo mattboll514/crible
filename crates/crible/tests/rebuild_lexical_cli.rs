@@ -44,6 +44,14 @@
 //! index really carries tombstones to remove. Nothing is written outside the
 //! temporary directory.
 //!
+//! # Why the tests of this binary are serialised
+//!
+//! Every test of this binary holds [`common::SerialGuard`] for its whole body,
+//! because the fixture opens a store for writing in this process while another
+//! test spawns a `crible rebuild-lexical` child: a `fork` duplicates the
+//! `WRITER_LOCK` of that store, which would refuse a later reopen as
+//! `overloaded` (ADR-0116, decision 2; see [`common::SerialGuard`]).
+//!
 //! ```text
 //! cargo test -p crible --test rebuild_lexical_cli
 //! ```

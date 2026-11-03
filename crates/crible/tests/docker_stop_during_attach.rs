@@ -703,8 +703,8 @@ impl Lab {
 
     /// Copies `/data` of the container to `<root>/<label>`, and returns it.
     ///
-    /// It works on a stopped container, which is how the analytics are read
-    /// before the restart.
+    /// It works on a stopped container as well as on a running one; the
+    /// analytics are read this way before the restart.
     fn copy_data(&self, label: &str) -> PathBuf {
         let destination = self.root.path().join(label);
         fs::create_dir_all(&destination).expect("the copy destination is creatable");
@@ -1105,7 +1105,7 @@ fn searches_in(data: &Path) -> u64 {
 /// opening in write mode removes `segments/tmp-*`, an unreferenced segment
 /// directory, the residual `tmp-*` of the index directory and of `manifests/`,
 /// then the `online-*` and `deleted-*` directories of `<data>/tmp/`. The
-/// `return` of `docs/04-donnees-et-ingestion.md:253` covers only the
+/// cross-reference to `docs/04-donnees-et-ingestion.md:253` covers only the
 /// `tmp/online-*` directories, not these.
 ///
 /// Two limits, deliberate here: the sweep also covers `epochs/`, which the

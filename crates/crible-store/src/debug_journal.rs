@@ -115,12 +115,12 @@ pub struct FlushReport {
     pub measure: JournalMeasure,
 }
 
-/// One row of `queries`, as a writer deposits it or a reader receives it.
+/// One row of `queries`, as a writer deposits it.
 ///
-/// The same type is the input of [`DebugJournalStore::flush`] and the output of
-/// [`read_queries`]: a writer leaves [`DebugQueryRow::created_at`] empty and
-/// SQLite fills it at the insertion (ADR-0121, decision 3), a reader receives
-/// the stored value.
+/// [`DebugJournalStore::flush`] takes rows of this type; [`read_queries`]
+/// returns [`DebugQuery`], the same row with the `id` SQLite assigned. A writer
+/// leaves [`DebugQueryRow::created_at`] empty and SQLite fills it at the
+/// insertion (ADR-0121, decision 3), a reader receives the stored value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DebugQueryRow {
     /// Timestamp of the flush, RFC 3339 UTC with milliseconds; empty on input.

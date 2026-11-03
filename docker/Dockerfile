@@ -10,6 +10,8 @@
 #
 # Build and run: see `docker/README.md`.
 
+# Toolchain of `rust-toolchain.toml`, which is the source of truth: a bump of
+# its `channel` must update this default too.
 ARG RUST_VERSION=1.99.1
 ARG DEBIAN_VERSION=bookworm
 ARG CARGO_CHEF_VERSION=0.1.78

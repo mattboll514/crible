@@ -108,8 +108,12 @@ n'est accordé qu'aux deux jobs qui publient, `build` et `merge`, le job `meta`,
 qui décide du nom et de la version, ne demandant que `contents: read`.
 L'authentification se fait par le `GITHUB_TOKEN` automatique, et aucun autre
 secret n'est employé. Le groupe de `concurrency` est fixe (`publish-image`) avec
-`cancel-in-progress: false` : deux publications ne se chevauchent pas, et aucune
-empreinte poussée ne reste sans liste de manifestes (ADR-0133, décision 5).
+`cancel-in-progress: false` : deux publications ne se chevauchent pas, et seules
+les empreintes orphelines d'une **exécution annulée** sont évitées. Avec
+`fail-fast: false`, si une architecture échoue après que l'autre a poussé son
+empreinte, le job `merge` ne tourne pas et cette empreinte reste sans étiquette
+dans le registre ; `cancel-in-progress: false` ne couvre pas ce cas d'échec
+d'une seule architecture (ADR-0133, décision 5).
 
 Les commandes ci-dessous sont celles du **propriétaire** ; aucun agent ne crée
 ni ne pousse de tag. D'abord l'essai, avec la pré-version écrite dans

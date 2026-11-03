@@ -16,8 +16,8 @@
 # pinned like the Python one, and only its executables are taken from it.
 FROM ghcr.io/astral-sh/uv:0.11.21 AS uv
 
-# Pinned patch version: the demo has no lock file of its own, and an unpinned
-# tag would change the container under the same compose file.
+# Pinned patch version: the Python base image is not covered by `uv.lock`, and
+# an unpinned tag would change the container under the same compose file.
 FROM python:3.13.9-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \

@@ -18,8 +18,8 @@
 //! type the targeted key already has. Three cases stop the startup, each with a
 //! message that names the variable: the key does not exist, the value does not
 //! parse in that type, or the variable targets a table of tables
-//! (`[[auth.keys]]`). The seven variables documented outside the configuration
-//! are ignored without error; any other unknown `CRIBLE_*` variable is a fault.
+//! (`[[auth.keys]]`). The variables documented outside the configuration are
+//! ignored without error; any other unknown `CRIBLE_*` variable is a fault.
 //! A refusal that comes from the key itself (a bound, an enumeration, an empty
 //! value) names the variable too: the set of overrides is kept, and every
 //! validation message of a key it set adds "set by `CRIBLE_…`".
@@ -54,7 +54,7 @@ const SECTION_SEPARATOR: &str = "__";
 ///
 /// The list is closed. These variables name no key of `crible.toml`, so they
 /// escape the three refusals above and are ignored without error.
-const EXCLUDED_VARIABLES: [&str; 8] = [
+const EXCLUDED_VARIABLES: [&str; 11] = [
     "CRIBLE_FAILPOINT",
     "CRIBLE_BIN",
     "CRIBLE_PYTHON",
@@ -62,6 +62,12 @@ const EXCLUDED_VARIABLES: [&str; 8] = [
     "CRIBLE_CRASH_CHILD",
     "CRIBLE_CRASH_BATCH",
     "CRIBLE_CRASH_INDEX",
+    // The hooks of the `failpoints` build. A test sets one of them in its own
+    // process and spawns `crible serve`; the child inherits the environment
+    // and must ignore the hook it does not read without the feature.
+    "CRIBLE_TEST_BARRIER",
+    "CRIBLE_TEST_ENCODER",
+    "CRIBLE_TEST_SEGMENT_READERS",
     // The `read` key of `crible eval --url` (ADR-0131, decision 4): the server
     // never reads it, and an operator who exported it before starting the
     // server must not be stopped by the closed list.
@@ -1051,7 +1057,20 @@ query_cache_entries = 1024
 
     #[test]
     fn a_variable_documented_outside_the_configuration_is_ignored() {
-        // ADR-0097: the list is closed, and these eight variables name no key.
+        // ADR-0097: the list is closed, and every variable of it names no key.
+        for name in [
+            "CRIBLE_TEST_BARRIER",
+            "CRIBLE_TEST_ENCODER",
+            "CRIBLE_TEST_SEGMENT_READERS",
+        ] {
+            // A test process sets these hooks and spawns `crible serve`; the
+            // child inherits them and must not refuse to start on the closed
+            // list.
+            assert!(
+                super::EXCLUDED_VARIABLES.contains(&name),
+                "{name} belongs to the closed list of the test hooks"
+            );
+        }
         let env: Vec<(&str, &str)> = super::EXCLUDED_VARIABLES
             .iter()
             .map(|name| (*name, "ignored"))

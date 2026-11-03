@@ -21,8 +21,9 @@ target/
 *.sqlite-wal
 *.sqlite-shm
 
-# The image needs the workspace manifests, `crates/`, `rust-toolchain.toml` and
-# `docker/` only.
+# The image copies the workspace manifests, `crates/` and
+# `rust-toolchain.toml` only; `clippy.toml`, `rustfmt.toml`, `LICENSE` and
+# `.cargo/` stay in the context and are harmless. Everything below is excluded.
 .git/
 .gitignore
 .claude/
@@ -32,7 +33,6 @@ ci/
 clients/
 tools/
 docs/
-.claude/runs/
 .DS_Store
 CLAUDE.md
 AGENTS.md
