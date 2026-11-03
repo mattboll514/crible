@@ -1,6 +1,6 @@
 # ADR-0134 — Progression des jobs : vocabulaire, granularité et types publiés
 
-- **Statut** : Accepté (décidé par le propriétaire le 2026-11-03)
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-03) — complété par la précision du 2026-11-03 sur la décision 2 (job réussi sans étape jouée), sans modification du corps
 - **Date** : 2026-11-03
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche NETTOYER-P8 (passage D), sur demande de l'orchestrateur, d'après le verdict de `@architecte` et quatre questions posées au propriétaire le 2026-11-03
@@ -80,6 +80,14 @@ Un job échoué garde la dernière progression publiée, éventuellement avec `d
 | Une étape `encode` comptée en documents pour le lot en ligne | Change l'unité en cours de job : `total` passerait des documents aux passages, et un client ne pourrait plus comparer `done` et `total` dans le temps. Le lot en ligne publie l'attache seule, après l'encodage. |
 | Omettre `progress` plutôt que rendre `null` | L'objet `Job` est fermé (ADR-0111, décision 7) : un membre absent et un membre `null` se liraient différemment, alors que l'absence de progression est un état, pas une omission. |
 
+## Complément du 2026-11-03 (précision du propriétaire sur la décision 2)
+
+La décision 2 dit que `done` vaut `total` à la fin de la dernière étape d'un job réussi. Elle ne nommait pas le cas d'un job réussi qui n'a joué **aucune** étape. Le rejeu d'un lot déjà attaché est ce cas : `attach_batch` rend le rapport déjà appliqué quand le `batch_id` et le digest du manifeste concordent, sans jouer `validation`, `segment`, `transaction`, `lexical`, `manifest` ni `snapshot` (`crates/crible-store/src/attach.rs:585-587` ; rejeu idempotent d'ADR-0103). Aucune étape n'est donc publiée, et le job `succeeded` garde `progress: null`, membre présent (décision 4 et ADR-0111, décision 7).
+
+**La précision, décidée par le propriétaire le 2026-11-03.** Un job réussi qui n'a joué aucune étape, comme le rejeu d'un lot déjà attaché, garde `progress: null` ; un client ne doit donc pas supposer `done = total` sur tout job réussi.
+
+Le test `a_replayed_batch_publishes_no_progress` (`crates/crible-server/tests/job_progress.rs:392`) fige ce comportement. Le corps de l'ADR et les autres décisions ne changent pas.
+
 ## Références
 
 - `docs/05-api.md`, section « Jobs » (`:429-451`), en particulier l'exemple `:432-440` et la puce `:443`.
@@ -87,5 +95,6 @@ Un job échoué garde la dernière progression publiée, éventuellement avec `d
 - `docs/02-architecture.md` (« Générations et point de commit » `:120-142`, ordre des étapes `:124-131`, patch de métadonnées `:133` et `:135-142`).
 - `crates/crible-server/src/jobs.rs:140-187` (`JobProgress`, `set` sans appelant) ; `crates/crible-server/src/openapi.rs:552-561` (`#[schema(example = "commit")]` à `:557`).
 - `crates/crible-store/src/attach.rs:230-258` (`AttachDurations`).
+- `crates/crible-store/src/attach.rs:585-587` (rejeu d'un lot déjà attaché : rapport rendu sans jouer d'étape) ; `crates/crible-server/tests/job_progress.rs:392` (`a_replayed_batch_publishes_no_progress`).
 - ADR-0016 (point de commit unique) ; ADR-0042 (durées d'attache, télémétrie d'appel non persistée) ; ADR-0060 (patch de métadonnées) ; ADR-0087 (`lexical` entre `transaction` et `manifest`) ; ADR-0088 (commit tantivy absent quand le texte ne change pas) ; ADR-0103 (table des jobs, décision 3) ; ADR-0105 (`kind` et corps des réponses) ; ADR-0111 (décision 7, objets fermés) ; ADR-0119 (décision 3, omission limitée à `per_result`).
 - Tâche NETTOYER-P8, passage D ; écart relevé par `@testeur` pendant VERIFIER-ARRET-PROPRE.
