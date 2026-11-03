@@ -1985,3 +1985,203 @@ mod tests {
         );
     }
 }
+
+/// The reference game of Legifacile (`CONSTITUER-JEU-DE-REFERENCE`, P10).
+///
+/// The six `<index>.jsonl` files of `docs/legifacile/reference/` are read by
+/// [`read_queries`], the parser of `crible eval` itself (ADR-0125, decision 3),
+/// so the game is accepted by the command that will run it. Every `filter` is
+/// then parsed and validated against the schema of its index by
+/// `Filter::from_json_str` and `Filter::validate`, the path of step 1 of the
+/// pipeline (ADR-0029, ADR-0035). `mcp.jsonl` is checked as the other side of
+/// the same game: one line per `id`, one `id` per line, the four members, the
+/// eight perimeters and the parameter names of `recherche_semantique`.
+#[cfg(test)]
+mod reference_game {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::{Path, PathBuf};
+
+    use crible_core::config::IndexConfig;
+    use crible_core::filter::Filter;
+    use serde_json::Value;
+
+    use super::Query;
+    use super::read_queries;
+
+    /// The six indexes of `docs/legifacile/configs/`.
+    const INDEXES: [&str; 6] = ["articles", "jorf", "decisions", "titres", "sarde", "dole"];
+
+    /// The eight perimeters of the MCP (`serveur_mcp/perimetres.py`).
+    const PERIMETERS: [&str; 8] = [
+        "droit_applicable",
+        "droit_en_vigueur",
+        "droit_historique",
+        "jurisprudence",
+        "journal_officiel",
+        "index_thematique",
+        "dossiers_legislatifs",
+        "titres",
+    ];
+
+    /// The filter parameter names `recherche_semantique` accepts
+    /// (`serveur_mcp/outils.py`), `corpus` left out: `mcp.jsonl` describes the
+    /// call by perimeter only.
+    const FILTER_PARAMS: [&str; 8] = [
+        "k",
+        "dedupliquer",
+        "partie_exclue",
+        "fonds",
+        "etat",
+        "annee_min",
+        "annee_max",
+        "cle_domaine",
+    ];
+
+    /// Root of the repository, from this crate.
+    fn docs() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("docs")
+    }
+
+    /// One game, read by the parser of the command.
+    fn game(name: &str) -> Vec<Query> {
+        let path = docs()
+            .join("legifacile/reference")
+            .join(format!("{name}.jsonl"));
+        read_queries(&path).unwrap_or_else(|error| {
+            panic!(
+                "{} must be a game `crible eval` accepts: {error}",
+                path.display()
+            )
+        })
+    }
+
+    /// The configuration of one index, read as `crible-store` reads it.
+    fn config(name: &str) -> IndexConfig {
+        let path = docs()
+            .join("legifacile/configs")
+            .join(format!("{name}.json"));
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+        IndexConfig::from_json_str(&raw).unwrap_or_else(|error| {
+            panic!("index {name}: the configuration must be valid: {error}")
+        })
+    }
+
+    #[test]
+    fn every_reference_game_parses_and_every_filter_validates_against_its_index() {
+        for name in INDEXES {
+            let queries = game(name);
+            assert!(
+                !queries.is_empty(),
+                "index {name}: the reference game must hold at least one query"
+            );
+            let config = config(name);
+            for query in &queries {
+                assert!(
+                    query.text.is_some(),
+                    "index {name} ({}): a reference query carries its text",
+                    query.id
+                );
+                assert!(
+                    !query.expected.is_empty(),
+                    "index {name} ({}): a reference query names the documents it expects",
+                    query.id
+                );
+                let Some(raw) = query.filter.as_deref() else {
+                    continue;
+                };
+                let filter = Filter::from_json_str(raw).unwrap_or_else(|error| {
+                    panic!(
+                        "index {name} ({}): the filter is outside the grammar: {error}",
+                        query.id
+                    )
+                });
+                filter.validate(&config.schema).unwrap_or_else(|error| {
+                    panic!(
+                        "index {name} ({}): the filter does not validate against the schema: \
+                         {error}",
+                        query.id
+                    )
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn every_id_has_exactly_one_mcp_line_and_the_converse() {
+        let mut ids: BTreeMap<String, &str> = BTreeMap::new();
+        for name in INDEXES {
+            for query in game(name) {
+                if let Some(previous) = ids.insert(query.id.clone(), name) {
+                    panic!(
+                        "the id '{}' appears in {previous} and in {name}: the game numbers its \
+                         queries once",
+                        query.id
+                    );
+                }
+            }
+        }
+
+        let path = docs().join("legifacile/reference/mcp.jsonl");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        for (position, line) in text.lines().enumerate() {
+            let number = position + 1;
+            let value: Value = serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("mcp.jsonl line {number}: invalid JSON: {error}"));
+            let object = value
+                .as_object()
+                .unwrap_or_else(|| panic!("mcp.jsonl line {number}: a line must be an object"));
+            let members: BTreeSet<&str> = object.keys().map(String::as_str).collect();
+            let expected: BTreeSet<&str> =
+                ["id", "tool", "perimetre", "params"].into_iter().collect();
+            assert_eq!(
+                members, expected,
+                "mcp.jsonl line {number}: the line is closed to these four members"
+            );
+            let id = object["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("mcp.jsonl line {number}: `id` must be a string"))
+                .to_owned();
+            assert_eq!(
+                object["tool"].as_str(),
+                Some("recherche_semantique"),
+                "mcp.jsonl line {number}: the game compares the semantic branch"
+            );
+            let perimetre = object["perimetre"]
+                .as_str()
+                .unwrap_or_else(|| panic!("mcp.jsonl line {number}: `perimetre` must be a string"));
+            assert!(
+                PERIMETERS.contains(&perimetre),
+                "mcp.jsonl line {number}: '{perimetre}' is not one of the eight perimeters"
+            );
+            let params = object["params"]
+                .as_object()
+                .unwrap_or_else(|| panic!("mcp.jsonl line {number}: `params` must be an object"));
+            for key in params.keys() {
+                assert!(
+                    FILTER_PARAMS.contains(&key.as_str()),
+                    "mcp.jsonl line {number}: '{key}' is not a parameter of `recherche_semantique`"
+                );
+            }
+            assert!(
+                ids.contains_key(&id),
+                "mcp.jsonl line {number}: the id '{id}' is in no index game"
+            );
+            assert!(
+                seen.insert(id.clone()),
+                "mcp.jsonl line {number}: the id '{id}' has more than one line"
+            );
+        }
+        assert_eq!(
+            seen.len(),
+            ids.len(),
+            "mcp.jsonl: {} lines for {} ids of the six games",
+            seen.len(),
+            ids.len()
+        );
+    }
+}
