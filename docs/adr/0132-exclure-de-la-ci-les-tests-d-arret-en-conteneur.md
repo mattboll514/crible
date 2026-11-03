@@ -1,6 +1,6 @@
 # ADR-0132 — Exclure de la CI les tests de l'arrêt propre en conteneur
 
-- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmation à venir)
+- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmé par le propriétaire le 2026-11-03)
 - **Date** : 2026-11-03
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche VERIFIER-ARRET-PROPRE (phase P8), sur la recommandation de `@architecte` retenue telle quelle par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-02

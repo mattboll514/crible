@@ -1,6 +1,6 @@
 # ADR-0131 — Mode API de `crible eval`
 
-- **Statut** : Accepté (par anticipation le 2026-11-02, sur délégation du propriétaire ; confirmation à venir)
+- **Statut** : Accepté (par anticipation le 2026-11-02, sur délégation du propriétaire du 2026-11-02 ; confirmé par le propriétaire le 2026-11-03)
 - **Date** : 2026-11-02
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche EVALUER-PAR-API (phase P8), sur l'analyse de `@architecte` et les décisions retenues par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-02

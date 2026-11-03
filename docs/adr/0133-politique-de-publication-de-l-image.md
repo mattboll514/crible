@@ -1,6 +1,6 @@
 # ADR-0133 — Politique de publication de l'image
 
-- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmation à venir)
+- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmé par le propriétaire le 2026-11-03)
 - **Date** : 2026-11-03
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche PUBLIER-IMAGE (phase P8), sur les recommandations de `@architecte` retenues telles quelles par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-02

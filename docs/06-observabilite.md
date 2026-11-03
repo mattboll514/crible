@@ -154,7 +154,7 @@ crible eval (--data <dossier> | --url <base>) --index articles --queries golden.
   [--repeat <R>] [--baseline <rapport.json>]
 ```
 
-La commande fonctionne **en local** sur un dossier de données, ou **contre une instance par l'API** (ADR-0131, accepté par anticipation le 2026-11-02) : en local, elle ouvre le dossier **en lecture**, comme `crible search`, et cette lecture reste permise à côté d'un serveur en service (ADR-0116). Elle n'écrit rien sous le dossier de données. En mode API, elle se choisit par `--url <base>` et vise `POST /v1/indexes/{index}/search` (ADR-0131). `--data` et `--url` sont exclusifs ; `--models`, `--exact-threshold` et `--rescore-candidates` sont refusés en mode API (ADR-0131, décision 6).
+La commande fonctionne **en local** sur un dossier de données, ou **contre une instance par l'API** (ADR-0131) : en local, elle ouvre le dossier **en lecture**, comme `crible search`, et cette lecture reste permise à côté d'un serveur en service (ADR-0116). Elle n'écrit rien sous le dossier de données. En mode API, elle se choisit par `--url <base>` et vise `POST /v1/indexes/{index}/search` (ADR-0131). `--data` et `--url` sont exclusifs ; `--models`, `--exact-threshold` et `--rescore-candidates` sont refusés en mode API (ADR-0131, décision 6).
 
 **Format du jeu de requêtes**, en JSONL, normatif et fermé (ADR-0125, décisions 2 et 3) :
 
