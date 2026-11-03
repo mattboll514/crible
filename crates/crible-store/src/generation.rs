@@ -703,6 +703,20 @@ pub struct GenerationStore {
     retained: Mutex<Vec<Weak<EpochLease>>>,
 }
 
+/// Records the release of the store in the `failpoints` build.
+///
+/// The hook exists so a test can prove that the writer task of a deleted index
+/// really dropped its store — its SQLite and tantivy descriptors, the epoch lease
+/// and the disk space of the files it retained — instead of keeping it until the
+/// process ends (NETTOYER-P8). It is compiled only with the feature, and a normal
+/// build carries neither the call nor the record.
+#[cfg(feature = "failpoints")]
+impl Drop for GenerationStore {
+    fn drop(&mut self) {
+        crate::testhooks::record_store_drop(&self.index_dir);
+    }
+}
+
 /// Marks one epoch as held by the store and by every snapshot of it.
 ///
 /// A snapshot clones the `Arc`, so the strong count of the lease is the number

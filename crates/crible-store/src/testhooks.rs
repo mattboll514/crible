@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Observable hook of the segment readers, `failpoints` build only.
+//! Observable hooks of the `failpoints` build only: the segment readers and the
+//! release of a store.
 //!
-//! References: ADR-0126, decisions 2 and 6. The cache of the dense readers
+//! References: ADR-0126, decisions 2 and 6, for the readers; NETTOYER-P8 for the
+//! release of a store. The cache of the dense readers
 //! (module [`crate::readers`]) exists to remove the opening of the readers from
 //! the path of a query, and a test must prove that absence **on the observable
 //! path**, never by asserting that the code does not call `open`. This module is
@@ -26,6 +28,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 /// Environment variable naming the log file of the hook.
 ///
@@ -161,6 +164,41 @@ pub fn reset_events(path: &Path) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
     }
+}
+
+/// Directories of the stores this process released, in the order it released
+/// them.
+///
+/// It backs [`record_store_drop`], and exists only in the `failpoints` build. A
+/// test reads it to prove that a
+/// [`GenerationStore`](crate::generation::GenerationStore) really dropped — its
+/// SQLite and tantivy descriptors with it — instead of staying held by a task
+/// that never ends (NETTOYER-P8).
+static DROPPED_STORES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Records the directory of a store released by its last owner.
+///
+/// The record is in memory and process-global: a test that owns its instance
+/// filters on the directory of its own index, so the drops of the neighbouring
+/// tests of the same binary never satisfy its wait. A poisoned slot still
+/// records, so a panicking test never hides a later drop.
+pub(crate) fn record_store_drop(directory: &Path) {
+    let mut dropped = DROPPED_STORES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    dropped.push(directory.to_path_buf());
+}
+
+/// Directories of the stores released since the process started, in order.
+///
+/// See the record above: this reader exists for the tests of a caller that
+/// owns a store through a task, which cannot downgrade it to a `Weak`.
+#[must_use]
+pub fn dropped_store_directories() -> Vec<PathBuf> {
+    let dropped = DROPPED_STORES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    dropped.clone()
 }
 
 #[cfg(test)]
