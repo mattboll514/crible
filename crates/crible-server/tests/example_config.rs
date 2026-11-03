@@ -8,6 +8,10 @@
 //! is mounted as `/etc/crible/crible.toml` by `docker/README.md`; this test reads
 //! it with the loader of the server, so a key added to or removed from the
 //! closed list of ADR-0097 cannot leave the example silently stale.
+//!
+//! The task `COMPOSE-EXEMPLE` adds `docker/crible.demo.toml`, the configuration
+//! of `docker/compose.example.yml`; it gets the same treatment, because nothing
+//! else in the repository loads it.
 
 // A test may panic: the failure of the fixture is the failure of the test, and
 // the helper below is not a `#[test]` function, so the workspace lint does not
@@ -17,13 +21,19 @@
 use std::path::Path;
 
 use crible_server::Config;
+use crible_server::auth::hex_encode;
+use crible_server::config::Role;
+use sha2::{Digest, Sha256};
 
-/// Path of the example, from the manifest directory of this crate.
-fn example_path() -> std::path::PathBuf {
+/// Path of a file of `docker/` that the tests load, from the manifest directory.
+fn docker_path(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docker/crible.example.toml")
+        .join("../../docker")
+        .join(name)
         .canonicalize()
-        .expect("docker/crible.example.toml must exist at the root of the repository")
+        .unwrap_or_else(|error| {
+            panic!("docker/{name} must exist at the root of the repository: {error}")
+        })
 }
 
 #[test]
@@ -31,8 +41,8 @@ fn the_docker_example_configuration_is_accepted() {
     // `load_with_env` is the loader of `crible serve`, with the environment
     // passed instead of read: the test never depends on the variables of the
     // machine that runs it (ADR-0097).
-    let config =
-        Config::load_with_env(&example_path(), std::iter::empty()).unwrap_or_else(|error| {
+    let config = Config::load_with_env(&docker_path("crible.example.toml"), std::iter::empty())
+        .unwrap_or_else(|error| {
             panic!(
                 "docker/crible.example.toml must be accepted by the loader, got {}: {}",
                 error.code().as_str(),
@@ -54,5 +64,46 @@ fn the_docker_example_configuration_is_accepted() {
 
     // The stop timeout of the container is above this bound (docs/07:129,
     // ADR-0104); `docker/README.md` passes `--stop-timeout 65`.
+    assert_eq!(config.limits.wait_timeout_ms, 60_000);
+}
+
+#[test]
+fn the_compose_demo_configuration_is_accepted() {
+    // `docker/crible.demo.toml` is mounted by `docker/compose.example.yml`, and
+    // only the run of the demonstration would notice a key the loader rejects.
+    let config = Config::load_with_env(&docker_path("crible.demo.toml"), std::iter::empty())
+        .unwrap_or_else(|error| {
+            panic!(
+                "docker/crible.demo.toml must be accepted by the loader, got {}: {}",
+                error.code().as_str(),
+                error.message()
+            )
+        });
+
+    // Same three roots as the example: the demo replaces nothing but the keys.
+    assert_eq!(config.paths.data, Path::new("/data"));
+    assert_eq!(config.paths.models, Path::new("/models"));
+    assert_eq!(config.paths.exchange, Path::new("/exchange"));
+
+    // One read key, the one the `client` service sends. Its digest is compared
+    // to the demonstration key written in `docker/compose.example.yml`, so the
+    // two files cannot drift apart and turn the demo into a `401`.
+    assert_eq!(
+        config.auth.keys.len(),
+        1,
+        "the demo declares exactly one key"
+    );
+    let key = &config.auth.keys[0];
+    assert_eq!(key.name, "compose-demo");
+    assert_eq!(key.role, Role::Read);
+    assert_eq!(
+        key.sha256,
+        hex_encode(&Sha256::digest(b"crible-compose-demo-key")),
+        "the digest of docker/crible.demo.toml must be the one of the key of \
+         docker/compose.example.yml"
+    );
+
+    // Same stop timeout as the example, for the same reason; the compose
+    // service passes `stop_grace_period: 65s`.
     assert_eq!(config.limits.wait_timeout_ms, 60_000);
 }

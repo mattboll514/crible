@@ -1,0 +1,82 @@
+# Model of deployment of one Crible project (COMPOSE-EXEMPLE).
+#
+# Two services on one **internal** network: `crible` serves the `/v1` API and
+# `client` runs a demonstration search from inside that network. Crible
+# publishes **no port**: no `ports:` entry anywhere, so the server is reachable
+# only by the containers of this network (docs/07, section "Docker").
+#
+# `docker/README.md`, section "Démarrer la démonstration Compose", gives the
+# preparation of the volumes and the commands.
+
+services:
+  crible:
+    # The single CPU image of `docker/Dockerfile` (docs/07, section "Docker").
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: crible:dev
+    # The three mounts of docs/07: `/data` and `/models` are named volumes,
+    # `/exchange` is a directory of the host, the configuration is read-only.
+    volumes:
+      - crible-data:/data
+      - crible-models:/models
+      - ../exchange:/exchange
+      - ./crible.demo.toml:/etc/crible/crible.toml:ro
+    # ADR-0099 and ADR-0104: the stop timeout stays above [limits].wait_timeout_ms
+    # (60 000 ms in `crible.demo.toml`), like `--stop-timeout 65` of the README.
+    stop_grace_period: 65s
+    # The image checks `/health`, a liveness probe; the demo needs a server that
+    # has loaded the model and published its snapshots, which is `/ready`
+    # (ADR-0099). These timings are those of the **demo**, whose sample opens in
+    # well under a second: 10 s of grace, then 15 tries 2 s apart. A project at
+    # 8,58 M passages loads far longer — ADR-0099 keeps the start time under
+    # watch — and must raise `start_period` (the image itself allows 30 s), or
+    # the container would be declared unhealthy before it is ready.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:8080/ready"]
+      interval: 2s
+      timeout: 5s
+      start_period: 10s
+      retries: 15
+    # A crash of the server is a failure of the demo, not something to hide by
+    # restarting it.
+    restart: "no"
+    networks:
+      - internal
+
+  client:
+    # The context is `clients/python`: the root `.dockerignore` excludes
+    # `clients/` and stays untouched. The demonstration script is mounted
+    # read-only instead of being copied, see `docker/client/Dockerfile`.
+    build:
+      context: ../clients/python
+      dockerfile: ../../docker/client/Dockerfile
+    image: crible-demo-client:dev
+    volumes:
+      - ./client:/demo:ro
+    command: ["python", "/demo/search_demo.py"]
+    # The demo starts only once the server answers `/ready`.
+    depends_on:
+      crible:
+        condition: service_healthy
+    environment:
+      CRIBLE_URL: http://crible:8080
+      CRIBLE_INDEX: synth-small
+      # Demonstration key, and nothing else: its digest is the `read` entry of
+      # `crible.demo.toml`. It protects nothing and never leaves this file.
+      CRIBLE_API_KEY: crible-compose-demo-key
+    restart: "no"
+    networks:
+      - internal
+
+networks:
+  # `internal: true` gives the network no gateway: the two containers talk to
+  # each other and reach nothing outside.
+  internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  # Named volumes, seeded by the preparation of `docker/README.md`.
+  crible-data:
+  crible-models:
