@@ -144,16 +144,21 @@ pub struct JobProgress {
     /// Identifier of the job this handle belongs to, so a work can name files
     /// after it (ADR-0105, decision 6).
     id: String,
+    /// Value the next state transition writes to the table.
     value: Arc<Mutex<Value>>,
+    /// Published view the two job routes read while the job runs (ADR-0134,
+    /// decision 3).
+    view: watch::Sender<JobView>,
 }
 
 impl JobProgress {
-    /// Creates the empty progression of the job `id`.
+    /// Creates the empty progression of the job `id`, published through `view`.
     #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<String>, view: watch::Sender<JobView>) -> Self {
         Self {
             id: id.into(),
             value: Arc::new(Mutex::new(Value::Null)),
+            view,
         }
     }
 
@@ -165,12 +170,35 @@ impl JobProgress {
 
     /// Publishes the progression of the job.
     ///
-    /// The step is a server word (`validation`, `commit`), `done` and `total`
+    /// The step is a name of the write protocol — `validation`, `segment`,
+    /// `transaction`, `lexical`, `manifest`, `snapshot` —; `done` and `total`
     /// count passages for an attach and documents for a patch
-    /// (`docs/05-api.md`, "Jobs").
+    /// (`docs/05-api.md`, "Jobs"; ADR-0134).
+    ///
+    /// The value is published **in memory** at once, so `GET /v1/jobs/{id}` and
+    /// `GET /v1/jobs` read it while the job runs; the table is written only at
+    /// the next state transition (ADR-0103, decision 3).
     pub fn set(&self, step: &str, done: u64, total: u64) {
         if let Ok(mut value) = self.value.lock() {
             *value = json!({ "step": step, "done": done, "total": total });
+            self.view
+                .send_modify(|view| view.progress = Some(value.clone()));
+        }
+    }
+
+    /// Marks the last published step as finished: `done` becomes `total` when
+    /// the job succeeded (ADR-0134, decision 2).
+    ///
+    /// A job that published no progression stays at `None`, and a failed job
+    /// keeps the last value it published.
+    fn complete(&self) {
+        if let Ok(mut value) = self.value.lock()
+            && let Some(object) = value.as_object_mut()
+        {
+            let total = object.get("total").and_then(Value::as_u64).unwrap_or(0);
+            object.insert("done".to_owned(), json!(total));
+            self.view
+                .send_modify(|view| view.progress = Some(value.clone()));
         }
     }
 
@@ -307,7 +335,6 @@ impl JobBoard {
             }
         };
         let id = new_job_id();
-        let progress = JobProgress::new(id.clone());
         let created_at = self.store.insert(&id, kind, index)?;
         let view = JobView {
             id: id.clone(),
@@ -322,9 +349,10 @@ impl JobBoard {
             result: None,
             error: None,
         };
+        let (sender, _receiver) = watch::channel(view.clone());
+        let progress = JobProgress::new(id.clone(), sender.clone());
         {
             let mut jobs = self.jobs.write().map_err(|_| poisoned("the job board"))?;
-            let (sender, _receiver) = watch::channel(view.clone());
             jobs.insert(id.clone(), sender);
         }
         self.pending.fetch_add(1, Ordering::AcqRel);
@@ -1056,6 +1084,11 @@ impl IndexWriter {
                 Ok((returned, outcome)) => {
                     let failed = outcome.is_err();
                     holder = Some(returned);
+                    if !failed {
+                        // ADR-0134, decision 2: a successful job ends at `total`,
+                        // on the step it last published.
+                        command.progress.complete();
+                    }
                     self.board
                         .mark_finished(&id, kind, outcome, &command.progress);
                     if failed && kind == JobKind::Compact {

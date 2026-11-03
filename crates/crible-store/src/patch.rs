@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::filters_index::date_days;
-use crate::generation::{GenerationChange, GenerationStore, generation_after};
+use crate::generation::{GenerationChange, GenerationStore, ProtocolStep, generation_after};
 use crate::records::{self, DocumentRecord};
 
 /// Largest patch accepted, in bytes, for the CLI file and the HTTP body alike
@@ -200,6 +200,23 @@ pub fn apply(
     source: PatchSource,
     patches: &[DocumentPatch],
 ) -> Result<PatchReport, CribleError> {
+    apply_with_progress(store, schema, source, patches, &mut |_step, _total| {})
+}
+
+/// Same as [`apply`], and reports each step boundary of the generation to
+/// `progress`, with the number of documents of the patch (ADR-0134).
+///
+/// A patch whose documents all keep their fields creates no generation: it
+/// reports nothing at all, so `progress` stays unpublished. When a generation
+/// is created, the three steps of `docs/02` for a metadata patch are reported in
+/// this order — `transaction`, `manifest`, `snapshot` — and `lexical` never is.
+pub fn apply_with_progress(
+    store: &mut GenerationStore,
+    schema: &Schema,
+    source: PatchSource,
+    patches: &[DocumentPatch],
+    progress: &mut dyn FnMut(ProtocolStep, u64),
+) -> Result<PatchReport, CribleError> {
     if patches.len() > MAX_ENTRIES {
         return Err(too_many_entries(patches.len()));
     }
@@ -223,12 +240,29 @@ pub fn apply(
         });
     }
 
-    let committed = store.commit(GenerationChange {
-        segments: Vec::new(),
-        documents,
-        passages: Vec::new(),
-        deletions: Vec::new(),
-    })?;
+    // ADR-0134: the patch counts documents, and `total` is known from its body.
+    // The step is published only now: a patch with no effect returned above and
+    // runs none of the three steps.
+    let total = u64::try_from(patches.len()).unwrap_or(u64::MAX);
+    // ADR-0134, decision 1: a metadata patch runs `transaction`, `manifest` and
+    // `snapshot` only. The lexical branch may still run for a snapshot that is
+    // not certified (a catch-up after a compaction, ADR-0088), but that is not a
+    // step of the patch protocol, so it is filtered out and the closed list of
+    // the decision stays true. The catch-up itself and its duration are
+    // unchanged.
+    let committed = store.commit_reported(
+        GenerationChange {
+            segments: Vec::new(),
+            documents,
+            passages: Vec::new(),
+            deletions: Vec::new(),
+        },
+        &mut |step| {
+            if step != ProtocolStep::Lexical {
+                progress(step, total);
+            }
+        },
+    )?;
     Ok(PatchReport {
         updated,
         unchanged,

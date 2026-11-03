@@ -45,8 +45,8 @@
 //! prepares them: a segment stays invisible until step 3 references it, which is
 //! what makes an abandoned one an orphan that recovery removes.
 //!
-//! `GenerationStore::commit_with_rows` runs the same protocol and lets the
-//! caller append its own rows (the attach writes the `batches` row there) to
+//! `GenerationStore::commit_with_rows_observed` runs the same protocol and lets
+//! the caller append its own rows (the attach writes the `batches` row there) to
 //! step 3, still inside the single commit point. It also returns the time spent
 //! in each of its post-write steps, which the attach reports (`docs/04`).
 //!
@@ -578,8 +578,8 @@ pub(crate) struct CommittedGeneration {
     pub(crate) timings: CommitTimings,
 }
 
-/// Step of the commit protocol of `GenerationStore::commit_with_rows` that an
-/// observer is called at.
+/// Step of the commit protocol of
+/// `GenerationStore::commit_with_rows_observed` that an observer is called at.
 ///
 /// The two steps sit around the SQLite `COMMIT`, which is the only commit point
 /// of a generation (ADR-0016). A job held at the first step has written no
@@ -588,8 +588,8 @@ pub(crate) struct CommittedGeneration {
 ///
 /// The type is compiled in every build, like
 /// [`CompactStep`](crate::compact::CompactStep): a production caller hands
-/// `GenerationStore::commit_with_rows` a no-op observer, which the compiler
-/// removes, and only the attach of the `failpoints` build
+/// `GenerationStore::commit_with_rows_observed` a no-op observer, which the
+/// compiler removes, and only the attach of the `failpoints` build
 /// (`attach_with_observer`) hands a real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommitStep {
@@ -600,8 +600,45 @@ pub enum CommitStep {
     AfterSqliteCommit,
 }
 
-/// Time spent in the steps of [`GenerationStore::commit_with_rows`], measured
-/// around the work this module owns.
+/// Step of the write protocol of `docs/02-architecture.md` ("Générations et
+/// point de commit"), as `docs/05-api.md` and ADR-0134 name it.
+///
+/// The attach runs the six steps in this order; a metadata patch runs
+/// `transaction`, `manifest` and `snapshot` only. A step the protocol skips for
+/// one job is never reported, so a client only sees steps that really ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolStep {
+    /// Validation of the batch and decision on the fate of every document.
+    Validation,
+    /// Writing and renaming the segment.
+    Segment,
+    /// Filling the SQLite transaction and reaching the commit point.
+    Transaction,
+    /// Tantivy commit and reader reload.
+    Lexical,
+    /// Writing `manifests/<generation>.json`.
+    Manifest,
+    /// Building and publishing the new snapshot.
+    Snapshot,
+}
+
+impl ProtocolStep {
+    /// Wire name of the step, the one `progress.step` carries (ADR-0134).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Validation => "validation",
+            Self::Segment => "segment",
+            Self::Transaction => "transaction",
+            Self::Lexical => "lexical",
+            Self::Manifest => "manifest",
+            Self::Snapshot => "snapshot",
+        }
+    }
+}
+
+/// Time spent in the steps of the commit protocol, measured around the work
+/// this module owns.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct CommitTimings {
     /// Filling the transaction and reaching the commit point.
@@ -620,8 +657,8 @@ pub(crate) struct CommitTimings {
 /// The generation that follows `generation`, refusing an exhausted counter.
 ///
 /// The attach computes its planned generation with this before the transaction,
-/// and [`GenerationStore::commit_with_rows`] recomputes it inside; both must
-/// agree, which the attach checks.
+/// and [`GenerationStore::commit_with_rows_observed`] recomputes it inside;
+/// both must agree, which the attach checks.
 pub(crate) fn generation_after(generation: Generation) -> Result<Generation, CribleError> {
     let next = generation.get().checked_add(1).ok_or_else(|| {
         CribleError::new(
@@ -1003,11 +1040,37 @@ impl GenerationStore {
     /// publishes it (ADR-0016, INV-04). A caller must therefore not read such an
     /// error as "nothing was written".
     pub fn commit(&mut self, change: GenerationChange) -> Result<Generation, CribleError> {
-        self.commit_with_rows(|transaction, generation, next_iid| {
-            let (next_iid, created_documents) =
-                write_generation_change(transaction, &change, generation, next_iid)?;
-            Ok((next_iid, delta_of(change, created_documents)))
-        })
+        self.commit_reported(change, &mut |_step| {})
+    }
+
+    /// Applies `change` as one generation and reports the step boundaries of
+    /// the commit protocol to `progress` (ADR-0134).
+    ///
+    /// The caller decides what to publish: this module only names the steps the
+    /// generation really runs, in the order of `docs/02-architecture.md`. A
+    /// step the change skips — a metadata patch never runs `lexical` — is never
+    /// reported.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`GenerationStore::commit`].
+    pub(crate) fn commit_reported<P>(
+        &mut self,
+        change: GenerationChange,
+        progress: &mut P,
+    ) -> Result<Generation, CribleError>
+    where
+        P: FnMut(ProtocolStep) + ?Sized,
+    {
+        self.commit_with_rows_observed(
+            |transaction, generation, next_iid| {
+                let (next_iid, created_documents) =
+                    write_generation_change(transaction, &change, generation, next_iid)?;
+                Ok((next_iid, delta_of(change, created_documents)))
+            },
+            &mut |_step| {},
+            progress,
+        )
         .map(|committed| committed.generation)
     }
 
@@ -1031,34 +1094,28 @@ impl GenerationStore {
     /// transaction, which [`GenerationChange`] alone cannot express. The
     /// returned [`CommittedGeneration`] also carries the time spent in the
     /// transaction, in the manifest and in the snapshot.
-    pub(crate) fn commit_with_rows<F>(
-        &mut self,
-        write: F,
-    ) -> Result<CommittedGeneration, CribleError>
-    where
-        F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
-    {
-        self.commit_with_rows_observed(write, &mut |_step| {})
-    }
-
-    /// Same as [`GenerationStore::commit_with_rows`], and calls `observer` at
-    /// each [`CommitStep`] of the protocol.
+    /// Applies `write` inside the transaction of one generation and calls
+    /// `observer` at each [`CommitStep`] of the protocol and `progress` at each
+    /// [`ProtocolStep`] the change really runs.
     ///
     /// Only the attach of the `failpoints` build hands a real observer
     /// (`attach_with_observer`, `ingest_documents_with_observer`): it holds the
     /// job at a step while a test reads the index (INV-02). The observer runs on
     /// the caller's thread, so a test that blocks in it holds the commit
     /// protocol at that exact step. A production caller goes through
-    /// [`GenerationStore::commit_with_rows`], which passes a no-op closure the
+    /// [`GenerationStore::commit`] or
+    /// [`GenerationStore::commit_reported`], which pass a no-op closure the
     /// compiler removes.
-    pub(crate) fn commit_with_rows_observed<F, O>(
+    pub(crate) fn commit_with_rows_observed<F, O, P>(
         &mut self,
         write: F,
         observer: &mut O,
+        progress: &mut P,
     ) -> Result<CommittedGeneration, CribleError>
     where
         F: FnOnce(&Transaction<'_>, Generation, u32) -> Result<(u32, CommitDelta), CribleError>,
         O: FnMut(CommitStep) + ?Sized,
+        P: FnMut(ProtocolStep) + ?Sized,
     {
         // ADR-0108, decision 1: before any commit, the pointer is the authority
         // on which epoch is current. A store left on E while `CURRENT_EPOCH`
@@ -1093,6 +1150,9 @@ impl GenerationStore {
         }
         let epoch_dir = epoch_directory(&self.index_dir, self.lease.epoch);
 
+        // ADR-0134: the transaction step starts here, after every read-only
+        // check the commit owes, so a step that never begins is never reported.
+        progress(ProtocolStep::Transaction);
         let transaction_started = Instant::now();
         let transaction = self.records.begin()?;
         let meta = records::read_meta(&transaction)?;
@@ -1139,6 +1199,7 @@ impl GenerationStore {
             generation,
             marker,
             &delta,
+            progress,
         )?;
         let lexical_time = if lexical.worked {
             lexical_started.elapsed()
@@ -1158,11 +1219,13 @@ impl GenerationStore {
         )?;
         let snapshot_time = snapshot_started.elapsed();
 
+        progress(ProtocolStep::Manifest);
         let manifest_started = Instant::now();
         write_manifest(&epoch_dir, self.lease.epoch, &snapshot)?;
         let manifest_time = manifest_started.elapsed();
         failpoint!("after_manifest");
 
+        progress(ProtocolStep::Snapshot);
         self.snapshot.store(Arc::new(snapshot));
         failpoint!("after_publish");
         Ok(CommittedGeneration {
@@ -1963,7 +2026,8 @@ impl LexicalStep {
 /// here leaves the reference state one generation ahead of the lexical index:
 /// the next [`GenerationStore::open`] catches the lexical index up
 /// ([`recover_lexical`]), which is the `M > Gt` branch of the restart.
-fn index_lexical(
+#[allow(clippy::too_many_arguments)]
+fn index_lexical<P>(
     records: &RecordStore,
     epoch_dir: &Path,
     config: &LexicalConfig,
@@ -1971,7 +2035,11 @@ fn index_lexical(
     generation: Generation,
     marker: Option<Generation>,
     delta: &CommitDelta,
-) -> Result<LexicalStep, CribleError> {
+    progress: &mut P,
+) -> Result<LexicalStep, CribleError>
+where
+    P: FnMut(ProtocolStep) + ?Sized,
+{
     if !config.enabled {
         return Ok(LexicalStep::reused(None, LexicalStatus::Disabled));
     }
@@ -1996,6 +2064,9 @@ fn index_lexical(
             previous.lexical_status(),
         ));
     }
+    // ADR-0134: the step really runs from here on. The two returns above are
+    // the cases where the protocol skips it, and the step is not published.
+    progress(ProtocolStep::Lexical);
     if consecutive {
         let mut writer = lexical::writer(epoch_dir, config)?;
         for passage in delta.created.iter().filter(|passage| !passage.dead) {

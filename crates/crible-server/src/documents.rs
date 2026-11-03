@@ -189,6 +189,7 @@ async fn post_documents_inner(
             &batch_id,
             &documents,
             &deletions,
+            &mut |step, total| progress.set(step.as_str(), 0, total),
         )?;
         log_attach_durations(
             progress.job_id(),
@@ -305,9 +306,15 @@ async fn patch_documents_inner(
         );
     }
     let patches = body.documents;
-    let work: crate::jobs::JobWork = Box::new(move |store, _progress, writer| {
+    let work: crate::jobs::JobWork = Box::new(move |store, progress, writer| {
         let index_config = writer.configuration()?;
-        let report = patch::apply(store, &index_config.schema, PatchSource::Body, &patches)?;
+        let report = patch::apply_with_progress(
+            store,
+            &index_config.schema,
+            PatchSource::Body,
+            &patches,
+            &mut |step, total| progress.set(step.as_str(), 0, total),
+        )?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
             result: Some(json!({
@@ -478,6 +485,7 @@ fn ingest(
     batch_id: &str,
     documents: &[OnlineDocument],
     deletions: &[String],
+    progress: &mut dyn FnMut(crible_store::generation::ProtocolStep, u64),
 ) -> Result<crible_store::attach::AttachReport, CribleError> {
     let model = state.model(&index_config.model)?;
     let token_counter = match model.config.kind {
@@ -497,6 +505,7 @@ fn ingest(
             token_counter: token_counter.as_ref(),
             document_encoder: Some(&encoder),
         },
+        progress,
     )
     .map_err(|failure| named(failure, index))
 }
