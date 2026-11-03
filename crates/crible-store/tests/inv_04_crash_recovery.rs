@@ -33,16 +33,17 @@
 //!
 //! # Why the tests of this binary are serialised
 //!
-//! A `fork` duplicates every open file description of the process, and the
-//! writer lock is an `flock` held by such a description (ADR-0116, decision 2):
-//! while a child is forked and has not exec'd yet, it holds every `WRITER_LOCK`
-//! the process has open, so a reopen in another test thread is refused with
-//! `overloaded` for a writer that does not exist. `lsof` shows no holder, which
-//! is what makes the flake look like a lock that outlives its store. The
-//! `O_CLOEXEC` flag does not help: it closes the descriptor at `exec`, not
-//! between `fork` and `exec`. Every test of this file therefore holds
-//! [`common::SerialGuard`] for its whole body, so no fork runs while another
-//! test holds a writer lock, and no test waits or retries.
+//! A child forked or spawned duplicates every open file description of the
+//! process, and the writer lock is an `flock` held by such a description
+//! (ADR-0116, decision 2): while a child has been forked or spawned and has not
+//! exec'd yet, it holds every `WRITER_LOCK` the process has open, so a reopen in
+//! another test thread is refused with `overloaded` for a writer that does not
+//! exist. `lsof` shows no holder, which is what makes the flake look like a lock
+//! that outlives its store. The `O_CLOEXEC` flag does not help: it closes the
+//! descriptor at `exec`, not between `fork` and `exec`. Every test of this
+//! binary except `crash_child_entry` therefore holds [`common::SerialGuard`] for
+//! its whole body, so no fork or spawn runs while another test holds a writer
+//! lock, and no test waits or retries.
 //!
 //! # Injection points
 //!

@@ -41,11 +41,6 @@ tower = { workspace = true, features = ["util"] }
 # feature is a test need, so the server build keeps the list of ADR-0096.
 tokio = { workspace = true, features = ["io-util"] }
 tempfile.workspace = true
-# The test of the demonstration configuration checks the digest of its read key
-# against the demonstration key written in `docker/compose.example.yml`, so the
-# two cannot drift apart without a red test. Same crate as the `sha2` of the
-# dependencies: no new package. Test build only.
-sha2.workspace = true
 # The tests of the debug journal read the pragmas of `debug.sqlite` on a second
 # connection, so the four counters of the cap are compared to an independent
 # measurement of the file (ADR-0127, decision 6). Test build only.

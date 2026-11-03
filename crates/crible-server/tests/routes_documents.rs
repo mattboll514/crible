@@ -534,15 +534,14 @@ async fn the_attach_journal_carries_the_durations_once() {
 /// rejects any extra field (see the next test).
 #[test]
 fn a_hexadecimal_job_id_does_not_look_like_content() {
-    let job_id = CI_FAILING_JOB_ID;
     let line = format!(
-        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{job_id}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1}},"target":"crible_server::jobs"}}"#
+        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{CI_FAILING_JOB_ID}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1}},"target":"crible_server::jobs"}}"#
     );
     assert!(
         line.contains("4242"),
         "the failing job id holds the marker by chance: {line}"
     );
-    assert_attach_duration_line(&line, job_id, "online_batch", INDEX);
+    assert_attach_duration_line(&line, CI_FAILING_JOB_ID, "online_batch", INDEX);
 }
 
 /// A free field on the duration line is refused even when its value is a bare
@@ -551,11 +550,10 @@ fn a_hexadecimal_job_id_does_not_look_like_content() {
 #[test]
 #[should_panic(expected = "carries these fields only")]
 fn a_free_field_on_the_duration_line_is_refused() {
-    let job_id = CI_FAILING_JOB_ID;
     let line = format!(
-        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{job_id}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1,"text":"contrat"}},"target":"crible_server::jobs"}}"#
+        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{CI_FAILING_JOB_ID}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1,"text":"contrat"}},"target":"crible_server::jobs"}}"#
     );
-    assert_attach_duration_line(&line, job_id, "online_batch", INDEX);
+    assert_attach_duration_line(&line, CI_FAILING_JOB_ID, "online_batch", INDEX);
 }
 
 /// `?text=true` adds the text of each passage; `GET` of an unknown document is

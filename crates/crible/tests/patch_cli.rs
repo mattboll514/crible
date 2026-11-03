@@ -21,6 +21,14 @@
 //! | `an_unknown_document_fails_the_whole_file` | decision 4 |
 //! | `a_mis_typed_value_is_refused_without_a_report` | criterion 3 |
 //! | `a_patch_above_the_entry_limit_is_refused` | decision 7, on the file |
+//!
+//! # Why the tests of this binary are serialised
+//!
+//! Every test of this binary holds [`common::SerialGuard`] for its whole body,
+//! because the fixture opens a store for writing in this process while another
+//! test spawns a `crible patch` child: a `fork` duplicates the `WRITER_LOCK` of
+//! that store, which would refuse a later reopen as `overloaded` (ADR-0116,
+//! decision 2; see [`common::SerialGuard`]).
 
 mod common;
 

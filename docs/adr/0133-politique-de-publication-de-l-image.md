@@ -1,6 +1,6 @@
 # ADR-0133 — Politique de publication de l'image
 
-- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmé par le propriétaire le 2026-11-03)
+- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-02 ; confirmé par le propriétaire le 2026-11-03) — complété par le complément du 2026-11-03 sur la portée exacte de `cancel-in-progress: false`, accepté par anticipation et à confirmer par le propriétaire, sans modification du corps
 - **Date** : 2026-11-03
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche PUBLIER-IMAGE (phase P8), sur les recommandations de `@architecte` retenues telles quelles par l'orchestrateur, en application de la délégation du propriétaire du 2026-11-02
@@ -103,6 +103,12 @@ Précisions :
 | **Aucune garde de monotonie** | Une étiquette mobile qui recule en silence : un correctif d'une version antérieure ramènerait `:cpu` en arrière, et rien dans le registre ne le signalerait. |
 | **Garde par étiquette OCI et `imagetools inspect`** | Il faudrait lire l'étiquette de l'image déjà publiée pour décider, donc une politique d'étiquettes nouvelle et une lecture du registre de plus ; le tri des tags git répond à la même question avec `fetch-depth: 0`. |
 | **`cancel-in-progress: true`** | Une exécution annulée peut laisser des empreintes poussées sans liste de manifestes : des couches orphelines dans le registre. `false` sérialise les publications. |
+
+## Complément du 2026-11-03 (portée exacte de `cancel-in-progress: false`)
+
+La décision 5 écrit que les publications sont « sérialisées sans laisser d'empreintes orphelines derrière une exécution annulée », et la conséquence positive affirme que `cancel-in-progress: false` « évite des empreintes poussées sans liste de manifestes ». Ces deux phrases ne valent que derrière une **exécution annulée**. Or le workflow porte aussi `fail-fast: false` sur la matrice du job `build`, et le job `merge` demande les deux constructions (`needs: [meta, build]`). Il reste donc un cas que `cancel-in-progress: false` ne couvre pas : **une seule architecture échoue après que l'autre a poussé son empreinte** ; `merge` ne tourne pas, et cette empreinte reste sans étiquette dans le registre. Le symptôme est celui que la conséquence « À surveiller » nomme déjà — une empreinte sans liste de manifestes —, avec une seconde cause que ce complément constate.
+
+Aucune décision nouvelle n'est prise ici : le workflow garde `fail-fast: false`, aucun nettoyage automatique n'est ajouté, et le point « à surveiller » de la conséquence ci-dessus — une empreinte sans liste de manifestes — vaut pour les deux causes, l'exécution annulée comme l'échec d'une seule architecture. Le corps de l'ADR et les décisions 1 à 7 ne changent pas.
 
 ## Références
 
