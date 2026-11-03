@@ -1,6 +1,6 @@
 # ADR-0135 — Protocole de la mesure en conteneur sur la machine de développement
 
-- **Statut** : Proposé
+- **Statut** : Accepté (accepté par le propriétaire le 2026-11-03, tel que proposé)
 - **Date** : 2026-11-03
 - **Décideurs** : propriétaire
 - **Proposé par** : `@greffier`, à la demande de l'orchestrateur, pour la tâche `MESURER-EN-CONTENEUR-MAC` (P8), d'après les verdicts de `@architecte` du 2026-11-03
