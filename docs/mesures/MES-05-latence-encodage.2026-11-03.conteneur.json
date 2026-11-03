@@ -1,0 +1,146 @@
+{
+  "report": "docs/mesures/MES-05-latence-encodage.md",
+  "queries": 300,
+  "warmup": 300,
+  "count": 1000,
+  "container": {
+    "int8": [
+      {
+        "first_call_ms": 3701.068043,
+        "threads": {
+          "available_parallelism": 8,
+          "process_threads": 8
+        },
+        "summary": {
+          "count": 1000,
+          "min_us": 12096.292,
+          "max_us": 282238.625,
+          "mean_us": 57296.499672,
+          "p50_us": 47456.917,
+          "p95_us": 132102.792,
+          "p99_us": 176773.08299999998,
+          "p50_ms": 47.456917000000004,
+          "p95_ms": 132.102792,
+          "p99_ms": 176.77308299999999,
+          "harness_summary": null
+        },
+        "count": 1000
+      },
+      {
+        "first_call_ms": 1905.647834,
+        "threads": {
+          "available_parallelism": 8,
+          "process_threads": 8
+        },
+        "summary": {
+          "count": 1000,
+          "min_us": 13212.708,
+          "max_us": 233490.959,
+          "mean_us": 50437.797270999996,
+          "p50_us": 41510.208,
+          "p95_us": 116965.542,
+          "p99_us": 156240.916,
+          "p50_ms": 41.510208,
+          "p95_ms": 116.965542,
+          "p99_ms": 156.240916,
+          "harness_summary": null
+        },
+        "count": 1000
+      }
+    ],
+    "fp32": [
+      {
+        "first_call_ms": 6596.407668999999,
+        "threads": {
+          "available_parallelism": 8,
+          "process_threads": 8
+        },
+        "summary": {
+          "count": 1000,
+          "min_us": 32787.5,
+          "max_us": 443062.125,
+          "mean_us": 116051.663896,
+          "p50_us": 100347.125,
+          "p95_us": 258465.208,
+          "p99_us": 316955.792,
+          "p50_ms": 100.347125,
+          "p95_ms": 258.465208,
+          "p99_ms": 316.95579200000003,
+          "harness_summary": null
+        },
+        "count": 1000
+      },
+      {
+        "first_call_ms": 3571.91296,
+        "threads": {
+          "available_parallelism": 8,
+          "process_threads": 8
+        },
+        "summary": {
+          "count": 1000,
+          "min_us": 32383.375,
+          "max_us": 398364.75,
+          "mean_us": 121032.313595,
+          "p50_us": 103593.25,
+          "p95_us": 260640.00100000002,
+          "p99_us": 317729.45800000004,
+          "p50_ms": 103.59325,
+          "p95_ms": 260.64000100000004,
+          "p99_ms": 317.729458,
+          "harness_summary": null
+        },
+        "count": 1000
+      }
+    ]
+  },
+  "native_same_harness": {
+    "int8": {
+      "first_call_ms": 2570.5095,
+      "threads": {
+        "available_parallelism": 8,
+        "process_threads": null
+      },
+      "summary": {
+        "count": 1000,
+        "min_us": 8425.0,
+        "max_us": 94575.29100000001,
+        "mean_us": 22691.580977,
+        "p50_us": 18262.084000000003,
+        "p95_us": 52709.833,
+        "p99_us": 65833.25,
+        "p50_ms": 18.262084,
+        "p95_ms": 52.709832999999996,
+        "p99_ms": 65.83325
+      }
+    },
+    "fp32": {
+      "first_call_ms": 3065.351291,
+      "threads": {
+        "available_parallelism": 8,
+        "process_threads": null
+      },
+      "summary": {
+        "count": 1000,
+        "min_us": 16166.75,
+        "max_us": 187093.75,
+        "mean_us": 52430.553618,
+        "p50_us": 42616.083,
+        "p95_us": 117720.25,
+        "p99_us": 146124.292,
+        "p50_ms": 42.616082999999996,
+        "p95_ms": 117.72025,
+        "p99_ms": 146.124292
+      }
+    }
+  },
+  "published_native_ms": {
+    "int8": {
+      "p50": 8.646,
+      "p95": 22.49
+    },
+    "fp32": {
+      "p50": 20.978,
+      "p95": 55.763
+    }
+  }
+}

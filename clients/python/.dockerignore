@@ -1,0 +1,13 @@
+# Build context of the client image of the Compose demonstration
+# (`docker/compose.example.yml`, `docker/client/Dockerfile`).
+#
+# The context is `clients/python` because the root `.dockerignore` excludes
+# `clients/`: it is not weakened for the demo. Like the root file, this one
+# never lets a secret travel to the builder (ADR-0032), and it keeps the local
+# virtual environment, the caches and the tests out of the image.
+.env*
+.venv/
+__pycache__/
+.pytest_cache/
+tests/
+*.pyc

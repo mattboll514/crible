@@ -168,7 +168,17 @@ jobs:
         working-directory: tools
         run: uv run python fetch_model_artifact.py --dest ../data/models/mdenseon
       # No save step here: `.github/workflows/model-cache.yml` is the only writer of this cache (ADR-0059).
-      # The five Legifacile sample tests stay local, excluded by name one by one
-      # (ADR-0057, ADR-0062, ADR-0063, ADR-0085, ADR-0109).
+      # Seven tests stay local, excluded by name one by one, for two reasons.
+      # The five Legifacile sample tests read production-derived data (ADR-0032):
+      # inv_12_the_legifacile_sample_passes_the_acceptance_check,
+      # inv_09_legifacile_sample_queries_return_the_same_results_after_compaction,
+      # inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import,
+      # inv_12_the_reference_batch_acceptance_statistics_are_unchanged and
+      # api_and_cli_return_the_same_results_on_the_legifacile_sample
+      # (ADR-0057, ADR-0062, ADR-0063, ADR-0085, ADR-0109). The two clean-stop
+      # tests need Docker and an image built locally, which the runner does not have:
+      # inv_03_a_docker_stop_during_an_attach_leaves_one_complete_generation and
+      # inv_04_a_docker_stop_during_an_attach_leaves_the_last_committed_generation
+      # (ADR-0132). Keep this command identical to docs/07-stack-et-deploiement.md.
       - name: Test with ONNX Runtime
-        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import --skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged --skip api_and_cli_return_the_same_results_on_the_legifacile_sample
+        run: cargo test --locked --workspace -- --include-ignored --skip inv_12_the_legifacile_sample_passes_the_acceptance_check --skip inv_09_legifacile_sample_queries_return_the_same_results_after_compaction --skip inv_08_legifacile_sample_queries_return_the_same_results_after_export_and_import --skip inv_12_the_reference_batch_acceptance_statistics_are_unchanged --skip api_and_cli_return_the_same_results_on_the_legifacile_sample --skip inv_03_a_docker_stop_during_an_attach_leaves_one_complete_generation --skip inv_04_a_docker_stop_during_an_attach_leaves_the_last_committed_generation

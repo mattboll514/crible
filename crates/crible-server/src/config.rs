@@ -18,8 +18,8 @@
 //! type the targeted key already has. Three cases stop the startup, each with a
 //! message that names the variable: the key does not exist, the value does not
 //! parse in that type, or the variable targets a table of tables
-//! (`[[auth.keys]]`). The seven variables documented outside the configuration
-//! are ignored without error; any other unknown `CRIBLE_*` variable is a fault.
+//! (`[[auth.keys]]`). The variables documented outside the configuration are
+//! ignored without error; any other unknown `CRIBLE_*` variable is a fault.
 //! A refusal that comes from the key itself (a bound, an enumeration, an empty
 //! value) names the variable too: the set of overrides is kept, and every
 //! validation message of a key it set adds "set by `CRIBLE_…`".
@@ -54,7 +54,7 @@ const SECTION_SEPARATOR: &str = "__";
 ///
 /// The list is closed. These variables name no key of `crible.toml`, so they
 /// escape the three refusals above and are ignored without error.
-const EXCLUDED_VARIABLES: [&str; 7] = [
+const EXCLUDED_VARIABLES: [&str; 11] = [
     "CRIBLE_FAILPOINT",
     "CRIBLE_BIN",
     "CRIBLE_PYTHON",
@@ -62,6 +62,16 @@ const EXCLUDED_VARIABLES: [&str; 7] = [
     "CRIBLE_CRASH_CHILD",
     "CRIBLE_CRASH_BATCH",
     "CRIBLE_CRASH_INDEX",
+    // The hooks of the `failpoints` build. A test sets one of them in its own
+    // process and spawns `crible serve`; the child inherits the environment
+    // and must ignore the hook it does not read without the feature.
+    "CRIBLE_TEST_BARRIER",
+    "CRIBLE_TEST_ENCODER",
+    "CRIBLE_TEST_SEGMENT_READERS",
+    // The `read` key of `crible eval --url` (ADR-0131, decision 4): the server
+    // never reads it, and an operator who exported it before starting the
+    // server must not be stopped by the closed list.
+    "CRIBLE_EVAL_API_KEY",
 ];
 
 /// Key path of `crible.toml` to the `CRIBLE_*` variable that set it.
@@ -193,7 +203,15 @@ pub struct DebugJournalConfig {
     pub sample_rate: f64,
     /// Life of a recorded entry, in days.
     pub ttl_days: usize,
+    /// Largest number of rows kept (ADR-0127, decision 1).
+    pub max_rows: usize,
+    /// Largest used size of `debug.sqlite`, in bytes (ADR-0127, decisions 1
+    /// and 2).
+    pub max_bytes: usize,
 }
+
+/// Smallest `[debug_journal].max_bytes`, one MiB (ADR-0127, decision 1).
+pub const MIN_DEBUG_JOURNAL_MAX_BYTES: usize = 1_048_576;
 
 /// `[encoder]` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,7 +344,13 @@ impl Config {
         only_keys(
             journal,
             "debug_journal",
-            &["enabled", "sample_rate", "ttl_days"],
+            &[
+                "enabled",
+                "sample_rate",
+                "ttl_days",
+                "max_rows",
+                "max_bytes",
+            ],
         )?;
         let sample_rate = float(journal, "debug_journal", "sample_rate", overrides)?;
         if !(0.0..=1.0).contains(&sample_rate) {
@@ -344,10 +368,31 @@ impl Config {
                 origin(overrides, "debug_journal.ttl_days")
             )));
         }
+        let max_rows = count(journal, "debug_journal", "max_rows", overrides)?;
+        if max_rows == 0 {
+            // ADR-0127, decision 1: `0` would recreate the unbounded journal
+            // this decision removes, under a key that looks set.
+            return Err(invalid(format!(
+                "setting 'max_rows' must be at least 1 at {}, got {max_rows}",
+                origin(overrides, "debug_journal.max_rows")
+            )));
+        }
+        let max_bytes = count(journal, "debug_journal", "max_bytes", overrides)?;
+        if max_bytes < MIN_DEBUG_JOURNAL_MAX_BYTES {
+            // ADR-0127, decision 1: one MiB lets a current row through while
+            // refusing a value that would empty the journal at every flush.
+            return Err(invalid(format!(
+                "setting 'max_bytes' must be at least {MIN_DEBUG_JOURNAL_MAX_BYTES} at {}, \
+                 got {max_bytes}",
+                origin(overrides, "debug_journal.max_bytes")
+            )));
+        }
         let debug_journal = DebugJournalConfig {
             enabled: boolean(journal, "debug_journal", "enabled", overrides)?,
             sample_rate,
             ttl_days,
+            max_rows,
+            max_bytes,
         };
 
         let encoder = section(document, "encoder")?;
@@ -836,6 +881,8 @@ retention_days = 90
 enabled = false
 sample_rate = 0.0
 ttl_days = 7
+max_rows = 500000
+max_bytes = 2147483648
 
 [encoder]
 query_precision = "fp32"
@@ -889,6 +936,9 @@ query_cache_entries = 1024
         assert!(!config.debug_journal.enabled);
         assert_eq!(config.debug_journal.sample_rate, 0.0);
         assert_eq!(config.debug_journal.ttl_days, 7);
+        // ADR-0127, decision 1: the two caps of `docs/07`.
+        assert_eq!(config.debug_journal.max_rows, 500_000);
+        assert_eq!(config.debug_journal.max_bytes, 2_147_483_648);
         // ADR-0052: `[encoder].query_precision` decides the precision of the
         // queries, and fp32 is the documented default.
         assert_eq!(config.encoder.query_precision, Precision::Fp32);
@@ -1007,12 +1057,39 @@ query_cache_entries = 1024
 
     #[test]
     fn a_variable_documented_outside_the_configuration_is_ignored() {
-        // ADR-0097: the list is closed, and these seven variables name no key.
+        // ADR-0097: the list is closed, and every variable of it names no key.
+        for name in [
+            "CRIBLE_TEST_BARRIER",
+            "CRIBLE_TEST_ENCODER",
+            "CRIBLE_TEST_SEGMENT_READERS",
+        ] {
+            // A test process sets these hooks and spawns `crible serve`; the
+            // child inherits them and must not refuse to start on the closed
+            // list.
+            assert!(
+                super::EXCLUDED_VARIABLES.contains(&name),
+                "{name} belongs to the closed list of the test hooks"
+            );
+        }
         let env: Vec<(&str, &str)> = super::EXCLUDED_VARIABLES
             .iter()
             .map(|name| (*name, "ignored"))
             .collect();
         let config = load(EXAMPLE, &env).expect("the excluded variables are ignored without error");
+        assert_eq!(config.server.bind, "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn crible_eval_api_key_does_not_stop_the_server() {
+        // ADR-0131, decision 4: the key of `crible eval --url` lives in the
+        // environment, and the closed list of ADR-0097 must know it; otherwise
+        // `crible serve` would refuse to start on a host that exported it.
+        assert!(
+            super::EXCLUDED_VARIABLES.contains(&"CRIBLE_EVAL_API_KEY"),
+            "the key of the API mode belongs to the closed list"
+        );
+        let config = load(EXAMPLE, &[("CRIBLE_EVAL_API_KEY", "an-example-key")])
+            .expect("the server starts with the key of `crible eval` in its environment");
         assert_eq!(config.server.bind, "0.0.0.0:8080");
     }
 
@@ -1048,6 +1125,78 @@ query_cache_entries = 1024
             message.contains("CRIBLE_DEBUG_JOURNAL__TTL_DAYS"),
             "got {message}"
         );
+    }
+
+    #[test]
+    fn the_two_caps_of_the_journal_are_read_and_overridden() {
+        // ADR-0127, decision 1 and ADR-0097: the two keys are scalars of the
+        // section, and their `CRIBLE_*` variables reach them.
+        let config = load(
+            EXAMPLE,
+            &[
+                ("CRIBLE_DEBUG_JOURNAL__MAX_ROWS", "1000"),
+                ("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", "1048576"),
+            ],
+        )
+        .expect("the two overrides are accepted");
+        assert_eq!(config.debug_journal.max_rows, 1_000);
+        assert_eq!(config.debug_journal.max_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn a_max_rows_of_zero_is_refused_naming_the_key() {
+        // ADR-0127, decision 1: `0` would recreate the unbounded journal under
+        // a key that looks set.
+        let error = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_ROWS", "0")])
+            .expect_err("a row cap of zero is refused");
+        let message = message(error);
+        assert!(message.contains("max_rows"), "got {message}");
+        assert!(
+            message.contains("CRIBLE_DEBUG_JOURNAL__MAX_ROWS"),
+            "got {message}"
+        );
+    }
+
+    #[test]
+    fn a_max_bytes_below_one_mebibyte_is_refused_naming_the_key() {
+        // ADR-0127, decision 1: the floor is one MiB, so a current row fits and
+        // a value that would empty the journal at every flush is refused.
+        for refused in ["0", "1048575"] {
+            let error = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", refused)])
+                .expect_err("a byte cap below one MiB is refused");
+            let message = message(error);
+            assert!(message.contains("max_bytes"), "got {message}");
+            assert!(
+                message.contains("CRIBLE_DEBUG_JOURNAL__MAX_BYTES"),
+                "got {message}"
+            );
+        }
+        let accepted = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", "1048576")])
+            .expect("one MiB is accepted");
+        assert_eq!(accepted.debug_journal.max_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn a_missing_cap_is_refused() {
+        // The keys belong to the closed list of the section: neither has a
+        // silent default (ADR-0031, ADR-0127).
+        for key in ["max_rows = 500000\n", "max_bytes = 2147483648\n"] {
+            let raw = EXAMPLE.replace(key, "");
+            let error = load(&raw, &[]).expect_err("a missing cap is refused");
+            let message = message(error);
+            assert!(
+                message.contains(key.split(' ').next().unwrap_or_default()),
+                "got {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_key_of_the_journal_section_is_refused() {
+        let raw = EXAMPLE.replace("max_rows = 500000", "max_rows = 500000\nmax_row = 4");
+        let error = load(&raw, &[]).expect_err("an unknown key is refused");
+        let text = message(error);
+        assert!(text.contains("max_row"), "got {text}");
     }
 
     #[test]

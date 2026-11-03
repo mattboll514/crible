@@ -77,6 +77,25 @@ fn precision_name(precision: Precision) -> &'static str {
     }
 }
 
+/// Threads of the process, and the parallelism the process sees.
+///
+/// `available_parallelism` is what the runtime sizes its pools from; the task
+/// count is what the process really holds, ONNX Runtime's intra-op pool
+/// included. On a platform without `/proc`, the task count is `null` rather
+/// than a guess.
+fn thread_report() -> serde_json::Value {
+    let parallelism = std::thread::available_parallelism()
+        .map(|value| value.get())
+        .ok();
+    let tasks = std::fs::read_dir("/proc/self/task")
+        .map(|entries| entries.count())
+        .ok();
+    serde_json::json!({
+        "available_parallelism": parallelism,
+        "process_threads": tasks,
+    })
+}
+
 /// Returns the value following `name` on the command line.
 fn required(arguments: &[String], name: &str) -> Result<String, String> {
     let position = arguments
@@ -264,8 +283,16 @@ fn write_latency(
         calls_us.push(started.elapsed().as_secs_f64() * 1_000_000.0);
     }
 
+    // Thread count of the process, read after the first call because ONNX
+    // Runtime builds its intra-op pool on the first `Run` and nothing in the
+    // engine reports it (ADR-0052). A container measurement must say how many
+    // threads the runtime saw, or the figure is not comparable (ADR-0135).
+    let threads = thread_report();
+    println!("threads: {threads}");
+
     let stats = encoder.cache_stats()?;
     let payload = serde_json::json!({
+        "threads": threads,
         "precision": precision_name(precision),
         "precision_effective": precision_name(precision_effective),
         "model": model.display().to_string(),

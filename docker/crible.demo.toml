@@ -1,0 +1,49 @@
+# Configuration of the demonstration instance of `docker/compose.example.yml`
+# (COMPOSE-EXEMPLE).
+#
+# It is `docker/crible.example.toml` with one difference: a single read key,
+# named `compose-demo`, so that the client container can search. The key itself
+# is a **demonstration key**, written in the compose file where anyone can read
+# it: it protects nothing and must never be copied into a deployment. For a real
+# deployment, copy the example file outside the repository and generate real
+# keys with `crible key generate` (ADR-0100).
+#
+# The digest below is the SHA-256 of the UTF-8 bytes of the demonstration key
+# `crible-compose-demo-key` (ADR-0100).
+
+[server]
+bind = "0.0.0.0:8080"
+search_threads = 0            # 0 = number of cores
+max_concurrent_searches = 0   # 0 = 2 × cores
+
+[paths]
+data = "/data"
+models = "/models"
+exchange = "/exchange"
+
+[auth]
+[[auth.keys]]
+name = "compose-demo"
+role = "read"                 # search, document reads, index listing
+sha256 = "c94bb6ac7b7e8116e736609f12a43bd0874472bcff4a8cbdbb8cc8123ff397a2"
+
+[analytics]
+retention_days = 90
+
+[debug_journal]
+enabled = false
+sample_rate = 0.0            # fraction of the requests WITHOUT `debug: true`, in [0, 1]
+ttl_days = 7                 # 0 is refused at startup (ADR-0122)
+max_rows = 500000            # 0 is refused at startup (ADR-0127)
+max_bytes = 2147483648       # 2 GiB, the USED size of debug.sqlite (ADR-0127)
+
+[encoder]
+query_precision = "fp32"      # "fp32" | "int8" (ADR-0052)
+
+[limits]
+writer_queue = 16             # queued jobs per index, the running one excluded (ADR-0103)
+default_timeout_ms = 2000
+# Bounds `?wait=true` and the wait of the write jobs at shutdown (ADR-0067,
+# ADR-0104): `stop_grace_period` of the compose service stays above it (65 s).
+wait_timeout_ms = 60000
+query_cache_entries = 1024    # LRU of the queries, per instance, never persisted (ADR-0051)

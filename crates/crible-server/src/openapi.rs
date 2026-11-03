@@ -553,8 +553,10 @@ pub enum JobKind {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct JobProgress {
-    /// Step the job reached.
-    #[schema(example = "commit")]
+    /// Step the job reached: `validation`, `segment`, `transaction`, `lexical`,
+    /// `manifest` or `snapshot` for an attach, `transaction`, `manifest` or
+    /// `snapshot` for a metadata patch (ADR-0134).
+    #[schema(example = "snapshot")]
     pub step: String,
     /// Units already treated.
     pub done: u64,
@@ -651,7 +653,9 @@ pub struct DebugQuery {
 ///
 /// `enabled` is `false` and `queries` empty when the journal is disabled;
 /// `dropped` is the counter of the rows the bounded queue refused since the
-/// start of the process (ADR-0122, decision 6).
+/// start of the process (ADR-0122, decision 6). `capped`, `rows`, `bytes` and
+/// `trimmed` describe the size cap of `debug.sqlite` (ADR-0127, decision 6);
+/// they are process counters, never persisted, and always present.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DebugQueryList {
@@ -659,6 +663,15 @@ pub struct DebugQueryList {
     pub enabled: bool,
     /// Rows the bounded queue refused since the start of the process.
     pub dropped: u64,
+    /// Whether the last cap check found the journal above a cap (ADR-0127).
+    pub capped: bool,
+    /// Number of rows of the journal (ADR-0127, decision 6).
+    pub rows: u64,
+    /// Used size of `debug.sqlite`, `(page_count - freelist_count) × page_size`
+    /// (ADR-0127, decisions 2 and 6).
+    pub bytes: u64,
+    /// Rows the cap deleted since the start of the process (ADR-0127).
+    pub trimmed: u64,
     /// The page, `created_at` descending then `id`.
     pub queries: Vec<DebugQuery>,
 }

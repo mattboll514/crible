@@ -257,8 +257,6 @@ where
 
     // Step 1: the writer is suspended by the exclusive borrow; the readers keep
     // their snapshots of E and are not blocked (ADR-0017, INV-02).
-    let state = store.state()?;
-    let removed_passages = state.dead_passages;
     observer(CompactStep::WriterSuspended);
     // Step 1 of `docs/02`: the writer is suspended, nothing has been read yet.
     stop_at_failpoint("compaction_writer_suspended");
@@ -271,10 +269,10 @@ where
             from_epoch.get()
         )));
     }
-    // Step 2: the live passages of the published snapshot, in the order of the
-    // new identifiers. The document rows are read once, here, and the ordering
-    // looks their fields up by `doc_id`: reading them through the passages would
-    // parse each document once per passage.
+    // Step 2: the live passages of the reference state, in the order of the new
+    // identifiers. The document rows are read once, here, and the ordering looks
+    // their fields up by `doc_id`: reading them through the passages would parse
+    // each document once per passage.
     let documents = records::all_documents(store.records().connection())?;
     let batches = records::all_batches(store.records().connection())?;
     let identities =
@@ -287,6 +285,18 @@ where
         internal(
             "the epoch holds more live passages than the internal identifier space, so no \
              compaction can renumber them"
+                .to_owned(),
+        )
+    })?;
+    // The removed passages are the tombstones of the **reference state**, not of
+    // the published snapshot: after a commit that was never published, the served
+    // snapshot is one generation behind, while the compaction copies the rows of
+    // `records.sqlite` and removes exactly the tombstones that state holds. The
+    // count is the row count of `passages` minus the live passages copied above.
+    let stored = records::counts(store.records().connection())?;
+    let removed_passages = stored.passages.checked_sub(live_passages).ok_or_else(|| {
+        internal(
+            "the reference state holds fewer passages than the live ones the compaction copies"
                 .to_owned(),
         )
     })?;

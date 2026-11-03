@@ -131,6 +131,7 @@
   - le passage de la clé `read` sans l'écrire dans un fichier versionné ni dans un log (ADR-0032) ;
   - les délais et les erreurs réseau.
 - **À lire** : ADR-0125 (décisions 1 et suivantes), ADR-0124 (décision 13), ADR-0116, ADR-0032, `docs/06-observabilite.md:124-144`, `docs/05-api.md` (« Recherche : requête » et champ `exact`), `docs/07:29-50`.
+- **Note du 2026-11-02 (ADR-0131).** Le préalable est tranché : ADR-0131 accepte un mode API par `--url <base>` qui vise `POST /v1/indexes/{index}/search` (route simple), et non `POST /v1/search` (multi-index) comme l'écrit la fiche : la réponse multi-index n'a pas de `generation` scalaire (`docs/05:384`). Deux références de la fiche sont périmées : `docs/06-observabilite.md:124-144` est en réalité `:148-179` (chapitre « Éval »), et `05-api.md:269` est `:273` (champ `exact`).
 - **Livrables** :
   - le mode API de `crible eval` : chaque requête du jeu part en `POST /v1/search` sur l'instance visée, avec les mêmes modes, `k` et surcharges qu'en local, et `exact` porté par le corps de la requête (`05-api.md:269`) ;
   - la réutilisation du format d'entrée et du schéma de rapport d'ADR-0125, sans duplication des métriques ;
@@ -163,6 +164,7 @@
 - **Dépend de** : CONSTRUIRE-IMAGE-DOCKER, CONFIGURER-QUALITE-ET-CI
 - **Livrables** : un workflow sur tag `v*` qui construit l'image multi-arch avec buildx et la pousse sur GHCR (`ghcr.io/<owner>/crible:<version>` et `:cpu`).
 - **Critères d'acceptation** : le workflow est valide ; **le premier tag est poussé par le propriétaire** (l'agent ne pousse jamais).
+- **Note du 2026-11-03** : `<version>` et `:cpu` sont définis par ADR-0133. `<version>` est le tag sans son `v` et doit valoir `[workspace.package] version` de `Cargo.toml`, sinon le workflow échoue avant toute construction. `:cpu` est l'étiquette mobile de la dernière version **stable** publiée : elle ne se déplace ni sur une pré-version, ni sur un correctif d'une version antérieure.
 
 ### MESURER-EN-CONTENEUR-MAC
 - **Objectif** : les chiffres en conteneur, à titre **indicatif**, sur la machine de développement. ADR-0129 (décision 4) déplace la portée : cette tâche garde son nom et sa place en P8, mais elle éprouve l'image et le conteneur ; elle ne porte plus la cible de `docs/08:88`. La mesure contraignante est `MESURER-SUR-MAC-MINI`, en P10.

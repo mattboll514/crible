@@ -185,6 +185,14 @@ pub(crate) struct CommitDelta {
     /// Documents whose `documents` row the transaction wrote: their passages
     /// inherit the new document-level values.
     pub rewritten_documents: Vec<String>,
+    /// Documents whose `documents` row the transaction **created**, a row that
+    /// did not exist before.
+    ///
+    /// The snapshot of the new generation carries the counts of its own state
+    /// (ADR-0105, decision 3), and it derives them from this delta rather than by
+    /// counting the tables: ADR-0066 forbids a scan of `documents` and `passages`
+    /// on the commit path.
+    pub created_documents: u64,
     /// Passages the transaction tombstoned.
     pub tombstones: Vec<Iid>,
     /// Documents whose `documents` row the transaction removed.

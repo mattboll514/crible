@@ -432,7 +432,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 ```json
 { "id": "job_…", "kind": "attach_batch", "index": "decisions", "state": "succeeded",
   "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1288,
-  "progress": { "step": "commit", "done": 932, "total": 932 },
+  "progress": { "step": "snapshot", "done": 932, "total": 932 },
   "result": { "report": { "added": 421, "replaced": 428, "unchanged": 1230,
                           "metadata_updated": 137, "deleted": 221, "ignored": 3,
                           "acceptance": { "sample": 200, "min_cosine": 0.99971, "p1": 0.9998, "p50": 0.99995 } } },
@@ -440,7 +440,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 ```
 
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
-- `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport.
+- `progress` n'est publié que par `attach_batch`, `online_batch` et `patch_documents` ; les autres `kind` gardent `progress: null`, membre toujours présent. `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport. `progress.step` prend les noms d'étapes du protocole : `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` pour `attach_batch` et `online_batch`, et `transaction`, `manifest`, `snapshot` pour `patch_documents` ; une étape que le protocole saute pour un job donné n'est pas publiée. `done` avance aux **frontières d'étape**, pas passage par passage : `total` est connu dès la lecture du manifeste ou du corps du patch, `step` prend son nom au début de chaque étape, et `done` vaut `total` à la fin d'un job réussi — l'exemple ci-dessus, `succeeded`, est à cette dernière étape. Un job réussi qui n'a joué aucune étape, comme le rejeu d'un lot déjà attaché, garde `progress: null` : un client ne doit donc pas supposer `done = total` sur tout job réussi (ADR-0134). Un job échoué garde la dernière progression publiée, éventuellement avec `done < total`, ou `null` si l'échec précède la première publication. Pendant l'encodage d'un `online_batch`, avant que le lot interne et son manifeste existent, `progress` reste `null` ; il suit ensuite les étapes de l'attache, en passages. Pendant le job, `progress` est lu **en mémoire** ; la table `jobs` n'est écrite qu'aux transitions d'état et porte alors la progression de l'instant (ADR-0103, décision 3 ; ADR-0134).
 - `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel (ADR-0042) : le serveur les **journalise une fois, à la fin du job**, au niveau `info`, avec `job_id`, `kind` et `index`, et **aucune réponse de l'API ne les rend**, `?wait=true` compris ; elles ne sont ni persistées ni portées par le job (ADR-0107). La CLI continue de les afficher à son appelant. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `patch_config`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`. `patch_config` est le patch d'un réglage de l'index qui ne reconstruit pas le lexical, et `rebuild_lexical` celui qui le reconstruit (ADR-0105).
 - `state` vaut `queued`, `running`, `succeeded` ou `failed`.
@@ -466,6 +466,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 <!-- openapi: DebugQueryList -->
 ```json
 { "enabled": true, "dropped": 0,
+  "capped": false, "rows": 1, "bytes": 65536, "trimmed": 0,
   "queries": [
     { "id": 42, "created_at": "2026-10-31T10:00:00.123Z", "request_id": "…",
       "index": "decisions", "client": "legifacile-mcp", "mode": "hybrid",
@@ -475,7 +476,7 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
                    "generation": 1287 } } ] }
 ```
 
-- Note du 2026-11-02 : l'exemple ci-dessus ne porte pas encore `capped`, `rows`, `bytes` et `trimmed`. Ces membres apparaîtront dans l'exemple avec `PLAFONNER-JOURNAL-DE-DEBUG` (P8, ADR-0127), en même temps que leur implémentation et le composant `DebugQueryList` qui les déclare.
+- Note du 2026-11-02 : les quatre membres `capped`, `rows`, `bytes` et `trimmed`, annoncés dans la prose ci-dessous, ont été rétablis dans cet exemple par `PLAFONNER-JOURNAL-DE-DEBUG` (P8, ADR-0127), en même temps que leur implémentation et le composant `DebugQueryList` qui les déclare.
 - L'ordre est `created_at DESC, id DESC`, un ordre total : deux lignes du même vidage partagent `created_at`, et `id` les départage. Le client reprend le dernier `id` reçu pour la page suivante ; il n'y a pas d'`OFFSET` (ADR-0122, décision 9).
 - `payload` est rendu comme un **objet JSON**, jamais comme une chaîne ; sa forme est celle d'ADR-0121, décision 4. Un `payload` illisible rend `internal`.
 - En multi-index, `index` vaut `null` et `payload.targets[]` porte les cibles, avec leur filtre, leur génération et leur capture (ADR-0122, décision 4).

@@ -144,16 +144,21 @@ pub struct JobProgress {
     /// Identifier of the job this handle belongs to, so a work can name files
     /// after it (ADR-0105, decision 6).
     id: String,
+    /// Value the next state transition writes to the table.
     value: Arc<Mutex<Value>>,
+    /// Published view the two job routes read while the job runs (ADR-0134,
+    /// decision 3).
+    view: watch::Sender<JobView>,
 }
 
 impl JobProgress {
-    /// Creates the empty progression of the job `id`.
+    /// Creates the empty progression of the job `id`, published through `view`.
     #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<String>, view: watch::Sender<JobView>) -> Self {
         Self {
             id: id.into(),
             value: Arc::new(Mutex::new(Value::Null)),
+            view,
         }
     }
 
@@ -165,12 +170,35 @@ impl JobProgress {
 
     /// Publishes the progression of the job.
     ///
-    /// The step is a server word (`validation`, `commit`), `done` and `total`
+    /// The step is a name of the write protocol — `validation`, `segment`,
+    /// `transaction`, `lexical`, `manifest`, `snapshot` —; `done` and `total`
     /// count passages for an attach and documents for a patch
-    /// (`docs/05-api.md`, "Jobs").
+    /// (`docs/05-api.md`, "Jobs"; ADR-0134).
+    ///
+    /// The value is published **in memory** at once, so `GET /v1/jobs/{id}` and
+    /// `GET /v1/jobs` read it while the job runs; the table is written only at
+    /// the next state transition (ADR-0103, decision 3).
     pub fn set(&self, step: &str, done: u64, total: u64) {
         if let Ok(mut value) = self.value.lock() {
             *value = json!({ "step": step, "done": done, "total": total });
+            self.view
+                .send_modify(|view| view.progress = Some(value.clone()));
+        }
+    }
+
+    /// Marks the last published step as finished: `done` becomes `total` when
+    /// the job succeeded (ADR-0134, decision 2).
+    ///
+    /// A job that published no progression stays at `None`, and a failed job
+    /// keeps the last value it published.
+    fn complete(&self) {
+        if let Ok(mut value) = self.value.lock()
+            && let Some(object) = value.as_object_mut()
+        {
+            let total = object.get("total").and_then(Value::as_u64).unwrap_or(0);
+            object.insert("done".to_owned(), json!(total));
+            self.view
+                .send_modify(|view| view.progress = Some(value.clone()));
         }
     }
 
@@ -307,7 +335,6 @@ impl JobBoard {
             }
         };
         let id = new_job_id();
-        let progress = JobProgress::new(id.clone());
         let created_at = self.store.insert(&id, kind, index)?;
         let view = JobView {
             id: id.clone(),
@@ -322,9 +349,10 @@ impl JobBoard {
             result: None,
             error: None,
         };
+        let (sender, _receiver) = watch::channel(view.clone());
+        let progress = JobProgress::new(id.clone(), sender.clone());
         {
             let mut jobs = self.jobs.write().map_err(|_| poisoned("the job board"))?;
-            let (sender, _receiver) = watch::channel(view.clone());
             jobs.insert(id.clone(), sender);
         }
         self.pending.fetch_add(1, Ordering::AcqRel);
@@ -643,7 +671,7 @@ pub struct IndexSummary {
     pub epoch: u64,
     /// Published generation.
     pub generation: u64,
-    /// Documents the reference state holds.
+    /// Documents the served generation holds.
     pub documents: u64,
     /// Passages alive at this generation.
     pub live_passages: u64,
@@ -667,12 +695,19 @@ impl IndexSummary {
     ///
     /// # Errors
     ///
-    /// The errors of [`GenerationStore::state`] and of the `batches` query.
+    /// The errors of the `batches` queries and of the passage counts of the
+    /// snapshot.
     pub fn of(store: &GenerationStore) -> Result<Self, CribleError> {
         Self::of_snapshot(store, &store.snapshot())
     }
 
     /// Reads the summary of `snapshot`, a generation `store` already holds.
+    ///
+    /// The counts describe `snapshot` alone: the documents and the passages were
+    /// recorded when it was built, and the live passages are its bitmap
+    /// (ADR-0105, decision 3). Only `last_batch` and `batches` still come from
+    /// the reference state, and that asymmetry is wanted: `last_batch` is the
+    /// last row of `batches`, whatever generation served the readers.
     ///
     /// A `PATCH` job builds its snapshot with
     /// [`GenerationStore::reconfigure`](crible_store::generation::GenerationStore::reconfigure)
@@ -681,20 +716,19 @@ impl IndexSummary {
     ///
     /// # Errors
     ///
-    /// The errors of the `batches` query and of the reference state of
+    /// The errors of the `batches` queries and of the passage counts of
     /// `snapshot`.
     pub fn of_snapshot(
         store: &GenerationStore,
         snapshot: &Arc<Snapshot>,
     ) -> Result<Self, CribleError> {
-        let state = store.state()?;
         Ok(Self {
-            epoch: u64::from(state.epoch.get()),
+            epoch: u64::from(snapshot.epoch().get()),
             generation: snapshot.generation().get(),
-            documents: state.documents,
-            live_passages: state.live_passages,
-            dead_passages: state.dead_passages,
-            segments: state.segments.len(),
+            documents: snapshot.documents(),
+            live_passages: snapshot.live_passages(),
+            dead_passages: snapshot.dead_passages()?,
+            segments: snapshot.segments().len(),
             filter_memory_bytes: u64::try_from(snapshot.filter_memory().total())
                 .unwrap_or(u64::MAX),
             codes_memory_bytes: snapshot.codes_memory(),
@@ -723,7 +757,16 @@ pub struct IndexWriter {
     /// Directory of the index on disk, kept to reopen the store after a failed
     /// compaction (ADR-0108).
     directory: PathBuf,
-    queue: mpsc::Sender<Command>,
+    /// Sender of the jobs waiting for this writer.
+    ///
+    /// It is an `Option` because a deletion closes the queue: the sender lives
+    /// inside this writer, which the task holds through its own `Arc`, so the
+    /// channel would never close on its own, and the task would keep its store
+    /// until the process ends. [`IndexWriter::mark_deleted`] takes it and drops
+    /// it, which ends the drain of the queue and the task (ADR-0105, decision 6,
+    /// for the deletion; `docs/02-architecture.md`, "Concurrence", for the writer
+    /// task and its bounded queue).
+    queue: Mutex<Option<mpsc::Sender<Command>>>,
     receiver: Mutex<Option<mpsc::Receiver<Command>>>,
     store: Mutex<Option<GenerationStore>>,
     board: Arc<JobBoard>,
@@ -778,7 +821,7 @@ impl IndexWriter {
         Ok(Self {
             index,
             directory,
-            queue,
+            queue: Mutex::new(Some(queue)),
             receiver: Mutex::new(Some(receiver)),
             store: Mutex::new(Some(store)),
             board,
@@ -948,8 +991,33 @@ impl IndexWriter {
 
     /// Marks the index as deleted, so the writer fails the jobs queued behind
     /// `delete_index` in `unknown_index` and stops (ADR-0105, decision 6).
+    ///
+    /// It also closes the write queue. The sender belongs to this writer, which
+    /// the task holds through its own `Arc`; nobody else could drop it, so
+    /// `recv` would never return `None`, the task would never end, and the store
+    /// with its SQLite and tantivy descriptors would stay until the process
+    /// ended. Taking the sender here is the signal that ends the drain of
+    /// `fail_queued` and the task itself, which drops the store.
     pub fn mark_deleted(&self) {
         self.deleted.store(true, Ordering::Release);
+        match self.queue.lock() {
+            // Dropping the sender inside the guard closes the channel after the
+            // submissions already holding the guard: a job is therefore either
+            // enqueued, and failed by [`fail_queued`], or refused, never lost.
+            Ok(mut queue) => {
+                queue.take();
+            }
+            Err(poisoned) => {
+                // A panic in a submission must not leave the queue open: the
+                // task, its store and their descriptors would stay retained,
+                // which is the defect this method closes.
+                warn!(
+                    index = %self.index,
+                    "the write queue of a deleted index is poisoned; it is closed anyway"
+                );
+                poisoned.into_inner().take();
+            }
+        }
     }
 
     /// Name of the index this writer serves.
@@ -992,25 +1060,60 @@ impl IndexWriter {
         handle.spawn(async move { writer.run(receiver, store).await });
     }
 
-    /// Accepts a job, or refuses it when the queue is full.
+    /// Accepts a job, or refuses it when the queue is full or the index was
+    /// deleted.
+    ///
+    /// The queue guard is held for the whole acceptance, the insertion of the
+    /// job row and the send included: [`Self::mark_deleted`] takes the same
+    /// guard to close the queue, so a job is either enqueued before the close —
+    /// and failed in `unknown_index` by `fail_queued` — or refused here, never
+    /// reserved and then dropped with its row left `queued`.
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Overloaded`] when the queue is full, and the errors of the
-    /// job table.
+    /// [`ErrorCode::Overloaded`] when the queue is full,
+    /// [`ErrorCode::UnknownIndex`] when the index was deleted, and the errors of
+    /// the job table.
     pub fn submit(&self, kind: JobKind, work: JobWork) -> Result<JobView, CribleError> {
-        self.board.accept(&self.queue, &self.index, kind, work)
+        let queue = self
+            .queue
+            .lock()
+            .map_err(|_| poisoned("the write queue of an index"))?;
+        let Some(queue) = queue.as_ref() else {
+            return Err(CribleError::new(
+                ErrorCode::UnknownIndex,
+                format!("unknown index '{}'", self.index),
+            ));
+        };
+        self.board.accept(queue, &self.index, kind, work)
     }
 
-    /// Runs the queue until every sender is dropped: the running job and every
-    /// waiting one run, in arrival order, on a blocking thread.
+    /// Runs the queue until it is closed: the running job and every waiting one
+    /// run, in arrival order, on a blocking thread.
+    ///
+    /// The loop ends when [`Self::mark_deleted`] closes the queue, after
+    /// [`fail_queued`] failed the commands still buffered. The store this task
+    /// owns is then dropped on a blocking thread, so a deleted index releases
+    /// its descriptors and its disk space off the async threads, like every
+    /// other store operation (ADR-0103, decision 8).
     ///
     /// A failed `compact` abandons the in-memory store and reopens the index from
     /// disk, then republishes the snapshot before the next job (ADR-0108,
     /// decision 2). If that reopen fails, the index keeps serving its last
     /// snapshot and the later jobs fail in `internal` until the restart, with a
     /// single `error` line.
-    async fn run(self: Arc<Self>, mut receiver: mpsc::Receiver<Command>, store: GenerationStore) {
+    async fn run(self: Arc<Self>, receiver: mpsc::Receiver<Command>, store: GenerationStore) {
+        let holder = self.run_queue(receiver, store).await;
+        self.release_store_off_threads(holder).await;
+    }
+
+    /// The loop of [`Self::run`]: it returns the store it still holds when the
+    /// queue closes.
+    async fn run_queue(
+        self: &Arc<Self>,
+        mut receiver: mpsc::Receiver<Command>,
+        store: GenerationStore,
+    ) -> Option<GenerationStore> {
         let mut holder = Some(store);
         while let Some(command) = receiver.recv().await {
             self.board.mark_running(&command.id, &command.progress);
@@ -1037,7 +1140,7 @@ impl IndexWriter {
             let kind = command.kind;
             let work = command.work;
             let id = command.id.clone();
-            let writer = Arc::clone(&self);
+            let writer = Arc::clone(self);
             let joined = tokio::task::spawn_blocking(move || {
                 let mut store = current;
                 let outcome = work(&mut store, &progress, &writer);
@@ -1050,6 +1153,11 @@ impl IndexWriter {
                 Ok((returned, outcome)) => {
                     let failed = outcome.is_err();
                     holder = Some(returned);
+                    if !failed {
+                        // ADR-0134, decision 2: a successful job ends at `total`,
+                        // on the step it last published.
+                        command.progress.complete();
+                    }
                     self.board
                         .mark_finished(&id, kind, outcome, &command.progress);
                     if failed && kind == JobKind::Compact {
@@ -1057,7 +1165,7 @@ impl IndexWriter {
                     }
                     if self.deleted.load(Ordering::Acquire) {
                         fail_queued(&mut receiver, &self.board, &self.index).await;
-                        return;
+                        return holder;
                     }
                 }
                 Err(join) => {
@@ -1080,11 +1188,36 @@ impl IndexWriter {
                     holder = self.reopen_off_threads(None).await;
                     if self.deleted.load(Ordering::Acquire) {
                         fail_queued(&mut receiver, &self.board, &self.index).await;
-                        return;
+                        return holder;
                     }
                     continue;
                 }
             }
+        }
+        holder
+    }
+
+    /// Drops the store a closed queue left, on a blocking thread.
+    ///
+    /// Closing the SQLite connection of the write epoch — with the WAL
+    /// checkpoint of its last descriptor — and the tantivy writer is a store
+    /// operation, paid off the async threads like every other (ADR-0103,
+    /// decision 8). The index directory is already gone, so the cost is small,
+    /// but the placement is the one of [`Self::reopen_off_threads`].
+    async fn release_store_off_threads(&self, holder: Option<GenerationStore>) {
+        let Some(store) = holder else {
+            return;
+        };
+        let joined = tokio::task::spawn_blocking(move || {
+            drop(store);
+        })
+        .await;
+        if let Err(join) = joined {
+            error!(
+                index = %self.index,
+                cause = %join,
+                "the store of a deleted index panicked while it was released"
+            );
         }
     }
 

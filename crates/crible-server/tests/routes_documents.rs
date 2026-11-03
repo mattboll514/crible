@@ -15,6 +15,8 @@
 //! | `a_patch_of_an_unknown_document_fails_not_found` | business error carried by the job |
 //! | `a_patch_replaces_a_document_field` | patch updates the fields, report in memory |
 //! | `the_attach_journal_carries_the_durations_once` | one duration line per attach, no content |
+//! | `a_hexadecimal_job_id_does_not_look_like_content` | the CI collision: a marker inside the `job_id` |
+//! | `a_free_field_on_the_duration_line_is_refused` | an extra field on the duration line is refused |
 //! | `a_read_key_is_forbidden_on_the_write_routes` | role matrix, `read` |
 //! | `a_write_key_is_forbidden_on_the_admin_routes` | role matrix, `write` |
 //! | `the_admin_routes_refuse_a_non_empty_body` | no body on `compact`/`exports`/`snapshots` |
@@ -30,9 +32,13 @@ use axum::http::{Method, StatusCode};
 use serde_json::{Value, json};
 
 use common::{
-    ADMIN_SECRET, DOC_ID, INDEX, READ_SECRET, WRITE_SECRET, deletion_batch, instance_with_alpha,
-    online_batch, post_documents, send, terminal_job,
+    ADMIN_SECRET, DOC_ID, INDEX, READ_SECRET, WRITE_SECRET, assert_attach_duration_line,
+    deletion_batch, instance_with_alpha, online_batch, post_documents, send, terminal_job,
 };
+
+/// `job_id` of the failing line of the CI run 41519244925, kept as the
+/// reproduction of the collision: it holds the digits `4242` by chance.
+const CI_FAILING_JOB_ID: &str = "job_7310ebb220da4f7ba3a619f142422e14";
 
 /// Asserts that the job succeeded and returns its report.
 fn succeeded(job: &Value) -> &Value {
@@ -514,37 +520,40 @@ async fn the_attach_journal_carries_the_durations_once() {
         .as_str()
         .expect("the job carries its id")
         .to_owned();
-    let text = journal.contents();
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|line| line.contains(id.as_str()) && line.contains("attach durations"))
-        .collect();
-    assert_eq!(
-        lines.len(),
-        1,
-        "the attach job logs its durations exactly once: {text}"
+    // INV-13 is proved by the exact set of fields of the line, not by a search
+    // for the batch content: the `job_id` is a random hexadecimal UUID, so a
+    // short marker of the content would match it by chance.
+    assert_attach_duration_line(&journal.contents(), &id, "online_batch", INDEX);
+}
+
+/// The line of the CI failure of the run 41519244925: its `job_id` holds the
+/// digits `4242` by chance, and a search of that marker in the raw line would
+/// have matched it although the line carries no content.
+///
+/// The helper reads the field names and the values, so it accepts this line and
+/// rejects any extra field (see the next test).
+#[test]
+fn a_hexadecimal_job_id_does_not_look_like_content() {
+    let line = format!(
+        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{CI_FAILING_JOB_ID}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1}},"target":"crible_server::jobs"}}"#
     );
-    let line = lines[0];
-    let fields: Vec<String> = vec![
-        "\"kind\":\"online_batch\"".to_owned(),
-        format!("\"index\":\"{INDEX}\""),
-        "\"validation_ms\":".to_owned(),
-        "\"segment_ms\":".to_owned(),
-        "\"transaction_ms\":".to_owned(),
-        "\"lexical_ms\":".to_owned(),
-        "\"manifest_ms\":".to_owned(),
-        "\"snapshot_ms\":".to_owned(),
-    ];
-    for field in &fields {
-        assert!(
-            line.contains(field.as_str()),
-            "the duration line carries '{field}': {line}"
-        );
-    }
     assert!(
-        !line.contains("998877") && !line.contains("4242"),
-        "the duration line carries no field value and no text (INV-13): {line}"
+        line.contains("4242"),
+        "the failing job id holds the marker by chance: {line}"
     );
+    assert_attach_duration_line(&line, CI_FAILING_JOB_ID, "online_batch", INDEX);
+}
+
+/// A free field on the duration line is refused even when its value is a bare
+/// word: the assertion proves the absence of content by the set of fields, not
+/// by a search of a marker (INV-13).
+#[test]
+#[should_panic(expected = "carries these fields only")]
+fn a_free_field_on_the_duration_line_is_refused() {
+    let line = format!(
+        r#"{{"timestamp":"2026-11-02T20:33:58.433685Z","level":"INFO","fields":{{"message":"attach durations","job_id":"{CI_FAILING_JOB_ID}","kind":"online_batch","index":"alpha","validation_ms":2,"segment_ms":2,"transaction_ms":1,"lexical_ms":0,"manifest_ms":1,"snapshot_ms":1,"text":"contrat"}},"target":"crible_server::jobs"}}"#
+    );
+    assert_attach_duration_line(&line, CI_FAILING_JOB_ID, "online_batch", INDEX);
 }
 
 /// `?text=true` adds the text of each passage; `GET` of an unknown document is

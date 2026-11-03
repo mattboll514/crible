@@ -7,9 +7,9 @@
 //! vector are encoded here, in fp32, on CPU; passages with a vector keep it.
 //! Every document then goes through the same door as a batch produced
 //! elsewhere: this module writes a real batch directory (format v1) into
-//! `<data>/tmp/online-<hash>/`, and [`attach`] validates and applies it. The
-//! controls, the semantic table, the report and the recovery are those of
-//! `attach`, unchanged (ADR-0055).
+//! `<data>/tmp/online-<hash>/`, and [`crate::attach::attach`] validates and
+//! applies it. The controls, the semantic table, the report and the recovery
+//! are those of `attach`, unchanged (ADR-0055).
 //!
 //! # Determinism and idempotence
 //!
@@ -56,14 +56,15 @@
 //!
 //! An ingestion takes an exclusive [`File::try_lock`] on
 //! `<data>/tmp/online-<batch_id>.lock` before it creates the batch directory,
-//! and holds it until after [`attach`]. Two ingestions of the same file
-//! therefore serialise: the second fails with [`ErrorCode::Overloaded`] without
-//! creating anything, and the caller retries once the first has finished
-//! (ADR-0056). [`remove_stale_batches`] uses the same lock to tell a live lot
-//! from a leftover: it deletes only what it can lock.
+//! and holds it until after [`crate::attach::attach`]. Two ingestions of the
+//! same file therefore serialise: the second fails with
+//! [`ErrorCode::Overloaded`] without creating anything, and the caller retries
+//! once the first has finished (ADR-0056). [`remove_stale_batches`] uses the
+//! same lock to tell a live lot from a leftover: it deletes only what it can
+//! lock.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs::{self, File, TryLockError};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -90,12 +91,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::attach::AttachReport;
-#[cfg(not(feature = "failpoints"))]
-use crate::attach::attach;
 #[cfg(feature = "failpoints")]
 use crate::attach::attach_with_observer;
+#[cfg(not(feature = "failpoints"))]
+use crate::attach::attach_with_progress;
 use crate::batch_reader::{parquet_type, vector_width};
+use crate::file_lock::{LockAttempt, lock_exclusive};
 use crate::filters_index::date_days;
+use crate::generation::ProtocolStep;
 use crate::generation::{CommitStep, GenerationStore};
 use crate::records;
 
@@ -235,18 +238,18 @@ pub struct OnlineIngest<'a> {
 }
 
 /// Ingests one JSONL file of documents into `store`, then applies the internal
-/// batch with [`attach`].
+/// batch with [`crate::attach::attach`].
 ///
 /// `data_dir` is the root data directory of the instance: the internal batch is
 /// built under `<data_dir>/tmp`, outside the index, and removed before the call
 /// returns.
 ///
-/// `token_counter` and `document_encoder` follow [`attach`]: the tokenizer
-/// counts the passages (control 8, INV-11), the loader gives the fp32 encoder
-/// (control 9, INV-12). Both are required for an `onnx` model and absent for an
-/// `external` one. The loader is called at most once here: the encoder it
-/// returns serves the online encoding and the acceptance check of `attach`, so
-/// a single fp32 graph is loaded.
+/// `token_counter` and `document_encoder` follow [`crate::attach::attach`]:
+/// the tokenizer counts the passages (control 8, INV-11), the loader gives the
+/// fp32 encoder (control 9, INV-12). Both are required for an `onnx` model and
+/// absent for an `external` one. The loader is called at most once here: the
+/// encoder it returns serves the online encoding and the acceptance check of
+/// `attach`, so a single fp32 graph is loaded.
 ///
 /// `mode` is the mode of the internal manifest. The online lot accepts `upsert`
 /// only, for the CLI as for the route of P6: `replace_all` is refused with
@@ -261,8 +264,8 @@ pub struct OnlineIngest<'a> {
 ///   or mistyped field, a passage longer than `max_tokens`, or `replace_all`;
 /// - [`ErrorCode::Overloaded`] when another ingestion already holds the
 ///   presence lock of this batch (same input bytes, ADR-0056);
-/// - the errors of [`attach`], which validates the internal batch (model,
-///   checksums, lengths, acceptance, conflict).
+/// - the errors of [`crate::attach::attach`], which validates the internal
+///   batch (model, checksums, lengths, acceptance, conflict).
 pub fn ingest(
     store: &mut GenerationStore,
     request: &OnlineIngest<'_>,
@@ -287,6 +290,7 @@ pub fn ingest(
         document_encoder,
         mode,
         &mut |_step| {},
+        &mut |_step, _total| {},
     )
 }
 
@@ -345,36 +349,61 @@ pub fn ingest_documents(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
 ) -> Result<AttachReport, CribleError> {
-    ingest_documents_observed(store, request, &mut |_step| {})
+    ingest_documents_with_progress(store, request, &mut |_step, _total| {})
+}
+
+/// Same as [`ingest_documents`], and reports each step boundary of the attach
+/// to `progress`, with the number of passages of the internal batch
+/// (ADR-0134).
+///
+/// The encoding of the online batch runs before the internal batch and its
+/// manifest exist, so it reports nothing: `progress` stays unpublished until
+/// the attach, and the unit is passages from the first publication on
+/// (ADR-0134, decision 5).
+pub fn ingest_documents_with_progress<P>(
+    store: &mut GenerationStore,
+    request: &OnlineDocuments<'_>,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    ingest_documents_observed(store, request, &mut |_step| {}, progress)
 }
 
 /// Same as [`ingest_documents`], and reports the commit protocol of the attach
 /// to `observer`.
 ///
-/// Test hook: like
-/// [`attach_with_observer`](crate::attach::attach_with_observer), it only
-/// exists with the `failpoints` cargo feature. A test that blocks in `observer`
-/// holds the online attach exactly before or exactly after the SQLite `COMMIT`
+/// Test hook: like [`crate::attach::attach_with_observer`], it only exists with
+/// the `failpoints` cargo feature. A test that blocks in `observer` holds the
+/// online attach exactly before or exactly after the SQLite `COMMIT`
 /// while a search reads the published generation (INV-02).
 #[cfg(feature = "failpoints")]
-pub fn ingest_documents_with_observer<F>(
+pub fn ingest_documents_with_observer<F, P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
     observer: F,
+    progress: &mut P,
 ) -> Result<AttachReport, CribleError>
 where
     F: FnMut(CommitStep),
+    P: FnMut(ProtocolStep, u64) + ?Sized,
 {
     let mut observer = observer;
-    ingest_documents_observed(store, request, &mut observer)
+    ingest_documents_observed(store, request, &mut observer, progress)
 }
 
 /// The single body of the two online entry points.
-fn ingest_documents_observed(
+fn ingest_documents_observed<F, P>(
     store: &mut GenerationStore,
     request: &OnlineDocuments<'_>,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     let OnlineDocuments {
         batch_id,
         documents,
@@ -399,6 +428,7 @@ fn ingest_documents_observed(
         document_encoder,
         BatchMode::Upsert,
         observer,
+        progress,
     )
 }
 
@@ -416,7 +446,7 @@ enum Source<'a> {
 
 /// The single path of an online batch: survey, internal lot, attach.
 #[allow(clippy::too_many_arguments)]
-fn run(
+fn run<F, P>(
     store: &mut GenerationStore,
     source: Source<'_>,
     identity: OnlineIdentity<'_>,
@@ -426,8 +456,13 @@ fn run(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     mode: BatchMode,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     if mode != BatchMode::Upsert {
         return Err(invalid(format!(
             "the online lot accepts mode '{}' only, got '{}': at most 10 000 passages per \
@@ -555,6 +590,7 @@ fn run(
         token_counter,
         loader,
         observer,
+        progress,
     )
 }
 
@@ -562,15 +598,20 @@ fn run(
 /// to `observer` when the `failpoints` build offers the hold.
 #[cfg(feature = "failpoints")]
 #[allow(clippy::too_many_arguments)]
-fn attached(
+fn attached<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-    observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
+    observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     attach_with_observer(
         store,
         batch_dir,
@@ -579,6 +620,7 @@ fn attached(
         token_counter,
         document_encoder,
         observer,
+        progress,
     )
 }
 
@@ -586,22 +628,28 @@ fn attached(
 /// normal build.
 #[cfg(not(feature = "failpoints"))]
 #[allow(clippy::too_many_arguments)]
-fn attached(
+fn attached<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
     model_config: &ModelConfig,
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
-    _observer: &mut dyn FnMut(CommitStep),
-) -> Result<AttachReport, CribleError> {
-    attach(
+    _observer: &mut F,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
+    attach_with_progress(
         store,
         batch_dir,
         index_config,
         model_config,
         token_counter,
         document_encoder,
+        progress,
     )
 }
 
@@ -616,8 +664,8 @@ fn attached(
 /// - on `WouldBlock`, a writer holds it: it is left untouched.
 ///
 /// The lock is taken on the file the path currently names (see
-/// `lock_presence`), so a path replaced under the caller never yields a lock
-/// on a vanished inode.
+/// `crate::file_lock::lock_exclusive`), so a path replaced under the caller
+/// never yields a lock on a vanished inode.
 ///
 /// Two kinds of residue are handled: the usual pair
 /// `online-<batch_id>/` + `online-<batch_id>.lock`, and an **orphan lock
@@ -706,7 +754,7 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
         } else {
             continue;
         };
-        let _lock = match lock_presence(&lock_path) {
+        let _lock = match lock_exclusive(&lock_path, "presence lock of the online batch") {
             Ok(LockAttempt::Locked(lock)) => lock,
             Ok(LockAttempt::Busy) => {
                 tracing::debug!(
@@ -736,7 +784,7 @@ pub fn remove_stale_batches(data_dir: &Path) -> Result<(), CribleError> {
             }
         }
         // Cleaning up deletes the lock file only while holding its lock, and
-        // `lock_presence` has just checked that this handle is the file the
+        // `lock_exclusive` has just checked that this handle is the file the
         // path names. Since no one but a lock holder unlinks the path, it still
         // names this file here: the two deletions (directory, then lock) cannot
         // leave a lock on a vanished inode behind them.
@@ -1182,93 +1230,6 @@ fn names_at(schema: &Schema, level: FieldLevel) -> String {
     }
 }
 
-/// Highest number of times the lock is reopened when the path is replaced
-/// under the caller. A single replacement is expected; more means something
-/// keeps deleting the lock file, and guessing is worse than failing.
-const LOCK_ATTEMPTS: usize = 8;
-
-/// Outcome of [`lock_presence`] on one lock path.
-enum LockAttempt {
-    /// The exclusive lock is held on the file the path currently names.
-    Locked(File),
-    /// Another writer holds the lock: the caller must wait and retry.
-    Busy,
-}
-
-/// Opens `path` (creating it) and takes an exclusive lock on the **current**
-/// file of that path.
-///
-/// A lock is not enough on its own: the path may have been unlinked and
-/// recreated between the open and the `try_lock`, so the handle would hold a
-/// lock on a file no name points at any more, and two writers would each hold a
-/// lock they believe exclusive (ADR-0056). After a successful `try_lock`, the
-/// identity of the open file is therefore compared with the identity of the
-/// path; on a mismatch the handle is dropped and the open is retried.
-///
-/// # Errors
-///
-/// [`ErrorCode::Internal`] when the lock file cannot be opened or locked, or
-/// when the path keeps being replaced.
-fn lock_presence(path: &Path) -> Result<LockAttempt, CribleError> {
-    for _ in 0..LOCK_ATTEMPTS {
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path)
-            .map_err(|error| {
-                io_error("open the presence lock of the online batch", path, &error)
-            })?;
-        match file.try_lock() {
-            Ok(()) => {
-                if names_same_file(&file, path) {
-                    return Ok(LockAttempt::Locked(file));
-                }
-                // The path was replaced under this handle: retry, and let the
-                // handle drop at the end of the iteration.
-            }
-            Err(TryLockError::WouldBlock) => return Ok(LockAttempt::Busy),
-            Err(TryLockError::Error(error)) => {
-                return Err(internal(format!(
-                    "cannot lock the presence lock {} of the online batch: {error}",
-                    path.display()
-                )));
-            }
-        }
-    }
-    Err(internal(format!(
-        "the presence lock {} was replaced {LOCK_ATTEMPTS} times while it was being taken; \
-         refusing to guess which file it protects",
-        path.display()
-    )))
-}
-
-/// Tells whether `file` is still the file `path` names.
-///
-/// The identity is the pair (device, inode) of the two metadata reads, which is
-/// how a Unix kernel designates a file. `false` on any fault, including a path
-/// that no longer exists, so the caller retries instead of locking a vanished
-/// file.
-#[cfg(unix)]
-fn names_same_file(file: &File, path: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let (Ok(held), Ok(current)) = (file.metadata(), fs::metadata(path)) else {
-        return false;
-    };
-    held.dev() == current.dev() && held.ino() == current.ino()
-}
-
-/// On a platform without a portable file identity, the check is skipped.
-///
-/// Crible is deployed on Linux (`docs/07-stack-et-deploiement.md`, Docker), and
-/// its tests run on Linux and macOS, where the Unix check above applies.
-#[cfg(not(unix))]
-fn names_same_file(_file: &File, _path: &Path) -> bool {
-    true
-}
-
 /// Exclusive presence lock of one internal batch (ADR-0056).
 ///
 /// The lock is the neighbour file `<data_dir>/tmp/online-<batch_id>.lock`, held
@@ -1297,7 +1258,7 @@ impl BatchLock {
         fs::create_dir_all(&root)
             .map_err(|error| io_error("create the temporary directory", &root, &error))?;
         let path = root.join(format!("{batch_id}{LOCK_SUFFIX}"));
-        match lock_presence(&path)? {
+        match lock_exclusive(&path, "presence lock of the online batch")? {
             LockAttempt::Locked(file) => Ok(Self { _file: file, path }),
             LockAttempt::Busy => Err(CribleError::new(
                 ErrorCode::Overloaded,
@@ -1935,6 +1896,40 @@ pub fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
+/// Encodes bytes in the standard base64 alphabet of `docs/05-api.md`.
+///
+/// The inverse of [`decode_base64`], written by hand for the same reason: the
+/// crate list of `docs/07-stack-et-deploiement.md` holds no base64 encoder.
+/// `crible eval` encodes the `vector` of a query of its game with it, so the
+/// server decodes exactly the bytes this process wrote (ADR-0131, decision 8).
+#[must_use]
+pub fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for group in bytes.chunks(3) {
+        let first = group[0];
+        let second = group.get(1).copied().unwrap_or(0);
+        let third = group.get(2).copied().unwrap_or(0);
+        encoded.push(char::from(ALPHABET[usize::from(first >> 2)]));
+        encoded.push(char::from(
+            ALPHABET[usize::from((first & 0x03) << 4 | second >> 4)],
+        ));
+        if group.len() > 1 {
+            encoded.push(char::from(
+                ALPHABET[usize::from((second & 0x0f) << 2 | third >> 6)],
+            ));
+        } else {
+            encoded.push('=');
+        }
+        if group.len() > 2 {
+            encoded.push(char::from(ALPHABET[usize::from(third & 0x3f)]));
+        } else {
+            encoded.push('=');
+        }
+    }
+    encoded
+}
+
 /// Value of one base64 character, or the fault that names its position.
 fn sextet(byte: u8) -> Result<u8, String> {
     match byte {
@@ -2049,6 +2044,8 @@ mod tests {
     #![allow(clippy::panic)]
 
     use super::*;
+    use crate::file_lock::names_same_file;
+    use std::fs::TryLockError;
 
     #[test]
     fn base64_decodes_the_standard_alphabet() {
@@ -2077,6 +2074,33 @@ mod tests {
             assert!(
                 decode_base64(text).is_err(),
                 "'{text}' must be refused as base64"
+            );
+        }
+    }
+
+    #[test]
+    fn base64_encodes_the_standard_alphabet() {
+        // The canonical vectors of RFC 4648, section 10, then every length and
+        // every byte value: `decode_base64` reads back exactly what
+        // `encode_base64` wrote, padding and canonical bits included.
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+        assert_eq!(encode_base64(b"foob"), "Zm9vYg==");
+        assert_eq!(encode_base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(encode_base64(b"foobar"), "Zm9vYmFy");
+        assert_eq!(encode_base64(&[0, 1, 2, 3, 4]), "AAECAwQ=");
+        for length in 0..=32_usize {
+            let bytes: Vec<u8> = (0..length)
+                .map(|index| u8::try_from(index * 37 % 256).unwrap_or_default())
+                .collect();
+            let encoded = encode_base64(&bytes);
+            assert_eq!(encoded.len() % 4, 0, "'{encoded}' is a multiple of four");
+            assert_eq!(
+                decode_base64(&encoded),
+                Ok(bytes),
+                "'{encoded}' must read back what it encoded"
             );
         }
     }

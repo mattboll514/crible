@@ -1,6 +1,6 @@
 # ADR-0097 — Configuration de l'instance : surcharges `CRIBLE_*`, chemin de `crible.toml`, options de `crible serve`
 
-- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé)
+- **Statut** : Accepté (accepté par anticipation le 2026-10-29, confirmé par le propriétaire le 2026-10-29, tel que rédigé) — complété par ADR-0131 (variable `CRIBLE_EVAL_API_KEY`), puis par le complément du 2026-11-03 sur la liste actuelle des variables exclues, accepté par anticipation, confirmé par le propriétaire le 2026-11-03, sans modification du corps
 - **Date** : 2026-10-29
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche DEMARRER-SERVEUR-AXUM (phase P6), sur la demande du propriétaire et le verdict de `@architecte` du 2026-10-29
@@ -90,6 +90,28 @@ Deux précisions, qui ne changent pas la décision.
 Le **nombre flottant** manquait à la liste. Il est nécessaire : `[debug_journal].sample_rate` vaut `0.0` par défaut (`docs/07`, section « Configuration de l'instance »), et une valeur telle que `0.25` doit pouvoir être surchargée sans éditer le fichier monté en lecture seule. L'analyse se fait en virgule flottante décimale, sans séparateur de milliers ni notation dépendant de la locale.
 
 **Variables non UTF-8.** Une variable d'environnement de préfixe `CRIBLE_` dont le **nom** ou la **valeur** n'est pas en UTF-8 est refusée au démarrage comme une variable invalide, avec le même code de sortie non nul. Son nom est cité dans le message sous une forme approchée (substitution des octets non décodables), faute de pouvoir l'écrire exactement. Le but est qu'aucune variable `CRIBLE_*` ne soit ignorée en silence : le système d'exploitation permet des octets arbitraires dans l'environnement, et le contrôle de la décision, qui lit des chaînes, ne verrait pas ces variables sans cette règle.
+
+## Complément du 2026-11-03 (liste actuelle des variables exclues)
+
+Le tableau de la décision présentait **sept** variables comme la liste fermée, et disait que « toute autre variable `CRIBLE_*` inconnue est une faute ». Il était complet à la rédaction ; la liste a grandi depuis, et le corps de l'ADR n'est pas réécrit. Au 2026-11-03, `EXCLUDED_VARIABLES` (`crates/crible-server/src/config.rs`) en compte **onze**, et c'est cette liste qui fait foi :
+
+| Variable | Emploi | Origine |
+|---|---|---|
+| `CRIBLE_FAILPOINT` | Point d'injection des tests de panne, en build de test seulement | Décision de cet ADR |
+| `CRIBLE_BIN` | Chemin du binaire `crible` pour les tests Python | Décision de cet ADR |
+| `CRIBLE_PYTHON` | Interpréteur Python des tests de recette | Décision de cet ADR |
+| `CRIBLE_EXPORT_REPRO` | Rejeu opt-in de la reproductibilité de l'export | Décision de cet ADR |
+| `CRIBLE_CRASH_CHILD` | Sélection du processus enfant des tests de panne | Décision de cet ADR |
+| `CRIBLE_CRASH_BATCH` | Identifiant du lot des tests de panne | Décision de cet ADR |
+| `CRIBLE_CRASH_INDEX` | Index des tests de panne | Décision de cet ADR |
+| `CRIBLE_EVAL_API_KEY` | Clé `read` de `crible eval --url`, jamais lue par le serveur | ADR-0131, décision 4 |
+| `CRIBLE_TEST_BARRIER` | Répertoire de la barrière de synchronisation des tests | Tests sous `failpoints` (ADR-0118, ADR-0122) |
+| `CRIBLE_TEST_ENCODER` | Répertoire du double de l'encodeur, qui compte les appels | Tests sous `failpoints` (ADR-0110, décision 11) |
+| `CRIBLE_TEST_SEGMENT_READERS` | Fichier du journal des lecteurs de segments | Tests sous `failpoints` (ADR-0126, décisions 2 et 6) |
+
+Les trois variables de test entrent dans la liste pour la même raison : un test actif sous `failpoints` arme l'un de ces points d'observation dans son propre processus, puis lance `crible serve` ; l'enfant hérite de l'environnement et doit ignorer le point qu'il ne lit pas sans la feature. Sans elles, la liste fermée refuserait le démarrage du serveur de test.
+
+Le mécanisme de la décision ne change pas : la liste reste fermée, toute autre variable `CRIBLE_*` inconnue fait échouer le démarrage, et une variable de la liste est ignorée sans erreur. La conséquence « la liste des variables hors configuration est écrite une fois » se lit avec ce complément : elle est écrite dans le code une fois, et ce tableau en donne l'état daté. `docs/07-stack-et-deploiement.md`, section « Configuration de l'instance » (`:113`), a été mis à jour le 2026-11-03 avec ce complément : sa liste nomme les onze variables, si bien que `docs/07` et le code ne se contredisent plus.
 
 ## Références
 

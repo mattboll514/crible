@@ -77,6 +77,13 @@ pub struct Journal {
     /// `debug_journal.ttl_days`; `0` is refused at the startup (ADR-0122,
     /// decision 8).
     pub ttl_days: usize,
+    /// `debug_journal.max_rows`; `0` is refused at the startup, and a flush
+    /// above it trims the oldest rows (ADR-0127, decisions 1 and 3).
+    pub max_rows: usize,
+    /// `debug_journal.max_bytes`, compared to the **used** size of
+    /// `debug.sqlite`, `(page_count - freelist_count) × page_size`
+    /// (ADR-0127, decision 2).
+    pub max_bytes: usize,
 }
 
 impl Default for Journal {
@@ -85,6 +92,8 @@ impl Default for Journal {
             enabled: false,
             sample_rate: 0.0,
             ttl_days: 7,
+            max_rows: 500_000,
+            max_bytes: 2_147_483_648,
         }
     }
 }
@@ -96,6 +105,20 @@ impl Journal {
         Self {
             enabled: true,
             sample_rate,
+            ..Self::default()
+        }
+    }
+
+    /// The journal enabled, with `sample_rate` and `max_rows` rows kept.
+    ///
+    /// `max_bytes` keeps its documented default, which is inert on a fixture of
+    /// a few small rows (ADR-0127, decision 1).
+    #[must_use]
+    pub fn with_max_rows(sample_rate: f64, max_rows: usize) -> Self {
+        Self {
+            enabled: true,
+            sample_rate,
+            max_rows,
             ..Self::default()
         }
     }
@@ -260,6 +283,8 @@ retention_days = 90
 enabled = {enabled}
 sample_rate = {sample_rate:?}
 ttl_days = {ttl_days}
+max_rows = {max_rows}
+max_bytes = {max_bytes}
 
 [encoder]
 query_precision = "fp32"
@@ -279,6 +304,8 @@ query_cache_entries = 1024
         enabled = journal.enabled,
         sample_rate = journal.sample_rate,
         ttl_days = journal.ttl_days,
+        max_rows = journal.max_rows,
+        max_bytes = journal.max_bytes,
     )
 }
 
@@ -472,6 +499,77 @@ pub fn online_batch(batch_id: &str, text: &str, numero: &str) -> Value {
             }
         ]
     })
+}
+
+/// Asserts that the journal holds one duration line for `job_id`, with the
+/// fields of ADR-0107, decision 4 only, so no free field and no text (INV-13).
+/// A duration cannot be told apart from a numeric content: the six `*_ms`
+/// fields are numbers of the expected kind only.
+///
+/// The line is JSON, so it is parsed and the assertion reads the names and the
+/// values of its fields. A search for a short marker in the raw line would also
+/// match the `job_id` by chance: it is a random 32-character hexadecimal UUID, and
+/// a four-character hexadecimal marker has about one chance in 2 260 to appear
+/// in it.
+pub fn assert_attach_duration_line(journal_text: &str, job_id: &str, kind: &str, index: &str) {
+    let mut lines: Vec<Value> = Vec::new();
+    for line in journal_text.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let fields = &entry["fields"];
+        if fields["message"] == "attach durations" && fields["job_id"] == job_id {
+            lines.push(fields.clone());
+        }
+    }
+    assert_eq!(
+        lines.len(),
+        1,
+        "the attach job {job_id} logs its durations exactly once: {journal_text}"
+    );
+    let fields = &lines[0];
+    let mut names: Vec<&str> = fields
+        .as_object()
+        .unwrap_or_else(|| panic!("the duration line carries an object of fields: {fields}"))
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort_unstable();
+    let mut expected = vec![
+        "index",
+        "job_id",
+        "kind",
+        "lexical_ms",
+        "manifest_ms",
+        "message",
+        "segment_ms",
+        "snapshot_ms",
+        "transaction_ms",
+        "validation_ms",
+    ];
+    expected.sort_unstable();
+    assert_eq!(
+        names, expected,
+        "the duration line carries these fields only, so no free field can hold \
+         a text or a value (INV-13): {fields}"
+    );
+    assert_eq!(fields["message"], "attach durations", "{fields}");
+    assert_eq!(fields["job_id"], job_id, "{fields}");
+    assert_eq!(fields["kind"], kind, "{fields}");
+    assert_eq!(fields["index"], index, "{fields}");
+    for name in [
+        "validation_ms",
+        "segment_ms",
+        "transaction_ms",
+        "lexical_ms",
+        "manifest_ms",
+        "snapshot_ms",
+    ] {
+        assert!(
+            fields[name].is_u64(),
+            "the duration `{name}` is a non-negative integer: {fields}"
+        );
+    }
 }
 
 /// Body of an online batch that deletes `DOC_ID`.

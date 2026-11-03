@@ -21,6 +21,16 @@
 //! | `an_unknown_document_fails_the_whole_file` | decision 4 |
 //! | `a_mis_typed_value_is_refused_without_a_report` | criterion 3 |
 //! | `a_patch_above_the_entry_limit_is_refused` | decision 7, on the file |
+//!
+//! # Why the tests of this binary are serialised
+//!
+//! Every test of this binary holds [`common::SerialGuard`] for its whole body,
+//! because the fixture opens a store for writing in this process while another
+//! test spawns a `crible patch` child: a `fork` duplicates the `WRITER_LOCK` of
+//! that store, which would refuse a later reopen as `overloaded` (ADR-0116,
+//! decision 2; see [`common::SerialGuard`]).
+
+mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -220,6 +230,7 @@ fn path(path: &Path) -> &str {
 
 #[test]
 fn patch_changes_what_a_search_returns() {
+    let _serial = common::SerialGuard::acquire();
     // Criterion 1 end to end, and the report of ADR-0060 decision 8: a search
     // after the patch returns the new document field, with the new generation,
     // and the patch prints `{updated, unchanged, generation}`.
@@ -274,6 +285,7 @@ fn patch_changes_what_a_search_returns() {
 
 #[test]
 fn an_unknown_document_fails_the_whole_file() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0060, decision 4: one unknown `doc_id` refuses the file, and the valid
     // entry of the same file is not applied either.
     let instance = Instance::new();
@@ -302,6 +314,7 @@ fn an_unknown_document_fails_the_whole_file() {
 
 #[test]
 fn a_mis_typed_value_is_refused_without_a_report() {
+    let _serial = common::SerialGuard::acquire();
     // Criterion 3 through the CLI: the fault is `invalid_request`, the report is
     // absent, and the index does not move.
     let instance = Instance::new();
@@ -327,6 +340,7 @@ fn a_mis_typed_value_is_refused_without_a_report() {
 
 #[test]
 fn a_patch_above_the_entry_limit_is_refused() {
+    let _serial = common::SerialGuard::acquire();
     // ADR-0060, decision 7: the file is bounded at 10 000 entries, and the bound
     // is checked while the file is parsed, before any write.
     let instance = Instance::new();

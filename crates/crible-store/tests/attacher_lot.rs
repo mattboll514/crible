@@ -1622,6 +1622,33 @@ fn replace_all_deletes_the_documents_absent_from_the_batch() {
         "after replace_all, only the passages of the batch are alive"
     );
 
+    // The published snapshot carries the counts of the generation `replace_all`
+    // committed, not the counts of the snapshot it found: every kind of commit,
+    // including the one that removes document rows, must derive them from what it
+    // wrote (ADR-0105, decision 3; ADR-0066, decision 1).
+    let published = store
+        .state()
+        .expect("the state of the published generation");
+    assert_eq!(
+        (
+            published.documents,
+            published.live_passages,
+            published.dead_passages
+        ),
+        (
+            state.documents_rows,
+            state.live_passages,
+            state
+                .passages_rows
+                .checked_sub(state.live_passages)
+                .unwrap_or_else(|| panic!(
+                    "{} live passages are among the {} rows",
+                    state.live_passages, state.passages_rows
+                )),
+        ),
+        "the snapshot counts the documents and the passages its own generation holds"
+    );
+
     let absent = before
         .difference(&kept)
         .next()

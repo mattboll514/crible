@@ -154,10 +154,20 @@ fn prepare(arguments: &[String]) -> Result<Prepared, Box<dyn std::error::Error>>
         Some(path) if path.exists() => read_candidates(path, n, queries.len())?,
         _ => {
             let mut sets: Vec<Vec<Candidate>> = Vec::with_capacity(queries.len());
-            for query_code in &query_codes {
+            for (position, query_code) in query_codes.iter().enumerate() {
                 sets.push(
                     scan_pool.install(|| binary::top_k(&snapshot, &pool, query_code, wanted))?,
                 );
+                // Progress on the scan: it dominates the wall clock of a first
+                // invocation and prints nothing else, and a campaign rule here
+                // forbids a measurement command that stays silent for minutes.
+                if (position + 1) % 25 == 0 || position + 1 == query_codes.len() {
+                    println!(
+                        "scan of N = {n}: {} of {} candidate sets",
+                        position + 1,
+                        query_codes.len()
+                    );
+                }
             }
             if let Some(path) = &cache {
                 write_candidates(path, n, k, queries.len(), dims, &sets)?;

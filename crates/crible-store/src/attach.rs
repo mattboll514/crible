@@ -30,7 +30,7 @@
 //! 3. One SQLite transaction writes the document rows, the passage rows, the
 //!    tombstones, the removed `documents` rows, the `batches` row, the
 //!    `segments` row and `meta`. It goes through
-//!    [`GenerationStore::commit_with_rows`](crate::generation::GenerationStore),
+//!    [`GenerationStore::commit_with_rows_observed`](crate::generation::GenerationStore),
 //!    which owns the commit point (ADR-0016). A failure before the commit rolls
 //!    the transaction back, so the previous generation stays visible in full
 //!    (INV-03).
@@ -124,7 +124,7 @@ use serde_json::{Map, Number, Value, json};
 
 use crate::batch_reader::BatchReader;
 use crate::filters_index::{CommitDelta, CreatedPassage};
-use crate::generation::{CommitStep, GenerationStore, stop_at_failpoint};
+use crate::generation::{CommitStep, GenerationStore, ProtocolStep, stop_at_failpoint};
 use crate::records::{self, DocumentRecord, PassageRecord};
 use crate::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
 
@@ -477,6 +477,40 @@ pub fn attach(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
 ) -> Result<AttachReport, CribleError> {
+    attach_with_progress(
+        store,
+        batch_dir,
+        index_config,
+        model_config,
+        token_counter,
+        document_encoder,
+        &mut |_step, _total| {},
+    )
+}
+
+/// Same as [`attach`], and reports each step boundary of the protocol to
+/// `progress`, with the number of passages of the batch (ADR-0134).
+///
+/// A step the protocol skips for this batch is never reported: no `segment`
+/// when no passage is written, no `lexical` when the configuration disables the
+/// branch or the batch changes no passage text. The callback runs on the
+/// caller's thread, before the step it names.
+///
+/// The CLI goes through [`attach`] and pays nothing for this hook; the server
+/// publishes `progress` from the callback (ADR-0134, decision 2).
+#[allow(clippy::too_many_arguments)]
+pub fn attach_with_progress<P>(
+    store: &mut GenerationStore,
+    batch_dir: &Path,
+    index_config: &IndexConfig,
+    model_config: &ModelConfig,
+    token_counter: Option<&TokenCounter>,
+    document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
+    progress: &mut P,
+) -> Result<AttachReport, CribleError>
+where
+    P: FnMut(ProtocolStep, u64) + ?Sized,
+{
     run(
         store,
         batch_dir,
@@ -485,6 +519,7 @@ pub fn attach(
         token_counter,
         document_encoder,
         &mut |_step| {},
+        progress,
     )
 }
 
@@ -499,7 +534,7 @@ pub fn attach(
 /// the snapshot of the new generation is published (INV-02).
 #[cfg(feature = "failpoints")]
 #[allow(clippy::too_many_arguments)]
-pub fn attach_with_observer<F>(
+pub fn attach_with_observer<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
@@ -507,9 +542,11 @@ pub fn attach_with_observer<F>(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     observer: F,
+    progress: &mut P,
 ) -> Result<AttachReport, CribleError>
 where
     F: FnMut(CommitStep),
+    P: FnMut(ProtocolStep, u64) + ?Sized,
 {
     let mut observer = observer;
     run(
@@ -520,12 +557,13 @@ where
         token_counter,
         document_encoder,
         &mut observer,
+        progress,
     )
 }
 
 /// Runs one attach of `batch_dir`, reporting the commit protocol to `observer`.
 #[allow(clippy::too_many_arguments)]
-fn run<F>(
+fn run<F, P>(
     store: &mut GenerationStore,
     batch_dir: &Path,
     index_config: &IndexConfig,
@@ -533,9 +571,11 @@ fn run<F>(
     token_counter: Option<&TokenCounter>,
     document_encoder: Option<&dyn Fn() -> Result<Arc<Model>, CribleError>>,
     observer: &mut F,
+    progress: &mut P,
 ) -> Result<AttachReport, CribleError>
 where
     F: FnMut(CommitStep) + ?Sized,
+    P: FnMut(ProtocolStep, u64) + ?Sized,
 {
     let validation_started = Instant::now();
     let reader = BatchReader::open(batch_dir, index_config, model_config)?;
@@ -556,6 +596,12 @@ where
             ),
         ));
     }
+
+    // ADR-0134: the manifest is read, so the unit of the progression — the
+    // passages of the batch — is known from here on. A replay above published
+    // nothing: the protocol runs no step for it.
+    let total = reader.manifest().counts.passages;
+    progress(ProtocolStep::Validation, total);
 
     // Controls 6 and 7, including the cross-check of the two roles.
     reader.validate()?;
@@ -595,7 +641,11 @@ where
     stop_at_failpoint("attach_validated");
 
     // Step 2 of `docs/02`: the segment is written and renamed before the
-    // transaction opens.
+    // transaction opens. A batch that refreshes no passage writes no segment,
+    // so the step is not published then (ADR-0134).
+    if !plan.refresh.is_empty() {
+        progress(ProtocolStep::Segment, total);
+    }
     let segment_started = Instant::now();
     let segment = write_segment(
         &reader,
@@ -705,12 +755,14 @@ where
                 CommitDelta {
                     created,
                     rewritten_documents: plan.rewrite.iter().cloned().collect(),
+                    created_documents: counters.added,
                     tombstones: plan.tombstones.clone(),
                     removed_documents: plan.removed.clone(),
                 },
             ))
         },
         observer,
+        &mut |step| progress(step, total),
     )?;
 
     let mut report =

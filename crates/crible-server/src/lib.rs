@@ -41,6 +41,9 @@ pub mod lifecycle;
 pub mod limits;
 pub mod logging;
 mod maintenance;
+// The warning of the startup when the data root is shared from the host: a
+// memory map there is slow (`docs/07`, "Docker", volumes).
+mod mounts;
 // The OpenAPI specification, generated from the annotations of the routes and
 // served by `GET /openapi.json` and `GET /docs` (ADR-0015, ADR-0111).
 pub mod openapi;
