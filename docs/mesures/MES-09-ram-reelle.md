@@ -234,3 +234,187 @@ Ce que la mesure **ne** permet pas d'affirmer :
 - le RSS en conteneur (P8) ;
 - la trace du tampon transitoire dans le RSS anonyme, non résolue par `ps` sous 2 Gio de croissance
   de pages de fichier.
+
+## Campagne en conteneur (P8, ADR-0135) — 2026-11-03
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe A, mesure MES-09.
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié.** L'exemple
+  `crates/crible/examples/dense_latency.rs` est modifié pour Linux (lecture `/proc/self/status` et
+  cgroup v2) et **non commité au moment de la mesure**. Binaire `crible`, SHA-256
+  `a9658ecb…a399c54` ; harnais, `0eb8487f…307c4fe`.
+- **Machine** : MacBook Air M3, 8 cœurs, 24 Go, macOS 15.7.7 (24G720), **en conteneur** : Docker
+  Desktop 28.5.1, VM Linux `aarch64` de **12 529 836 032 octets (11,67 Gio)** de RAM et **8 vCPU**,
+  **page de 4 096 octets**, volume nommé `crible-mes-p8-data` sur `/data`, **aucune limite
+  `--memory`** (`memory.max = max`). La charge de l'hôte n'est pas relevée : limite déclarée.
+- **Jeu de données** : `synth-large`, **7 740 000 passages vivants**, 860 000 morts, un segment,
+  `vectors.f16` de 13 209 600 000 octets mappé en lecture, `records.sqlite` de 3,7 Go, codes binaires
+  de 825 600 000 octets, bitmaps et colonnes de 361 661 936 octets. Mêmes 300 requêtes qu'en natif,
+  SHA-256 `03cb2a2b…52948b`.
+- **Modèle** : `mdenseon`, session **fp32** chargée par une requête encodée, mesurée à part comme
+  ADR-0077, décision 5, l'exige.
+
+### Protocole
+
+Les trois états d'ADR-0077 sont repris sans changement :
+
+- **(a) index ouvert**, instantané chargé, aucune requête ;
+- **(b) après une passe** de 300 requêtes à vecteur fourni, **N = 1000** (défaut du mode `rss`), sans
+  session ONNX ;
+- **(c) session fp32**, deux exécutions **sans passe** (`--skip-pass`), pour ne pas mêler les pages
+  de vecteurs d'une passe au chiffre de la session.
+
+Chaque état est lu par `/proc/self/status` (`VmRSS`, `RssAnon`, `RssFile`, `RssShmem`, `VmSize`) et,
+quand le conteneur expose cgroup v2, par `memory.current` et `memory.stat`. Trois exécutions pour
+(a) et (b), deux pour (c).
+
+```sh
+sh tools/bench/mes-p8-conteneur/run.sh mes09
+```
+
+soit `dense_latency rss --data /data --index synth-large --vectors /data/queries.f32 --passes 1`,
+puis `… --model /data/models/mdenseon --skip-pass`, un conteneur neuf par exécution.
+
+Écarts au protocole, déclarés :
+
+- **Pas d'équivalent de `vmmap`** : Linux ne fournit pas la `Physical footprint` qui sert de mesure
+  de la mémoire possédée dans la campagne native. La comparaison porte donc sur le **RSS anonyme**
+  contre l'empreinte native, deux grandeurs voisines mais non identiques.
+- **Le cgroup ne referme pas toujours ses comptes** : à l'exécution 3, `RssFile` vaut 8 658 MiB quand
+  `file` du cgroup vaut 6 810 MiB, et le RSS total (9 804 MiB) dépasse `memory.current`
+  (7 987 MiB). Le mécanisme probable — des pages déjà présentes dans le cache de la VM, imputées à
+  un cgroup antérieur, entrent dans la projection sans être réimputées — **n'est pas prouvé** : le
+  harnais ne lit pas le cgroup parent. Les chiffres sont donnés tels quels.
+- **La session est mesurée sans passe**, donc la comparaison (c) − (a) isole la session, mais pas son
+  coût quand 8,7 Go de pages de vecteurs occupent déjà la VM.
+
+### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/rss-base-{1,2,3}.json` et
+`rss-model-cold-{1,2}.json` (gitignorés) ; artefact versionné :
+`MES-09-ram-reelle.2026-11-03.conteneur.json`, qui porte chaque état, les champs cgroup complets et
+la référence native.
+
+Mébioctets (1 MiB = 1 048 576 octets), « anon » = `RssAnon`, « fichiers » = `RssFile`,
+« cgroup » = `memory.current` :
+
+| Exécution | État | RSS | anon | fichiers | cgroup | récupéré pendant la passe |
+|---|---|---:|---:|---:|---:|---:|
+| `rss-base-1` | (a) ouvert | 1 148 | 1 141 | 7 | 3 382 | — |
+| `rss-base-1` | après le searcher | 1 148 | 1 141 | 7 | 11 072 | — |
+| `rss-base-1` | (b) après une passe | **9 972** | 1 147 | 8 825 | 11 216 | 10,7 Gio |
+| `rss-base-2` | (a) ouvert | 1 148 | 1 141 | 6 | 5 518 | — |
+| `rss-base-2` | après le searcher | 1 148 | 1 142 | 6 | 8 427 | — |
+| `rss-base-2` | (b) après une passe | **9 777** | 1 147 | 8 630 | 11 242 | 11,7 Gio |
+| `rss-base-3` | (a) ouvert | 1 148 | 1 141 | 7 | 3 353 | — |
+| `rss-base-3` | après le searcher | 1 148 | 1 141 | 7 | 4 606 | — |
+| `rss-base-3` | (b) après une passe | **9 804** | 1 147 | 8 658 | 7 987 | 6,2 Gio |
+
+« Récupéré » est la **différence** de `pgsteal_kswapd` entre l'état (b) et l'ouverture, convertie en
+Gio : 2 800 552, 3 070 424 et 1 625 311 pages de 4 Kio, l'ouverture de la troisième exécution en
+comptant déjà 607 410. Pendant la même passe, `pgmajfault` vaut 70 432, 80 709 et 54 401, soit
+**275, 315 et 213 MiB** relus depuis le volume.
+
+| Exécution | État | RSS | anon | session (anon) | cgroup |
+|---|---|---:|---:|---:|---:|
+| `rss-model-cold-1` | (a) ouvert | 1 148 | 1 141 | — | 4 297 |
+| `rss-model-cold-1` | avant la session | 1 148 | 1 141 | — | 7 392 |
+| `rss-model-cold-1` | (a) + session fp32 | **2 650** | 2 627 | **+1 486** | 6 841 |
+| `rss-model-cold-2` | (a) ouvert | 1 148 | 1 141 | — | 4 581 |
+| `rss-model-cold-2` | avant la session | 1 148 | 1 142 | — | 7 266 |
+| `rss-model-cold-2` | (a) + session fp32 | **2 637** | 2 613 | **+1 472** | 6 681 |
+
+### Conclusion
+
+- **Le conteneur n'ajoute rien à la mémoire possédée de l'index.** À l'ouverture, le RSS vaut
+  **1 148 MiB** et l'anonyme **1 141 MiB**, contre 1 148 MiB de RSS et 1 126 MiB d'empreinte en natif
+  (2026-10-27) : l'écart de 1,3 % est celui de deux grandeurs voisines, non un coût du conteneur.
+- **Le RSS en régime est un chiffre de cache, pas de dimensionnement.** Après une passe, il vaut
+  **9 777 à 9 972 MiB**, dont **8 630 à 8 658 MiB de pages de fichier** et **1 147 MiB d'anonyme** :
+  2,1 à 2,3 fois le RSS natif (4 743 à 4 948 MiB), parce que la VM n'a pas de swap et garde résidentes
+  environ 8,7 Go des 13,2 Go du fichier, là où la machine native en avait laissé partir 3,9 à 4,1 Go
+  et 314 à 346 MiB au swap. La VM a néanmoins récupéré **6,2 à 11,7 Gio** pendant la passe
+  (`pgsteal_kswapd`) : elle était sous pression, mais sur des pages de fichier. **La mémoire possédée
+  ne bouge pas : 1 147 MiB d'anonyme dans les trois exécutions.**
+- **La session fp32 coûte 1 472 à 1 486 MiB, entièrement résidente** (aucun swap dans la VM), contre
+  **1 127 à 1 229 MiB d'empreinte** en natif, dont une partie était sortie au swap. L'écart de +19,8 %
+  à +31,9 % compare un RSS à une empreinte et **ne doit pas être lu comme un coût du conteneur** ;
+  il mesure surtout que la session native était partiellement évincée.
+- **Le minimum d'une instance qui sert** vaut **2 637 à 2 650 MiB (2,58 à 2,59 Gio)** en conteneur,
+  contre 2 253 à 2 355 MiB d'empreinte en natif (+12,0 % à +17,6 %) et « ~2,0 Go » dans `docs/02`
+  (+28,8 % à +29,4 %). L'écart au tableau de conception reste celui que MES-09 avait déjà relevé,
+  augmenté de la session non évincée et du noyau du conteneur (`kernel` 29 à 61 MiB, `pagetables`
+  2,4 à 28 MiB selon l'état).
+- **Aucune recommandation de RAM n'est formulée ici.** La décision 5 d'ADR-0135 la place dans la
+  passe B, sur la base des états (b) et (c) ; cette section fournit les deux valeurs qui lui
+  manquaient : **1 147 MiB possédés par l'index** et **1 472 à 1 486 MiB pour la session fp32**.
+- **Le cache des vecteurs n'est pas un plancher** : 8 630 à 8 658 MiB sont évincibles et l'ont été
+  en partie pendant la mesure elle-même.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- l'empreinte physique en conteneur, `vmmap` n'existant pas sous Linux ;
+- l'écart exact entre session conteneur et session native, les deux grandeurs n'étant pas les mêmes ;
+- la fermeture des comptes du cgroup à l'exécution 3, où `memory.current` est inférieur au RSS ;
+- le RSS d'un index multi-segments ou d'un index lexical en conteneur ;
+- l'effet d'une limite `--memory` : aucune n'était posée.
+
+### Recommandation de RAM pour la VM Docker (passage B) — 2026-11-03
+
+Cette sous-section **ajoute** une lecture de dimensionnement aux chiffres de la campagne en conteneur
+ci-dessus. Elle ne mesure rien de nouveau en mémoire : elle confronte ces chiffres à la RAM que la
+cible demande (ADR-0135, décision 5), et signale ce que la mesure ne couvre pas.
+
+**Plancher, mesuré.** À l'ouverture, l'index possède **1 147 MiB d'anonyme** (`RssAnon`, identique dans
+les trois exécutions) et **6 à 7 MiB de fichier**. Une session fp32 y ajoute **1 472 à 1 486 MiB**,
+tous résidents. Le plancher d'une instance qui sert des requêtes en texte est donc
+**2 613 à 2 627 MiB d'anonyme** (≈ 2,6 Gio), mesuré, hors noyau et hors démons de la VM.
+
+**Ce que la cible peut garder en cache.** La VM de développement dispose de **11,67 Gio** et elle a
+gardé, après une passe, **8 630 à 8 658 MiB de pages de fichier** sur les **12,3 Gio** de vecteurs fp16
+et les **3,7 Go** de `records.sqlite` — en récupérant 6,2 à 11,7 Gio pendant la passe. Le Mac mini
+M1 16 Go alloue **environ 8 Go** à la VM Docker (`docs/07-stack-et-deploiement.md`, section Docker) :
+il lui resterait **≈ 5,4 Gio** de cache une fois le plancher de 2,6 Gio posé.
+
+**Ce qui est demandé par une requête de rescoring.** La passe B de MES-03 a lu, par requête,
+**1 214 / 2 448 / 6 210 pages de 4 Kio** de `vectors.f16` pour N = 1000 / 2000 / 5000, soit
+**4,74 / 9,56 / 24,26 Mio** par requête et, pour la série de 300 requêtes du harnais,
+**1,39 / 2,80 / 7,11 Gio**. Le nombre de pages par requête est mesuré (`mincore`) ; le passage en Gio
+de la série de 300 requêtes est une multiplication déclarée, et cette série est un **artefact de
+mesure** : un trafic réel ne rejoue pas 300 fois les mêmes candidats.
+
+**Ce que cela donne pour la cible à 8 Go :**
+
+| Besoin | Gio | Tient dans 8 Go ? |
+|---|---:|---|
+| plancher : index ouvert + session fp32 | 2,55 à 2,57 | oui |
+| + pages de candidats, une requête à N = 1000 | +0,005 | oui |
+| + pages de candidats, une requête à N = 5000 | +0,025 | oui |
+| + série de 300 requêtes à N = 2000 (artefact) | +2,80 | oui, en laissant ≈ 2,6 Gio |
+| + série de 300 requêtes à N = 5000 (artefact) | +7,11 | **non** |
+
+Autrement dit : **8 Go suffisent au plancher et à une requête**, mais **pas à garder résidentes les
+pages de vecteurs d'une longue série de requêtes à N = 5000**. À 8 Go, les pages de vecteurs fp16
+**seront évincées** (12,3 Gio de fichier pour 5,4 Gio de cache disponible) ; le coût du rescoring se
+situera entre le chiffre résident (1,10 à 1,64 ms à N = 1000 et 2000, MES-03 passage B) et le chiffre
+« froid partiel » (55 à 174 ms), et **aucune mesure de cette campagne ne dit où**.
+
+**Recommandation, à valider par le propriétaire** :
+
+- **minimum : 4 Go** pour la VM de la cible (plancher de 2,6 Gio + marge pour le noyau, les démons et
+  la fragmentation), en sachant que le rescoring y sera le plus souvent en lecture de pages ;
+- **confortable : 12 Go**, soit ≈ 4,6 fois le plancher de 2,6 Gio, ce qui laisse ≈ 9,4 Gio de cache —
+  assez pour la série à N = 5000 telle que mesurée (7,11 Gio) et pour `records.sqlite` ;
+- **entre les deux, 8 Go** est le réglage de `docs/07` : il tient le service, pas le régime résident à
+  N = 5000. Si la cible reste à 8 Go, retenir **N = 2000** (voir la recommandation de MES-03 passage B),
+  en sachant que N = 2000 donne un rappel@10 de **0,9887**, sous la cible de **0,99**
+  (`docs/mesures/MES-01-fidelite-scan-binaire.md:145`, ADR-0078) : ce compromis de fidélité, et le
+  changement du défaut `rescore_candidates` de 5000 à 2000 qu'il suppose, demandent un **nouvel ADR**.
+
+Ce que cette lecture **ne** permet pas d'affirmer :
+
+- le coût du rescoring à 8 Go ou à 12 Go : seule la VM de 11,67 Gio a été mesurée ;
+- la taille de la session **int8**, qui n'a pas été mesurée (seule la session fp32 l'a été) ; la
+  recommandation de MES-05 (int8) changerait le plancher, sans chiffre ici ;
+- la part du noyau et des démons de la VM dans le RSS, que le cgroup ne referme pas toujours ;
+- le comportement d'un index multi-segments ou lexical, jamais mesuré en mémoire.

@@ -191,3 +191,132 @@ que `conditions.txt` (date, charge, `vm_stat`).
   de charge supérieure à 5), après les quatre passes Rust. Ses valeurs absolues
   sont donc plus hautes que celles du § 2 ; seule la comparaison entre réglages
   est retenue.
+
+## Campagne en conteneur (P8, ADR-0135) — 2026-11-03
+
+Cette section **ajoute** une campagne en conteneur à la campagne native du 2026-10-24 ; elle ne
+réécrit aucun de ses chiffres. Elle suit le protocole de MES-05 sans changement, et relève en plus le
+nombre de fils que le processus voit, parce qu'une latence d'encodage mesurée en conteneur ne se
+compare au natif que si le runtime y disposait de la même parallélie (ADR-0135, décision 5).
+
+- **Tâche** : `MESURER-EN-CONTENEUR-MAC` (P8), passe B, mesure MES-05.
+- **Commit** : `3fb33439aa3349a31593b8281920af7ce51938bb`, branche
+  `tache/MESURER-EN-CONTENEUR-MAC`. **Aucun code de production n'a été modifié.** Le harnais
+  `crates/crible-encode/examples/measure_queries.rs` gagne un relevé de fils (`threads` dans le
+  document, une ligne à la console) ; c'est une **addition**, et elle est déclarée ici parce que le
+  harnais est un fichier suivi.
+- **Machine** : MacBook Air M3, 8 cœurs, 24 Go, macOS 15.7.7 (24G720), **en conteneur** : Docker
+  Desktop 28.5.1, VM Linux `aarch64` de **12 529 836 032 octets (11,67 Gio)** de RAM et **8 vCPU**,
+  **page de 4 096 octets**. Aucune limite `--memory`. La charge de l'hôte n'est pas relevée : limite
+  déclarée.
+- **Modèle** : `data/models/mdenseon`, copié dans le volume (`/data/models/mdenseon`), session
+  rechargée depuis le même `model.json` ; ONNX Runtime **1.31.0** dans l'image (`/opt/ort`) comme sur
+  l'hôte (`libonnxruntime.1.31.0.dylib` du wheel Python). Aucun changement de runtime ni d'export du
+  graphe.
+- **Requêtes** : les 300 textes de `data/mes04/query-texts.jsonl`, copiés dans le volume
+  (`/data/staging/query-texts.jsonl`). Les textes ne sortent ni dans un journal ni dans un document.
+
+### Protocole
+
+Celui du § 1, sans écart : mode `latency` de `measure_queries`, cache de requêtes **désactivé**
+(capacité 0), 300 appels de préchauffage, 1 000 appels mesurés, deux exécutions par précision, une
+précision par conteneur. Le relevé de fils est pris **après le premier appel**, parce qu'ONNX Runtime
+construit son pool intra-opération au premier `Run` : il donne `available_parallelism` (ce dont le
+runtime dimensionne ses pools) et le nombre de tâches du processus (`/proc/self/task`), ou `null`
+quand la plateforme n'a pas `/proc` — c'est le cas sur macOS.
+
+```sh
+# conteneur, image de harnais de la campagne (ENTRYPOINT remplacé)
+docker run --rm -v crible-mes-p8-data:/data --entrypoint measure_queries \
+    crible-mes-p8-harness:dev latency --model /data/models/mdenseon \
+    --queries /data/staging/query-texts.jsonl --precision <int8|fp32> \
+    --warmup 300 --count 1000 --out /data/raw/b-encode-<precision>-<n>.json
+
+# contrôle natif, même harnais, même machine, juste avant
+ORT_DYLIB_PATH=…/libonnxruntime.1.31.0.dylib \
+    target/release/examples/measure_queries latency --model data/models/mdenseon \
+    --queries data/mes04/query-texts.jsonl --precision <int8|fp32> \
+    --warmup 300 --count 1000 --out data/mes-p8-conteneur/raw/native-encode-<precision>.json
+```
+
+Écarts et limites, déclarés :
+
+- **Le contrôle natif n'est pas celui du 2026-10-24.** Il a été refait le 2026-11-03, sur la même
+  machine mais dans l'état où elle est aujourd'hui : c'est la seule comparaison qui isole le
+  conteneur, et elle est plus lente que la campagne publiée (voir plus bas).
+- **Le nombre de fils n'est pas lu dans ONNX Runtime** : le runtime ne l'expose pas, et le harnais
+  compte donc les tâches du processus. Il prouve que le processus n'a **pas** tourné sur un seul
+  fil, il ne prouve pas que le pool intra-opération valait 8.
+- **Le préchauffage et le comptage sont identiques** aux deux endroits, mais la première exécution
+  par précision paie encore le chargement du graphe (voir « premier appel »).
+- **Pas de mesure de la contention** : ni le scan binaire ni la recherche ne tournent pendant
+  l'encodage.
+
+### Résultats
+
+Documents bruts : `data/mes-p8-conteneur/raw/b-encode-int8-{1,2}.json`,
+`b-encode-fp32-{3,4}.json`, `native-encode-{int8,fp32}.json` (gitignorés) ; artefact versionné :
+`docs/mesures/MES-05-latence-encodage.2026-11-03.conteneur.json`, écrit par
+`tools/bench/mes-p8-conteneur/aggregate-b.py`, qui recalcule chaque percentile depuis les durées par
+appel et **refuse** une série dont le nombre d'appels s'écarte de celui du harnais.
+
+Tous les percentiles de ce tableau et de l'artefact sont pris au **rang le plus proche** (ADR-0077,
+décision 4), jamais par interpolation ; l'artefact a été régénéré depuis les sorties brutes le
+2026-11-03, après alignement de l'agrégateur sur cette méthode, et les deux concordent.
+
+Millisecondes, 1 000 appels mesurés par exécution :
+
+| Exécution | Précision | p50 | p95 | p99 | premier appel | fils vus |
+|---|---|---:|---:|---:|---:|---|
+| `b-encode-int8-1` | int8 | 47,457 | 132,103 | 176,773 | 3 701,1 | 8 / 8 |
+| `b-encode-int8-2` | int8 | 41,510 | 116,966 | 156,241 | 1 905,6 | 8 / 8 |
+| `b-encode-fp32-3` | fp32 | 100,347 | 258,465 | 316,956 | 6 596,4 | 8 / 8 |
+| `b-encode-fp32-4` | fp32 | 103,593 | 260,640 | 317,729 | 3 571,9 | 8 / 8 |
+| `native-encode-int8` | int8 | **18,262** | **52,710** | **65,833** | 2 570,5 | 8 / — |
+| `native-encode-fp32` | fp32 | **42,616** | **117,720** | **146,124** | 3 065,4 | 8 / — |
+
+« fils vus » : `available_parallelism` / tâches du processus ; le tiret signifie que la plateforme
+n'a pas `/proc`. Les quatre exécutions en conteneur rapportent **8 et 8** : le processus n'a pas été
+réduit à un fil.
+
+Rapports. Pour le conteneur, chaque précision a **deux exécutions** : le rapport prend la **médiane
+des deux**, soit la moyenne de deux valeurs, et le dit à chaque fois plutôt que de choisir une
+exécution.
+
+- **conteneur / natif du jour** : **×2,44** pour l'int8 (médiane 44,484 contre 18,262) et **×2,39**
+  pour le fp32 (101,970 contre 42,616) ; en p95, **×2,36** (124,535 contre 52,710) et **×2,20**
+  (259,553 contre 117,720). Prises séparément, les deux exécutions d'une précision donnent 2,27 et
+  2,60 pour l'int8 et 2,36 et 2,43 pour le fp32 (p50) : la médiane est retenue, et la fourchette est
+  dite ici plutôt que masquée.
+- **natif du jour / campagne publiée du 2026-10-24** (8,646 int8, 20,978 fp32) : **×2,11** et **×2,03**.
+
+Le second rapport est la part de l'état de la machine, le premier est celle du conteneur. Les deux
+sont donnés séparément : aucun des deux ne peut être attribué au conteneur seul.
+
+### Conclusion
+
+- **Le conteneur coûte entre 2,2 et 2,6 fois le natif du même jour** (2,4 en médiane sur les p50), à
+  précision égale, sur le même modèle, le même harnais, le même nombre de fils vus (8) et les mêmes
+  300 requêtes. C'est le chiffre
+  que la décision 5 d'ADR-0135 demande, et il ne dépend pas de la campagne publiée.
+- **La machine était plus lente aujourd'hui qu'au 2026-10-24, et c'est déclaré** : le contrôle natif
+  vaut ×2,0 à ×2,1 la campagne publiée. Comparer le conteneur directement aux 8,646 / 20,978 ms
+  publiés donnerait ×5,1 et ×4,9, soit un peu plus du double du coût réel du conteneur ; ce rapport
+  n'est donc **pas** retenu.
+- **Aucune comparaison au budget n'est faite.** Le budget indicatif de `docs/03-recherche.md`
+  (20 à 50 ms pour l'encodage d'une requête) se lit sur le Mac mini en conteneur (P10) ; ces chiffres
+  sont **indicatifs** (ADR-0129). En conteneur, sur cette VM, le p50 int8 (41,5 à 47,5 ms) est dans le
+  budget et le p50 fp32 (100,4 à 103,6 ms) le dépasse : c'est un constat sur cette VM, pas un verdict
+  sur la cible.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- le nombre de fils du pool intra-opération d'ONNX Runtime : il n'est pas exposé par le runtime ;
+- l'effet d'un pool réduit (`search_threads`) sur l'encodage : la configuration de l'instance laisse
+  le runtime choisir ;
+- la latence de l'encodage **de document**, qui n'est pas MES-05 ;
+- la reproductibilité sur une machine au repos : la charge de l'hôte n'est pas relevée.
+
+**Recommandation, à valider par le propriétaire** : pour un budget d'encodage en conteneur à 8,58 M
+passages, ne retenir que l'int8 (`query_precision = "int8"`), dont le p50 en conteneur reste sous les
+50 ms du budget indicatif ; le fp32, mesuré à 100 ms sur cette VM, ne le tient pas.

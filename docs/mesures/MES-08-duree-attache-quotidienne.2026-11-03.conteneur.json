@@ -1,0 +1,382 @@
+{
+  "report": "docs/mesures/MES-08-duree-attache-quotidienne.md",
+  "container": {
+    "sweeps": {
+      "b-sweep-calibrate": {
+        "sizes": [
+          1
+        ],
+        "rounds": 1,
+        "passages": 200,
+        "tokens_total": 54991,
+        "results": {
+          "1": {
+            "values_ms": [
+              171895.858786
+            ],
+            "rounds": 1,
+            "median_ms": 171895.858786,
+            "min_ms": 171895.858786,
+            "max_ms": 171895.858786,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 54991,
+            "microseconds_per_token": 3125.890760051645
+          }
+        },
+        "harness_median_ms": {
+          "1": 171895.858786
+        }
+      },
+      "b-sweep-a": {
+        "sizes": [
+          1,
+          4,
+          8
+        ],
+        "rounds": 2,
+        "passages": 200,
+        "tokens_total": 54991,
+        "results": {
+          "1": {
+            "values_ms": [
+              168530.942328,
+              207002.850468
+            ],
+            "rounds": 2,
+            "median_ms": 187766.896398,
+            "min_ms": 168530.942328,
+            "max_ms": 207002.850468,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 54991,
+            "microseconds_per_token": 3414.5023076139737
+          },
+          "4": {
+            "values_ms": [
+              126615.706641,
+              134478.655853
+            ],
+            "rounds": 2,
+            "median_ms": 130547.181247,
+            "min_ms": 126615.706641,
+            "max_ms": 134478.655853,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 56448,
+            "microseconds_per_token": 2312.6980804811506
+          },
+          "8": {
+            "values_ms": [
+              112674.500884,
+              144528.960941
+            ],
+            "rounds": 2,
+            "median_ms": 128601.7309125,
+            "min_ms": 112674.500884,
+            "max_ms": 144528.960941,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 58504,
+            "microseconds_per_token": 2198.169884324149
+          }
+        },
+        "harness_median_ms": {
+          "1": 207002.850468,
+          "4": 134478.655853,
+          "8": 144528.960941
+        }
+      },
+      "b-sweep-b": {
+        "sizes": [
+          1,
+          4,
+          8
+        ],
+        "rounds": 2,
+        "passages": 200,
+        "tokens_total": 54991,
+        "results": {
+          "1": {
+            "values_ms": [
+              167686.82957600002,
+              169008.111578
+            ],
+            "rounds": 2,
+            "median_ms": 168347.470577,
+            "min_ms": 167686.82957600002,
+            "max_ms": 169008.111578,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 54991,
+            "microseconds_per_token": 3061.3640518812167
+          },
+          "4": {
+            "values_ms": [
+              131050.45535100001,
+              140651.081397
+            ],
+            "rounds": 2,
+            "median_ms": 135850.768374,
+            "min_ms": 131050.45535100001,
+            "max_ms": 140651.081397,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 56448,
+            "microseconds_per_token": 2406.653351296769
+          },
+          "8": {
+            "values_ms": [
+              124463.54889,
+              133663.441518
+            ],
+            "rounds": 2,
+            "median_ms": 129063.495204,
+            "min_ms": 124463.54889,
+            "max_ms": 133663.441518,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 58504,
+            "microseconds_per_token": 2206.0627513332424
+          }
+        },
+        "harness_median_ms": {
+          "1": 169008.111578,
+          "4": 140651.081397,
+          "8": 133663.441518
+        }
+      },
+      "b-sweep-frame-after": {
+        "sizes": [
+          1
+        ],
+        "rounds": 3,
+        "passages": 200,
+        "tokens_total": 54991,
+        "results": {
+          "1": {
+            "values_ms": [
+              166882.807534,
+              167272.04816,
+              167275.5157
+            ],
+            "rounds": 3,
+            "median_ms": 167272.04816,
+            "min_ms": 166882.807534,
+            "max_ms": 167275.5157,
+            "median_rule": "median: mean of the two central values when the count is even",
+            "tokens_padded": 54991,
+            "microseconds_per_token": 3041.807716899129
+          }
+        },
+        "harness_median_ms": {
+          "1": 167272.04816
+        }
+      }
+    },
+    "combined": {
+      "1": {
+        "rounds": 4,
+        "values_ms": [
+          167686.82957600002,
+          168530.942328,
+          169008.111578,
+          207002.850468
+        ],
+        "median_ms": 168769.526953,
+        "min_ms": 167686.82957600002,
+        "max_ms": 207002.850468,
+        "tokens_padded": 54991,
+        "microseconds_per_token": 3069.039060082559,
+        "median_rule": "median: mean of the two central values when the count is even"
+      },
+      "4": {
+        "rounds": 4,
+        "values_ms": [
+          126615.706641,
+          131050.45535100001,
+          134478.655853,
+          140651.081397
+        ],
+        "median_ms": 132764.555602,
+        "min_ms": 126615.706641,
+        "max_ms": 140651.081397,
+        "tokens_padded": 56448,
+        "microseconds_per_token": 2351.979797371032,
+        "median_rule": "median: mean of the two central values when the count is even"
+      },
+      "8": {
+        "rounds": 4,
+        "values_ms": [
+          112674.500884,
+          124463.54889,
+          133663.441518,
+          144528.960941
+        ],
+        "median_ms": 129063.495204,
+        "min_ms": 112674.500884,
+        "max_ms": 144528.960941,
+        "tokens_padded": 58504,
+        "microseconds_per_token": 2206.0627513332424,
+        "median_rule": "median: mean of the two central values when the count is even"
+      }
+    },
+    "longest": {
+      "b-longest": {
+        "tokens": 1026,
+        "copies": [
+          1,
+          4,
+          8
+        ],
+        "rounds": 3,
+        "results": {
+          "1": {
+            "values_ms": [
+              3291.46971,
+              3340.948043,
+              3427.787502
+            ],
+            "rounds": 3,
+            "median_ms": 3340.948043,
+            "min_ms": 3291.46971,
+            "max_ms": 3427.787502,
+            "median_rule": "median: mean of the two central values when the count is even"
+          },
+          "4": {
+            "values_ms": [
+              9933.439129,
+              10288.336796,
+              10553.546214
+            ],
+            "rounds": 3,
+            "median_ms": 10288.336796,
+            "min_ms": 9933.439129,
+            "max_ms": 10553.546214,
+            "median_rule": "median: mean of the two central values when the count is even"
+          },
+          "8": {
+            "values_ms": [
+              18885.380174,
+              18948.610384,
+              19091.407009000002
+            ],
+            "rounds": 3,
+            "median_ms": 18948.610384,
+            "min_ms": 18885.380174,
+            "max_ms": 19091.407009000002,
+            "median_rule": "median: mean of the two central values when the count is even"
+          }
+        },
+        "harness_median_ms": {
+          "1": 3340.948043,
+          "4": 10288.336796,
+          "8": 18948.610384
+        }
+      }
+    }
+  },
+  "native_same_harness": {
+    "native-sweep": {
+      "results": {
+        "1": {
+          "values_ms": [
+            98965.871375
+          ],
+          "rounds": 1,
+          "median_ms": 98965.871375,
+          "min_ms": 98965.871375,
+          "max_ms": 98965.871375,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 54991,
+          "microseconds_per_token": 1799.6739716499064
+        },
+        "4": {
+          "values_ms": [
+            99721.173292
+          ],
+          "rounds": 1,
+          "median_ms": 99721.173292,
+          "min_ms": 99721.173292,
+          "max_ms": 99721.173292,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 56448,
+          "microseconds_per_token": 1766.6024180130387
+        },
+        "8": {
+          "values_ms": [
+            108346.24487499999
+          ],
+          "rounds": 1,
+          "median_ms": 108346.24487499999,
+          "min_ms": 108346.24487499999,
+          "max_ms": 108346.24487499999,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 58504,
+          "microseconds_per_token": 1851.9459331840555
+        }
+      },
+      "harness_median_ms": {
+        "1": 98965.871375,
+        "4": 99721.173292,
+        "8": 108346.24487499999
+      }
+    },
+    "native-longest": {
+      "results": {
+        "1": {
+          "values_ms": [
+            2210.231834,
+            2229.927541,
+            2263.669125
+          ],
+          "rounds": 3,
+          "median_ms": 2229.927541,
+          "min_ms": 2210.231834,
+          "max_ms": 2263.669125,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 54991,
+          "microseconds_per_token": 40.550772690076556
+        },
+        "4": {
+          "values_ms": [
+            8207.162125,
+            8345.950292,
+            8494.148375
+          ],
+          "rounds": 3,
+          "median_ms": 8345.950292,
+          "min_ms": 8207.162125,
+          "max_ms": 8494.148375,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 56448,
+          "microseconds_per_token": 147.85201055839002
+        },
+        "8": {
+          "values_ms": [
+            16425.11275,
+            16455.789042,
+            16847.708667
+          ],
+          "rounds": 3,
+          "median_ms": 16455.789042,
+          "min_ms": 16425.11275,
+          "max_ms": 16847.708667,
+          "median_rule": "median: mean of the two central values when the count is even",
+          "tokens_padded": 58504,
+          "microseconds_per_token": 281.27630661151375
+        }
+      },
+      "harness_median_ms": {
+        "1": 2229.927541,
+        "4": 8345.950292,
+        "8": 16455.789042
+      }
+    }
+  },
+  "published_native_ms": {
+    "B=1": 56314.7,
+    "B=4": 59681.1,
+    "B=8": 63633.4,
+    "note": "campagne du 2026-10-27, `sweep` natif, 200 passages, 54 991 jetons"
+  },
+  "published_native_padded_us_per_token": {
+    "B=1": 1024.071211652816,
+    "B=4": 1057.2757227891157,
+    "B=8": 1087.676056338028
+  },
+  "sample": "sample-daily-articles-1000.json, 200 passages, 54 991 jetons"
+}
