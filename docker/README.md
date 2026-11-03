@@ -58,6 +58,79 @@ contient **aucun** fichier `.env*` (`.env.prod` porte les accès de production,
 ADR-0032), ni `data/`, `models/`, `exchange/`, `target/`, `.git/` ou `.claude/`.
 L'image est autosuffisante : elle ne reçoit ni données ni modèle.
 
+## Publier l'image
+
+`.github/workflows/publish-image.yml` publie l'image sur GHCR. Il ne se déclenche
+que sur un tag `v*` : une poussée sur une branche ne touche jamais le registre.
+Le **premier tag est poussé par le propriétaire**, jamais par un agent ; le
+workflow ne crée ni ne pousse de tag lui-même.
+
+Ce que fait le workflow :
+
+1. il vérifie que le tag correspond à la version du workspace dans `Cargo.toml`
+   (`v0.1.0` pour `version = "0.1.0"`), et échoue sinon ;
+2. il construit les deux architectures, `linux/arm64` sur `ubuntu-24.04-arm` et
+   `linux/amd64` sur `ubuntu-latest`, deux runners **natifs** : aucune
+   compilation émulée par QEMU. Chaque job met ses couches en cache
+   (`type=gha`, une portée par architecture) et pousse son image par empreinte,
+   sans étiquette ;
+3. il assemble la liste de manifestes avec `docker buildx imagetools create`,
+   qui étiquette les deux empreintes d'un coup.
+
+Étiquettes publiées, `<owner>` étant le propriétaire du dépôt en minuscules
+(GHCR l'exige) et `<version>` le tag sans son `v` initial :
+
+| Étiquette | Sens |
+|---|---|
+| `ghcr.io/<owner>/crible:<version>` | la version publiée : `v0.1.0` publie `0.1.0` |
+| `ghcr.io/<owner>/crible:cpu` | étiquette **mobile** de la dernière version **stable** publiée |
+
+Règle de `:cpu` (ADR-0133, décision 4) : elle n'est déplacée que si le tag
+poussé est le plus haut tag stable `vX.Y.Z` du dépôt. Les tags sont comparés
+comme des versions et non comme du texte, donc `v0.10.0` passe au-dessus de
+`v0.9.0`. Un correctif d'une version antérieure — `v0.1.1` poussé après `v0.2.0`
+— publie son étiquette de version et laisse `:cpu` en place : l'étiquette mobile
+ne recule jamais.
+
+Une **pré-version** Cargo, c'est-à-dire une version contenant un `-` (par exemple
+`0.1.0-rc.1`, tag `v0.1.0-rc.1`), est admise : elle publie son étiquette de
+version mais **ne déplace jamais `:cpu`**. C'est l'essai du workflow avant la
+première version stable, et il vaut mieux cet essai qu'une première publication
+ratée, une image poussée sur GHCR étant difficile à retirer. La garde de version
+compare le tag à `[workspace.package] version` de `Cargo.toml` : la pré-version
+se met donc dans `Cargo.toml` avant de pousser le tag.
+
+Le `v` reste dans git et disparaît de l'étiquette de l'image : c'est une
+convention de gestion de versions, dont une référence d'image n'a pas besoin.
+
+Au niveau du workflow, les permissions sont `contents: read` ; `packages: write`
+n'est accordé qu'aux deux jobs qui publient, `build` et `merge`, le job `meta`,
+qui décide du nom et de la version, ne demandant que `contents: read`.
+L'authentification se fait par le `GITHUB_TOKEN` automatique, et aucun autre
+secret n'est employé. Le groupe de `concurrency` est fixe (`publish-image`) avec
+`cancel-in-progress: false` : deux publications ne se chevauchent pas, et aucune
+empreinte poussée ne reste sans liste de manifestes (ADR-0133, décision 5).
+
+Les commandes ci-dessous sont celles du **propriétaire** ; aucun agent ne crée
+ni ne pousse de tag. D'abord l'essai, avec la pré-version écrite dans
+`Cargo.toml` (`version = "0.1.0-rc.1"`), qui publie `0.1.0-rc.1` sans toucher
+`:cpu` :
+
+```
+git tag v0.1.0-rc.1
+git push origin v0.1.0-rc.1
+```
+
+Puis la première version stable, `[workspace.package] version` remise à `0.1.0`
+dans `Cargo.toml` et commitée :
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Récupérer ensuite l'image publiée avec `docker pull ghcr.io/<owner>/crible:0.1.0`.
+
 ## Lancer
 
 La configuration d'une instance est écrite par l'exploitant ; elle n'est jamais
