@@ -523,6 +523,42 @@ pub fn crible_ok(arguments: &[&str]) {
     );
 }
 
+/// Serialises the tests of a binary that both open a store in this process and
+/// spawn children.
+///
+/// A `fork` duplicates every open file description of the process, and the
+/// writer lock of an index is an `flock` held by such a description (ADR-0116,
+/// decision 2): while a child is forked and has not exec'd yet, it holds every
+/// `WRITER_LOCK` the process has open, so a reopen in another test thread is
+/// refused as `overloaded` for a writer that does not exist. `lsof` shows no
+/// holder, which makes the flake look like a lock that outlives its store.
+/// `O_CLOEXEC` closes the descriptor at `exec`, not between `fork` and `exec`.
+///
+/// A binary is serialised when a store opened for writing in the test process
+/// — even one closed at once — coexists with another test that spawns a child,
+/// or when a child then takes the `WRITER_LOCK` of the same index:
+/// `lock_exclusive` returns `Busy` without retrying, so that child's open fails
+/// as `overloaded` while the forked descriptor lives. Such a binary holds this
+/// guard for the whole body of every test; no test waits or retries.
+pub struct SerialGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl SerialGuard {
+    /// Waits for the other tests of this binary to finish.
+    ///
+    /// A poison is expected and ignored: a test that panics on purpose while
+    /// holding the guard would otherwise turn every later test into a panic.
+    pub fn acquire() -> Self {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let lock = match LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self { _lock: lock }
+    }
+}
+
 pub fn path(path: &Path) -> &str {
     path.to_str()
         .unwrap_or_else(|| panic!("the path {} must be UTF-8", path.display()))
