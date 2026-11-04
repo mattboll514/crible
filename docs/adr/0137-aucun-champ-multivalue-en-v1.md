@@ -1,6 +1,6 @@
 # ADR-0137 — Aucun champ multivalué en v1 (réponse à Q-03)
 
-- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-03 ; à confirmer par le propriétaire le 2026-11-04 au matin)
+- **Statut** : Accepté (accepté par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-03, confirmé par le propriétaire le 2026-11-04, sa réponse : « ok merci beacou les 3 point sont confirmé »)
 - **Date** : 2026-11-03 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche `DEFINIR-INDEX-LEGIFACILE` (phase P10), à la demande de `@relecteur` au premier tour de relecture (point bloquant 1)

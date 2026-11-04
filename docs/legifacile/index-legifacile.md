@@ -346,4 +346,5 @@ donc ni les `src_hash` ni les vecteurs.
 
 ## Validation du propriétaire
 
-Déléguée par anticipation le 2026-11-03, à confirmer.
+Validée par anticipation le 2026-11-03, confirmée par le propriétaire le 2026-11-04. Sa réponse, exacte :
+« ok merci beacou les 3 point sont confirmé ».

@@ -1,6 +1,6 @@
 # ADR-0138 — Versionner le jeu de référence de P10 (exception à ADR-0125, décision 16)
 
-- **Statut** : Accepté (par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-03 ; à confirmer par le propriétaire le 2026-11-04 au matin)
+- **Statut** : Accepté (accepté par anticipation le 2026-11-03, sur délégation du propriétaire du 2026-11-03, confirmé par le propriétaire le 2026-11-04, sa réponse : « ok merci beacou les 3 point sont confirmé »)
 - **Date** : 2026-11-03 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche `CONSTITUER-JEU-DE-REFERENCE` (phase P10), sur l'écart 6 relevé par `@dev` dans `docs/legifacile/jeu-de-reference.md`
