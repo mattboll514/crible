@@ -143,7 +143,7 @@ La tâche `COMPARER-AVEC-PGVECTOR` (P10) est la mesure décisive de la v1 : elle
 
 ## Complément du 2026-11-06 (relecture, tour 1)
 
-Ce complément répond aux deux points de la relecture du tour 1 de la tâche `COMPARER-AVEC-PGVECTOR`. Il **ne réécrit aucune des douze décisions** ci-dessus : il fixe l'interprétation de la décision 8 sur un point où elle se contredit, et il corrige un compte de la décision 11. Les règles sont retenues par l'orchestrateur, sur délégation du propriétaire du 2026-11-06 (« si tu as d'autre ADR a ecrire pour cette tache considere qu'ils sont accepté par anticipation, on le confirme ensemble a la fin de la tache »). Elles portent le **statut d'acceptation par anticipation du 2026-11-06** et sont **à confirmer avec le propriétaire à la fin de la tâche**.
+Ce complément répond aux deux points de la relecture du tour 1 de la tâche `COMPARER-AVEC-PGVECTOR`. Il **ne réécrit aucune des douze décisions** ci-dessus : il fixe l'interprétation de la décision 8 sur un point où elle se contredit, et il corrige un compte de la décision 11. Les règles sont retenues par l'orchestrateur, sur délégation du propriétaire du 2026-11-06 (« si tu as d'autre ADR a ecrire pour cette tache considere qu'ils sont accepté par anticipation, on le confirme ensemble a la fin de la tache »). Elles portent le **statut d'acceptation par anticipation du 2026-11-06** ; elles sont **confirmées par le propriétaire le 2026-11-06** (« complément confirmé »).
 
 ### Décision 8 : le banc de MES-14 n'est pas rejoué sur l'index réel
 
