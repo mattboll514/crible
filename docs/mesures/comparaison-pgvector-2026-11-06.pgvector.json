@@ -1,0 +1,1715 @@
+{
+  "format_version": 1,
+  "measure": "COMPARER-AVEC-PGVECTOR",
+  "source": "pgvector",
+  "campaign_date": "2026-11-06",
+  "fixed_date": "2026-11-03",
+  "machine": "Mac mini de production (Apple M1, 8 cœurs, 16 Go), PostgreSQL 17 dans Docker Desktop ; latence indicative (ADR-0129, décision 7 point 5)",
+  "dataset": {
+    "name": "jeu de référence Legifacile",
+    "queries": 97,
+    "k": 10,
+    "dedupliquer": "document",
+    "query_sha256": "4da55cc1b034aee2b7f78c4c9f4ff8e5590d2b7cea5ebab12022f50f9df8c434",
+    "vector_sha256": "b92e4ec1c42cc8b7fc74da370344eb7275f2e8d67e29422d4160e1d12e2ba494"
+  },
+  "repetitions": 3,
+  "warmup": 1,
+  "latency_ms": {
+    "sql": {
+      "max": 34.092,
+      "mean": 15.147,
+      "min": 4.698,
+      "n": 291,
+      "p50": 13.357,
+      "p95": 27.723,
+      "p99": 32.754
+    },
+    "reconstruction": {
+      "max": 2028.015,
+      "mean": 252.485,
+      "min": 10.319,
+      "n": 291,
+      "p50": 80.189,
+      "p95": 955.245,
+      "p99": 1986.913
+    },
+    "total": {
+      "max": 2038.43,
+      "mean": 267.632,
+      "min": 15.768,
+      "n": 291,
+      "p50": 95.458,
+      "p95": 975.76,
+      "p99": 2009.289
+    }
+  },
+  "encoder_ms": {
+    "max": 61.454,
+    "mean": 34.461,
+    "min": 21.303,
+    "n": 97,
+    "p50": 32.874,
+    "p95": 51.64,
+    "p99": 59.966
+  },
+  "counts": {
+    "before": {
+      "taken_at": "2026-11-06T18:12:28.058590+00:00",
+      "totals": {
+        "documents": 6660834,
+        "passages": 9600778
+      },
+      "per_corpus": {
+        "dole": {
+          "documents": 3600,
+          "passages": 7653
+        },
+        "jorf_normatif": {
+          "documents": 1636191,
+          "passages": 1833499
+        },
+        "juri_sommaires": {
+          "documents": 578251,
+          "passages": 590199
+        },
+        "juri_texte_integral": {
+          "documents": 618373,
+          "passages": 2999576
+        },
+        "sarde": {
+          "documents": 210965,
+          "passages": 214578
+        },
+        "textes_hors_vigueur": {
+          "documents": 1249947,
+          "passages": 1490821
+        },
+        "textes_vigueur": {
+          "documents": 885463,
+          "passages": 986408
+        },
+        "titres_textes": {
+          "documents": 1478044,
+          "passages": 1478044
+        }
+      },
+      "per_index": {
+        "articles": {
+          "documents": 2135410,
+          "passages": 2477229
+        },
+        "decisions": {
+          "documents": 1196624,
+          "passages": 3589775
+        },
+        "dole": {
+          "documents": 3600,
+          "passages": 7653
+        },
+        "jorf": {
+          "documents": 1636191,
+          "passages": 1833499
+        },
+        "sarde": {
+          "documents": 210965,
+          "passages": 214578
+        },
+        "titres": {
+          "documents": 1478044,
+          "passages": 1478044
+        }
+      }
+    },
+    "after": {
+      "taken_at": "2026-11-06T18:15:03.046504+00:00",
+      "totals": {
+        "documents": 6660834,
+        "passages": 9600778
+      },
+      "per_corpus": {
+        "dole": {
+          "documents": 3600,
+          "passages": 7653
+        },
+        "jorf_normatif": {
+          "documents": 1636191,
+          "passages": 1833499
+        },
+        "juri_sommaires": {
+          "documents": 578251,
+          "passages": 590199
+        },
+        "juri_texte_integral": {
+          "documents": 618373,
+          "passages": 2999576
+        },
+        "sarde": {
+          "documents": 210965,
+          "passages": 214578
+        },
+        "textes_hors_vigueur": {
+          "documents": 1249947,
+          "passages": 1490821
+        },
+        "textes_vigueur": {
+          "documents": 885463,
+          "passages": 986408
+        },
+        "titres_textes": {
+          "documents": 1478044,
+          "passages": 1478044
+        }
+      },
+      "per_index": {
+        "articles": {
+          "documents": 2135410,
+          "passages": 2477229
+        },
+        "decisions": {
+          "documents": 1196624,
+          "passages": 3589775
+        },
+        "dole": {
+          "documents": 3600,
+          "passages": 7653
+        },
+        "jorf": {
+          "documents": 1636191,
+          "passages": 1833499
+        },
+        "sarde": {
+          "documents": 210965,
+          "passages": 214578
+        },
+        "titres": {
+          "documents": 1478044,
+          "passages": 1478044
+        }
+      }
+    },
+    "drift": {
+      "totals": {
+        "documents": 0,
+        "passages": 0
+      },
+      "per_corpus": {
+        "dole": {
+          "documents": 0,
+          "passages": 0
+        },
+        "jorf_normatif": {
+          "documents": 0,
+          "passages": 0
+        },
+        "juri_sommaires": {
+          "documents": 0,
+          "passages": 0
+        },
+        "juri_texte_integral": {
+          "documents": 0,
+          "passages": 0
+        },
+        "sarde": {
+          "documents": 0,
+          "passages": 0
+        },
+        "textes_hors_vigueur": {
+          "documents": 0,
+          "passages": 0
+        },
+        "textes_vigueur": {
+          "documents": 0,
+          "passages": 0
+        },
+        "titres_textes": {
+          "documents": 0,
+          "passages": 0
+        }
+      },
+      "per_index": {
+        "articles": {
+          "documents": 0,
+          "passages": 0
+        },
+        "decisions": {
+          "documents": 0,
+          "passages": 0
+        },
+        "dole": {
+          "documents": 0,
+          "passages": 0
+        },
+        "jorf": {
+          "documents": 0,
+          "passages": 0
+        },
+        "sarde": {
+          "documents": 0,
+          "passages": 0
+        },
+        "titres": {
+          "documents": 0,
+          "passages": 0
+        }
+      }
+    }
+  },
+  "queries": [
+    {
+      "id": "Q01",
+      "doc_ids": [
+        "KALIARTI000046314615",
+        "KALIARTI000023974133",
+        "KALIARTI000027181109",
+        "KALIARTI000048674529",
+        "KALIARTI000032488956",
+        "KALIARTI000044340010",
+        "KALIARTI000048682898",
+        "LEGIARTI000033024893",
+        "LEGIARTI000033013454",
+        "KALIARTI000038632581"
+      ]
+    },
+    {
+      "id": "Q02",
+      "doc_ids": [
+        "LEGIARTI000024057825",
+        "LEGIARTI000032041565",
+        "LEGIARTI000032023629",
+        "LEGIARTI000051786000",
+        "LEGIARTI000051541660",
+        "LEGIARTI000006417220",
+        "LEGIARTI000006792604",
+        "LEGIARTI000006417208",
+        "LEGIARTI000017735449",
+        "LEGIARTI000032023643"
+      ]
+    },
+    {
+      "id": "Q03",
+      "doc_ids": [
+        "LEGIARTI000051288468",
+        "LEGIARTI000006743112",
+        "LEGIARTI000021941652",
+        "LEGIARTI000053281565",
+        "LEGIARTI000023585094",
+        "LEGIARTI000028452256",
+        "LEGIARTI000031686531",
+        "LEGIARTI000026791760",
+        "LEGIARTI000035653293",
+        "LEGIARTI000051288472"
+      ]
+    },
+    {
+      "id": "Q04",
+      "doc_ids": [
+        "LEGIARTI000038725501",
+        "LEGIARTI000006230691",
+        "LEGIARTI000054716237",
+        "LEGIARTI000019295184",
+        "LEGIARTI000006270523",
+        "LEGIARTI000006230799",
+        "LEGIARTI000029329639",
+        "LEGIARTI000042623924",
+        "LEGIARTI000006651978",
+        "LEGIARTI000042624066"
+      ]
+    },
+    {
+      "id": "Q05",
+      "doc_ids": [
+        "LEGIARTI000045981314",
+        "LEGIARTI000044142579",
+        "LEGIARTI000045981078",
+        "LEGIARTI000044142554",
+        "LEGIARTI000044152587",
+        "LEGIARTI000044142723",
+        "LEGIARTI000044142545",
+        "LEGIARTI000044142531",
+        "LEGIARTI000044142539",
+        "LEGIARTI000006531358"
+      ]
+    },
+    {
+      "id": "Q06",
+      "doc_ids": [
+        "LEGIARTI000037685727",
+        "LEGIARTI000054551268",
+        "LEGIARTI000049657271",
+        "LEGIARTI000049913825",
+        "LEGIARTI000032073152",
+        "LEGIARTI000047769750",
+        "LEGIARTI000036541655",
+        "LEGIARTI000050834694",
+        "LEGIARTI000043857940",
+        "LEGIARTI000027929811"
+      ]
+    },
+    {
+      "id": "Q07",
+      "doc_ids": [
+        "LEGIARTI000051190132",
+        "LEGIARTI000050497051",
+        "LEGIARTI000044390515",
+        "LEGIARTI000006815663",
+        "LEGIARTI000050497040",
+        "LEGIARTI000034425616",
+        "LEGIARTI000006820064",
+        "LEGIARTI000006815398",
+        "LEGIARTI000041587197",
+        "LEGIARTI000043841066"
+      ]
+    },
+    {
+      "id": "Q08",
+      "doc_ids": [
+        "LEGIARTI000006418127",
+        "LEGIARTI000006418141",
+        "LEGIARTI000023717688",
+        "LEGIARTI000054716098",
+        "LEGIARTI000006418135",
+        "LEGIARTI000006418139",
+        "LEGIARTI000006418148",
+        "LEGIARTI000006418143",
+        "LEGIARTI000006418131",
+        "LEGIARTI000042193493"
+      ]
+    },
+    {
+      "id": "Q09",
+      "doc_ids": [
+        "LEGIARTI000026238344",
+        "LEGIARTI000021680097",
+        "LEGIARTI000020033651",
+        "LEGIARTI000049912021",
+        "LEGIARTI000054373628",
+        "LEGIARTI000053542636",
+        "LEGIARTI000054373568",
+        "LEGIARTI000023420693",
+        "LEGIARTI000023420703",
+        "LEGIARTI000054373592"
+      ]
+    },
+    {
+      "id": "Q10",
+      "doc_ids": [
+        "LEGIARTI000043588225",
+        "LEGIARTI000054137430",
+        "LEGIARTI000054562489",
+        "LEGIARTI000054562527",
+        "LEGIARTI000006908217",
+        "LEGIARTI000032970238",
+        "LEGIARTI000043588182",
+        "LEGIARTI000048629011",
+        "LEGIARTI000045292687",
+        "LEGIARTI000043588175"
+      ]
+    },
+    {
+      "id": "Q11",
+      "doc_ids": [
+        "LEGIARTI000038901859",
+        "LEGIARTI000043982594",
+        "LEGIARTI000027682645",
+        "LEGIARTI000038901960",
+        "LEGIARTI000030311487",
+        "LEGIARTI000025263486",
+        "LEGIARTI000043974537",
+        "LEGIARTI000043982589",
+        "LEGIARTI000043982602",
+        "LEGIARTI000043974554"
+      ]
+    },
+    {
+      "id": "Q12",
+      "doc_ids": [
+        "LEGIARTI000037302633",
+        "LEGIARTI000039344234",
+        "LEGIARTI000036749888",
+        "LEGIARTI000023718484",
+        "LEGIARTI000031823467",
+        "LEGIARTI000006840971",
+        "LEGIARTI000039099768",
+        "LEGIARTI000006840957",
+        "LEGIARTI000006841413",
+        "LEGIARTI000031823453"
+      ]
+    },
+    {
+      "id": "Q13",
+      "doc_ids": [
+        "JURITEXT000054392399",
+        "JURITEXT000007038619",
+        "JURITEXT000025474967",
+        "JURITEXT000049261550",
+        "JURITEXT000030142936",
+        "JURITEXT000051553993",
+        "JURITEXT000007022875",
+        "JURITEXT000007001182",
+        "JURITEXT000023804171",
+        "JURITEXT000017895728"
+      ]
+    },
+    {
+      "id": "Q14",
+      "doc_ids": [
+        "JURITEXT000007014891",
+        "JURITEXT000006935436",
+        "JURITEXT000022826566",
+        "JURITEXT000037405951",
+        "JURITEXT000023055440",
+        "JURITEXT000006941074",
+        "JURITEXT000034550310",
+        "JURITEXT000006982654",
+        "JURITEXT000006935731",
+        "JURITEXT000007618844"
+      ]
+    },
+    {
+      "id": "Q15",
+      "doc_ids": [
+        "CETATEXT000052239154",
+        "CETATEXT000053884980",
+        "CETATEXT000048118401",
+        "CETATEXT000044361915",
+        "CETATEXT000051522351",
+        "CETATEXT000047980472",
+        "CETATEXT000029731476",
+        "CETATEXT000052066943",
+        "CETATEXT000049009493",
+        "CETATEXT000020867093"
+      ]
+    },
+    {
+      "id": "Q16",
+      "doc_ids": [
+        "CETATEXT000053623557",
+        "CNILTEXT000052182271",
+        "CNILTEXT000052851847",
+        "CNILTEXT000042635729",
+        "CNILTEXT000028450267",
+        "CNILTEXT000052981827",
+        "CETATEXT000042040556",
+        "CNILTEXT000046977994",
+        "CNILTEXT000033738124",
+        "CNILTEXT000055022778"
+      ]
+    },
+    {
+      "id": "Q17",
+      "doc_ids": [
+        "JURITEXT000044105538",
+        "CONSTEXT000052372192",
+        "JURITEXT000031949251",
+        "JURITEXT000028173506",
+        "JURITEXT000039285263",
+        "JURITEXT000033207542",
+        "JURITEXT000025150003",
+        "JURITEXT000023908699",
+        "JURITEXT000047324597",
+        "JURITEXT000053538626"
+      ]
+    },
+    {
+      "id": "Q18",
+      "doc_ids": [
+        "JURITEXT000054110110",
+        "JURITEXT000047635689",
+        "JURITEXT000046760641",
+        "JURITEXT000037425175",
+        "JURITEXT000039660129",
+        "JURITEXT000037425165",
+        "JURITEXT000047635688",
+        "JURITEXT000047635691",
+        "JURITEXT000049510194",
+        "JURITEXT000047635690"
+      ]
+    },
+    {
+      "id": "Q19",
+      "doc_ids": [
+        "CETATEXT000044310559",
+        "CETATEXT000039209705",
+        "CETATEXT000022486214",
+        "CETATEXT000043574587",
+        "CETATEXT000038691272",
+        "JURITEXT000038734086",
+        "CETATEXT000047191910",
+        "CETATEXT000025386883",
+        "CETATEXT000049823411",
+        "CETATEXT000007472314"
+      ]
+    },
+    {
+      "id": "Q20",
+      "doc_ids": [
+        "JURITEXT000045733171",
+        "JURITEXT000031158182",
+        "JURITEXT000036670496",
+        "JURITEXT000043711457",
+        "JURITEXT000043565950",
+        "JURITEXT000037556176",
+        "JURITEXT000039009898",
+        "JURITEXT000046991448",
+        "JURITEXT000045652745",
+        "JURITEXT000036648867"
+      ]
+    },
+    {
+      "id": "Q21",
+      "doc_ids": [
+        "JORFARTI000042845466",
+        "JORFARTI000042845470",
+        "JORFARTI000042845467",
+        "JORFARTI000042845475",
+        "JORFARTI000042845483",
+        "JORFARTI000042845476",
+        "JORFARTI000042845484",
+        "JORFARTI000042845478",
+        "JORFARTI000042845473",
+        "JORFARTI000042845477"
+      ]
+    },
+    {
+      "id": "Q22",
+      "doc_ids": [
+        "JORFARTI000033000733",
+        "JORFARTI000047912064",
+        "JORFARTI000038544408",
+        "JORFARTI000032879412",
+        "JORFARTI000001055592",
+        "JORFARTI000027994322",
+        "JORFARTI000028437389",
+        "JORFARTI000034983365",
+        "JORFARTI000025431779",
+        "JORFARTI000028198218"
+      ]
+    },
+    {
+      "id": "Q23",
+      "doc_ids": [
+        "JORFARTI000021902766",
+        "JORFARTI000021902779",
+        "JORFARTI000018111361",
+        "JORFARTI000001617602",
+        "JORFARTI000046221534",
+        "JORFARTI000001818819",
+        "JORFARTI000001048900",
+        "JORFARTI000021902759",
+        "JORFARTI000018111352",
+        "JORFARTI000029993088"
+      ]
+    },
+    {
+      "id": "Q24",
+      "doc_ids": [
+        "JORFARTI000044793391",
+        "JORFARTI000044793384",
+        "JORFARTI000032539975",
+        "JORFARTI000002026697",
+        "JORFARTI000002448179",
+        "JORFARTI000044793392",
+        "JORFARTI000044793360",
+        "JORFARTI000021683646",
+        "JORFARTI000021683643",
+        "JORFARTI000044793351"
+      ]
+    },
+    {
+      "id": "Q25",
+      "doc_ids": [
+        "SARDBLOC000007204874",
+        "SARDBLOC000026423705",
+        "SARDBLOC000007207368",
+        "SARDBLOC000007206561",
+        "SARDBLOC000007206624",
+        "SARDBLOC000007204886",
+        "SARDBLOC000007207369",
+        "SARDBLOC000007206801",
+        "SARDBLOC000007205804",
+        "SARDBLOC000007205895"
+      ]
+    },
+    {
+      "id": "Q26",
+      "doc_ids": [
+        "SARDBLOC000018568777",
+        "SARDBLOC000020126984",
+        "SARDBLOC000033355757",
+        "SARDBLOC000020830234",
+        "SARDBLOC000007146365",
+        "SARDBLOC000007146613",
+        "SARDBLOC000028538475",
+        "SARDBLOC000007144570",
+        "SARDBLOC000018575581",
+        "SARDBLOC000007146364"
+      ]
+    },
+    {
+      "id": "Q27",
+      "doc_ids": [
+        "SARDBLOC000007253136",
+        "SARDBLOC000007253932",
+        "SARDBLOC000018576254",
+        "SARDBLOC000025197928",
+        "SARDBLOC000007254177",
+        "SARDBLOC000007253547",
+        "SARDBLOC000007253798",
+        "SARDBLOC000007253847",
+        "SARDBLOC000007254053",
+        "SARDBLOC000007254175"
+      ]
+    },
+    {
+      "id": "Q28",
+      "doc_ids": [
+        "JORFDOLE000018944151",
+        "JORFDOLE000017758953",
+        "JORFDOLE000028138448",
+        "JORFDOLE000020078758",
+        "JORFDOLE000043022845",
+        "JORFDOLE000025746723",
+        "JORFDOLE000027665014",
+        "JORFDOLE000029310724",
+        "JORFDOLE000025793851",
+        "JORFDOLE000026453355"
+      ]
+    },
+    {
+      "id": "Q29",
+      "doc_ids": [
+        "JORFDOLE000047079143",
+        "JORFDOLE000051903428",
+        "JORFDOLE000052390066",
+        "JORFDOLE000029287359",
+        "JORFDOLE000049335132",
+        "JORFDOLE000043260830",
+        "JORFDOLE000048399123",
+        "JORFDOLE000036629528",
+        "JORFDOLE000050959759",
+        "JORFDOLE000048404267"
+      ]
+    },
+    {
+      "id": "Q30",
+      "doc_ids": [
+        "LEGIARTI000052849819",
+        "LEGIARTI000045656197",
+        "LEGIARTI000045656179",
+        "LEGIARTI000045656200",
+        "LEGIARTI000045656185",
+        "LEGIARTI000045068712",
+        "LEGIARTI000052686299",
+        "LEGIARTI000052686337",
+        "LEGIARTI000039099354",
+        "LEGIARTI000052686343"
+      ]
+    },
+    {
+      "id": "Q31",
+      "doc_ids": [
+        "JURITEXT000030244099",
+        "JURITEXT000050384428",
+        "JURITEXT000052303761",
+        "JURITEXT000031511386",
+        "JURITEXT000038674788",
+        "JURITEXT000026577897",
+        "JURITEXT000022031944",
+        "JURITEXT000049733789",
+        "JURITEXT000047201055",
+        "JURITEXT000007047340"
+      ]
+    },
+    {
+      "id": "Q32",
+      "doc_ids": [
+        "JURITEXT000039188608",
+        "JURITEXT000044162482",
+        "JURITEXT000053764828",
+        "JURITEXT000044162481",
+        "JURITEXT000044162484",
+        "JURITEXT000042128369",
+        "JURITEXT000044162483",
+        "JURITEXT000054929414",
+        "JURITEXT000025699613",
+        "JURITEXT000052303776"
+      ]
+    },
+    {
+      "id": "Q33",
+      "doc_ids": [
+        "JURITEXT000047482967",
+        "JURITEXT000053915688",
+        "JURITEXT000028845428",
+        "JURITEXT000007050474",
+        "JURITEXT000006944493",
+        "CETATEXT000048938701",
+        "JURITEXT000019003917",
+        "JURITEXT000043302024",
+        "JURITEXT000036648689",
+        "JURITEXT000007027298"
+      ]
+    },
+    {
+      "id": "Q34",
+      "doc_ids": [
+        "JURITEXT000030181423",
+        "JURITEXT000030181392",
+        "JURITEXT000024053633",
+        "JURITEXT000007433528",
+        "JURITEXT000019785658",
+        "JURITEXT000032606112",
+        "JURITEXT000053402819",
+        "JURITEXT000006999392",
+        "JURITEXT000032162504",
+        "JURITEXT000024733706"
+      ]
+    },
+    {
+      "id": "Q35",
+      "doc_ids": [
+        "JURITEXT000030080635",
+        "JURITEXT000007350616",
+        "JURITEXT000023934785",
+        "JURITEXT000006944974",
+        "JURITEXT000007423129",
+        "JURITEXT000007194562",
+        "JURITEXT000027491285",
+        "JURITEXT000033881962",
+        "JURITEXT000006936462",
+        "JURITEXT000025291194"
+      ]
+    },
+    {
+      "id": "Q36",
+      "doc_ids": [
+        "JURITEXT000007037537",
+        "JURITEXT000045904904",
+        "JURITEXT000007480055",
+        "JURITEXT000028731492",
+        "JURITEXT000018948338",
+        "JURITEXT000007016140",
+        "JURITEXT000007492861",
+        "JURITEXT000007004978",
+        "JURITEXT000022903657",
+        "JURITEXT000007430126"
+      ]
+    },
+    {
+      "id": "Q37",
+      "doc_ids": [
+        "JURITEXT000039285432",
+        "JURITEXT000007075578",
+        "JURITEXT000007005531",
+        "JURITEXT000007028067",
+        "JURITEXT000007138290",
+        "JURITEXT000007382120",
+        "JURITEXT000007009410",
+        "JURITEXT000025329476",
+        "JURITEXT000043711412",
+        "JURITEXT000033145907"
+      ]
+    },
+    {
+      "id": "Q38",
+      "doc_ids": [
+        "JURITEXT000051283980",
+        "JURITEXT000033211538",
+        "JURITEXT000043782053",
+        "JURITEXT000023931448",
+        "JURITEXT000048550520",
+        "JURITEXT000030653730",
+        "JURITEXT000039437798",
+        "JURITEXT000045470156",
+        "JURITEXT000043352325",
+        "JURITEXT000007512350"
+      ]
+    },
+    {
+      "id": "Q39",
+      "doc_ids": [
+        "JURITEXT000028067404",
+        "JURITEXT000023832369",
+        "JURITEXT000024653443",
+        "JURITEXT000044384686",
+        "JURITEXT000028067238",
+        "JURITEXT000028067359",
+        "JURITEXT000047074082",
+        "JURITEXT000051336132",
+        "JURITEXT000025897861",
+        "JURITEXT000046555916"
+      ]
+    },
+    {
+      "id": "Q41",
+      "doc_ids": [
+        "JURITEXT000050290428",
+        "JURITEXT000053765410",
+        "JURITEXT000054392137",
+        "JURITEXT000031481394",
+        "JURITEXT000023575453",
+        "JURITEXT000052970348",
+        "JURITEXT000047737729",
+        "JURITEXT000052970347",
+        "JURITEXT000034087233",
+        "JURITEXT000022108607"
+      ]
+    },
+    {
+      "id": "Q42",
+      "doc_ids": [
+        "JURITEXT000050868906",
+        "JURITEXT000050116232",
+        "JURITEXT000031661280",
+        "JURITEXT000050316411",
+        "JURITEXT000020027359",
+        "JURITEXT000024392838",
+        "JURITEXT000050290615",
+        "JURITEXT000042551872",
+        "JURITEXT000052044058",
+        "JURITEXT000050704108"
+      ]
+    },
+    {
+      "id": "Q43",
+      "doc_ids": [
+        "JURITEXT000045905201",
+        "JURITEXT000026984161",
+        "JURITEXT000030869110",
+        "JURITEXT000052403732",
+        "JURITEXT000026093695",
+        "JURITEXT000007637801",
+        "JURITEXT000032866916",
+        "JURITEXT000007069323",
+        "CONSTEXT000017664797",
+        "JURITEXT000044183611"
+      ]
+    },
+    {
+      "id": "Q44",
+      "doc_ids": [
+        "JURITEXT000037196660",
+        "JURITEXT000028123387",
+        "JURITEXT000033487108",
+        "JURITEXT000031510173",
+        "JURITEXT000019035649",
+        "JURITEXT000037196657",
+        "JURITEXT000038137184",
+        "JURITEXT000036803358",
+        "JURITEXT000037196659",
+        "JURITEXT000046330628"
+      ]
+    },
+    {
+      "id": "Q45",
+      "doc_ids": [
+        "JURITEXT000047700804",
+        "JURITEXT000045133506",
+        "JURITEXT000026675073",
+        "JURITEXT000032476572",
+        "JURITEXT000043352195",
+        "JURITEXT000006943928",
+        "JURITEXT000035811294",
+        "JURITEXT000043105485",
+        "JURITEXT000047781262",
+        "JURITEXT000007398618"
+      ]
+    },
+    {
+      "id": "Q46",
+      "doc_ids": [
+        "JURITEXT000025606652",
+        "JURITEXT000007050611",
+        "JURITEXT000007047703",
+        "JURITEXT000007493906",
+        "JURITEXT000050384849",
+        "JURITEXT000007500278",
+        "JURITEXT000007041198",
+        "JURITEXT000030521235",
+        "JURITEXT000023669056",
+        "JURITEXT000018544239"
+      ]
+    },
+    {
+      "id": "Q47",
+      "doc_ids": [
+        "JURITEXT000027184439",
+        "JURITEXT000019128258",
+        "JURITEXT000042438783",
+        "JURITEXT000026063104",
+        "JURITEXT000007050802",
+        "JURITEXT000007045240",
+        "JURITEXT000027074470",
+        "JURITEXT000045652492",
+        "JURITEXT000028731781",
+        "JURITEXT000034959494"
+      ]
+    },
+    {
+      "id": "Q48",
+      "doc_ids": [
+        "JURITEXT000007060070",
+        "JURITEXT000022027813",
+        "CETATEXT000053761082",
+        "CETATEXT000054946386",
+        "JURITEXT000032126856",
+        "CETATEXT000054387771",
+        "JURITEXT000007414099",
+        "JURITEXT000006983573",
+        "JURITEXT000045133447",
+        "JURITEXT000047571087"
+      ]
+    },
+    {
+      "id": "Q49",
+      "doc_ids": [
+        "JURITEXT000007019947",
+        "JURITEXT000025403321",
+        "JURITEXT000030355825",
+        "JURITEXT000030207243",
+        "JURITEXT000007051197",
+        "JURITEXT000031333383",
+        "JURITEXT000026064579",
+        "JURITEXT000033431439",
+        "JURITEXT000030270311",
+        "JURITEXT000007025720"
+      ]
+    },
+    {
+      "id": "Q50",
+      "doc_ids": [
+        "JURITEXT000042486487",
+        "JURITEXT000046760852",
+        "JURITEXT000046990442",
+        "JURITEXT000051151376",
+        "JURITEXT000018808172",
+        "JURITEXT000046990417",
+        "JURITEXT000046990404",
+        "JURITEXT000044524906",
+        "JURITEXT000046990403",
+        "JURITEXT000046990456"
+      ]
+    },
+    {
+      "id": "Q51",
+      "doc_ids": [
+        "JURITEXT000051336178",
+        "JURITEXT000007575703",
+        "JURITEXT000048059291",
+        "JURITEXT000007585229",
+        "JURITEXT000029453405",
+        "JURITEXT000027596137",
+        "JURITEXT000029509291",
+        "JURITEXT000027734399",
+        "JURITEXT000007603250",
+        "JURITEXT000007289272"
+      ]
+    },
+    {
+      "id": "Q52",
+      "doc_ids": [
+        "JURITEXT000007044343",
+        "JURITEXT000030114340",
+        "JURITEXT000007038720",
+        "JURITEXT000007499250",
+        "JURITEXT000007042135",
+        "JURITEXT000006936852",
+        "JURITEXT000028944602",
+        "JURITEXT000007046436",
+        "JURITEXT000028487034",
+        "JURITEXT000007072832"
+      ]
+    },
+    {
+      "id": "Q53",
+      "doc_ids": [
+        "JURITEXT000028577577",
+        "JURITEXT000028577626",
+        "JURITEXT000028577327",
+        "JURITEXT000028577276",
+        "JURITEXT000028577301",
+        "JURITEXT000028577601",
+        "JURITEXT000028577452",
+        "JURITEXT000028577352",
+        "JURITEXT000028577527",
+        "JURITEXT000028577552"
+      ]
+    },
+    {
+      "id": "Q54",
+      "doc_ids": [
+        "JURITEXT000051311682",
+        "JURITEXT000053764852",
+        "JURITEXT000046760676",
+        "JURITEXT000051744314",
+        "JURITEXT000042464378",
+        "JURITEXT000043105227",
+        "JURITEXT000045967911",
+        "JURITEXT000049053072",
+        "JURITEXT000017912193",
+        "JURITEXT000052384037"
+      ]
+    },
+    {
+      "id": "Q55",
+      "doc_ids": [
+        "JURITEXT000007059147",
+        "JURITEXT000051311698",
+        "JURITEXT000007638116",
+        "JURITEXT000049053056",
+        "JURITEXT000007613361",
+        "JURITEXT000027080171",
+        "JURITEXT000023297227",
+        "JURITEXT000024647522",
+        "JURITEXT000036057479",
+        "JURITEXT000029854273"
+      ]
+    },
+    {
+      "id": "Q56",
+      "doc_ids": [
+        "JURITEXT000007069296",
+        "JURITEXT000030989816",
+        "JURITEXT000054110104",
+        "JURITEXT000007070522",
+        "JURITEXT000051823628",
+        "JURITEXT000042486401",
+        "JURITEXT000050290627",
+        "JURITEXT000047324604",
+        "JURITEXT000020064252",
+        "JURITEXT000007070088"
+      ]
+    },
+    {
+      "id": "Q57",
+      "doc_ids": [
+        "JURITEXT000007611169",
+        "JURITEXT000007611172",
+        "JURITEXT000007584758",
+        "JURITEXT000007309811",
+        "JURITEXT000007309805",
+        "JURITEXT000007309802",
+        "JURITEXT000007309808",
+        "JURITEXT000007310519",
+        "JURITEXT000007250807",
+        "JURITEXT000007221253"
+      ]
+    },
+    {
+      "id": "Q58",
+      "doc_ids": [
+        "JURITEXT000007047821",
+        "JURITEXT000007005161",
+        "JURITEXT000007047907",
+        "JURITEXT000007260095",
+        "JURITEXT000007052428",
+        "JURITEXT000007048779",
+        "JURITEXT000007018660",
+        "JURITEXT000017830068",
+        "JURITEXT000007556172",
+        "JURITEXT000028944419"
+      ]
+    },
+    {
+      "id": "Q02-VARIANTE-COURTE",
+      "doc_ids": [
+        "LEGIARTI000024057825",
+        "LEGIARTI000041729718",
+        "LEGIARTI000032023643",
+        "LEGIARTI000051541660",
+        "LEGIARTI000032023651",
+        "LEGIARTI000032023657",
+        "LEGIARTI000032023647",
+        "LEGIARTI000032042331",
+        "LEGIARTI000006792604",
+        "LEGIARTI000052676361"
+      ]
+    },
+    {
+      "id": "Q02-APPLICABLE",
+      "doc_ids": [
+        "LEGIARTI000024057825",
+        "LEGIARTI000032041565",
+        "LEGIARTI000032023629",
+        "LEGIARTI000051786000",
+        "LEGIARTI000051541660",
+        "LEGIARTI000006417220",
+        "LEGIARTI000006792604",
+        "LEGIARTI000006417208",
+        "LEGIARTI000017735449",
+        "LEGIARTI000032023643"
+      ]
+    },
+    {
+      "id": "Q30-APPLICABLE",
+      "doc_ids": [
+        "LEGIARTI000029370748",
+        "LEGIARTI000045656197",
+        "LEGIARTI000045656179",
+        "LEGIARTI000045656200",
+        "LEGIARTI000045656185",
+        "LEGIARTI000032655984",
+        "LEGIARTI000045068712",
+        "LEGIARTI000033116898",
+        "LEGIARTI000039099354",
+        "LEGIARTI000045068714"
+      ]
+    },
+    {
+      "id": "Q01-CODE",
+      "doc_ids": [
+        "LEGIARTI000033024893",
+        "LEGIARTI000033013454",
+        "LEGIARTI000033024877",
+        "LEGIARTI000032181969",
+        "LEGIARTI000043891119",
+        "LEGIARTI000042682021",
+        "LEGIARTI000006900967",
+        "LEGIARTI000006902309",
+        "LEGIARTI000006900985",
+        "LEGIARTI000025560071"
+      ]
+    },
+    {
+      "id": "Q06-FONDS",
+      "doc_ids": [
+        "LEGIARTI000037685727",
+        "LEGIARTI000054551268",
+        "LEGIARTI000049657271",
+        "LEGIARTI000049913825",
+        "LEGIARTI000032073152",
+        "LEGIARTI000047769750",
+        "LEGIARTI000036541655",
+        "LEGIARTI000050834694",
+        "LEGIARTI000043857940",
+        "LEGIARTI000027929811"
+      ]
+    },
+    {
+      "id": "Q01-ANNEE",
+      "doc_ids": [
+        "KALIARTI000046314615",
+        "KALIARTI000048674529",
+        "KALIARTI000044340010",
+        "KALIARTI000048682898",
+        "KALIARTI000042096671",
+        "KALIARTI000049216380",
+        "KALIARTI000051352399",
+        "KALIARTI000050299469",
+        "KALIARTI000043562491",
+        "KALIARTI000052119502"
+      ]
+    },
+    {
+      "id": "Q21-NATURE",
+      "doc_ids": [
+        "JORFARTI000042845466",
+        "JORFARTI000042845470",
+        "JORFARTI000042845467",
+        "JORFARTI000042845475",
+        "JORFARTI000042845483",
+        "JORFARTI000042845476",
+        "JORFARTI000042845484",
+        "JORFARTI000042845478",
+        "JORFARTI000042845473",
+        "JORFARTI000042845477"
+      ]
+    },
+    {
+      "id": "Q21-ANNEE",
+      "doc_ids": [
+        "JORFARTI000042845466",
+        "JORFARTI000042845470",
+        "JORFARTI000042845467",
+        "JORFARTI000042845475",
+        "JORFARTI000042845483",
+        "JORFARTI000042845476",
+        "JORFARTI000042845484",
+        "JORFARTI000042845478",
+        "JORFARTI000042845473",
+        "JORFARTI000042845477"
+      ]
+    },
+    {
+      "id": "Q21-FONDS",
+      "doc_ids": [
+        "JORFARTI000042845466",
+        "JORFARTI000042845470",
+        "JORFARTI000042845467",
+        "JORFARTI000042845475",
+        "JORFARTI000042845483",
+        "JORFARTI000042845476",
+        "JORFARTI000042845484",
+        "JORFARTI000042845478",
+        "JORFARTI000042845473",
+        "JORFARTI000042845477"
+      ]
+    },
+    {
+      "id": "Q13-SECTION",
+      "doc_ids": [
+        "JURITEXT000054392399",
+        "JURITEXT000007038619",
+        "JURITEXT000030142936",
+        "JURITEXT000051553993",
+        "JURITEXT000007022875",
+        "JURITEXT000007001182",
+        "JURITEXT000023804171",
+        "JURITEXT000017895728",
+        "JURITEXT000006998888",
+        "JURITEXT000007003527"
+      ]
+    },
+    {
+      "id": "Q13-JURIDICTION",
+      "doc_ids": [
+        "JURITEXT000054392399",
+        "JURITEXT000007038619",
+        "JURITEXT000025474967",
+        "JURITEXT000049261550",
+        "JURITEXT000030142936",
+        "JURITEXT000051553993",
+        "JURITEXT000007022875",
+        "JURITEXT000007001182",
+        "JURITEXT000023804171",
+        "JURITEXT000017895728"
+      ]
+    },
+    {
+      "id": "Q13-PARTIE-EXCLUE-DEFAUT",
+      "doc_ids": [
+        "JURITEXT000054392399",
+        "JURITEXT000007038619",
+        "JURITEXT000025474967",
+        "JURITEXT000049261550",
+        "JURITEXT000030142936",
+        "JURITEXT000051553993",
+        "JURITEXT000007022875",
+        "JURITEXT000007001182",
+        "JURITEXT000023804171",
+        "JURITEXT000017895728"
+      ]
+    },
+    {
+      "id": "Q31-PARTIE-EXCLUE-DEFAUT",
+      "doc_ids": [
+        "JURITEXT000050384428",
+        "JURITEXT000052303761",
+        "JURITEXT000049733789",
+        "JURITEXT000007047340",
+        "JURITEXT000053384268",
+        "JURITEXT000031850395",
+        "JURITEXT000019358868",
+        "JURITEXT000049641051",
+        "JURITEXT000036139746",
+        "JURITEXT000049198527"
+      ]
+    },
+    {
+      "id": "Q25-THEME",
+      "doc_ids": [
+        "SARDBLOC000007204874",
+        "SARDBLOC000026423705",
+        "SARDBLOC000007207368",
+        "SARDBLOC000007206561",
+        "SARDBLOC000007206624",
+        "SARDBLOC000007204886",
+        "SARDBLOC000007207369",
+        "SARDBLOC000007206801",
+        "SARDBLOC000007205804",
+        "SARDBLOC000007205895"
+      ]
+    },
+    {
+      "id": "Q26-THEME",
+      "doc_ids": [
+        "SARDBLOC000018568777",
+        "SARDBLOC000020126984",
+        "SARDBLOC000033355757",
+        "SARDBLOC000020830234",
+        "SARDBLOC000007146365",
+        "SARDBLOC000007146613",
+        "SARDBLOC000028538475",
+        "SARDBLOC000007144570",
+        "SARDBLOC000018575581",
+        "SARDBLOC000007146364"
+      ]
+    },
+    {
+      "id": "Q28-TYPE",
+      "doc_ids": [
+        "JORFDOLE000018944151",
+        "JORFDOLE000017758953",
+        "JORFDOLE000020078758",
+        "JORFDOLE000027665014",
+        "JORFDOLE000029310724",
+        "JORFDOLE000026453355",
+        "JORFDOLE000017758131",
+        "JORFDOLE000027143883",
+        "JORFDOLE000024529201",
+        "JORFDOLE000018051744"
+      ]
+    },
+    {
+      "id": "MES00-q0001",
+      "doc_ids": [
+        "JURITEXT000007073115",
+        "JURITEXT000007073389",
+        "JURITEXT000007073390",
+        "JURITEXT000007073099",
+        "JURITEXT000007074506",
+        "JURITEXT000007072352",
+        "JURITEXT000007074508",
+        "JURITEXT000007073541",
+        "JURITEXT000007070323",
+        "JURITEXT000007075045"
+      ]
+    },
+    {
+      "id": "MES00-q0002",
+      "doc_ids": [
+        "SARDBLOC000007272188",
+        "SARDBLOC000007272189",
+        "SARDBLOC000007272183",
+        "SARDBLOC000007271894",
+        "SARDBLOC000007271896",
+        "SARDBLOC000007272191",
+        "SARDBLOC000007272185",
+        "SARDBLOC000007272184",
+        "SARDBLOC000007267960",
+        "SARDBLOC000007272181"
+      ]
+    },
+    {
+      "id": "MES00-q0003",
+      "doc_ids": [
+        "SARDBLOC000007250332",
+        "SARDBLOC000007250053",
+        "SARDBLOC000007256772",
+        "SARDBLOC000007251756",
+        "SARDBLOC000007251655",
+        "SARDBLOC000007251417",
+        "SARDBLOC000007256734",
+        "SARDBLOC000007256477",
+        "SARDBLOC000007251723",
+        "SARDBLOC000007251979"
+      ]
+    },
+    {
+      "id": "MES00-q0004",
+      "doc_ids": [
+        "LEGIARTI000006666322",
+        "LEGIARTI000006666321",
+        "LEGIARTI000006666049",
+        "LEGIARTI000035044782",
+        "LEGIARTI000039183512",
+        "LEGIARTI000030898082",
+        "LEGIARTI000022963573",
+        "LEGIARTI000006666295",
+        "LEGIARTI000033614282",
+        "LEGIARTI000006666306"
+      ]
+    },
+    {
+      "id": "MES00-q0005",
+      "doc_ids": [
+        "JORFARTI000042738091",
+        "JORFARTI000042738083",
+        "JORFARTI000042753893",
+        "JORFARTI000042665462",
+        "JORFARTI000042738123",
+        "JORFARTI000042101326",
+        "JORFARTI000042520682",
+        "JORFARTI000042031999",
+        "JORFARTI000042738116",
+        "JORFARTI000042225098"
+      ]
+    },
+    {
+      "id": "MES00-q0006",
+      "doc_ids": [
+        "CETATEXT000021924591",
+        "CETATEXT000022810512",
+        "CETATEXT000022155142",
+        "CETATEXT000023295808",
+        "CETATEXT000021924601",
+        "CETATEXT000023295807",
+        "CETATEXT000022810537",
+        "CETATEXT000023494413",
+        "CETATEXT000023295865",
+        "CETATEXT000022810526"
+      ]
+    },
+    {
+      "id": "MES00-q0007",
+      "doc_ids": [
+        "LEGIARTI000042339592",
+        "LEGIARTI000006226508",
+        "LEGIARTI000042339501",
+        "LEGIARTI000051322881",
+        "LEGIARTI000042339865",
+        "LEGIARTI000051322842",
+        "LEGIARTI000048489093",
+        "LEGIARTI000006227032",
+        "LEGIARTI000053489878",
+        "LEGIARTI000042922345"
+      ]
+    },
+    {
+      "id": "MES00-q0008",
+      "doc_ids": [
+        "SARDBLOC000007186042",
+        "SARDBLOC000007175274",
+        "SARDBLOC000007182739",
+        "SARDBLOC000007168394",
+        "SARDBLOC000007185362",
+        "SARDBLOC000007177214",
+        "SARDBLOC000007173010",
+        "SARDBLOC000007188970",
+        "SARDBLOC000007184911",
+        "SARDBLOC000007170669"
+      ]
+    },
+    {
+      "id": "MES00-q0009",
+      "doc_ids": [
+        "LEGIARTI000006756319",
+        "LEGIARTI000006756311",
+        "LEGIARTI000006777332",
+        "LEGIARTI000006777331",
+        "LEGIARTI000006756313",
+        "LEGIARTI000006756318",
+        "LEGIARTI000006756435",
+        "LEGIARTI000006756427",
+        "LEGIARTI000006774365",
+        "LEGIARTI000006756309"
+      ]
+    },
+    {
+      "id": "MES00-q0010",
+      "doc_ids": [
+        "CETATEXT000037445862",
+        "CETATEXT000037315299",
+        "CETATEXT000036972070",
+        "CETATEXT000037599721",
+        "CETATEXT000032008100",
+        "CETATEXT000033619551",
+        "CETATEXT000033695570",
+        "CETATEXT000033422890",
+        "CETATEXT000031978103",
+        "CETATEXT000033157729"
+      ]
+    },
+    {
+      "id": "MES00-q0011",
+      "doc_ids": [
+        "JORFTEXT000042178384",
+        "JORFTEXT000043232501",
+        "JORFTEXT000037782823",
+        "JORFTEXT000047898560",
+        "JORFTEXT000038215891",
+        "JORFTEXT000036231703",
+        "JORFTEXT000046114399",
+        "JORFTEXT000043023997",
+        "JORFTEXT000047484851",
+        "JORFTEXT000035803538"
+      ]
+    },
+    {
+      "id": "MES00-q0012",
+      "doc_ids": [
+        "JURITEXT000043253075",
+        "JURITEXT000024820883",
+        "JURITEXT000024919601",
+        "JURITEXT000024652287",
+        "JURITEXT000024733123",
+        "JURITEXT000024676127",
+        "JURITEXT000024951166",
+        "JURITEXT000024570405",
+        "JURITEXT000024591623",
+        "JURITEXT000024951139"
+      ]
+    },
+    {
+      "id": "MES00-q0013",
+      "doc_ids": [
+        "LEGIARTI000006513469",
+        "LEGIARTI000006513470",
+        "LEGIARTI000006513476",
+        "LEGIARTI000006513478",
+        "LEGIARTI000006513473",
+        "LEGIARTI000006513474",
+        "LEGIARTI000006568642",
+        "LEGIARTI000006513477",
+        "LEGIARTI000006513472",
+        "LEGIARTI000006513471"
+      ]
+    },
+    {
+      "id": "MES00-q0014",
+      "doc_ids": [
+        "JURITEXT000007311017",
+        "JURITEXT000007321920",
+        "JURITEXT000007321601",
+        "JURITEXT000007321205",
+        "JURITEXT000007329718",
+        "JURITEXT000007311775",
+        "JURITEXT000007284665",
+        "JURITEXT000007290622",
+        "JURITEXT000007317655",
+        "JURITEXT000007322753"
+      ]
+    },
+    {
+      "id": "MES00-q0015",
+      "doc_ids": [
+        "JORFTEXT000000336865",
+        "JORFTEXT000000702318",
+        "JORFTEXT000000852846",
+        "LEGITEXT000006062993",
+        "JORFTEXT000000283892",
+        "JORFTEXT000000452467",
+        "JORFTEXT000000694755",
+        "JORFTEXT000000506335",
+        "JORFTEXT000000681630",
+        "JORFTEXT000000670030"
+      ]
+    },
+    {
+      "id": "MES00-q0016",
+      "doc_ids": [
+        "JORFTEXT000000293281",
+        "JORFTEXT000000643205",
+        "JORFTEXT000000450081",
+        "JORFTEXT000000450082",
+        "JORFTEXT000000838644",
+        "JORFTEXT000000838347",
+        "JORFTEXT000000643964",
+        "JORFTEXT000000450303",
+        "JORFTEXT000000326693",
+        "JORFTEXT000000638275"
+      ]
+    },
+    {
+      "id": "MES00-q0018",
+      "doc_ids": [
+        "CETATEXT000043930448",
+        "CETATEXT000044487040",
+        "CETATEXT000044387219",
+        "CETATEXT000043411063",
+        "CETATEXT000044487042",
+        "CETATEXT000044393226",
+        "CETATEXT000043875738",
+        "CETATEXT000044249646",
+        "CETATEXT000044314557",
+        "CETATEXT000043704148"
+      ]
+    },
+    {
+      "id": "MES00-q0019",
+      "doc_ids": [
+        "LEGIARTI000006855851",
+        "LEGIARTI000006855840",
+        "LEGIARTI000006855848",
+        "LEGIARTI000006855842",
+        "LEGIARTI000006855852",
+        "LEGIARTI000006855853",
+        "LEGIARTI000006856346",
+        "LEGIARTI000006855841",
+        "LEGIARTI000006856349",
+        "LEGIARTI000006855838"
+      ]
+    },
+    {
+      "id": "MES00-q0021",
+      "doc_ids": [
+        "LEGIARTI000006555085",
+        "LEGIARTI000006555086",
+        "LEGIARTI000006555090",
+        "LEGIARTI000006555089",
+        "LEGIARTI000006555088",
+        "LEGIARTI000006555087",
+        "LEGIARTI000006546198",
+        "LEGIARTI000006555020",
+        "LEGIARTI000006555022",
+        "LEGIARTI000006553753"
+      ]
+    },
+    {
+      "id": "MES00-q0028",
+      "doc_ids": [
+        "JORFARTI000001285590",
+        "JORFARTI000001667881",
+        "JORFARTI000002259004",
+        "JORFARTI000002106129",
+        "JORFARTI000050145728",
+        "JORFARTI000002108351",
+        "JORFARTI000001453939",
+        "JORFARTI000001094520",
+        "JORFARTI000001525851",
+        "JORFARTI000001097324"
+      ]
+    },
+    {
+      "id": "MES00-q0030",
+      "doc_ids": [
+        "JORFDOLE000051102694",
+        "JORFDOLE000031978444",
+        "JORFDOLE000017759359",
+        "JORFDOLE000024808636",
+        "JORFDOLE000028054214",
+        "JORFDOLE000053446698",
+        "JORFDOLE000026765866",
+        "JORFDOLE000051294777",
+        "JORFDOLE000031829941",
+        "JORFDOLE000038055528"
+      ]
+    },
+    {
+      "id": "MES00-q0033",
+      "doc_ids": [
+        "JORFARTI000001543800",
+        "JORFARTI000002315959",
+        "JORFARTI000002124038",
+        "JORFARTI000001736885",
+        "JORFARTI000002297412",
+        "JORFARTI000001892856",
+        "JORFARTI000002124037",
+        "JORFARTI000002210457",
+        "JORFARTI000001155669",
+        "JORFARTI000002411453"
+      ]
+    },
+    {
+      "id": "MES00-q0034",
+      "doc_ids": [
+        "JORFDOLE000053776703",
+        "JORFDOLE000051722662",
+        "JORFDOLE000028220632",
+        "JORFDOLE000023944918",
+        "JORFDOLE000047315814",
+        "JORFDOLE000036124537",
+        "JORFDOLE000026204681",
+        "JORFDOLE000053726704",
+        "JORFDOLE000041408756",
+        "JORFDOLE000017758328"
+      ]
+    },
+    {
+      "id": "MES00-q0042",
+      "doc_ids": [
+        "JORFDOLE000030773704",
+        "JORFDOLE000029920379",
+        "JORFDOLE000017758195",
+        "JORFDOLE000038357854",
+        "JORFDOLE000028244542",
+        "JORFDOLE000020909996",
+        "JORFDOLE000044288828",
+        "JORFDOLE000042956321",
+        "JORFDOLE000031472558",
+        "JORFDOLE000029310724"
+      ]
+    }
+  ]
+}
