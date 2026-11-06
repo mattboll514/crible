@@ -16,6 +16,7 @@ de conception ; il n'écrit aucun fichier dans le dépôt Legifacile.
 | `pass_b.py` | fonctions pures de la passe B : jeux d'entrée `vector`/texte, agrégats par population, fidélité, latence, comparaison et écarts de données | partout, couvert par pytest |
 | `build_eval_inputs.py` | écrit les 24 jeux d'entrée de la passe B sous `data/p10-compare/eval/inputs/` (quatre par index) | machine de développement |
 | `aggregate_eval.py` | agrège les 24 rapports `eval`, le rejeu pgvector, les deux `inspect` et les comptes pgvector en un JSON sous `data/` | machine de développement |
+| `audit_expected.py` | audit des 97 `expected` contre les `records.sqlite` des six index : état, dates, admission par le filtre et le périmètre de chaque ligne, versions en vigueur ; sortie sans texte de requête ni valeur de filtre | machine de développement |
 | `run_eval.sh` | recette de la passe B : `inputs`, `counts before/after`, `index <nom>`, `aggregate`, `publish` ; un index par commande | machine de développement |
 | `mes14.py` | fonctions pures et commandes de la passe C : jeux filtrés `games`, comptes de domaine `counts`, jointure `aggregate` ; aucune base de production, aucun import de production | machine de développement |
 | `run_mes14.sh` | recette de la passe C : `games`, `counts`, `index decisions`, `index articles`, `aggregate` ; un cas par `crible eval` | machine de développement |
@@ -137,6 +138,31 @@ génération que le volume.
 d'un index donnent quatre couples `eval-<index>-<passe>-2026-11-06.{json,md}`. Le complément fixe
 cette forme — **un rapport par index et par passe** —, et le suffixe de passe rend chaque fichier
 explicite ; chaque rapport reste le rapport brut de `crible eval`, sans retouche.
+
+## Audit du jeu après actualisation
+
+`audit_expected.py` relit les six fichiers de `docs/legifacile/reference/` et interroge, en
+lecture seule, les `records.sqlite` du volume importé. Il écrit un JSON qui ne porte que des `id`,
+des `doc_id`, des états et des dates : ni texte de requête ni valeur de filtre (ADR-0125,
+décision 16). Le dossier de sortie reste sous `data/`, gitignoré.
+
+```bash
+# [local] audit du jeu courant, serveur Crible arrêté, conteneur éphémère
+docker run --rm \
+    -v crible-p10-data:/data \
+    -v "$PWD:/repo:ro" \
+    -v "$PWD/data/p10-compare:/out" \
+    python:3.12-slim \
+    python3 /repo/tools/bench/p10-compare/audit_expected.py \
+    --reference-dir /repo/docs/legifacile/reference \
+    --data /data \
+    --output /out/audit-after.json
+```
+
+`--data` désigne la racine qui contient `indexes/<index>/CURRENT_EPOCH` et
+`indexes/<index>/epochs/<n>/records.sqlite` ; `--reference-dir` désigne les six `<index>.jsonl` et
+`mcp.jsonl` ; `--output` est obligatoire. Le script échoue avec `AuditError` sur une ligne sans
+`id` textuel ou sans `expected` non vide, et ferme chaque connexion SQLite même en cas d'erreur.
 
 ## Passe C — MES-14 sur l'index réel
 
