@@ -86,6 +86,31 @@ use serde_json::Value;
 
 use crate::records::{PassageRecord, canonical_json, database_error, from_sql_u32};
 
+/// Counts the calls of `FieldData::clear` in a test build.
+///
+/// The non-regression test of `CORRIGER-BLOCAGE-APRES-COMMIT` bounds the work a
+/// commit does by the number of clears it runs, never by a duration: a duration
+/// would depend on the machine and would be flaky in CI. Production builds
+/// compile nothing here.
+#[cfg(test)]
+mod clear_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// Records one call of `FieldData::clear`.
+    pub(super) fn record() {
+        CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
+    }
+
+    /// Returns the calls recorded since the last call, and resets the count.
+    pub(super) fn take() -> u64 {
+        CALLS.with(|calls| calls.replace(0))
+    }
+}
+
 /// Number of values one block of a value column holds.
 ///
 /// A block is the unit of copy on write of a column: an update clones the
@@ -299,6 +324,8 @@ impl FieldData {
     /// plain image of the reference state: a null and an untouched slot read the
     /// same, and a rebuild gives the same column.
     fn clear(&mut self, field: &str, field_type: FieldType, iid: Iid) -> Result<(), CribleError> {
+        #[cfg(test)]
+        clear_probe::record();
         match field_type {
             FieldType::Keyword => self.keyword(field)?.clear(iid),
             FieldType::Bool => self.boolean(field)?.clear(iid),
@@ -925,7 +952,12 @@ impl FilterIndex {
         let mut next = self.clone();
         next.insert_created_passages(connection, delta)?;
         next.apply_tombstones(&delta.tombstones);
-        next.refresh_updated_documents(connection, &delta.rewritten_documents)?;
+        let created: RoaringBitmap = delta
+            .created
+            .iter()
+            .map(|passage| passage.iid.get())
+            .collect();
+        next.refresh_updated_documents(connection, &delta.rewritten_documents, &created)?;
         next.clear_removed_documents(connection, &delta.removed_documents)?;
         Ok(next)
     }
@@ -1110,16 +1142,33 @@ impl FilterIndex {
     ///
     /// The passages of the document are read by `passages(doc_id)` and its
     /// fields by the primary key of `documents`, both bounded (ADR-0066).
+    ///
+    /// A passage step 1 created already carries the values of the document row
+    /// the transaction wrote: refreshing it would clear and rewrite the very
+    /// values it has just received. On a `keyword` field that clear walks every
+    /// distinct value of the field, so the first `replace_all` of a large batch
+    /// — where the delta lists every created document as rewritten — paid one
+    /// sweep per passage and per field. The created iids are skipped here; the
+    /// passages a replacement or a metadata update inherits new values for are
+    /// still refreshed.
     fn refresh_updated_documents(
         &mut self,
         connection: &Connection,
         rewritten: &[String],
+        created: &RoaringBitmap,
     ) -> Result<(), CribleError> {
         for doc_id in rewritten {
+            let iids: Vec<Iid> = passage_iids_of_document(connection, doc_id)?
+                .into_iter()
+                .filter(|iid| !created.contains(iid.get()))
+                .collect();
+            if iids.is_empty() {
+                continue;
+            }
             let Some(document) = document_fields(connection, doc_id)? else {
                 continue;
             };
-            for iid in passage_iids_of_document(connection, doc_id)? {
+            for iid in iids {
                 self.refresh_document_fields(iid, &document)?;
             }
         }
@@ -1275,9 +1324,15 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Column, Placement, Sentinel, date_days};
-    use crible_core::ids::Iid;
+    use super::{
+        Column, CommitDelta, CreatedPassage, FilterIndex, Placement, Sentinel, clear_probe,
+        date_days,
+    };
+    use crate::records::{DocumentRecord, PassageRecord, RecordStore};
+    use crible_core::config::Schema;
+    use crible_core::ids::{Generation, Iid};
     use crible_core::time::days_from_civil;
+    use serde_json::{Value, json};
 
     /// The reference epoch, the leap day of a leap year, and the day before the
     /// epoch, which only a signed count can represent.
@@ -1405,6 +1460,110 @@ mod tests {
         assert_ne!(
             left, other,
             "a value that differs must make the columns differ"
+        );
+    }
+
+    /// Schema of the regression fixture: one document-level `keyword` field and
+    /// one document-level `integer` field, so a refresh would clear both.
+    const REGRESSION_SCHEMA_JSON: &str = r#"{
+        "document_fields": {
+            "valeur": { "type": "keyword" },
+            "annee": { "type": "integer" }
+        },
+        "passage_fields": {}
+    }"#;
+
+    /// Documents of the regression fixture.
+    const REGRESSION_DOCUMENTS: usize = 64;
+
+    /// A commit that only creates passages must not clear a field it has just
+    /// written (INV-07, `CORRIGER-BLOCAGE-APRES-COMMIT`).
+    ///
+    /// The fixture is the first `replace_all` of an empty index: every document
+    /// is new, so the attach lists every one of them in `rewritten_documents`
+    /// while their passages come from `created`. The old code cleared the
+    /// document-level value of every created passage before writing it back;
+    /// on a `keyword` field whose cardinality follows the number of documents,
+    /// that clear walks every distinct value of the field, which is the
+    /// quadratic cost the task pursues.
+    ///
+    /// The test bounds the number of `FieldData::clear` calls, never a
+    /// duration: it is deterministic and does not depend on the machine. It
+    /// also keeps the equality with `FilterIndex::from_records` (INV-07).
+    #[test]
+    fn inv_07_after_commit_does_not_clear_the_fields_it_has_just_written() {
+        let temp = tempfile::tempdir().expect("a temporary directory");
+        let path = temp.path().join("records.sqlite");
+        let mut records = RecordStore::create(&path).expect("the records database is created");
+        let schema = Schema::from_json_str(REGRESSION_SCHEMA_JSON)
+            .unwrap_or_else(|error| panic!("the regression schema must be valid: {error}"));
+
+        let mut created = Vec::with_capacity(REGRESSION_DOCUMENTS);
+        let mut rewritten = Vec::with_capacity(REGRESSION_DOCUMENTS);
+        for number in 0..REGRESSION_DOCUMENTS {
+            let doc_id = format!("doc-{number:04}");
+            let fields: Value = json!({
+                "valeur": format!("valeur-{number:04}"),
+                "annee": 2000 + number as i64,
+            });
+            records
+                .write_document(&DocumentRecord {
+                    doc_id: doc_id.clone(),
+                    doc_hash: format!("blake3:doc-{number:04}"),
+                    fields: fields.clone(),
+                    updated_generation: Generation::new(1),
+                })
+                .expect("the document row is written");
+            let iid = Iid::new(number as u32);
+            records
+                .write_passage(&PassageRecord {
+                    iid,
+                    doc_id: doc_id.clone(),
+                    ord: 0,
+                    text: format!("{doc_id}#0"),
+                    passage_hash: format!("blake3:passage-{number:04}"),
+                    fields: json!({}),
+                    segment_id: "seg-regression".to_owned(),
+                    created_generation: Generation::new(1),
+                    dead_since_gen: None,
+                })
+                .expect("the passage row is written");
+            created.push(CreatedPassage {
+                iid,
+                doc_id: doc_id.clone(),
+                text: format!("{doc_id}#0"),
+                fields: json!({}),
+                dead: false,
+            });
+            rewritten.push(doc_id);
+        }
+
+        let delta = CommitDelta {
+            created,
+            rewritten_documents: rewritten,
+            created_documents: REGRESSION_DOCUMENTS as u64,
+            tombstones: Vec::new(),
+            removed_documents: Vec::new(),
+        };
+        let previous = FilterIndex::empty(&schema).expect("the empty filter structures are built");
+
+        // Leave no count from another test of this thread.
+        let _ = clear_probe::take();
+        let derived = previous
+            .after_commit(records.connection(), &delta)
+            .expect("the commit derives the next filter structures");
+        let clears = clear_probe::take();
+
+        assert_eq!(
+            clears, 0,
+            "a commit must not clear a document-level value of a passage it has \
+             just created: `clear` walks every distinct value of a keyword field"
+        );
+        assert_eq!(
+            derived,
+            FilterIndex::from_records(records.connection(), &schema)
+                .expect("the reference structures are rebuilt"),
+            "the derived structures must equal a full rebuild (INV-07)"
         );
     }
 }
