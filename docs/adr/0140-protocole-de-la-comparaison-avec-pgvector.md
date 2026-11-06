@@ -141,6 +141,32 @@ La tâche `COMPARER-AVEC-PGVECTOR` (P10) est la mesure décisive de la v1 : elle
 - **La liste est dans le rapport.** Elle nomme, pour chaque question perdante, l'attendu, le corpus, la cause probable — filtre, encodage, N, seuil exact, répartition par corpus, écart de données — et le levier possible. Elle ne code rien et ne tranche rien : le propriétaire décide.
 - **Distinction avec la fidélité.** Un rappel insuffisant n'est pas une fidélité insuffisante. Les deux sont rapportés séparément ; la fidélité sous 0,99 est un signal, pas une liste d'actions de qualité.
 
+## Complément du 2026-11-06 (relecture, tour 1)
+
+Ce complément répond aux deux points de la relecture du tour 1 de la tâche `COMPARER-AVEC-PGVECTOR`. Il **ne réécrit aucune des douze décisions** ci-dessus : il fixe l'interprétation de la décision 8 sur un point où elle se contredit, et il corrige un compte de la décision 11. Les règles sont retenues par l'orchestrateur, sur délégation du propriétaire du 2026-11-06 (« si tu as d'autre ADR a ecrire pour cette tache considere qu'ils sont accepté par anticipation, on le confirme ensemble a la fin de la tache »). Elles portent le **statut d'acceptation par anticipation du 2026-11-06** et sont **à confirmer avec le propriétaire à la fin de la tâche**.
+
+### Décision 8 : le banc de MES-14 n'est pas rejoué sur l'index réel
+
+La décision 8 demande le banc « rejoué en complément » (`:113`) et interdit en même temps « aucune modification du banc » (`:115`). Ces deux clauses ne peuvent pas tenir ensemble sur l'index réel. Les onze cas du banc (`crates/crible-search/benches/pool_filter.rs:461-539`) nomment des champs des fixtures synthétiques — `categorie`, `partie`, `annee`, `date_publication` et `score` —, et le banc ne tourne que sur `synth-small`, `fixture-1m` et `fixture-8m58` (`tools/bench/mes14/run.sh:17-19`). Trois de ces champs, `categorie`, `date_publication` et `score`, n'existent dans aucun des six index réels (`docs/legifacile/configs/`) : le banc ne peut pas y tourner sans être modifié, ce que la décision 8 interdit.
+
+La règle est donc la suivante.
+
+- **Le banc n'est pas rejoué sur l'index réel.** Il reste tel quel, sur ses fixtures, et ses chiffres restent la référence pour le coût de `Pool::evaluate` seul (`docs/mesures/MES-14-cout-filtres-intervalles.md:57-64` ; campagne et contrôles du § 10, `:383-404`).
+- **Le coût du filtre seul sur l'index réel se lit dans l'étape `filter` de `debug.timings_ms`.** `crible eval` la produit sur le jeu filtré généré, à côté du `total` de bout en bout. L'étape chronomètre **exactement** l'appel `Pool::evaluate(self.snapshot.filters(), &filter)?` (`crates/crible/src/eval.rs:825`), entre `let pooling = Instant::now()` (`:824`) et `let filter_duration = pooling.elapsed()` (`:826`) : ni plus large, ni plus étroit. Elle ne contient donc ni le parsing et la validation du filtre, qui forment l'étape `validate` (`:788-790`), ni l'encodage, ni le scan dense, ni le lexical, ni la fusion, ni le regroupement, ni la lecture des payloads. Elle contient l'évaluation de l'AST, l'intersection avec la bitmap des vivants et le calcul de la taille du pool (`crates/crible-search/src/pool.rs:82-92`).
+- **Les deux chiffres ne se substituent pas.** L'étape `filter` d'`eval` et le banc mesurent la même fonction sur des populations différentes : un jeu filtré généré sur un index réel d'un côté, des fixtures synthétiques de l'autre. Le rapport les publie côte à côte et nomme la population de chacun.
+- **Ce qui ne change pas.** Aucun index de plage, aucune correction de performance, aucune modification du banc. La cible indicative de 698 ms et la règle d'ouverture d'un ADR d'index de plage restent celles de la fiche (`:153`) et d'ADR-0046 `:43`.
+
+### Décision 11 : un rapport `eval` par index et par passe
+
+La décision 11 annonce « six rapports `eval` », un par index (`:130-132`). Un lancement de `crible eval` écrit un rapport par exécution, et ADR-0125, décision 13 (`:191-193`), interdit d'écraser un rapport : quatre passes ne peuvent donc pas tenir dans un fichier par index. La campagne du 2026-11-06 a publié **24 rapports**, soit **48 fichiers** `docs/mesures/eval-<index>-<passe>-2026-11-06.json` et `.md`, pour les six index et les quatre passes `dense-primaire`, `dense-secondaire`, `hybride` et `fidelite`.
+
+La règle est donc la suivante.
+
+- **Un rapport par index et par passe.** Le nom est `docs/mesures/eval-<index>-<passe>-<AAAA-MM-JJ>.json` et `.md`. La décision 11 se lit avec « un rapport par index et par passe » à la place de « six rapports ».
+- **Le reste de la décision 11 est inchangé.** Le rapport de comparaison, le JSON pgvector par requête, le harnais sous `tools/bench/p10-compare/`, les entrées sous `data/` et l'absence de format nouveau pour `eval` restent tels quels.
+- **Aucun rapport n'est écrasé ni renommé.** Les 48 fichiers déjà publiés restent la trace de la campagne.
+- **Les deux mentions des conséquences suivent la même règle.** « Les six rapports `eval` » et « absente des six rapports `eval` », dans les conséquences ci-dessous, se lisent « un rapport par index et par passe » ; le corps des conséquences n'est pas réécrit ici.
+
 ## Conséquences
 
 - **Positives** :
