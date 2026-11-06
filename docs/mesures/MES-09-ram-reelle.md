@@ -418,3 +418,152 @@ Ce que cette lecture **ne** permet pas d'affirmer :
   recommandation de MES-05 (int8) changerait le plancher, sans chiffre ici ;
 - la part du noyau et des démons de la VM dans le RSS, que le cgroup ne referme pas toujours ;
 - le comportement d'un index multi-segments ou lexical, jamais mesuré en mémoire.
+
+## Campagne du 2026-11-06, échelle réelle Legifacile, conteneur
+
+- **Tâche** : `IMPORTER-BASE-COMPLETE` (phase P10), passe B, mesure MES-09. Branche
+  `tache/IMPORTER-BASE-COMPLETE`, commit `e059fdf9758092f47a19e858593c316770a3958a`. **Aucun code de
+  production n'a été modifié.** Le harnais `tools/bench/p10-import/mes09.py` est neuf et non commité
+  au moment de la mesure.
+- **Protocole** : les trois états d'ADR-0077, décision 5 — **(a)** index ouvert, instantané chargé,
+  aucune requête ; **(b)** après une passe de **300 requêtes à vecteur fourni**, sans encodage ;
+  **(c)** après une requête encodée, qui charge la session fp32 du modèle, **rapportée à part**.
+  ADR-0139, décision 3, pour les deux séries et pour la RAM de référence ; ADR-0135, décision 7, pour
+  la publication de `memory.current` et `memory.stat` avec le RSS.
+- **Machine** : MacBook Air M3 (8 cœurs), 24 Go, macOS 15.7.7 (24G720). **En conteneur** : Docker
+  Desktop 28.5.1, VM `aarch64` de **12 529 836 032 octets (11,67 Gio)**, 8 vCPU, volume nommé
+  `crible-p10-data`, **aucune limite `--memory`**. **La RAM de la VM n'est pas changée par cette
+  campagne** : elle reste à 12 Gio de référence, comme ADR-0139 le prévoit.
+- **Image** : `crible:p10`,
+  `sha256:ff08d62b74d285acfccdc8f7b452ea77030786a65a831024698158b53b5f50b6`.
+- **Jeu de données** : l'instance importée de la passe A, **6 660 239 documents et 9 600 105
+  passages** répartis sur six index ; `decisions` est en époque 2 (4 segments, 3 589 776 passages) et
+  `jorf` en époque 3 (2 segments, 1 833 500), les quatre autres en époque 1 (un segment).
+- **Ce qui est mesuré** : le **processus serveur** (pid 1 du conteneur), lu par `docker exec`
+  (`/proc/1/status` : `VmRSS`, `RssAnon`, `RssFile`, `RssShmem`, `VmHWM` ; cgroup v2 :
+  `memory.current`, `memory.max`, `memory.stat`). Chaque série part d'un **serveur fraîchement
+  démarré** : la passe A a montré qu'un delta de commit reste en mémoire anonyme après une attache
+  (10,55 GiB), et ne retombe qu'au redémarrage. Les séries ne sont donc pas contaminées par un job.
+
+### Protocole
+
+```sh
+# série « instance » : les six index ouverts
+sh tools/bench/p10-import/start.sh
+python3 tools/bench/p10-import/mes09.py series --label instance --target decisions
+
+# série par index : serveur arrêté, les cinq autres dossiers déplacés dans le volume
+sh tools/bench/p10-import/mes09-per-index.sh decisions
+```
+
+`mes09-per-index.sh` arrête le serveur, **déplace** les cinq autres dossiers de `/data/indexes/` vers
+`/data/staging-mes09/` (un `mv` dans le même volume, jamais une suppression), démarre le serveur sur
+l'index seul, mesure les trois états, arrête le serveur et **remet les dossiers en place** — même en
+cas d'échec de la mesure. Les six index ont été replacés et le serveur les sert : `GET /v1/indexes`
+rend les six, et `ls /data/indexes` les liste.
+
+La passe de **300 requêtes** utilise un vecteur unitaire tiré une fois (graine 20261106, 768
+dimensions, base64 fp32 LE), en mode `dense`, `k = 10`, sur l'index cible — `decisions` pour la série
+d'instance. La requête encodée de l'état (c) est un texte (`responsabilité contractuelle`), sur le même
+index.
+
+### Résultats
+
+Série **instance**, six index ouverts ; MiB = 1 048 576 octets, `cgroup` = `memory.current` :
+
+| État | RSS | `RssAnon` | `RssFile` | `cgroup` | `VmHWM` | `anon` (cgroup) |
+|---|---:|---:|---:|---:|---:|---:|
+| (a) ouvert, aucune requête | 3 647,8 | **3 612,7** | 35,1 | 9,19 GiB | 3 647,8 | 3,53 GiB |
+| (b) après 300 requêtes à vecteur fourni | 3 707,9 | **3 624,2** | 83,6 | 9,22 GiB | 3 707,9 | 3,53 GiB |
+| (c) après une requête encodée | 3 733,8 | **3 625,0** | 108,8 | 9,18 GiB | 3 733,8 | 3,53 GiB |
+
+Passe : p50 **19,05 ms**, max 276,9 ms, 300 requêtes sur 300 réussies. Encodage de la requête de (c) :
+**322,3 ms**.
+
+Série **par index**, serveur neuf à chaque fois, un seul index ouvert ; `anon` = `RssAnon` :
+
+| Index | Passages | (a) RSS | (a) `anon` | (b) `anon` | (c) `anon` | Écart à `dole`, état (a) | `cgroup` (a) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `dole` | 7 653 | 1 489,6 | **1 459,9** | 1 468,8 | 1 468,8 | — | 2,63 GiB |
+| `sarde` | 214 578 | 1 563,1 | **1 533,3** | 1 544,3 | 1 544,6 | +73,4 | 1,50 GiB |
+| `titres` | 1 477 883 | 1 931,9 | **1 901,7** | 1 912,6 | 1 913,1 | +441,8 | 1,86 GiB |
+| `jorf` | 1 833 500 | 1 712,2 | **1 681,4** | 1 692,3 | 1 692,4 | +221,5 | 7,04 GiB |
+| `articles` | 2 476 715 | 1 929,4 | **1 898,5** | 1 909,4 | 1 910,0 | +438,6 | 6,67 GiB |
+| `decisions` | 3 589 776 | 1 915,5 | **1 884,7** | 1 895,9 | 1 896,7 | +424,8 | 10,72 GiB |
+
+Passe de 300 requêtes : p50 de **2,93 ms** (`dole`) à **18,99 ms** (`decisions`).
+
+**Plancher mesuré.** `dole` ne porte que 7 653 passages et 0,7 MiB de codes binaires : ses
+**1 459,9 MiB** d'anonyme contiennent le runtime du serveur, la **session fp32** du modèle (chargée
+au démarrage), les allocations de l'index et les caches internes. La mesure ne sépare pas ces
+termes : elle en donne la **somme**, et c'est ce total qui sert de plancher à une instance qui sert.
+Elle **ne recoupe donc pas** les 1 472 à 1 486 MiB que la campagne en conteneur du 2026-11-03
+attribuait à la session seule : la comparaison est **non comparable** — harnais natif qui chargeait
+la session à la demande, plancher d'index de 1 141 MiB, taille d'index et de modèle différentes — et
+rien ici ne dit quelle part de 1 459,9 MiB revient à la session.
+
+**Ce que les six index ajoutent.** Deux comparaisons, chacune **à état égal** :
+
+- **état (a)**, aucune requête : instance **3 612,7 MiB** − `dole` **1 459,9** = **+2 152,8 MiB** ;
+  la somme des écarts par index (colonne « écart à `dole` », elle aussi en (a)) vaut **1 600,1 MiB** ;
+  l'ouverture simultanée coûte donc **552,7 MiB de plus** que la somme des ouvertures séparées ;
+- **état (b)**, après la passe de 300 requêtes : instance **3 624,2 MiB** − `dole` **1 468,8** =
+  **+2 155,4 MiB**, contre **1 610,5 MiB** pour la somme des écarts par index en (b), soit
+  **544,9 MiB** de plus.
+
+Les deux valeurs encadrent le même surcoût, non expliqué par cette campagne et conservé. Le
+**564,2 MiB** qui figurait ici auparavant mêlait l'état (b) de l'instance à l'état (a) de `dole` : il
+est écarté au profit des deux valeurs ci-dessus.
+
+**L'état (c) n'ajoute rien sur le serveur.** Le serveur charge la session fp32 **au démarrage** (la
+ligne `models and indexes loaded` du journal précède `/ready`), si bien que (a) la contient déjà :
+(c) − (b) vaut **0,8 MiB**, et l'encodage d'une requête prend 34,6 à 322,3 ms sans faire monter
+l'anonyme. La
+mesure ne sépare donc pas la session du reste, contrairement au harnais natif de 2026-10-27 qui la
+chargeait à la demande. C'est une différence de **protocole du serveur**, pas de la mesure.
+
+### Conclusion
+
+- **RAM minimale : 4 Gio.** Le plancher mesuré est de **3,54 GiB d'anonyme** en régime, plus le noyau
+  et les démons de la VM (`kernel` 36,6 MiB, `slab` 27,8 MiB, `pagetables` 7,7 MiB à l'ouverture de
+  l'instance). 4 Gio laisse ≈ 0,45 GiB de marge ; c'est un **minimum de service**, pas un réglage
+  confortable.
+- **RAM confortable : 12 Gio.** Le plancher de 3,54 GiB laisse alors **≈ 8,5 GiB de cache** pour
+  **25 G** de fichiers d'index (segments fp16, `records.sqlite`, lexical). C'est la RAM actuelle de la
+  VM, et c'est le réglage qui a servi toutes les mesures de cette campagne.
+- **La VM mesure 11,67 Gio.** Aucune série n'a approché sa limite : le plus haut `memory.current`
+  observé est **10,72 GiB** (`decisions` seul), dont 8,8 GiB de cache de pages de ses 5,5 G de
+  segments et 3,9 G de `records.sqlite`. L'anonyme, lui, ne dépasse jamais **3,54 GiB** : c'est le
+  `RssAnon` de l'état (b) de la série d'instance. Le `anon` du cgroup, colonne de droite du tableau,
+  vaut 3,53 GiB et compte les mêmes pages à l'arrondi près.
+- **Les ≈ 9 GiB anonymes extrapolés ne sont pas mesurés, et sont contredits pour le service** :
+  l'instance à six index possède **3,54 GiB** d'anonyme en régime. Le chiffre de 9 GiB décrit autre
+  chose — la mémoire d'un **delta de commit** pendant une attache : la passe A a mesuré **10,55 GiB**
+  d'anonyme après l'attache de `decisions`, libérés au redémarrage. Servir et importer ne coûtent pas
+  la même mémoire.
+- **Rétention après attache, observation transmise.** Après un job d'attache, l'anonyme reste à
+  **10,55 GiB** et ne retombe à **3,57 GiB** qu'au redémarrage du serveur. Ce n'est pas une fuite
+  démontrée : c'est un état de fait, mesuré deux fois (passe A, puis à chaque démarrage de cette
+  campagne). Toute mesure de mémoire doit donc partir d'un serveur fraîchement démarré, comme
+  ADR-0139, décision 3, l'impose ici.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la mémoire d'un index à plusieurs centaines de segments, ni celle d'une reconstruction lexicale en
+  cours de service (le lexical multi-segments n'a pas été mesuré en mémoire) ;
+- l'effet d'une limite `--memory` : aucune n'était posée ;
+- la répartition exacte de l'anonyme entre le runtime, la session et les index : le serveur n'expose
+  pas ce découpage, et la mesure ne fait que soustraire le plancher de `dole` ;
+- la mémoire en pointe d'une requête à `k` plus grand ou d'un `N` plus grand : la passe utilise les
+  valeurs par défaut de l'index (`rescore_candidates` 5000, `candidates_per_branch` 100).
+
+Recommandations, **à valider par le propriétaire** :
+
+1. **Retenir 4 Gio comme minimum et 12 Gio comme confortable** pour une instance qui sert les six
+   index. Le minimum décrit un service qui répond ; il ne laisse pas de cache et fait relire les
+   segments à chaque requête froide.
+2. **Dimensionner l'import, pas le service, sur la mémoire de commit** : 12 Gio tiennent le service
+   avec 8,5 GiB de cache, mais une attache de 3,6 M passages a frôlé la limite (marge de 0,58 GiB,
+   passe A). Si l'import reprend, la VM doit être plus grande ou les lots plus petits.
+3. **Redémarrer avant toute mesure de mémoire** : la rétention de 7 GiB après un job fausserait une
+   série MES-09, et la campagne l'a évitée par construction.
