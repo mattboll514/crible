@@ -1,7 +1,7 @@
 # ADR-0139 — Protocole de la campagne d'import à l'échelle réelle (IMPORTER-BASE-COMPLETE)
 
-- **Statut** : Proposé
-- **Date** : 2026-11-06
+- **Statut** : Accepté — décidé par le propriétaire le 2026-11-06 (« ADR-0139 accepté »), sans réserve
+- **Date** : 2026-11-06 (proposition et décision le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : `@greffier`, à la demande de l'orchestrateur, pour la tâche `IMPORTER-BASE-COMPLETE` (P10), d'après les verdicts de `@architecte` du 2026-11-06
 - **Remplace** : —
