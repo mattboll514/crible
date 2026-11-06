@@ -473,3 +473,151 @@ question de l'index de plage.
 Les jeux filtrés et les textes de requête restent sous `data/` (gitignoré) : ni le rapport, ni le
 JSON pgvector, ni le JSON MES-14 ne portent un texte de requête ou une valeur de filtre
 (ADR-0125, décision 16 ; ADR-0140, décision 11).
+
+## Rejeu sur le jeu actualisé (`ACTUALISER-JEU-DE-REFERENCE`)
+
+**Section datée du 2026-11-06.** Les chiffres des sections précédentes restent ceux de la
+campagne d'origine et ne changent pas. Cette section ne publie que le rappel, recalculé après
+l'actualisation d'un `expected` ; aucune mesure de latence n'y est ajoutée.
+
+- **Tâche** : `ACTUALISER-JEU-DE-REFERENCE` (P10, hors plan initial).
+- **Commit Crible** : `c14904444eedf25b946821025cc6cc9d239baca1`, branche
+  `tache/ACTUALISER-JEU-DE-REFERENCE`. Aucun code de production, aucune configuration d'index et
+  aucune cible n'ont été modifiés ; le serveur Crible est resté arrêté, les conteneurs sont
+  éphémères (`docker run --rm`).
+- **Machine** : la même que la campagne d'origine, MacBook Air Apple M3, 8 cœurs, 24 Go de RAM,
+  macOS 15.7.7, Docker Desktop 28.5.1, VM de 12 529 836 032 octets et 8 processeurs, conteneur
+  `crible:p10`.
+
+### Changement du jeu
+
+Un seul `expected` change : celui de `Q04`, remplacé par la version en vigueur du même article
+(`LEGIARTI000047381704` → `LEGIARTI000054716237`). La justification, les états et les dates sont
+dans la note datée de `docs/legifacile/jeu-de-reference.md`. Aucun autre `expected` n'est modifié :
+en particulier, `Q30` reste non satisfaisable par construction, et `Q01`, `Q02` et `Q06` désignent
+des documents en vigueur.
+
+**Cohérence avec MES-00 (constat du 2026-11-06).** MES-00 (2026-10-20) trouvait encore
+`LEGIARTI000047381704` au rang 3 (`MES-00-reference-pgvector.2026-10-20.eval-recherche.md:120`),
+alors que l'index importé donne à ce document une `date_fin` au 2026-08-20 et à la version
+courante une `date_debut` au 2026-08-20, toutes deux antérieures à MES-00. Le corpus a donc changé
+entre les deux campagnes : soit il était en retard au 2026-10-20, soit la mise à jour a été
+intégrée plus tard avec une date d'effet rétroactive ; les données ne permettent pas de trancher.
+MES-00 mesurait déjà 6/130 résultats hors vigueur dans `textes_vigueur` (`:34-35`), ce qui montre
+qu'un décalage de ce type existait. Le rejeu du 2026-11-06 ne rend plus l'ancien document
+(`diag.json`, `presence: []`) : son retrait du corpus `textes_vigueur` est postérieur à MES-00. La
+date d'ingestion de la nouvelle version n'est pas dans les données.
+
+### Méthode du recalcul
+
+1. Audit des 97 `expected` contre l'index Crible importé, en lecture seule, par
+   `tools/bench/p10-compare/audit_expected.py` : 97 documents présents, un seul non admis hors
+   `Q30` par son filtre et son périmètre (`Q04`) ; `Q30` est mis à part par construction.
+2. Reconstruction des jeux d'entrée par `build_eval_inputs.py` sous
+   `data/p10-compare/eval/inputs-actualise/`. Seuls les quatre fichiers `articles-*.jsonl`
+   changent d'empreinte ; les cinq autres index gardent exactement leurs empreintes d'origine.
+3. Rejeu de `crible eval` sur le seul index touché, `articles`, avec la recette de la passe B :
+   quatre passes (`dense-primaire`, `dense-secondaire`, `hybride`, `fidelite`), `k = 10`,
+   `exact_threshold = 5000` pour la qualité et `0` pour la fidélité, trois répétitions et une
+   passe d'échauffement. Les 20 rapports des cinq autres index sont ceux de la campagne
+   d'origine, inchangés ; les 24 rapports sont réunis sous
+   `data/p10-compare/eval/runs-actualise-complet/`. Ces quatre rapports restent bruts sous
+   `data/` : la fiche ne demande que la section datée ajoutée au rapport de comparaison, et le
+   complément d'ADR-0140 (décision 11) réserve le nom `eval-<index>-<passe>-<date>` aux rapports
+   publiés, qu'ADR-0125 (décision 13) interdit d'écraser. Un second jeu daté du même jour
+   demanderait un nom distinct, qu'aucune règle ne fixe.
+4. Agrégation par `aggregate_eval.py`, avec les mêmes populations et les mêmes règles qu'en passe
+   B, sous `data/p10-compare/eval/aggregates-actualise.json`.
+5. **pgvector n'a pas été rejoué.** Le top-10 enregistré contient déjà la version en vigueur de
+   `Q04` au rang 3 (`data/p10-compare/replay.json`) ; le recalcul applique le nouvel `expected`
+   au même top-10. Aucun accès à la production n'a été nécessaire.
+
+### Rappel à `k = 10`
+
+Les populations sont inchangées : 56 questions satisfaisables (`Q30` à part), 31 questions
+`juri_texte_integral` et 12 questions `textes_vigueur`. Les valeurs sont données sans arrondi
+au-delà de la sixième décimale.
+
+| Population | n | Dense primaire | Dense secondaire | Hybride | pgvector | Cible |
+|---|---:|---:|---:|---:|---:|---:|
+| Global satisfaisable | 56 | **0,500000** | 0,500000 | 0,535714 | 0,464286 | **0,482** |
+| `juri_texte_integral` | 31 | **0,322581** | 0,322581 | 0,419355 | 0,258065 | **0,290** |
+| `textes_vigueur` | 12 | **0,750000** | 0,750000 | 0,666667 | 0,750000 | **0,750** |
+| Toutes les 97 lignes | 97 | 0,556701 | 0,556701 | 0,628866 | 0,525773 | — |
+| `Q30`, non satisfaisable | 1 | 0 | 0 | 0 | 0 | — |
+
+MRR à 10, pour lecture : dense primaire 0,291291 (global), 0,155236
+(`juri_texte_integral`), 0,381944 (`textes_vigueur`) ; hybride 0,321967, 0,226152, 0,394676 ;
+pgvector 0,271648, 0,119752, 0,381944.
+
+**Face aux cibles.** Le dense primaire, qui porte J10, atteint les trois : 0,500000 contre 0,482
+(+0,018), 0,322581 contre 0,290 (+0,032581) et 0,750000 contre 0,750, soit exactement la cible
+de `textes_vigueur`, sans marge. pgvector atteint lui aussi 0,750000 sur `textes_vigueur`. Le
+rejeu pgvector reste sous la cible globale (0,464286). L'hybride reste à 0,666667 sur
+`textes_vigueur` ; il ne porte pas J10 (ADR-0140, décision 5).
+
+### Les 12 questions de `textes_vigueur`
+
+`Q30` est comptée à part. Le rang Crible est celui du dense avec le filtre de la ligne ; le rang
+pgvector vient du rejeu enregistré (`replay.json`) et de son diagnostic exact. Sur ces 12
+questions, les questions trouvées et manquées coïncident avec le rejeu pgvector ; les deux
+classements ne sont pas identiques en général (voir `Q52` et `Q58` plus haut).
+
+| `id` | `expected` | État | Version (début → fin) | Rang Crible | Rang pgvector | Lecture |
+|---|---|---|---|---|---|---|
+| `Q01` | `LEGIARTI000045391841` | `VIGUEUR` | 2022-09-01 → 2999-01-01 | absent du top 1 000 (971 documents après regroupement), rang exact non observable | absent du top 10 | manquée, classement |
+| `Q02` | `LEGIARTI000032041571` | `VIGUEUR` | 2016-10-01 → 2999-01-01 | 14 | 14 (exact) | manquée, classement |
+| `Q03` | `LEGIARTI000006743112` | `VIGUEUR` | 1985-12-21 → 2999-01-01 | 2 | 2 | trouvée |
+| `Q04` | `LEGIARTI000054716237` | `VIGUEUR` | 2026-08-20 → 2999-01-01 | 3 | 3 | trouvée ; l'ancien `expected` `MODIFIE` était exclu par le filtre |
+| `Q05` | `LEGIARTI000044142579` | `VIGUEUR` | 2021-10-01 → 2999-01-01 | 2 | 2 | trouvée |
+| `Q06` | `LEGIARTI000043978078` | `VIGUEUR` | 2021-08-25 → 2999-01-01 | 171 | absent du top 10 | manquée, classement |
+| `Q07` | `LEGIARTI000006815663` | `VIGUEUR` | 2007-10-01 → 2999-01-01 | 4 | 4 | trouvée |
+| `Q08` | `LEGIARTI000006418127` | `VIGUEUR` | 1994-03-01 → 2999-01-01 | 1 | 1 | trouvée |
+| `Q09` | `LEGIARTI000053542636` | `VIGUEUR` | 2026-02-21 → 2999-01-01 | 6 | 6 | trouvée |
+| `Q10` | `LEGIARTI000054137430` | `VIGUEUR` | 2026-05-28 → 2999-01-01 | 2 | 2 | trouvée |
+| `Q11` | `LEGIARTI000038901859` | `VIGUEUR` | 2019-09-02 → 2999-01-01 | 1 | 1 | trouvée |
+| `Q12` | `LEGIARTI000036749888` | `VIGUEUR` | 2018-03-30 → 2999-01-01 | 3 | 3 | trouvée |
+
+**Pourquoi 971 documents pour `k = 1 000`.** Sous le plan `BINARY`, le scan garde et re-score
+`max(N, k)` passages (`crates/crible-search/src/dense/planner.rs:129-131` et `:194-206`), soit
+5 000 ici, puis n'en rend que `k = 1 000` au regroupement (`:206`). Le regroupement par document
+consomme ces 1 000 passages et rend au plus 1 000 documents
+(`crates/crible-search/src/group.rs:206-235`), le sur-échantillonnage étant fixé par
+`candidates_per_branch` (`:178-184`) : 1 000 passages peuvent se répartir sur 971 documents. Les
+971 documents ne prouvent donc pas que les candidats sont épuisés. Le document attendu peut être
+parmi les 5 000 passages re-scorés mais après le 1 000e passage rendu, et son rang exact n'est pas
+observable.
+
+### Questions encore manquées
+
+- **`textes_vigueur`, dense primaire : `Q01`, `Q02` et `Q06`** (9 questions trouvées sur 12). Leur
+  `expected` est en vigueur et admis par son filtre : ce sont de vraies pertes de classement, et
+  aucun `expected` n'est changé.
+  - `Q01` : absent du top 1 000 demandé, qui rend 971 documents après regroupement ; son rang
+    exact n'est pas observable et il est absent du top 10. pgvector ne le place pas non plus dans
+    son top 10.
+  - `Q02` : rang 14 dans Crible et rang 14 exact dans pgvector, à quatre places du top 10.
+  - `Q06` : rang 171 dans Crible ; absent du top 10 pgvector.
+- **`textes_vigueur`, hybride : `Q01`, `Q06`, `Q07` et `Q09`** (8 sur 12). `Q07` et `Q09` sont
+  trouvées par le dense aux rangs 4 et 6 ; la fusion avec la branche lexicale les fait sortir du
+  top 10. Ce sont des effets de fusion sur des `expected` en vigueur, pas des écarts de données.
+- **`Q30`** : toujours 0, non satisfaisable par construction, inchangée.
+
+Les écarts de version de la campagne d'origine sont donc soldés : le seul `expected` qui désignait
+un texte hors vigueur hors `Q30` a été remplacé, et les seuls manques restants de `textes_vigueur`
+sous la règle `doc_id` sont des manques de classement sur des documents en vigueur. `Q30` reste le
+cas non satisfaisable déclaré par le jeu.
+
+### Données brutes de l'actualisation
+
+| Chemin | Contenu | Versionné |
+|---|---|---|
+| `data/p10-compare/audit-before.json`, `audit-after.json` | audit des 97 `expected` avant et après l'actualisation : état, dates, admission par filtre et périmètre, versions en vigueur | non |
+| `data/p10-compare/eval/inputs-actualise/`, `inputs-actualise.sha256` | jeux d'entrée reconstruits et leurs empreintes (seuls `articles-*` changent) | non |
+| `data/p10-compare/eval/runs-actualise/articles/` | quatre rapports bruts du rejeu `articles` | non |
+| `data/p10-compare/eval/runs-actualise-complet/` | les 24 rapports réunis, 20 d'origine et 4 rejoués | non |
+| `data/p10-compare/eval/aggregates-actualise.json` | agrégats du jeu actualisé, mêmes populations | non |
+| `data/p10-compare/ranks/`, `data/p10-compare/ranks10/` | rangs Crible relevés (`id`, `doc_id`, rangs) ; ces dossiers contiennent aussi `queries.tsv` (textes de requête) et le texte des passages rendus, qui restent sous `data/` gitignoré | non |
+
+Le rapport ne porte aucun texte de requête ni valeur de filtre, seulement des `id` et des `doc_id`
+(ADR-0125, décision 16). Aucune valeur de `.env.prod` n'a été lue ni citée.

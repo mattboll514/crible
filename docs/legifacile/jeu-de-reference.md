@@ -264,3 +264,68 @@ ajoutée sans attendu.
 
 Validée par anticipation le 2026-11-03, confirmée par le propriétaire le 2026-11-04. Sa réponse, exacte :
 « ok merci beacou les 3 point sont confirmé ».
+
+## Actualisation du 2026-11-06 (`ACTUALISER-JEU-DE-REFERENCE`)
+
+Le propriétaire a demandé le 2026-11-06 d'investiguer l'écart de `textes_vigueur` et d'actualiser
+les `expected` qui désignent un texte qui n'est plus en vigueur. L'audit porte sur les **97**
+`expected` du jeu, confrontés à l'état et aux dates de version lus dans les `records.sqlite` des
+six index de l'instance importée, ouverts en lecture seule, et au périmètre de leur propre ligne
+dans `mcp.jsonl`. Il ne porte pas sur les textes de requête.
+
+### Ce que l'audit a trouvé
+
+- Les **97** `expected` sont présents dans leur index : aucun document absent.
+- Hors `Q30`, un seul `expected` n'est ni en vigueur ni admis par le filtre et le périmètre de sa
+  ligne : celui de `Q04`. Sous le périmètre `droit_en_vigueur`, son filtre `etat` et son périmètre
+  exigent tous deux un état `VIGUEUR*`, alors que le document attendu est `MODIFIE`.
+- `Q30` reste le cas non satisfaisable **par construction** : son `expected` est `ABROGE_DIFF` et
+  le filtre d'état de sa ligne l'écarte. Il n'est pas modifié, conformément à la fiche.
+- `Q30-APPLICABLE` est admise par son filtre de dates : son `expected` `ABROGE_DIFF` commence le
+  `2014-10-01` et finit le `2029-01-01`, donc il contient le jour figé du `2026-11-03`.
+- `MES00-q0004`, `MES00-q0009` et `MES00-q0019` désignent des documents `ABROGE`, mais leurs
+  lignes relèvent du périmètre `droit_historique` et portent le filtre `etat nin` correspondant :
+  ils sont admis et restent tels quels.
+- `Q13-PARTIE-EXCLUE-DEFAUT` et `Q31-PARTIE-EXCLUE-DEFAUT` portent un filtre de **passage**
+  (`partie`), pas de document : l'audit les signale comme telles et ne les exclut pas.
+- Sur les 25 `expected` d'`articles`, qui seuls portent un état et des dates de version, 19 sont
+  `VIGUEUR` et `Q04` est `MODIFIE` avant actualisation ; **après actualisation, 20 sont
+  `VIGUEUR`** et admis par leur filtre. Les 5 autres sont `Q30` (non satisfaisable par
+  construction), `Q30-APPLICABLE` (admise par ses dates) et `MES00-q0004`, `MES00-q0009`,
+  `MES00-q0019` (`ABROGE`, admis par `droit_historique`). Les **72** autres lignes (`decisions`
+  45, `jorf` 10, `sarde` 8, `dole` 6, `titres` 3) relèvent de périmètres sans état de version ;
+  leur `expected` est admis par le filtre de sa ligne.
+- En particulier, `Q01`, `Q02` et `Q06` sont manquées alors que leur `expected` est **en
+  vigueur** : ce sont de vraies pertes de classement, analysées dans
+  `docs/mesures/comparaison-pgvector-2026-11-06.md`, et leur `expected` ne change pas.
+
+Les preuves brutes sont sous `data/p10-compare/audit-before.json` (avant actualisation : 19
+`VIGUEUR` et `Q04` `MODIFIE`) et `data/p10-compare/audit-after.json` (après actualisation : 20
+`VIGUEUR`), gitignorés, produits par `tools/bench/p10-compare/audit_expected.py`.
+
+**Cohérence avec MES-00 (constat du 2026-11-06).** MES-00 (2026-10-20) trouvait encore
+`LEGIARTI000047381704` au rang 3 de `textes_vigueur`
+(`MES-00-reference-pgvector.2026-10-20.eval-recherche.md:120`), alors que l'index importé donne à
+ce document une `date_fin` au 2026-08-20 et à la version courante une `date_debut` au 2026-08-20,
+toutes deux antérieures à MES-00. Le corpus a donc changé entre les deux campagnes : soit il était
+en retard au 2026-10-20, soit la mise à jour a été intégrée plus tard avec une date d'effet
+rétroactive ; les données ne permettent pas de trancher. MES-00 mesurait déjà 6/130 résultats hors
+vigueur dans `textes_vigueur` (`:34-35`), ce qui montre qu'un décalage de ce type existait. Le
+rejeu du 2026-11-06 ne rend plus l'ancien document (`diag.json`, `presence: []`) : son retrait du
+corpus `textes_vigueur` est donc postérieur à MES-00. La date d'ingestion de la nouvelle version
+n'est pas dans les données ; seule la conséquence est établie.
+
+### Changement appliqué
+
+Un seul `expected` change. Les `id`, les textes de requête, les filtres et `mcp.jsonl` sont
+inchangés, ainsi que la population (56 questions satisfaisables, `Q30` à part, 31 questions
+`juri_texte_integral` et 12 questions `textes_vigueur`) et les cibles.
+
+| `id` | Index | Ancien `doc_id` | État et dates de l'ancien | Nouveau `doc_id` | État et dates du nouveau | Raison |
+|---|---|---|---|---|---|---|
+| `Q04` | `articles` | `LEGIARTI000047381704` | `MODIFIE`, du 2023-04-01 au 2026-08-20 | `LEGIARTI000054716237` | `VIGUEUR`, du 2026-08-20 au 2999-01-01 | Même article (`texte_cid` `LEGITEXT000005634379`, `num` `L442-1`) ; l'ancienne version n'est plus en vigueur depuis le 2026-08-20 et le filtre d'état de la ligne l'exclut. La nouvelle version est l'unique version en vigueur de cet article, au rang 3 dans Crible et dans pgvector. |
+
+Décision du propriétaire : actualiser les `expected` qui attendent un texte qui n'est plus en
+vigueur, sans toucher aux `expected` en vigueur ni à `Q30`. Le recalcul du rappel sur le jeu
+actualisé est publié dans la section datée du rapport de comparaison ; les chiffres d'origine du
+rapport restent inchangés.
