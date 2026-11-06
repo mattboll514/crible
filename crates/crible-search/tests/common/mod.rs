@@ -210,6 +210,32 @@ impl Fixture {
         self.store.snapshot()
     }
 
+    /// The writer, for the operations the fixture does not wrap, such as a
+    /// metadata patch (ADR-0060).
+    pub fn store_mut(&mut self) -> &mut GenerationStore {
+        &mut self.store
+    }
+
+    /// Closes the writer and opens the index again, the way a restart does
+    /// (INV-04). The reference database and the temporary directory stay.
+    pub fn reopen(self) -> Self {
+        let Self {
+            _temp,
+            index,
+            schema,
+            store,
+        } = self;
+        drop(store);
+        let store = GenerationStore::open(&index, &schema)
+            .unwrap_or_else(|error| panic!("{} must reopen: {error}", index.display()));
+        Self {
+            _temp,
+            index,
+            schema,
+            store,
+        }
+    }
+
     /// Opens `records.sqlite` read-only, the way the oracle reads it.
     pub fn records(&self) -> Connection {
         let path = self.records_path();
