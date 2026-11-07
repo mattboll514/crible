@@ -1,6 +1,6 @@
 # ADR-0141 — Protocole de MESURER-SUR-MAC-MINI et installation par les agents
 
-- **Statut** : Proposé
+- **Statut** : Accepté — décidé par le propriétaire le 2026-11-07 (« ADR-0141 accepté »), sans réserve
 - **Date** : 2026-11-07
 - **Décideurs** : propriétaire
 - **Proposé par** : `@greffier`, à la demande de l'orchestrateur, pour la tâche `MESURER-SUR-MAC-MINI` (P10), d'après les verdicts de `@architecte` du 2026-11-07 et les faits relevés les 2026-11-06 et 2026-11-07
