@@ -247,9 +247,13 @@ Trois conséquences pour la v2 :
    propriétaire.
 5. **Décider si la marge de 0,58 GiB impose un plafond de mémoire** sur le Mac mini : ADR-0142
    laisse le point « à surveiller » et ne fixe aucun plafond (ADR-0142:75-76).
-6. **Trancher le sort de l'installation du Mac mini** après la campagne, et celui des volumes
-   `crible-p10-*` (ADR-0141, décision 6 ; suivi, « Idées hors périmètre », 2026-11-08,
-   `MESURER-SUR-MAC-MINI`, ligne 807).
+
+Le sort de l'installation du Mac mini n'est plus ouvert : il a été tranché par le propriétaire le
+2026-11-08. L'image et les volumes `crible-p10-*` sont gardés jusqu'au branchement de Legifacile ;
+les instantanés du dossier d'échange du SSD ont été supprimés par `@mesureur` ce jour-là (23,9 Gio) ;
+`docker-backup` est gardé une semaine, puis retiré par le propriétaire ; le branchement de
+Legifacile suit le tag de la v1 et reste un geste du propriétaire (suivi, « Idées hors périmètre »,
+2026-11-08, `MESURER-SUR-MAC-MINI`, ligne 807).
 
 ## 8. Contrôle des citations
 
