@@ -5,14 +5,14 @@
 | **Date** | 2026-11-08 |
 | **Branche** | `tache/BILAN-V1` |
 | **Commit de départ** | `8aa9097` (`merge: NETTOYER-P10`) |
-| **Statut** | à valider par le propriétaire ; la v1 est taguée par lui (ADR-0129, décision 7 ; `docs/phases/P10-validation-a-l-echelle-reelle.md:205`) |
+| **Statut** | bilan validé par le propriétaire le 2026-11-08 (« je valide le bilan , j10 et tu peux fair ele tag, tu peux utiliser v1.0.0 ») ; J10 validé le même jour ; la v1 est taguée `v1.0.0` sur sa délégation (ADR-0129, décision 7 ; `docs/phases/P10-validation-a-l-echelle-reelle.md:205`) |
 | **Périmètre** | tous les chiffres de mesure viennent de `docs/mesures/`, du suivi et des ADR ; aucun n'est recalculé ici, et les comptages (écarts, ADR, thèmes, écarts de rappel) sont explicités |
 
 ## 1. Résumé
 
 La v1 de Crible est terminée sur le plan technique : les cinq premiers critères de J10 sont tenus,
-et le sixième est ce bilan, soumis au propriétaire. Les deux limites connues sont acceptées par
-ADR-0142. L'import à l'échelle réelle porte
+et le sixième est ce bilan, validé par le propriétaire le 2026-11-08. Les deux limites connues sont
+acceptées par ADR-0142. L'import à l'échelle réelle porte
 **9 600 105 passages** et **6 660 239 documents** dans six index, avec des comptes égaux à pgvector
 (`docs/mesures/import-legifacile-2026-11-06.md:35-36`). Le rappel du dense primaire vaut
 **0,500000** au global, **0,322581** sur `juri_texte_integral` et **0,750000** sur
@@ -53,10 +53,10 @@ de ce qui compte (décision du propriétaire du 2026-11-08, D2 ; section 5).
 | Rappel `textes_vigueur` ≥ 0,750 | 0,750 sur 12 questions | 0,750000 | tenu, sans marge | `docs/mesures/comparaison-pgvector-2026-11-06.md:545`, `:554-555` |
 | Fidélité binaire contre exact ≥ 0,99 | 0,99 au N = 5000 | 0,995876 sur 97 requêtes | tenu | `docs/mesures/comparaison-pgvector-2026-11-06.md:154` |
 | Latence p95 ≤ 698 ms sur le Mac mini en conteneur | 698 ms | 79,355 ms (critère) ; 358,959 ms (prudent) ; 418,425 ms (API) | tenu | `docs/mesures/latence-mac-mini-2026-11-07.md:129`, `:256`, `:258` |
-| Bilan écrit et validé par le propriétaire | écrit et validé | écrit ; validation en attente | en attente | ADR-0129:160 ; `docs/phases/P10-validation-a-l-echelle-reelle.md:205` |
+| Bilan écrit et validé par le propriétaire | écrit et validé | écrit et validé le 2026-11-08 | tenu | ADR-0129:160 ; `docs/phases/P10-validation-a-l-echelle-reelle.md:205` |
 
 Le tableau détaille le critère 4 en rappel et fidélité, et ajoute le critère 6, qui est la
-validation de ce document.
+validation de ce document, tenu le 2026-11-08.
 
 Le critère de latence se lit avec ADR-0141, décision 4 : le `total` chaud de `crible eval` sur les
 97 requêtes en texte, plus grand p95 par index, vaut 79,355 ms
@@ -280,9 +280,9 @@ décision porte sur `legifacile-sandbox`.
 
 ### 7.2 Décisions qui restent au propriétaire
 
-1. **Valider ce bilan et taguer la v1** : c'est le critère d'acceptation de `BILAN-V1`, et le tag
-   est posé par le propriétaire seul (`docs/phases/P10-validation-a-l-echelle-reelle.md:205` ;
-   ADR-0129, décision 7).
+1. **Valider ce bilan et taguer la v1** : tranché le 2026-11-08. C'est le critère d'acceptation de
+   `BILAN-V1` : le propriétaire a validé le bilan, et le tag `v1.0.0` est posé sur sa délégation
+   (`docs/phases/P10-validation-a-l-echelle-reelle.md:205` ; ADR-0129, décision 7).
 2. **Ouvrir les tâches de la v2 au vu de la tâche quotidienne** : la liste de D2 n'est pas un plan.
    Les durées et la mémoire réelles de la tâche quotidienne de Legifacile diront quels points
    ouvrir, et cette ouverture reste une décision du propriétaire.
