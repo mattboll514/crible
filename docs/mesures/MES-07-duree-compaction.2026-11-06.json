@@ -1,0 +1,241 @@
+{
+  "kind": "MES-07 campaign, real scale, container",
+  "measure": "MES-07",
+  "task": "IMPORTER-BASE-COMPLETE",
+  "date": "2026-11-06",
+  "protocol": [
+    "ADR-0139 decision 2",
+    "ADR-0129 decision 4"
+  ],
+  "environment": {
+    "commit": "e059fdf9758092f47a19e858593c316770a3958a",
+    "branch": "tache/IMPORTER-BASE-COMPLETE",
+    "date": "2026-11-06",
+    "host": "MacBook Air M3, 8 cores, 24 GB, macOS 15.7.7",
+    "vm": "Docker Desktop 28.5.1, 8 vCPU, 12529836032 bytes of RAM",
+    "container_image": "sha256:ff08d62b74d285acfccdc8f7b452ea77030786a65a831024698158b53b5f50b6",
+    "container_memory_limit": "max (no --memory); the binding limit is the VM",
+    "writer": "crible compact, CLI, server stopped, one index open (ADR-0116)",
+    "provenance": "the index was imported with image sha256:1b0c66abc0af690b72c9c1e9fa1dafbdadb64b44912c66dd0c452c4be4460208"
+  },
+  "indexes": [
+    {
+      "index": "decisions",
+      "case": "first compaction, single source segment",
+      "passages": 3589776,
+      "dead_ratio": 0.0,
+      "duration_s": 371.0,
+      "exit_code": 0,
+      "oom_killed": false,
+      "command": [
+        "compact",
+        "--data",
+        "/data",
+        "--index",
+        "decisions"
+      ],
+      "container": "p10-mes07-decisions",
+      "image": "sha256:ff08d62b74d285acfccdc8f7b452ea77030786a65a831024698158b53b5f50b6",
+      "before": {
+        "epoch": 1,
+        "generation": 1,
+        "segments": 1,
+        "segment_names": [
+          "seg-decisions-full-v1"
+        ],
+        "bytes": 10293631290
+      },
+      "after": {
+        "epoch": 2,
+        "generation": 2,
+        "segments": 4,
+        "segment_names": [
+          "c2-0000000000",
+          "c2-0001000000",
+          "c2-0002000000",
+          "c2-0003000000"
+        ]
+      },
+      "bytes_written": 10252383506,
+      "bytes_written_detail": {
+        "epoch_out": 10252383506,
+        "segments_out": 5858535761,
+        "records_out": 3939201024,
+        "lexical_out": 454637502
+      },
+      "microseconds_per_passage": 103.3,
+      "temporary_space": {
+        "vm_data_used_peak_gib": 63.2,
+        "vm_data_used_before_gib": 51.0,
+        "host_free_go_series": [
+          "170G",
+          "169G",
+          "165G",
+          "156G",
+          "156G",
+          "156G",
+          "160G",
+          "170G"
+        ]
+      },
+      "memory": {
+        "samples": 72,
+        "sample_errors": 1,
+        "anon_gib": 2.64,
+        "memory_current_gib": 10.99,
+        "hwm_gib": 7.48
+      },
+      "host_before": {
+        "at": "2026-11-06T13:50:30.019706+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   159Gi     7%    427k  1.7G    0%   /"
+      },
+      "host_after": {
+        "at": "2026-11-06T13:56:41.055514+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   158Gi     7%    427k  1.7G    0%   /"
+      }
+    },
+    {
+      "index": "jorf",
+      "case": "first compaction, single source segment",
+      "passages": 1833500,
+      "dead_ratio": 0.0,
+      "duration_s": 150.5,
+      "exit_code": 0,
+      "oom_killed": false,
+      "command": [
+        "compact",
+        "--data",
+        "/data",
+        "--index",
+        "jorf"
+      ],
+      "container": "p10-mes07-jorf",
+      "image": "sha256:ff08d62b74d285acfccdc8f7b452ea77030786a65a831024698158b53b5f50b6",
+      "before": {
+        "epoch": 1,
+        "generation": 1,
+        "segments": 1,
+        "segment_names": [
+          "seg-jorf-full-v1"
+        ],
+        "bytes": 4859655373
+      },
+      "after": {
+        "epoch": 2,
+        "generation": 2,
+        "segments": 2,
+        "segment_names": [
+          "c2-0000000000",
+          "c2-0001000000"
+        ]
+      },
+      "bytes_written": 4964150023,
+      "bytes_written_detail": {
+        "epoch_out": 4964150023
+      },
+      "microseconds_per_passage": 82.1,
+      "temporary_space": {
+        "vm_data_used_peak_gib": 56.1,
+        "vm_data_used_before_gib": 51.0,
+        "host_free_go_series": [
+          "170G",
+          "167G",
+          "164G",
+          "170G"
+        ]
+      },
+      "memory": {
+        "samples": 29,
+        "sample_errors": 1,
+        "anon_gib": 2.52,
+        "memory_current_gib": 10.9,
+        "hwm_gib": 5.23
+      },
+      "host_before": {
+        "at": "2026-11-06T13:56:59.963508+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   158Gi     7%    427k  1.7G    0%   /"
+      },
+      "host_after": {
+        "at": "2026-11-06T13:59:30.529218+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   158Gi     7%    427k  1.7G    0%   /"
+      }
+    },
+    {
+      "index": "jorf",
+      "case": "second in-place compaction, multi-segment input (distinct case, not a repeat)",
+      "passages": 1833500,
+      "dead_ratio": 0.0,
+      "duration_s": 142.1,
+      "exit_code": 0,
+      "oom_killed": false,
+      "command": [
+        "compact",
+        "--data",
+        "/data",
+        "--index",
+        "jorf"
+      ],
+      "container": "p10-mes07-jorf-second",
+      "image": "sha256:ff08d62b74d285acfccdc8f7b452ea77030786a65a831024698158b53b5f50b6",
+      "before": {
+        "epoch": 2,
+        "generation": 2,
+        "segments": 2,
+        "segment_names": [
+          "c2-0000000000",
+          "c2-0001000000"
+        ]
+      },
+      "after": {
+        "epoch": 3,
+        "generation": 3,
+        "segments": 2,
+        "segment_names": [
+          "c3-0000000000",
+          "c3-0001000000"
+        ]
+      },
+      "bytes_written": 4964150023,
+      "bytes_written_detail": {
+        "epoch_out": 4964150023
+      },
+      "microseconds_per_passage": 77.5,
+      "temporary_space": {
+        "vm_data_used_peak_gib": 56.2,
+        "vm_data_used_before_gib": 51.0,
+        "host_free_go_series": [
+          "170G",
+          "167G",
+          "163G",
+          "170G"
+        ]
+      },
+      "memory": {
+        "samples": 27,
+        "sample_errors": 2,
+        "anon_gib": 2.47,
+        "memory_current_gib": 7.99,
+        "hwm_gib": 5.2
+      },
+      "host_before": {
+        "at": "2026-11-06T13:59:40.883232+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   158Gi     7%    427k  1.7G    0%   /"
+      },
+      "host_after": {
+        "at": "2026-11-06T14:02:03.002453+00:00",
+        "H": "/dev/disk3s1s1    494G     11G    170G     7%    427k  1.7G    0%   /",
+        "h": "/dev/disk3s1s1   460Gi    10Gi   158Gi     7%    427k  1.7G    0%   /"
+      }
+    }
+  ],
+  "notes": [
+    "The dead ratio is 0 for every index: the batches were attached with replace_all and nothing was deleted before the compaction.",
+    "The compaction writes the next epoch, including a rebuilt lexical index; the previous epoch is removed by the protocol, not by the operator.",
+    "A tantivy merge warning was logged during both jorf compactions (merge cancelled on the temporary epoch directory); the lexical index still holds every passage (1833500 live documents)."
+  ]
+}

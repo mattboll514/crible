@@ -1,5 +1,7 @@
 # P9 — Tableau de bord
 
+**Reportée après J10 (ADR-0136) ; fiches à réécrire à la reprise.** Le corps ci-dessous vient d'ADR-0130, dont l'application est suspendue. Un nouvel ADR, écrit à la reprise et avant toute tâche de P9, tranchera le contenu du futur tableau de bord, son framework, son mode de service et ses tests ; tant qu'il n'est pas accepté, aucune tâche de P9 ne démarre. P9 et J9 restent dans le plan, hors de la v1, dont le jalon est J10.
+
 **But** : un tableau de bord **visuel en lecture seule**, intégré à `crible serve` et servi sous `/ui` dans la même image, qui montre les données et les analytics de Crible. Trois fonctions : **parcourir les données** (index, configuration, comptes, documents et passages, génération courante, nombre de segments), **tester une recherche** (bac à sable dense, lexical et hybride, mono et multi-index, panneaux `debug` et `explain`) et **voir les analytics** de `GET /v1/stats`. Écrit en HTML, CSS et JavaScript simples, sans framework, sans étape de build et sans dépendance nouvelle ; `cargo build` suffit. Le style est **très épuré** (référence [anara.com](https://anara.com/) : beaucoup de blanc, typographie soignée, peu de couleurs) et l'interface est en **anglais**. Le détail visuel est figé par la maquette validée par le propriétaire, première tâche de la phase (ADR-0130, décisions 1, 2, 3, 10 et 14).
 
 **Jalon J9** (ADR-0130, décision 13) :

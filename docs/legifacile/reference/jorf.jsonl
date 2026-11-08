@@ -1,0 +1,10 @@
+{"id": "Q21", "query": "Quelles sont les modalités de mise en œuvre du télétravail pour les agents de l'Agence de l'outre-mer pour la mobilité ?", "expected": ["JORFARTI000042845467"]}
+{"id": "Q22", "query": "Un accord de branche relatif aux salaires minima peut-il être rendu obligatoire pour tous les employeurs et salariés d'un secteur par arrêté d'extension ?", "expected": ["JORFARTI000054408921"]}
+{"id": "Q23", "query": "Quel plan comptable les organismes de sécurité sociale doivent-ils appliquer ?", "expected": ["JORFARTI000046221547"]}
+{"id": "Q24", "query": "Quelles règles d'étiquetage s'appliquent aux animaux d'élevage et à leurs produits issus du mode de production biologique ?", "expected": ["JORFARTI000044793391"]}
+{"id": "Q21-NATURE", "query": "Quelles sont les modalités de mise en œuvre du télétravail pour les agents de l'Agence de l'outre-mer pour la mobilité ?", "filter": {"nature": "ARRETE"}, "expected": ["JORFARTI000042845467"]}
+{"id": "Q21-ANNEE", "query": "Quelles sont les modalités de mise en œuvre du télétravail pour les agents de l'Agence de l'outre-mer pour la mobilité ?", "filter": {"annee": {"gte": 2021, "lte": 2021}}, "expected": ["JORFARTI000042845467"]}
+{"id": "Q21-FONDS", "query": "Quelles sont les modalités de mise en œuvre du télétravail pour les agents de l'Agence de l'outre-mer pour la mobilité ?", "filter": {"fonds": {"in": ["JORF"]}}, "expected": ["JORFARTI000042845467"]}
+{"id": "MES00-q0005", "query": "1 — Décision n° 2020-810 DC du 21 décembre 2020", "expected": ["JORFARTI000042738116"]}
+{"id": "MES00-q0028", "query": "— Arrêté du 3 août 2004 portant nomination d'un notaire salarié (officiers publics ou ministériels)", "expected": ["JORFARTI000001652049"]}
+{"id": "MES00-q0033", "query": "— Arrêté du 21 septembre 1990 modifiant l'arrêté du 25 juillet 1989 fixant les modalités du concours pour le recrutement dans le corps des agents techniques des parcs nationaux", "expected": ["JORFARTI000002124038"]}

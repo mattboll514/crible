@@ -1,0 +1,28 @@
+{
+  "name": "titres",
+  "model": "mdenseon",
+  "reference_precision": "fp16",
+  "schema": {
+    "document_fields": {
+      "fonds":      { "type": "keyword" },
+      "nature":     { "type": "keyword" },
+      "etat":       { "type": "keyword" },
+      "annee":      { "type": "integer" },
+      "num":        { "type": "keyword" },
+      "texte_cid":  { "type": "keyword" },
+      "date_publi": { "type": "date" }
+    },
+    "passage_fields": {}
+  },
+  "cluster_by": ["nature"],
+  "lexical": { "enabled": true, "language": "fr", "positions": false },
+  "search": {
+    "scan": "binary",
+    "rescore_candidates": 5000,
+    "exact_threshold": 5000,
+    "candidates_per_branch": 100,
+    "fusion": { "method": "rrf" }
+  },
+  "ingest": { "acceptance_sample": 200, "acceptance_min_cosine": 0.999 },
+  "compaction": { "dead_ratio": 0.10 }
+}

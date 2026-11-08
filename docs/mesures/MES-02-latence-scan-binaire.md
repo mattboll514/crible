@@ -392,3 +392,125 @@ Ce que la mesure **ne** permet pas d'affirmer :
 - l'effet du nombre de segments sur le curseur `segment_of` ;
 - la cause des écarts de +179 à +227 % sur les petits pools et de −30,5 % sur le pool complet ;
 - la reproductibilité sur une machine au repos : la charge de l'hôte n'a pas été relevée.
+
+## Campagne en conteneur sur le Mac mini (P10, ADR-0141) — 2026-11-07
+
+- **Tâche** : `MESURER-SUR-MAC-MINI`, passe C. Commit
+  `439d946bf28d63214e64aa7cb2e09e458f81a45d` plus le harnais `tools/bench/p10-macmini/`, aucun code
+  de production modifié.
+- **Machine** : Mac mini M1 (`Macmini9,1`), 8 cœurs, 16 Gio, macOS 26.5.2 ; **VM Docker mesurée
+  8 vCPU, 10 418 937 856 o (9,703 GiB)**, page de l'hôte 16 384 o, page du conteneur 4 096 o.
+- **Jeu de données** : volume `crible-p10-data` restauré. `decisions` : **3 589 776 vivants sur
+  4 segments** ; `articles` : **2 476 715 vivants sur 1 segment**. Zéro passage mort.
+- **Requêtes** : les 300 vecteurs `f32` de 768 composantes d'ADR-0077 (SHA-256
+  `03cb2a2b3bb7951892179ee8d612b0970626f0f041fe6b3e18c2f0393452948b`), 8 fils de scan.
+- **Configuration** : celle de l'index (`exact_threshold` 5000, N = 5000, k = 10). Aucun réglage
+  n'est surchargé.
+
+### Protocole
+
+Le harnais est l'exemple `dense_latency` de l'image `crible-p10-harness:dev`, exécuté dans un
+conteneur `--rm` au premier plan sur le volume restauré, index par index. `dense_latency` ouvre
+l'index par `GenerationStore::open` (`crates/crible/examples/dense_latency.rs:140` ;
+`crates/crible-store/src/generation.rs:840`), donc en **écriture** avec la reprise ; le complément
+d'ADR-0141 l'autorise.
+
+```sh
+sh tools/bench/p10-macmini/run_pass_c.sh scan decisions <n>   # n = 1000, 2000, 5000
+sh tools/bench/p10-macmini/run_pass_c.sh scan articles <n>
+```
+
+Chaque exécution vaut 300 requêtes × 3 passages = **900 échantillons par point**, sur les pools de
+1 k, 10 k, 100 k et 1 M vivants, contigus et dispersés, puis sur le pool complet. Chaque point est
+mesuré **deux fois** (fichiers `-main` et `-all`), soit 6 passages au total. Les percentiles sont au
+rang le plus proche sur les durées brutes (ADR-0077, décision 4) ; `aggregate_pass_c.py` les
+recalcule depuis les durées brutes et refuse un
+désaccord avec le résumé du harnais.
+
+Deux écarts sont déclarés :
+
+- **Pas d'échauffement séparé** : le premier des trois passages est compté. L'écart entre les p50 des
+  passages a une médiane de **3,8 %** et un maximum de **48,3 %** (1 k contigu d'`articles`, 0,129 à
+  0,191 ms, soit 62 µs).
+- **`--sizes all` n'a pas restreint la campagne** : les fichiers `-all` portent la même liste de
+  tailles que les fichiers `-main`. Ils sont une seconde exécution du même protocole, pas une série
+  « pool complet seul ». L'écart entre les deux exécutions est publié dans le tableau suivant.
+
+### Résultats
+
+Pool complet, 900 échantillons par point, en millisecondes :
+
+| Index | Vivants | N | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| `decisions` | 3 589 776 | 1000 | 33,900 | 41,971 | 44,458 |
+| `decisions` | 3 589 776 | 2000 | 34,832 | 44,219 | 46,897 |
+| `decisions` | 3 589 776 | 5000 | 39,750 | 47,535 | 49,530 |
+| `articles` | 2 476 715 | 1000 | 22,293 | 31,620 | 32,415 |
+| `articles` | 2 476 715 | 2000 | 25,553 | 32,756 | 33,632 |
+| `articles` | 2 476 715 | 5000 | 27,536 | 35,896 | 36,511 |
+
+**Écart entre `-main` et `-all`.** Ce sont deux exécutions du même protocole, pas deux passages
+d'une même exécution. Sur le pool complet, en millisecondes :
+
+| Index | N | `-main` p50 / p95 | `-all` p50 / p95 | Écart p50 | Écart p95 |
+|---|---:|---:|---:|---:|---:|
+| `decisions` | 1000 | 33,900 / 41,971 | 34,284 / 42,751 | +1,1 % | +1,9 % |
+| `decisions` | 2000 | 34,832 / 44,219 | 35,228 / 43,341 | +1,1 % | −2,0 % |
+| `decisions` | 5000 | 39,750 / 47,535 | 48,112 / 51,620 | **+21,0 %** | **+8,6 %** |
+| `articles` | 1000 | 22,293 / 31,620 | 21,254 / 31,431 | −4,7 % | −0,6 % |
+| `articles` | 2000 | 25,553 / 32,756 | 24,235 / 32,712 | −5,2 % | −0,1 % |
+| `articles` | 5000 | 27,536 / 35,896 | 28,397 / 35,832 | +3,1 % | −0,2 % |
+
+Le tableau des résultats retient **`-main`** comme série principale, parce que c'est l'invocation du
+protocole principal. `-all` est la seconde exécution de contrôle ; elle est publiée sans servir à
+choisir la valeur la plus basse. L'écart atteint **+21,0 % p50 et +8,6 % p95** sur `decisions` à N = 5000. La dispersion
+de **3,8 %** ne porte que sur les passages d'une même exécution : elle ne couvre donc pas cet écart
+entre exécutions. La mesure ne sépare pas la cause de l'écart.
+
+Pools construits à N = 1000, en millisecondes :
+
+| Index | Pool | Forme | Plan | p50 | p95 | p99 |
+|---|---:|---|---|---:|---:|---:|
+| `decisions` | 1 000 | contigu | exact | 0,130 | 0,276 | 0,321 |
+| `decisions` | 1 000 | dispersé | exact | 0,137 | 0,279 | 0,357 |
+| `decisions` | 10 000 | contigu | binaire | 0,625 | 0,704 | 0,753 |
+| `decisions` | 10 000 | dispersé | binaire | 0,638 | 0,949 | 1,775 |
+| `decisions` | 100 000 | contigu | binaire | 2,027 | 2,216 | 2,388 |
+| `decisions` | 100 000 | dispersé | binaire | 2,624 | 2,854 | 3,050 |
+| `decisions` | 1 000 000 | contigu | binaire | 11,175 | 13,524 | 13,831 |
+| `decisions` | 1 000 000 | dispersé | binaire | 13,535 | 14,266 | 14,952 |
+| `articles` | 1 000 | contigu | exact | 0,139 | 0,379 | 0,643 |
+| `articles` | 1 000 | dispersé | exact | 0,159 | 0,308 | 0,360 |
+| `articles` | 10 000 | contigu | binaire | 0,629 | 0,722 | 0,787 |
+| `articles` | 10 000 | dispersé | binaire | 0,646 | 0,728 | 0,787 |
+| `articles` | 100 000 | contigu | binaire | 1,966 | 2,176 | 2,328 |
+| `articles` | 100 000 | dispersé | binaire | 2,592 | 2,833 | 3,036 |
+| `articles` | 1 000 000 | contigu | binaire | 10,870 | 13,517 | 13,629 |
+| `articles` | 1 000 000 | dispersé | binaire | 11,975 | 13,982 | 14,284 |
+
+Les pools de 1 000 passages passent par le plan **exact**, à cause de `exact_threshold = 5000` : ils
+ne mesurent pas le scan binaire. Les quatre segments de `decisions` sont parcourus par le même scan ;
+la campagne exerce donc enfin un index multi-segments en conteneur, mais ne décompose pas le coût du
+curseur `segment_of` par segment.
+
+**Le point à 7,74 M vivants est absent.** Aucun index restauré ne l'atteint : le plus grand,
+`decisions`, a 3 589 776 vivants. Le point n'est pas remplacé par une population voisine et aucune
+extrapolation n'est faite.
+
+### Conclusion
+
+- **Les grands pools restent dans l'ordre de grandeur attendu.** À N = 5000, le pool complet de
+  3,59 M vaut **39,750 ms p50 et 47,535 ms p95** ; `articles` (2,48 M) vaut 27,536 et 35,896 ms.
+  Le budget de `docs/03-recherche.md` (20 à 80 ms pour 7,74 M) n'est pas dépassé, mais il porte sur
+  une population plus grande : ces chiffres ne prouvent pas le point à 8,58 M.
+- **Le coût de N est visible sur le pool complet** : de N = 1000 à N = 5000, le p50 passe de 33,9 à
+  39,8 ms sur `decisions` (+17,3 %) et de 22,3 à 27,5 ms sur `articles` (+23,5 %).
+- **La dispersion entre passages est concentrée sur les petits pools.** La médiane de 3,8 % couvre
+  les grands pools ; le maximum de 48,3 % vaut 62 µs sur un scan de 0,13 ms.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la latence du scan à 8,58 M passages ;
+- le coût propre du curseur multi-segments : `decisions` mêle quatre segments et un pool plus grand ;
+- la reproductibilité sur une machine au repos : aucun relevé de charge CPU concurrente n'a été pris
+  pendant les séries.

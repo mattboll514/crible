@@ -1,0 +1,97 @@
+{"id": "Q01", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q02", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q03", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q04", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q05", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q06", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q07", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q08", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q09", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q10", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q11", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q12", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q13", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q14", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q15", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q16", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q17", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q18", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q19", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q20", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q21", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q22", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q23", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q24", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q25", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q26", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q27", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q28", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q29", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q30", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q31", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q32", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q33", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q34", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q35", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q36", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q37", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q38", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q39", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q41", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q42", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q43", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q44", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q45", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q46", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q47", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q48", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q49", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q50", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q51", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q52", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q53", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q54", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q55", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q56", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q57", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q58", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q02-VARIANTE-COURTE", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q02-APPLICABLE", "tool": "recherche_semantique", "perimetre": "droit_applicable", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q30-APPLICABLE", "tool": "recherche_semantique", "perimetre": "droit_applicable", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "Q01-CODE", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["Code du travail"]}}
+{"id": "Q06-FONDS", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "fonds": ["LEGI"]}}
+{"id": "Q01-ANNEE", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "annee_min": 2020}}
+{"id": "Q21-NATURE", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["ARRETE"]}}
+{"id": "Q21-ANNEE", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "annee_min": 2021, "annee_max": 2021}}
+{"id": "Q21-FONDS", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "fonds": ["JORF"]}}
+{"id": "Q13-SECTION", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "fonds": ["CASS"]}}
+{"id": "Q13-JURIDICTION", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["Cour de cassation"]}}
+{"id": "Q13-PARTIE-EXCLUE-DEFAUT", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": ["moyens", "faits"]}}
+{"id": "Q31-PARTIE-EXCLUE-DEFAUT", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": ["moyens", "faits"]}}
+{"id": "Q25-THEME", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["RECENSEMENT DES ARRETES PORTANT AUTORISATION D'EXPLOITER DES INSTALLATIONS DE PRODUCTION D'ELECTRICITE (IPE)"]}}
+{"id": "Q26-THEME", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["SITES NATURA 2000 - SITES D'IMPORTANCE COMMUNAUTAIRE"]}}
+{"id": "Q28-TYPE", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": [], "cle_domaine": ["LOI_PUBLIEE"]}}
+{"id": "MES00-q0001", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0002", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0003", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0004", "tool": "recherche_semantique", "perimetre": "droit_historique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0005", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0006", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0007", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0008", "tool": "recherche_semantique", "perimetre": "index_thematique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0009", "tool": "recherche_semantique", "perimetre": "droit_historique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0010", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0011", "tool": "recherche_semantique", "perimetre": "titres", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0012", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0013", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0014", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0015", "tool": "recherche_semantique", "perimetre": "titres", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0016", "tool": "recherche_semantique", "perimetre": "titres", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0018", "tool": "recherche_semantique", "perimetre": "jurisprudence", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0019", "tool": "recherche_semantique", "perimetre": "droit_historique", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0021", "tool": "recherche_semantique", "perimetre": "droit_en_vigueur", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0028", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0030", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0033", "tool": "recherche_semantique", "perimetre": "journal_officiel", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0034", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}
+{"id": "MES00-q0042", "tool": "recherche_semantique", "perimetre": "dossiers_legislatifs", "params": {"k": 10, "dedupliquer": "document", "partie_exclue": []}}

@@ -2066,3 +2066,86 @@ et `:206`, rappelé par ADR-0078). N = 5000 est la seule valeur qui atteint la c
 campagnes. Retenir N = 2000 revient donc à **accepter 0,9887 au lieu de 0,99**, et changer le défaut
 `rescore_candidates` de 5000 à 2000 demande un **nouvel ADR** qui porte ce coût ; ce rapport ne
 tranche ni l'un ni l'autre.
+
+## Campagne en conteneur sur le Mac mini (P10, ADR-0141) — 2026-11-07
+
+- **Tâche** : `MESURER-SUR-MAC-MINI`, passe C. Commit
+  `439d946bf28d63214e64aa7cb2e09e458f81a45d` plus le harnais `tools/bench/p10-macmini/`, aucun code
+  de production modifié.
+- **Machine** : Mac mini M1, 8 cœurs, 16 Gio, macOS 26.5.2 ; **VM Docker mesurée 9,703 GiB**, 8 vCPU,
+  page du conteneur 4 096 o, page de l'hôte 16 384 o.
+- **Jeu de données** : index `articles`, **2 476 715 vivants sur un seul segment**, vecteurs de
+  référence fp16, volume `crible-p10-data` restauré.
+- **Requêtes** : les 300 vecteurs d'ADR-0077 (même matrice que MES-02), 8 fils de scan.
+- **Configuration** : `exact_threshold` 5000, N ∈ {1000, 2000, 5000}, k = 10. Le plan reste
+  `binary` sur le pool complet, avec 5 000 candidats planifiés.
+
+### Protocole
+
+```sh
+sh tools/bench/p10-macmini/run_pass_c.sh rescore-warm <n>   # 4 passes, la première est jetée
+sh tools/bench/p10-macmini/run_pass_c.sh rescore-cold <n>   # --cold --evict, 1 passe
+sh tools/bench/p10-macmini/run_pass_c.sh rescore-split      # produit scalaire seul, clés seules
+```
+
+`dense_latency rescore` ouvre l'index par `GenerationStore::open`
+(`crates/crible/examples/dense_latency.rs:140` ; `crates/crible-store/src/generation.rs:840`), donc
+en **écriture** avec la reprise ; le complément d'ADR-0141 l'autorise. La série chaude vaut
+**900 échantillons** par N (300 requêtes × 3 passages utiles). La série froide
+vaut **300 échantillons** par N : elle applique `--cold --evict`, déplace les pages après l'ouverture
+et mesure la résidence par `mincore`. La décomposition à chaud oppose le produit scalaire seul
+(`--dot-only`) à la lecture des clés seule (`--key-only`) sur 3 passages. Percentiles au rang le plus
+proche ; l'agrégateur recalcule et refuse tout désaccord.
+
+**Écart déclaré** : le rescoring de `decisions` n'est **pas** mesuré. L'index a quatre segments et le
+harnais rescorerait contre les vecteurs du premier seulement. Les fichiers `rescore-warm-n*.json` de
+cet index existent comme **tentative invalide** et ne sont pas publiés.
+
+### Résultats
+
+Index `articles`, en millisecondes :
+
+| État | N | n | p50 | p95 | p99 | Résidence moyenne |
+|---|---:|---:|---:|---:|---:|---:|
+| chaud | 1000 | 900 | 1,334 | 1,526 | 1,773 | — |
+| chaud | 2000 | 900 | 1,962 | 2,257 | 2,486 | — |
+| chaud | 5000 | 900 | 3,858 | 4,274 | 4,622 | — |
+| froid partiel | 1000 | 300 | 5,644 | 24,826 | 33,762 | 0,779 |
+| froid partiel | 2000 | 300 | 4,770 | 38,174 | 57,315 | 0,876 |
+| froid partiel | 5000 | 300 | 6,415 | 40,719 | 100,631 | 0,942 |
+
+Le premier passage chaud est le plus lent : les quatre p50 par passage valent 1,590 / 1,338 / 1,332 /
+1,331 ms à N = 1000, 2,033 / 1,963 / 1,968 / 1,952 à N = 2000 et 4,653 / 3,860 / 3,865 / 3,850 à
+N = 5000. Le jeter est donc justifié et déclaré.
+
+Décomposition à chaud, en p50 et p95 :
+
+| N | Produit scalaire seul p50 | Clés seules p50 | Clés seules p95 |
+|---:|---:|---:|---:|
+| 1000 | 1,037 | 4,850 | 5,216 |
+| 2000 | 2,035 | 9,645 | 10,287 |
+| 5000 | 5,085 | 24,326 | 27,457 |
+
+La lecture des clés domine le rescoring, comme dans la campagne en conteneur du 2026-11-03. Le nombre
+de scores à égalité vaut 7 252 / 7 264 / 6 924 à chaud et 1 813 / 1 816 / 1 731 à froid partiel.
+
+### Conclusion
+
+- **Le chemin livré tient à chaud sur cette VM** : 1,334 ms p50 à N = 1000, 3,858 ms à N = 5000.
+  La valeur de `docs/03-recherche.md` pour N = 5000 sur la machine native de 2026-10-27 (2,07 à
+  2,17 ms p50) est dépassée d'environ 1,8 fois, mais elle ne porte pas sur cette machine.
+- **Le froid est partiel et nommé** : la résidence moyenne va de 0,779 à 0,942, donc une partie des
+  pages est encore résidente. Les chiffres froids sont une borne haute, jamais un froid complet.
+- **Le froid n'est pas monotone en N** : 5,644 ms p50 à N = 1000, 4,770 à N = 2000, 6,415 à N = 5000 ;
+  les p95 montent de 24,826 à 40,719 ms. Le nombre de pages déplacées et l'ordre des séries expliquent
+  probablement cette forme, sans que la mesure l'établisse.
+- **Aucun budget n'est tranché ici.** Le budget de 20 à 50 ms porte sur l'encodage, pas sur le
+  rescoring ; le critère d'ADR-0141, décision 4, est le `total` chaud de bout en bout mesuré par la
+  passe B : 79,355 ms, plus grand p95 par index.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la latence du rescoring sur `decisions`, à quatre segments ;
+- un froid complet : la résidence reste supérieure à 0,77 ;
+- la part du disque virtuel dans les p95 froids : aucune mesure d'IOPS n'a été faite ;
+- la reproductibilité sur une machine au repos : la charge concurrente n'a pas été relevée.

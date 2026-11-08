@@ -54,7 +54,7 @@ Deux conséquences pratiques :
 | `synth-small` | 10 000 passages, 2 000 documents, 768 dimensions, champs de tous types, vecteurs en grappes. Graine fixe | Généré par `tools/`, dans `data/` ; la somme de contrôle est versionnée |
 | `synth-large` | 8,6 M passages de vecteurs aléatoires normalisés : pour la latence seulement | Généré à la demande, dans `data/` |
 | `legifacile-sample` | ~50 000 passages réels pour chacune des structures, avec leurs vecteurs existants, et un jeu de requêtes de référence | Produit avec le propriétaire (`CONSTITUER-ECHANTILLON-LEGIFACILE`), dans `data/` |
-| `legifacile-full` | Toute la base (8,58 M) | P10 (ADR-0129) |
+| `legifacile-full` | Toute la base : 8,58 M passages à la conception, 9 600 105 à l'import du 2026-11-06 (`docs/02-architecture.md:230` ; `docs/mesures/import-legifacile-2026-11-06.md:35-36`) | P10 (ADR-0129) |
 
 ## Mesures
 

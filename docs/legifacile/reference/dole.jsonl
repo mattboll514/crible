@@ -1,0 +1,6 @@
+{"id": "Q28", "query": "Quel dossier législatif correspond à la loi portant engagement national pour l'environnement (dite Grenelle 2) ?", "expected": ["JORFDOLE000020078758"]}
+{"id": "Q29", "query": "Quel dossier législatif correspond à la loi de 2024 pour contrôler l'immigration et améliorer l'intégration ?", "expected": ["JORFDOLE000047079143"]}
+{"id": "Q28-TYPE", "query": "Quel dossier législatif correspond à la loi portant engagement national pour l'environnement (dite Grenelle 2) ?", "filter": {"type": "LOI_PUBLIEE"}, "expected": ["JORFDOLE000020078758"]}
+{"id": "MES00-q0030", "query": "Proposition de loi tendant à supprimer certains comités, structures, conseils et commissions « Théodule » dont l'utilité ne semble pas avérée", "expected": ["JORFDOLE000051102694"]}
+{"id": "MES00-q0034", "query": "Proposition de loi portant une gouvernance claire, juste et solidaire pour la gestion des milieux aquatiques et la prévention des inondations (GEMAPI)", "expected": ["JORFDOLE000053776703"]}
+{"id": "MES00-q0042", "query": "LOI n° 2015-1267 du 14 octobre 2015 relative au deuxième dividende numérique et à la poursuite de la modernisation de la télévision numérique terrestre", "expected": ["JORFDOLE000030773704"]}

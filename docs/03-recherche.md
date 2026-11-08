@@ -150,7 +150,7 @@ Le rerank viendra comme une étape optionnelle après la fusion et le regroupeme
 |---|---|---|
 | Encodage de la requête (CPU, fp32) | 20 à 50 ms (estimé pour l'INT8 ; fp32 : p50 21 ms, p95 ≈ 56 ms hors conteneur, dépassement du p95 assumé, ADR-0052) | MES-05 |
 | Filtre (bitmaps) | < 1 ms | MES-14 |
-| Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
+| Filtre d'intervalle (colonne de valeurs) | 101 à 194 ms à domaine plein, 9,1 à 49,2 ms sous un domaine réduit, à 8,58 M passages (fixtures de MES-14) ; sur l'index réel au 2026-11-06, 63,3 à 68,2 ms (`decisions`) et 41,5 à 42,5 ms (`articles`) à domaine plein, 3,8 à 4,4 ms sous domaine réduit, mesures et non cibles (rejeu de MES-14, `docs/mesures/comparaison-pgvector-2026-11-06.md`) ; 1 ms ≈ 40 000 à 110 000 iid lus (ADR-0046) | MES-14 |
 | Scan binaire, index entier (7,74 M vivants) | 20 à 80 ms ; mesuré au défaut N = 5000 avec le binaire actuel : 36,6 à 37,3 ms p50 et 40,1 à 41,6 ms p95 | MES-02 (A/B du 2026-10-27, ADR-0082) |
 | Scan binaire, pool de 1 M contigu | quelques ms ; mesuré : 7,10 à 7,27 ms p50 et 8,34 à 8,67 ms p95 | MES-02 (A/B du 2026-10-27, ADR-0082) |
 | Scan binaire, pool de 1 M dispersé (ce qu'un filtre produit, sauf sur le champ `cluster_by`) | quelques ms ; mesuré : 11,8 ms p50 et 14,1 ms p95 à N = 1000, 14,2 ms p50 à N = 5000 | MES-02 (campagne du 2026-10-27) |

@@ -320,3 +320,69 @@ Ce que la mesure **ne** permet pas d'affirmer :
 **Recommandation, à valider par le propriétaire** : pour un budget d'encodage en conteneur à 8,58 M
 passages, ne retenir que l'int8 (`query_precision = "int8"`), dont le p50 en conteneur reste sous les
 50 ms du budget indicatif ; le fp32, mesuré à 100 ms sur cette VM, ne le tient pas.
+
+## Campagne en conteneur sur le Mac mini (P10, ADR-0141) — 2026-11-07
+
+- **Tâche** : `MESURER-SUR-MAC-MINI`, passe C. Commit
+  `439d946bf28d63214e64aa7cb2e09e458f81a45d` plus le harnais `tools/bench/p10-macmini/`, aucun code
+  de production modifié.
+- **Machine** : Mac mini M1, 8 cœurs, 16 Gio, macOS 26.5.2 ; **VM Docker mesurée 9,703 GiB**, 8 vCPU.
+  Le conteneur voit **8 fils** (`available_parallelism` et fils du processus), page 4 096 o.
+- **Modèle** : `/models/mdenseon`, le modèle de l'instance ; **300 textes de requête** (entrée
+  d'encodage), sans écriture de texte.
+- **Configuration** : `measure_queries latency`, **cache de requêtes à capacité 0**, 300 appels
+  d'échauffement, **1 000 appels comptés par exécution**, **deux exécutions par précision**.
+
+### Protocole
+
+```sh
+sh tools/bench/p10-macmini/run_pass_c.sh encode int8 1
+sh tools/bench/p10-macmini/run_pass_c.sh encode int8 2
+sh tools/bench/p10-macmini/run_pass_c.sh encode fp32 3
+sh tools/bench/p10-macmini/run_pass_c.sh encode fp32 4
+```
+
+Chaque exécution tourne dans un conteneur `--rm` au premier plan, le volume des modèles monté en
+lecture seule. `measure_queries` **n'ouvre aucun index** : le conteneur ne monte aucun dossier d'index
+(`/models` et `/in` en lecture seule, `/out`)
+(`tools/bench/p10-macmini/run_pass_c.sh:96`). Les 2 000 appels d'une précision sont regroupés pour
+les percentiles ; les deux exécutions sont aussi données séparément. Percentiles au rang le plus
+proche ; l'agrégateur recalcule et refuse tout désaccord.
+
+### Résultats
+
+En millisecondes, 300 requêtes, cache désactivé :
+
+| Précision | n | p50 | p95 | p99 | min | max | Premier appel |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| int8 | 2 000 | 32,028 | 84,147 | 106,070 | 10,574 | 129,326 | 1 375,7 à 1 849,3 ms |
+| fp32 | 2 000 | 107,870 | 279,604 | 427,015 | 30,919 | 855,431 | 4 348,5 à 4 364,1 ms |
+
+Les deux exécutions sont cohérentes : p50 de 31,431 et 32,532 ms pour l'int8, 114,020 et 102,501 ms
+pour le fp32. Le premier appel paie l'ouverture de la session ONNX et n'est pas une requête.
+
+### Conclusion
+
+- **L'int8 tient son p50 dans le budget indicatif de 20 à 50 ms, estimé pour lui** (32,0 ms), mais
+  **pas son p95** (84,1 ms). Le fp32 dépasse le budget dès le p50 (107,9 ms).
+- **L'instance servie emploie le fp32** (`query_precision = "fp32"`) : c'est cette précision qui pèse
+  sur le total de bout en bout. La passe C mesure ce poids : 231,9 ms p95 d'encodage à froid sur les
+  82 requêtes uniques, dans `mac-mini-2026-11-07.md`.
+- **La campagne ne fournit aucun contrôle natif contemporain.** Elle ne permet donc pas d'attribuer
+  l'écart au conteneur seul, contrairement à la campagne du 2026-11-03 qui avait ce contrôle.
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- le coût du conteneur par rapport au natif du même jour ;
+- le nombre de fils internes d'ONNX Runtime : il n'est pas exposé ;
+- la latence d'encodage d'un document, qui n'est pas MES-05 ;
+- l'effet d'un changement de `query_precision` sur la fidélité : aucune bascule n'est faite ici.
+
+**Recommandation, à valider par le propriétaire** : garder `query_precision = "fp32"` tant que la
+latence avec encodage reste sous 698 ms. Le critère de J10 est le `total` chaud d'ADR-0141,
+décision 4 : **79,355 ms**, plus grand p95 par index ; l'encodage y est presque nul parce que le
+cache de requêtes sert les textes répétés. L'**estimation prudente** vaut **358,959 ms**
+(79,355 + 279,604, le p95 fp32 sans cache mesuré sur **300 textes**, donc pas un majorant strict
+pour les 97), et le **recoupement API** vaut **418,425 ms p95** à cache vide. Les trois lectures
+sont sous 698 ms. Une bascule vers l'int8 ne tiendrait pas non plus le p95 du budget indicatif et
+demanderait un ADR pour la fidélité.

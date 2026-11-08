@@ -145,7 +145,8 @@ Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 **Contraintes propres au Mac** (ADR-0129) :
 - la RAM disponible est celle de la VM Docker, pas celle de la machine : environ **8 Go** sur le Mac mini M1 16 Go aujourd'hui ; sur la machine de développement (MacBook Air M3, 24 Gio), la RAM allouée à Docker Desktop est indiquée dans chaque rapport de mesure. À 8,58 M passages, environ 13,2 Go de vecteurs fp16 sont attendus ;
 - pas d'accès au GPU Apple ;
-- le SIMD NEON est disponible.
+- le SIMD NEON est disponible ;
+- un `replace_all` complet d'un grand index (`decisions`, `articles`, `jorf`) ne se fait pas sur le Mac mini : il se fait sur la machine de développement, puis l'index rejoint la machine de service par instantané et restauration (ADR-0064, ADR-0065), comme le fait déjà la campagne de mesures (ADR-0141) ; les lots quotidiens, petits, s'attachent directement sur le Mac mini (ADR-0142, décision 3).
 
 ## CI (GitHub Actions)
 

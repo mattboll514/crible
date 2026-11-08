@@ -1,0 +1,135 @@
+{
+  "format_version": 1,
+  "measure": "MESURER-SUR-MAC-MINI",
+  "pass": "C",
+  "date": "2026-11-07",
+  "commit": "439d946bf28d63214e64aa7cb2e09e458f81a45d",
+  "machine": "Mac mini M1 (Macmini9,1), 8 cores, 16 GiB, macOS 26.5.2",
+  "container": {
+    "vm_bytes": 10418937856,
+    "vm_cpus": 8,
+    "vm_page_bytes": 4096,
+    "host_page_bytes": 16384,
+    "memory_limit": null,
+    "supabase": "stopped"
+  },
+  "percentile": "nearest rank on raw durations (ADR-0077, decision 4)",
+  "measure_id": "MES-05",
+  "question": "latency of one query encoding, in the container",
+  "protocol": {
+    "mode": "latency",
+    "cache_capacity": 0,
+    "warmup": 300,
+    "count": 1000,
+    "runs_per_precision": 2,
+    "queries": 300
+  },
+  "points": [
+    {
+      "precision": "int8",
+      "precision_effective": "int8",
+      "runs": [
+        {
+          "file": "mes05-encode-int8-1.json",
+          "samples": {
+            "n": 1000,
+            "p50": 31.431,
+            "p95": 82.932,
+            "p99": 105.814,
+            "min": 11.842917,
+            "max": 120.3685,
+            "mean": 37.181789442
+          },
+          "first_call_ms": 1849.259459,
+          "cache_hits": 0,
+          "cache_misses": 1301,
+          "threads": {
+            "available_parallelism": 8,
+            "process_threads": 8
+          }
+        },
+        {
+          "file": "mes05-encode-int8-2.json",
+          "samples": {
+            "n": 1000,
+            "p50": 32.532,
+            "p95": 84.618,
+            "p99": 107.866,
+            "min": 10.574208,
+            "max": 129.326083,
+            "mean": 38.192785579
+          },
+          "first_call_ms": 1375.698375,
+          "cache_hits": 0,
+          "cache_misses": 1301,
+          "threads": {
+            "available_parallelism": 8,
+            "process_threads": 8
+          }
+        }
+      ],
+      "pooled": {
+        "n": 2000,
+        "p50": 32.028,
+        "p95": 84.147,
+        "p99": 106.07,
+        "min": 10.574208,
+        "max": 129.326083,
+        "mean": 37.6872875105
+      }
+    },
+    {
+      "precision": "fp32",
+      "precision_effective": "fp32",
+      "runs": [
+        {
+          "file": "mes05-encode-fp32-3.json",
+          "samples": {
+            "n": 1000,
+            "p50": 114.02,
+            "p95": 302.062,
+            "p99": 525.797,
+            "min": 30.919459,
+            "max": 855.431001,
+            "mean": 137.13135277
+          },
+          "first_call_ms": 4348.452585999999,
+          "cache_hits": 0,
+          "cache_misses": 1301,
+          "threads": {
+            "available_parallelism": 8,
+            "process_threads": 8
+          }
+        },
+        {
+          "file": "mes05-encode-fp32-4.json",
+          "samples": {
+            "n": 1000,
+            "p50": 102.501,
+            "p95": 264.012,
+            "p99": 321.71,
+            "min": 36.19425,
+            "max": 409.203375,
+            "mean": 117.985198594
+          },
+          "first_call_ms": 4364.126585,
+          "cache_hits": 0,
+          "cache_misses": 1301,
+          "threads": {
+            "available_parallelism": 8,
+            "process_threads": 8
+          }
+        }
+      ],
+      "pooled": {
+        "n": 2000,
+        "p50": 107.87,
+        "p95": 279.604,
+        "p99": 427.015,
+        "min": 30.919459,
+        "max": 855.431001,
+        "mean": 127.558275682
+      }
+    }
+  ]
+}

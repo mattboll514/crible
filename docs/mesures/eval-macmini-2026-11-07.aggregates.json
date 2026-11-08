@@ -1,0 +1,1921 @@
+{
+  "format_version": 1,
+  "measure": "MESURER-SUR-MAC-MINI",
+  "pass": "B",
+  "date": "2026-11-07",
+  "machine": "Mac mini M1 (Macmini9,1), aarch64",
+  "vm": {
+    "cpus": 8,
+    "bytes": 10418937856
+  },
+  "criterion": {
+    "decision": "ADR-0141, decision 4",
+    "measure": "total chaud de crible eval local, 97 requêtes en texte",
+    "value_ms": 79.355,
+    "scope": "plus grand p95 par index",
+    "encoding_note": "the query cache serves the repeated texts (ADR-0051), so the total barely includes encoding; this is a fact of measurement against the assumption of decision 4"
+  },
+  "protocol": {
+    "mode": "local",
+    "repeat": 3,
+    "warmup": 1,
+    "exact_threshold": 5000,
+    "rescore_candidates": 5000,
+    "percentile": "nearest rank on raw durations (ADR-0077, decision 4)",
+    "grouped_samples_expected": {
+      "dense-texte": 291,
+      "mes00-1000-titres": 3000
+    }
+  },
+  "series": {
+    "dense-texte": {
+      "mode": "dense",
+      "indexes": {
+        "articles": {
+          "index": "articles",
+          "generation": 1,
+          "queries": 25,
+          "repeat": 3,
+          "samples": 75,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.008,
+              "p95": 0.013,
+              "p99": 0.014
+            },
+            "filter": {
+              "p50": 0.414,
+              "p95": 58.61,
+              "p99": 59.412
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.008,
+              "p99": 0.009
+            },
+            "dense": {
+              "p50": 19.922,
+              "p95": 27.099,
+              "p99": 32.751
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.006
+            },
+            "fetch": {
+              "p50": 0.325,
+              "p95": 0.949,
+              "p99": 1.356
+            },
+            "total": {
+              "p50": 21.862,
+              "p95": 79.355,
+              "p99": 82.06
+            }
+          },
+          "total": {
+            "p50": 21.862,
+            "p95": 79.355,
+            "p99": 82.06
+          },
+          "encode_share_at_p95": 0.0001
+        },
+        "decisions": {
+          "index": "decisions",
+          "generation": 2,
+          "queries": 45,
+          "repeat": 3,
+          "samples": 135,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.014,
+              "p99": 0.077
+            },
+            "filter": {
+              "p50": 0.252,
+              "p95": 0.345,
+              "p99": 0.912
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.024,
+              "p99": 0.03
+            },
+            "dense": {
+              "p50": 43.934,
+              "p95": 51.851,
+              "p99": 53.132
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.005
+            },
+            "fetch": {
+              "p50": 0.285,
+              "p95": 0.477,
+              "p99": 0.761
+            },
+            "total": {
+              "p50": 44.597,
+              "p95": 52.553,
+              "p99": 53.685
+            }
+          },
+          "total": {
+            "p50": 44.597,
+            "p95": 52.553,
+            "p99": 53.685
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "dole": {
+          "index": "dole",
+          "generation": 1,
+          "queries": 6,
+          "repeat": 3,
+          "samples": 18,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "filter": {
+              "p50": 0.006,
+              "p95": 0.008,
+              "p99": 0.008
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.01,
+              "p99": 0.01
+            },
+            "dense": {
+              "p50": 4.19,
+              "p95": 12.682,
+              "p99": 12.682
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.23,
+              "p95": 0.336,
+              "p99": 0.336
+            },
+            "total": {
+              "p50": 4.493,
+              "p95": 13.099,
+              "p99": 13.099
+            }
+          },
+          "total": {
+            "p50": 4.493,
+            "p95": 13.099,
+            "p99": 13.099
+          },
+          "encode_share_at_p95": 0.0008
+        },
+        "jorf": {
+          "index": "jorf",
+          "generation": 3,
+          "queries": 10,
+          "repeat": 3,
+          "samples": 30,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.056,
+              "p99": 0.062
+            },
+            "filter": {
+              "p50": 0.141,
+              "p95": 20.774,
+              "p99": 22.612
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.015,
+              "p99": 0.027
+            },
+            "dense": {
+              "p50": 24.769,
+              "p95": 32.531,
+              "p99": 32.788
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.206,
+              "p95": 0.533,
+              "p99": 0.589
+            },
+            "total": {
+              "p50": 26.925,
+              "p95": 33.316,
+              "p99": 33.358
+            }
+          },
+          "total": {
+            "p50": 26.925,
+            "p95": 33.316,
+            "p99": 33.358
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "sarde": {
+          "index": "sarde",
+          "generation": 1,
+          "queries": 8,
+          "repeat": 3,
+          "samples": 24,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.008
+            },
+            "filter": {
+              "p50": 0.02,
+              "p95": 0.022,
+              "p99": 0.022
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.005,
+              "p99": 0.007
+            },
+            "dense": {
+              "p50": 8.374,
+              "p95": 10.056,
+              "p99": 10.111
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.243,
+              "p95": 0.269,
+              "p99": 0.269
+            },
+            "total": {
+              "p50": 8.723,
+              "p95": 10.418,
+              "p99": 10.443
+            }
+          },
+          "total": {
+            "p50": 8.723,
+            "p95": 10.418,
+            "p99": 10.443
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "titres": {
+          "index": "titres",
+          "generation": 1,
+          "queries": 3,
+          "repeat": 3,
+          "samples": 9,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.109,
+              "p95": 0.115,
+              "p99": 0.115
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.005,
+              "p99": 0.005
+            },
+            "dense": {
+              "p50": 19.998,
+              "p95": 29.288,
+              "p99": 29.288
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.002
+            },
+            "fetch": {
+              "p50": 0.203,
+              "p95": 0.337,
+              "p99": 0.337
+            },
+            "total": {
+              "p50": 20.325,
+              "p95": 29.848,
+              "p99": 29.848
+            }
+          },
+          "total": {
+            "p50": 20.325,
+            "p95": 29.848,
+            "p99": 29.848
+          },
+          "encode_share_at_p95": 0.0002
+        }
+      },
+      "grouped": {
+        "samples": 291,
+        "available": false,
+        "reason": "les rapports `eval` portent des percentiles déjà agrégés et aucun échantillon par requête (ADR-0125, décision 9)",
+        "p50_range": [
+          4.493,
+          44.597
+        ],
+        "p95_bound_max_index": 79.355,
+        "p99_range": [
+          10.443,
+          82.06
+        ],
+        "per_index_p95": {
+          "articles": 79.355,
+          "decisions": 52.553,
+          "dole": 13.099,
+          "jorf": 33.316,
+          "sarde": 10.418,
+          "titres": 29.848
+        }
+      }
+    },
+    "dense-vecteur": {
+      "mode": "dense",
+      "indexes": {
+        "articles": {
+          "index": "articles",
+          "generation": 1,
+          "queries": 25,
+          "repeat": 3,
+          "samples": 75,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.007,
+              "p95": 0.01,
+              "p99": 0.022
+            },
+            "filter": {
+              "p50": 0.424,
+              "p95": 58.586,
+              "p99": 63.818
+            },
+            "dense": {
+              "p50": 19.129,
+              "p95": 25.972,
+              "p99": 30.977
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.267,
+              "p95": 0.662,
+              "p99": 0.785
+            },
+            "total": {
+              "p50": 20.975,
+              "p95": 78.216,
+              "p99": 86.724
+            }
+          },
+          "total": {
+            "p50": 20.975,
+            "p95": 78.216,
+            "p99": 86.724
+          },
+          "encode_share_at_p95": null
+        },
+        "decisions": {
+          "index": "decisions",
+          "generation": 2,
+          "queries": 45,
+          "repeat": 3,
+          "samples": 135,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.009,
+              "p99": 0.014
+            },
+            "filter": {
+              "p50": 0.249,
+              "p95": 0.34,
+              "p99": 0.889
+            },
+            "dense": {
+              "p50": 39.992,
+              "p95": 53.043,
+              "p99": 55.542
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.278,
+              "p95": 0.361,
+              "p99": 0.413
+            },
+            "total": {
+              "p50": 40.548,
+              "p95": 53.605,
+              "p99": 56.35
+            }
+          },
+          "total": {
+            "p50": 40.548,
+            "p95": 53.605,
+            "p99": 56.35
+          },
+          "encode_share_at_p95": null
+        },
+        "dole": {
+          "index": "dole",
+          "generation": 1,
+          "queries": 6,
+          "repeat": 3,
+          "samples": 18,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "filter": {
+              "p50": 0.006,
+              "p95": 0.016,
+              "p99": 0.016
+            },
+            "dense": {
+              "p50": 4.247,
+              "p95": 15.046,
+              "p99": 15.046
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.007,
+              "p99": 0.007
+            },
+            "fetch": {
+              "p50": 0.225,
+              "p95": 0.478,
+              "p99": 0.478
+            },
+            "total": {
+              "p50": 4.622,
+              "p95": 15.481,
+              "p99": 15.481
+            }
+          },
+          "total": {
+            "p50": 4.622,
+            "p95": 15.481,
+            "p99": 15.481
+          },
+          "encode_share_at_p95": null
+        },
+        "jorf": {
+          "index": "jorf",
+          "generation": 3,
+          "queries": 10,
+          "repeat": 3,
+          "samples": 30,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.007,
+              "p99": 0.009
+            },
+            "filter": {
+              "p50": 0.128,
+              "p95": 20.055,
+              "p99": 20.228
+            },
+            "dense": {
+              "p50": 23.38,
+              "p95": 32.553,
+              "p99": 35.771
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.002
+            },
+            "fetch": {
+              "p50": 0.21,
+              "p95": 0.636,
+              "p99": 0.75
+            },
+            "total": {
+              "p50": 26.276,
+              "p95": 33.267,
+              "p99": 36.301
+            }
+          },
+          "total": {
+            "p50": 26.276,
+            "p95": 33.267,
+            "p99": 36.301
+          },
+          "encode_share_at_p95": null
+        },
+        "sarde": {
+          "index": "sarde",
+          "generation": 1,
+          "queries": 8,
+          "repeat": 3,
+          "samples": 24,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.005,
+              "p99": 0.006
+            },
+            "filter": {
+              "p50": 0.02,
+              "p95": 0.02,
+              "p99": 0.021
+            },
+            "dense": {
+              "p50": 8.737,
+              "p95": 9.991,
+              "p99": 10.128
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "fetch": {
+              "p50": 0.244,
+              "p95": 0.263,
+              "p99": 0.552
+            },
+            "total": {
+              "p50": 9.058,
+              "p95": 10.47,
+              "p99": 10.583
+            }
+          },
+          "total": {
+            "p50": 9.058,
+            "p95": 10.47,
+            "p99": 10.583
+          },
+          "encode_share_at_p95": null
+        },
+        "titres": {
+          "index": "titres",
+          "generation": 1,
+          "queries": 3,
+          "repeat": 3,
+          "samples": 9,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.105,
+              "p95": 0.115,
+              "p99": 0.115
+            },
+            "dense": {
+              "p50": 19.18,
+              "p95": 30.091,
+              "p99": 30.091
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.002
+            },
+            "fetch": {
+              "p50": 0.211,
+              "p95": 0.271,
+              "p99": 0.271
+            },
+            "total": {
+              "p50": 19.532,
+              "p95": 30.461,
+              "p99": 30.461
+            }
+          },
+          "total": {
+            "p50": 19.532,
+            "p95": 30.461,
+            "p99": 30.461
+          },
+          "encode_share_at_p95": null
+        }
+      },
+      "grouped": {
+        "samples": 291,
+        "available": false,
+        "reason": "les rapports `eval` portent des percentiles déjà agrégés et aucun échantillon par requête (ADR-0125, décision 9)",
+        "p50_range": [
+          4.622,
+          40.548
+        ],
+        "p95_bound_max_index": 78.216,
+        "p99_range": [
+          10.583,
+          86.724
+        ],
+        "per_index_p95": {
+          "articles": 78.216,
+          "decisions": 53.605,
+          "dole": 15.481,
+          "jorf": 33.267,
+          "sarde": 10.47,
+          "titres": 30.461
+        }
+      }
+    },
+    "hybride": {
+      "mode": "hybrid",
+      "indexes": {
+        "articles": {
+          "index": "articles",
+          "generation": 1,
+          "queries": 25,
+          "repeat": 3,
+          "samples": 75,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.008,
+              "p95": 0.013,
+              "p99": 0.026
+            },
+            "filter": {
+              "p50": 0.423,
+              "p95": 59.072,
+              "p99": 65.113
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.013,
+              "p99": 0.017
+            },
+            "dense": {
+              "p50": 22.485,
+              "p95": 28.897,
+              "p99": 30.236
+            },
+            "lexical": {
+              "p50": 54.728,
+              "p95": 100.432,
+              "p99": 103.755
+            },
+            "fusion": {
+              "p50": 0.044,
+              "p95": 0.058,
+              "p99": 0.062
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.334,
+              "p95": 0.49,
+              "p99": 0.681
+            },
+            "total": {
+              "p50": 57.96,
+              "p95": 105.144,
+              "p99": 128.62
+            }
+          },
+          "total": {
+            "p50": 57.96,
+            "p95": 105.144,
+            "p99": 128.62
+          },
+          "encode_share_at_p95": 0.0001
+        },
+        "decisions": {
+          "index": "decisions",
+          "generation": 2,
+          "queries": 45,
+          "repeat": 3,
+          "samples": 135,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.029,
+              "p99": 0.065
+            },
+            "filter": {
+              "p50": 0.26,
+              "p95": 0.343,
+              "p99": 1.034
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.02,
+              "p99": 0.032
+            },
+            "dense": {
+              "p50": 55.449,
+              "p95": 65.595,
+              "p99": 78.119
+            },
+            "lexical": {
+              "p50": 104.84,
+              "p95": 146.517,
+              "p99": 154.937
+            },
+            "fusion": {
+              "p50": 0.047,
+              "p95": 0.054,
+              "p99": 0.063
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.325,
+              "p95": 1.428,
+              "p99": 2.039
+            },
+            "total": {
+              "p50": 106.088,
+              "p95": 147.3,
+              "p99": 156.517
+            }
+          },
+          "total": {
+            "p50": 106.088,
+            "p95": 147.3,
+            "p99": 156.517
+          },
+          "encode_share_at_p95": 0.0001
+        },
+        "dole": {
+          "index": "dole",
+          "generation": 1,
+          "queries": 6,
+          "repeat": 3,
+          "samples": 18,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.007,
+              "p99": 0.007
+            },
+            "filter": {
+              "p50": 0.006,
+              "p95": 0.009,
+              "p99": 0.009
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "dense": {
+              "p50": 4.407,
+              "p95": 11.853,
+              "p99": 11.853
+            },
+            "lexical": {
+              "p50": 0.918,
+              "p95": 5.058,
+              "p99": 5.058
+            },
+            "fusion": {
+              "p50": 0.04,
+              "p95": 0.059,
+              "p99": 0.059
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.005,
+              "p99": 0.005
+            },
+            "fetch": {
+              "p50": 0.257,
+              "p95": 0.316,
+              "p99": 0.316
+            },
+            "total": {
+              "p50": 4.769,
+              "p95": 12.309,
+              "p99": 12.309
+            }
+          },
+          "total": {
+            "p50": 4.769,
+            "p95": 12.309,
+            "p99": 12.309
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "jorf": {
+          "index": "jorf",
+          "generation": 3,
+          "queries": 10,
+          "repeat": 3,
+          "samples": 30,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.053,
+              "p99": 0.072
+            },
+            "filter": {
+              "p50": 0.145,
+              "p95": 28.179,
+              "p99": 31.835
+            },
+            "encode": {
+              "p50": 0.005,
+              "p95": 0.028,
+              "p99": 0.038
+            },
+            "dense": {
+              "p50": 32.248,
+              "p95": 71.756,
+              "p99": 78.763
+            },
+            "lexical": {
+              "p50": 27.263,
+              "p95": 75.751,
+              "p99": 80.412
+            },
+            "fusion": {
+              "p50": 0.036,
+              "p95": 0.052,
+              "p99": 0.061
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.255,
+              "p95": 0.533,
+              "p99": 1.823
+            },
+            "total": {
+              "p50": 35.396,
+              "p95": 80.051,
+              "p99": 81.172
+            }
+          },
+          "total": {
+            "p50": 35.396,
+            "p95": 80.051,
+            "p99": 81.172
+          },
+          "encode_share_at_p95": 0.0003
+        },
+        "sarde": {
+          "index": "sarde",
+          "generation": 1,
+          "queries": 8,
+          "repeat": 3,
+          "samples": 24,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.007
+            },
+            "filter": {
+              "p50": 0.02,
+              "p95": 0.02,
+              "p99": 0.021
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.005,
+              "p99": 0.012
+            },
+            "dense": {
+              "p50": 9.716,
+              "p95": 10.295,
+              "p99": 10.657
+            },
+            "lexical": {
+              "p50": 4.927,
+              "p95": 6.72,
+              "p99": 7.199
+            },
+            "fusion": {
+              "p50": 0.039,
+              "p95": 0.046,
+              "p99": 0.046
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.003,
+              "p99": 0.009
+            },
+            "fetch": {
+              "p50": 0.24,
+              "p95": 0.262,
+              "p99": 0.266
+            },
+            "total": {
+              "p50": 10.061,
+              "p95": 10.641,
+              "p99": 11.008
+            }
+          },
+          "total": {
+            "p50": 10.061,
+            "p95": 10.641,
+            "p99": 11.008
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "titres": {
+          "index": "titres",
+          "generation": 1,
+          "queries": 3,
+          "repeat": 3,
+          "samples": 9,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "hybrid",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.108,
+              "p95": 0.123,
+              "p99": 0.123
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.023,
+              "p99": 0.023
+            },
+            "dense": {
+              "p50": 27.636,
+              "p95": 35.553,
+              "p99": 35.553
+            },
+            "lexical": {
+              "p50": 23.654,
+              "p95": 40.986,
+              "p99": 40.986
+            },
+            "fusion": {
+              "p50": 0.039,
+              "p95": 0.078,
+              "p99": 0.078
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.008,
+              "p99": 0.008
+            },
+            "fetch": {
+              "p50": 0.254,
+              "p95": 0.384,
+              "p99": 0.384
+            },
+            "total": {
+              "p50": 28.11,
+              "p95": 41.518,
+              "p99": 41.518
+            }
+          },
+          "total": {
+            "p50": 28.11,
+            "p95": 41.518,
+            "p99": 41.518
+          },
+          "encode_share_at_p95": 0.0006
+        }
+      },
+      "grouped": {
+        "samples": 291,
+        "available": false,
+        "reason": "les rapports `eval` portent des percentiles déjà agrégés et aucun échantillon par requête (ADR-0125, décision 9)",
+        "p50_range": [
+          4.769,
+          106.088
+        ],
+        "p95_bound_max_index": 147.3,
+        "p99_range": [
+          11.008,
+          156.517
+        ],
+        "per_index_p95": {
+          "articles": 105.144,
+          "decisions": 147.3,
+          "dole": 12.309,
+          "jorf": 80.051,
+          "sarde": 10.641,
+          "titres": 41.518
+        }
+      }
+    },
+    "dense-texte-froid": {
+      "mode": "dense",
+      "indexes": {
+        "articles": {
+          "index": "articles",
+          "generation": 1,
+          "queries": 25,
+          "repeat": 3,
+          "samples": 75,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.009,
+              "p95": 0.013,
+              "p99": 0.013
+            },
+            "filter": {
+              "p50": 0.413,
+              "p95": 58.661,
+              "p99": 59.495
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.009,
+              "p99": 0.012
+            },
+            "dense": {
+              "p50": 20.059,
+              "p95": 26.187,
+              "p99": 28.173
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.002
+            },
+            "fetch": {
+              "p50": 0.27,
+              "p95": 0.354,
+              "p99": 0.432
+            },
+            "total": {
+              "p50": 21.941,
+              "p95": 78.404,
+              "p99": 81.816
+            }
+          },
+          "total": {
+            "p50": 21.941,
+            "p95": 78.404,
+            "p99": 81.816
+          },
+          "encode_share_at_p95": 0.0001
+        },
+        "decisions": {
+          "index": "decisions",
+          "generation": 2,
+          "queries": 45,
+          "repeat": 3,
+          "samples": 135,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.013,
+              "p99": 0.037
+            },
+            "filter": {
+              "p50": 0.248,
+              "p95": 0.887,
+              "p99": 1.184
+            },
+            "encode": {
+              "p50": 0.005,
+              "p95": 0.013,
+              "p99": 0.018
+            },
+            "dense": {
+              "p50": 42.626,
+              "p95": 52.419,
+              "p99": 54.306
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.289,
+              "p95": 0.409,
+              "p99": 0.484
+            },
+            "total": {
+              "p50": 43.365,
+              "p95": 53.084,
+              "p99": 56.096
+            }
+          },
+          "total": {
+            "p50": 43.365,
+            "p95": 53.084,
+            "p99": 56.096
+          },
+          "encode_share_at_p95": 0.0002
+        },
+        "dole": {
+          "index": "dole",
+          "generation": 1,
+          "queries": 6,
+          "repeat": 3,
+          "samples": 18,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "filter": {
+              "p50": 0.006,
+              "p95": 0.019,
+              "p99": 0.019
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.006,
+              "p99": 0.006
+            },
+            "dense": {
+              "p50": 4.192,
+              "p95": 10.236,
+              "p99": 10.236
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.007,
+              "p99": 0.007
+            },
+            "fetch": {
+              "p50": 0.239,
+              "p95": 0.334,
+              "p99": 0.334
+            },
+            "total": {
+              "p50": 4.467,
+              "p95": 11.312,
+              "p99": 11.312
+            }
+          },
+          "total": {
+            "p50": 4.467,
+            "p95": 11.312,
+            "p99": 11.312
+          },
+          "encode_share_at_p95": 0.0005
+        },
+        "jorf": {
+          "index": "jorf",
+          "generation": 3,
+          "queries": 10,
+          "repeat": 3,
+          "samples": 30,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.014,
+              "p99": 0.028
+            },
+            "filter": {
+              "p50": 0.128,
+              "p95": 20.392,
+              "p99": 20.58
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.007,
+              "p99": 0.01
+            },
+            "dense": {
+              "p50": 24.62,
+              "p95": 32.666,
+              "p99": 32.839
+            },
+            "group": {
+              "p50": 0.001,
+              "p95": 0.004,
+              "p99": 0.004
+            },
+            "fetch": {
+              "p50": 0.201,
+              "p95": 0.303,
+              "p99": 0.33
+            },
+            "total": {
+              "p50": 26.999,
+              "p95": 33.095,
+              "p99": 33.2
+            }
+          },
+          "total": {
+            "p50": 26.999,
+            "p95": 33.095,
+            "p99": 33.2
+          },
+          "encode_share_at_p95": 0.0002
+        },
+        "sarde": {
+          "index": "sarde",
+          "generation": 1,
+          "queries": 8,
+          "repeat": 3,
+          "samples": 24,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.006,
+              "p99": 0.009
+            },
+            "filter": {
+              "p50": 0.02,
+              "p95": 0.021,
+              "p99": 0.023
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.004,
+              "p99": 0.004
+            },
+            "dense": {
+              "p50": 8.797,
+              "p95": 9.955,
+              "p99": 10.249
+            },
+            "group": {
+              "p50": 0.001,
+              "p95": 0.003,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.229,
+              "p95": 0.27,
+              "p99": 0.275
+            },
+            "total": {
+              "p50": 9.124,
+              "p95": 10.307,
+              "p99": 10.567
+            }
+          },
+          "total": {
+            "p50": 9.124,
+            "p95": 10.307,
+            "p99": 10.567
+          },
+          "encode_share_at_p95": 0.0004
+        },
+        "titres": {
+          "index": "titres",
+          "generation": 1,
+          "queries": 3,
+          "repeat": 3,
+          "samples": 9,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.105,
+              "p95": 0.131,
+              "p99": 0.131
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.005,
+              "p99": 0.005
+            },
+            "dense": {
+              "p50": 24.157,
+              "p95": 27.875,
+              "p99": 27.875
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.002
+            },
+            "fetch": {
+              "p50": 0.199,
+              "p95": 0.266,
+              "p99": 0.266
+            },
+            "total": {
+              "p50": 24.6,
+              "p95": 28.246,
+              "p99": 28.246
+            }
+          },
+          "total": {
+            "p50": 24.6,
+            "p95": 28.246,
+            "p99": 28.246
+          },
+          "encode_share_at_p95": 0.0002
+        }
+      },
+      "grouped": {
+        "samples": 291,
+        "available": false,
+        "reason": "les rapports `eval` portent des percentiles déjà agrégés et aucun échantillon par requête (ADR-0125, décision 9)",
+        "p50_range": [
+          4.467,
+          43.365
+        ],
+        "p95_bound_max_index": 78.404,
+        "p99_range": [
+          10.567,
+          81.816
+        ],
+        "per_index_p95": {
+          "articles": 78.404,
+          "decisions": 53.084,
+          "dole": 11.312,
+          "jorf": 33.095,
+          "sarde": 10.307,
+          "titres": 28.246
+        }
+      }
+    },
+    "mes00-1000-titres": {
+      "mode": "dense",
+      "indexes": {
+        "articles": {
+          "index": "articles",
+          "generation": 1,
+          "queries": 246,
+          "repeat": 3,
+          "samples": 738,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.01,
+              "p95": 0.038,
+              "p99": 0.065
+            },
+            "filter": {
+              "p50": 0.486,
+              "p95": 0.845,
+              "p99": 1.133
+            },
+            "encode": {
+              "p50": 0.009,
+              "p95": 0.026,
+              "p99": 0.04
+            },
+            "dense": {
+              "p50": 22.367,
+              "p95": 31.306,
+              "p99": 55.17
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.005
+            },
+            "fetch": {
+              "p50": 0.314,
+              "p95": 0.513,
+              "p99": 1.112
+            },
+            "total": {
+              "p50": 23.375,
+              "p95": 32.395,
+              "p99": 57.563
+            }
+          },
+          "total": {
+            "p50": 23.375,
+            "p95": 32.395,
+            "p99": 57.563
+          },
+          "encode_share_at_p95": 0.0008
+        },
+        "decisions": {
+          "index": "decisions",
+          "generation": 2,
+          "queries": 251,
+          "repeat": 3,
+          "samples": 753,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.001
+            },
+            "filter": {
+              "p50": 0.25,
+              "p95": 0.27,
+              "p99": 0.283
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.022,
+              "p99": 0.032
+            },
+            "dense": {
+              "p50": 44.935,
+              "p95": 54.137,
+              "p99": 57.854
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.225,
+              "p95": 1.345,
+              "p99": 1.973
+            },
+            "total": {
+              "p50": 45.578,
+              "p95": 55.427,
+              "p99": 59.085
+            }
+          },
+          "total": {
+            "p50": 45.578,
+            "p95": 55.427,
+            "p99": 59.085
+          },
+          "encode_share_at_p95": 0.0004
+        },
+        "dole": {
+          "index": "dole",
+          "generation": 1,
+          "queries": 111,
+          "repeat": 3,
+          "samples": 333,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.006,
+              "p95": 0.008,
+              "p99": 0.01
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.006,
+              "p99": 0.007
+            },
+            "dense": {
+              "p50": 3.948,
+              "p95": 4.833,
+              "p99": 5.351
+            },
+            "group": {
+              "p50": 0.001,
+              "p95": 0.002,
+              "p99": 0.004
+            },
+            "fetch": {
+              "p50": 0.194,
+              "p95": 0.252,
+              "p99": 0.271
+            },
+            "total": {
+              "p50": 4.228,
+              "p95": 5.183,
+              "p99": 6.021
+            }
+          },
+          "total": {
+            "p50": 4.228,
+            "p95": 5.183,
+            "p99": 6.021
+          },
+          "encode_share_at_p95": 0.0012
+        },
+        "jorf": {
+          "index": "jorf",
+          "generation": 3,
+          "queries": 125,
+          "repeat": 3,
+          "samples": 375,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.001
+            },
+            "filter": {
+              "p50": 0.139,
+              "p95": 0.157,
+              "p99": 0.179
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.022,
+              "p99": 0.035
+            },
+            "dense": {
+              "p50": 28.551,
+              "p95": 34.793,
+              "p99": 44.265
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.005
+            },
+            "fetch": {
+              "p50": 0.268,
+              "p95": 0.393,
+              "p99": 0.859
+            },
+            "total": {
+              "p50": 29.004,
+              "p95": 36.104,
+              "p99": 44.802
+            }
+          },
+          "total": {
+            "p50": 29.004,
+            "p95": 36.104,
+            "p99": 44.802
+          },
+          "encode_share_at_p95": 0.0006
+        },
+        "sarde": {
+          "index": "sarde",
+          "generation": 1,
+          "queries": 129,
+          "repeat": 3,
+          "samples": 387,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.0
+            },
+            "filter": {
+              "p50": 0.02,
+              "p95": 0.023,
+              "p99": 0.032
+            },
+            "encode": {
+              "p50": 0.003,
+              "p95": 0.004,
+              "p99": 0.006
+            },
+            "dense": {
+              "p50": 9.443,
+              "p95": 10.123,
+              "p99": 10.333
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.004
+            },
+            "fetch": {
+              "p50": 0.226,
+              "p95": 0.274,
+              "p99": 0.299
+            },
+            "total": {
+              "p50": 9.769,
+              "p95": 10.464,
+              "p99": 10.631
+            }
+          },
+          "total": {
+            "p50": 9.769,
+            "p95": 10.464,
+            "p99": 10.631
+          },
+          "encode_share_at_p95": 0.0004
+        },
+        "titres": {
+          "index": "titres",
+          "generation": 1,
+          "queries": 138,
+          "repeat": 3,
+          "samples": 414,
+          "exact_threshold": 5000,
+          "rescore_candidates": 5000,
+          "mode": "dense",
+          "stages": {
+            "validate": {
+              "p50": 0.0,
+              "p95": 0.0,
+              "p99": 0.001
+            },
+            "filter": {
+              "p50": 0.106,
+              "p95": 0.12,
+              "p99": 0.136
+            },
+            "encode": {
+              "p50": 0.004,
+              "p95": 0.02,
+              "p99": 0.032
+            },
+            "dense": {
+              "p50": 23.682,
+              "p95": 28.348,
+              "p99": 28.971
+            },
+            "group": {
+              "p50": 0.002,
+              "p95": 0.002,
+              "p99": 0.003
+            },
+            "fetch": {
+              "p50": 0.262,
+              "p95": 0.34,
+              "p99": 0.397
+            },
+            "total": {
+              "p50": 24.098,
+              "p95": 28.796,
+              "p99": 29.415
+            }
+          },
+          "total": {
+            "p50": 24.098,
+            "p95": 28.796,
+            "p99": 29.415
+          },
+          "encode_share_at_p95": 0.0007
+        }
+      },
+      "grouped": {
+        "samples": 3000,
+        "available": false,
+        "reason": "les rapports `eval` portent des percentiles déjà agrégés et aucun échantillon par requête (ADR-0125, décision 9)",
+        "p50_range": [
+          4.228,
+          45.578
+        ],
+        "p95_bound_max_index": 55.427,
+        "p99_range": [
+          6.021,
+          59.085
+        ],
+        "per_index_p95": {
+          "articles": 32.395,
+          "decisions": 55.427,
+          "dole": 5.183,
+          "jorf": 36.104,
+          "sarde": 10.464,
+          "titres": 28.796
+        }
+      }
+    }
+  },
+  "recall": {
+    "global": {
+      "n": 56,
+      "recall_at_10": 0.5
+    },
+    "juri_texte_integral": {
+      "n": 31,
+      "recall_at_10": 0.322581
+    },
+    "textes_vigueur": {
+      "n": 12,
+      "recall_at_10": 0.75
+    }
+  },
+  "top10": {
+    "per_index": {
+      "articles": {
+        "compared": 25,
+        "identical": 25,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "decisions": {
+        "compared": 45,
+        "identical": 45,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "dole": {
+        "compared": 6,
+        "identical": 6,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "jorf": {
+        "compared": 10,
+        "identical": 10,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "sarde": {
+        "compared": 8,
+        "identical": 8,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "titres": {
+        "compared": 3,
+        "identical": 3,
+        "differing": [],
+        "missing": [],
+        "extra": []
+      }
+    },
+    "compared": 97,
+    "identical": 97
+  },
+  "versioned_eval": {
+    "reference": "docs/mesures/eval-<index>-dense-primaire-2026-11-06.json",
+    "document_ids_available": false,
+    "note": "the versioned eval reports carry no doc_id, so the top-10 identity is established by the local and remote search dumps, not by these files",
+    "per_index": {
+      "articles": {
+        "compared": 25,
+        "fidelity_identical": 25,
+        "fidelity_differing": [],
+        "quality_identical": 24,
+        "quality_differing": [
+          "Q04"
+        ],
+        "missing": [],
+        "extra": []
+      },
+      "decisions": {
+        "compared": 45,
+        "fidelity_identical": 45,
+        "fidelity_differing": [],
+        "quality_identical": 45,
+        "quality_differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "dole": {
+        "compared": 6,
+        "fidelity_identical": 6,
+        "fidelity_differing": [],
+        "quality_identical": 6,
+        "quality_differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "jorf": {
+        "compared": 10,
+        "fidelity_identical": 10,
+        "fidelity_differing": [],
+        "quality_identical": 10,
+        "quality_differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "sarde": {
+        "compared": 8,
+        "fidelity_identical": 8,
+        "fidelity_differing": [],
+        "quality_identical": 8,
+        "quality_differing": [],
+        "missing": [],
+        "extra": []
+      },
+      "titres": {
+        "compared": 3,
+        "fidelity_identical": 3,
+        "fidelity_differing": [],
+        "quality_identical": 3,
+        "quality_differing": [],
+        "missing": [],
+        "extra": []
+      }
+    },
+    "compared": 97,
+    "fidelity_identical": 97,
+    "quality_identical": 96,
+    "quality_differing": [
+      {
+        "index": "articles",
+        "id": "Q04"
+      }
+    ]
+  }
+}

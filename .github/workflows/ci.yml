@@ -19,6 +19,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # `docker/Dockerfile` pins the toolchain of `rust-toolchain.toml` in
+      # `ARG RUST_VERSION`, and the two `toolchain:` fields of this workflow
+      # repeat the same version: a comment was the only link between the three
+      # values, and a bump of the channel that forgot one of them would build
+      # the server with another compiler. The check runs before anything is
+      # built.
+      - name: Check that every Rust toolchain pin matches rust-toolchain.toml
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+          version=$(sed -n 's/^ARG RUST_VERSION=\(.*\)$/\1/p' docker/Dockerfile)
+          pins=$(sed -n 's/^ *toolchain: "\(.*\)"$/\1/p' .github/workflows/ci.yml)
+          if [ -z "$channel" ] || [ -z "$version" ]; then
+            echo "cannot read the channel of rust-toolchain.toml ('$channel') or ARG RUST_VERSION of docker/Dockerfile ('$version')"
+            exit 1
+          fi
+          if [ "$channel" != "$version" ]; then
+            echo "docker/Dockerfile pins Rust $version, rust-toolchain.toml names channel $channel: update ARG RUST_VERSION"
+            exit 1
+          fi
+          found=$(printf '%s\n' "$pins" | grep -c . || true)
+          if [ "$found" -ne 2 ]; then
+            echo "expected two toolchain pins in .github/workflows/ci.yml, found $found ('$pins')"
+            exit 1
+          fi
+          for pin in $pins; do
+            if [ "$pin" != "$channel" ]; then
+              echo ".github/workflows/ci.yml pins Rust $pin, rust-toolchain.toml names channel $channel: update toolchain: in .github/workflows/ci.yml"
+              exit 1
+            fi
+          done
       # Complement of 2026-11-01 to ADR-0068: several feature sets are linked in
       # one `target/`, and the disk of the runner fills up. The SDKs the project
       # does not use are removed, and the free space is measured before and after.

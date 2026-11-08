@@ -1,0 +1,244 @@
+{
+ "format_version": 1,
+ "measure": "MES-14",
+ "context": "COMPARER-AVEC-PGVECTOR, pass C",
+ "date": "2026-11-06",
+ "repeat": 50,
+ "queries_per_case": 20,
+ "samples_per_case": 1000,
+ "method": "crible eval, dense mode, k=10, exact_threshold=5000; the filter stage is Pool::evaluate; counts from the same generation snapshot, read-only",
+ "indexes": {
+  "decisions": {
+   "live": 3589776,
+   "snapshot": "decisions-e2-g2",
+   "cases": {
+    "bitmap": {
+     "kind": "bitmap",
+     "pool_size": 202425,
+     "scan_iids": null,
+     "generation": 2,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 0.004,
+      "p95": 0.006,
+      "p99": 0.008
+     },
+     "dense_ms": {
+      "p50": 4.673,
+      "p95": 5.195,
+      "p99": 5.652
+     },
+     "total_ms": {
+      "p50": 4.949,
+      "p95": 5.47,
+      "p99": 5.946
+     }
+    },
+    "annee-plein": {
+     "kind": "integer",
+     "pool_size": 1133472,
+     "scan_iids": 3589753,
+     "generation": 2,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 63.74,
+      "p95": 68.167,
+      "p99": 69.57
+     },
+     "dense_ms": {
+      "p50": 8.928,
+      "p95": 10.24,
+      "p99": 11.227
+     },
+     "total_ms": {
+      "p50": 73.052,
+      "p95": 77.705,
+      "p99": 79.542
+     }
+    },
+    "date-plein": {
+     "kind": "date",
+     "pool_size": 263057,
+     "scan_iids": 3589776,
+     "generation": 2,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 59.414,
+      "p95": 63.313,
+      "p99": 64.375
+     },
+     "dense_ms": {
+      "p50": 5.172,
+      "p95": 5.837,
+      "p99": 6.59
+     },
+     "total_ms": {
+      "p50": 64.907,
+      "p95": 68.778,
+      "p99": 70.471
+     }
+    },
+    "annee-reduit": {
+     "kind": "integer",
+     "pool_size": 48197,
+     "scan_iids": 202425,
+     "generation": 2,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 4.404,
+      "p95": 4.557,
+      "p99": 4.655
+     },
+     "dense_ms": {
+      "p50": 3.282,
+      "p95": 3.646,
+      "p99": 3.963
+     },
+     "total_ms": {
+      "p50": 7.909,
+      "p95": 8.314,
+      "p99": 8.701
+     }
+    },
+    "date-reduit": {
+     "kind": "date",
+     "pool_size": 1655,
+     "scan_iids": 202425,
+     "generation": 2,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 3.986,
+      "p95": 4.154,
+      "p99": 4.352
+     },
+     "dense_ms": {
+      "p50": 3.433,
+      "p95": 4.417,
+      "p99": 6.641
+     },
+     "total_ms": {
+      "p50": 7.618,
+      "p95": 8.696,
+      "p99": 10.852
+     }
+    }
+   }
+  },
+  "articles": {
+   "live": 2476715,
+   "snapshot": "articles-e1-g1",
+   "cases": {
+    "bitmap": {
+     "kind": "bitmap",
+     "pool_size": 168875,
+     "scan_iids": null,
+     "generation": 1,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 0.04,
+      "p95": 0.05,
+      "p99": 0.059
+     },
+     "dense_ms": {
+      "p50": 4.458,
+      "p95": 4.965,
+      "p99": 5.263
+     },
+     "total_ms": {
+      "p50": 4.713,
+      "p95": 5.225,
+      "p99": 5.526
+     }
+    },
+    "annee-plein": {
+     "kind": "integer",
+     "pool_size": 550966,
+     "scan_iids": 2231423,
+     "generation": 1,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 39.761,
+      "p95": 41.496,
+      "p99": 42.554
+     },
+     "dense_ms": {
+      "p50": 6.865,
+      "p95": 7.96,
+      "p99": 8.72
+     },
+     "total_ms": {
+      "p50": 47.076,
+      "p95": 49.016,
+      "p99": 51.368
+     }
+    },
+    "date-plein": {
+     "kind": "date",
+     "pool_size": 138740,
+     "scan_iids": 2476715,
+     "generation": 1,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 41.344,
+      "p95": 42.504,
+      "p99": 43.777
+     },
+     "dense_ms": {
+      "p50": 5.046,
+      "p95": 5.554,
+      "p99": 5.943
+     },
+     "total_ms": {
+      "p50": 46.771,
+      "p95": 48.035,
+      "p99": 49.531
+     }
+    },
+    "annee-reduit": {
+     "kind": "integer",
+     "pool_size": 31869,
+     "scan_iids": 168860,
+     "generation": 1,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 4.134,
+      "p95": 4.306,
+      "p99": 4.392
+     },
+     "dense_ms": {
+      "p50": 3.203,
+      "p95": 3.577,
+      "p99": 3.785
+     },
+     "total_ms": {
+      "p50": 7.641,
+      "p95": 8.026,
+      "p99": 8.401
+     }
+    },
+    "date-reduit": {
+     "kind": "date",
+     "pool_size": 7046,
+     "scan_iids": 168875,
+     "generation": 1,
+     "exact_threshold": 5000,
+     "filter_ms": {
+      "p50": 3.768,
+      "p95": 3.988,
+      "p99": 4.029
+     },
+     "dense_ms": {
+      "p50": 2.028,
+      "p95": 2.316,
+      "p99": 2.482
+     },
+     "total_ms": {
+      "p50": 6.104,
+      "p95": 6.435,
+      "p99": 6.671
+     }
+    }
+   }
+  }
+ }
+}
