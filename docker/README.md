@@ -18,7 +18,7 @@ se fait en release, et l'image d'exécution est `debian:bookworm-slim`
 | Port | 8080, `EXPOSE 8080` |
 | Dossiers | `/data`, `/models`, `/exchange`, `/etc/crible` |
 | Contrôle | `HEALTHCHECK` sur `GET /health` toutes les 15 s |
-| Tableau de bord | dans le binaire (ADR-0130), aucun dossier d'interface dans l'image |
+| Tableau de bord | aucun dans l'image : la phase P9 est reportée après J10 (ADR-0136), et le binaire n'embarque aucune interface |
 
 La version d'ONNX Runtime est la même que celle du groupe `ci` de `docs/07`. Le
 `Dockerfile` l'épingle (`ORT_VERSION`) et vérifie chaque archive par son
@@ -68,7 +68,7 @@ workflow ne crée ni ne pousse de tag lui-même.
 Ce que fait le workflow :
 
 1. il vérifie que le tag correspond à la version du workspace dans `Cargo.toml`
-   (`v0.1.0` pour `version = "0.1.0"`), et échoue sinon ;
+   (`v1.0.0` pour `version = "1.0.0"`), et échoue sinon ;
 2. il construit les deux architectures, `linux/arm64` sur `ubuntu-24.04-arm` et
    `linux/amd64` sur `ubuntu-latest`, deux runners **natifs** : aucune
    compilation émulée par QEMU. Chaque job met ses couches en cache
@@ -82,7 +82,7 @@ Ce que fait le workflow :
 
 | Étiquette | Sens |
 |---|---|
-| `ghcr.io/<owner>/crible:<version>` | la version publiée : `v0.1.0` publie `0.1.0` |
+| `ghcr.io/<owner>/crible:<version>` | la version publiée : `v1.0.0` publie `1.0.0` |
 | `ghcr.io/<owner>/crible:cpu` | étiquette **mobile** de la dernière version **stable** publiée |
 
 Règle de `:cpu` (ADR-0133, décision 4) : elle n'est déplacée que si le tag
@@ -93,7 +93,7 @@ comme des versions et non comme du texte, donc `v0.10.0` passe au-dessus de
 ne recule jamais.
 
 Une **pré-version** Cargo, c'est-à-dire une version contenant un `-` (par exemple
-`0.1.0-rc.1`, tag `v0.1.0-rc.1`), est admise : elle publie son étiquette de
+`1.0.0-rc.1`, tag `v1.0.0-rc.1`), est admise : elle publie son étiquette de
 version mais **ne déplace jamais `:cpu`**. C'est l'essai du workflow avant la
 première version stable, et il vaut mieux cet essai qu'une première publication
 ratée, une image poussée sur GHCR étant difficile à retirer. La garde de version
@@ -116,24 +116,28 @@ dans le registre ; `cancel-in-progress: false` ne couvre pas ce cas d'échec
 d'une seule architecture (ADR-0133, décision 5).
 
 Les commandes ci-dessous sont celles du **propriétaire** ; aucun agent ne crée
-ni ne pousse de tag. D'abord l'essai, avec la pré-version écrite dans
-`Cargo.toml` (`version = "0.1.0-rc.1"`), qui publie `0.1.0-rc.1` sans toucher
+ni ne pousse de tag. La version `1.0.0` est la première version stable : le tag
+`v1.0.0` est repointé sur le commit de la tâche `ACTUALISER-DEPOT-APRES-V1`, et
+sa publication suit la fusion. La marche à suivre ci-dessous vaut pour les
+**versions suivantes** ; les numéros ci-dessous ne servent que d'exemple.
+D'abord l'essai, avec la pré-version écrite dans
+`Cargo.toml` (`version = "1.0.0-rc.1"`), qui publie `1.0.0-rc.1` sans toucher
 `:cpu` :
 
 ```
-git tag v0.1.0-rc.1
-git push origin v0.1.0-rc.1
+git tag v1.0.0-rc.1
+git push origin v1.0.0-rc.1
 ```
 
-Puis la première version stable, `[workspace.package] version` remise à `0.1.0`
-dans `Cargo.toml` et commitée :
+Puis la version stable, `[workspace.package] version` remise à son numéro sans
+suffixe dans `Cargo.toml` et commitée :
 
 ```
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-Récupérer ensuite l'image publiée avec `docker pull ghcr.io/<owner>/crible:0.1.0`.
+Récupérer ensuite l'image publiée avec `docker pull ghcr.io/<owner>/crible:1.0.0`.
 
 ## Lancer
 

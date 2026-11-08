@@ -1,6 +1,6 @@
 [project]
 name = "crible"
-version = "0.1.0"
+version = "1.0.0"
 description = "Batch writer for Crible: writes format v1 batches (Parquet + manifest)."
 readme = "README.md"
 requires-python = ">=3.11"

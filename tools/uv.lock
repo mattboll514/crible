@@ -172,7 +172,7 @@ wheels = [
 
 [[package]]
 name = "crible"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "../clients/python" }
 dependencies = [
     { name = "blake3" },

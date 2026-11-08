@@ -109,8 +109,8 @@ opencode
 ```
 
 - L'agent actif est l'**orchestrateur** (agent par défaut). La touche Tab fait passer d'un agent principal à l'autre.
-- Tape `/etat` : il résume le projet et propose la première tâche, `INITIALISER-WORKSPACE-RUST`.
-- Tape `/tache INITIALISER-WORKSPACE-RUST`. `@git` doit créer `phase/P0-fondations` et la branche de tâche **sans te demander de permission**. Les règles d'un agent passent après les règles globales, et c'est la dernière règle qui correspond qui l'emporte. Seul un push te demandera confirmation.
+- Tape `/etat` : il fait le point. La v1 est livrée le 2026-11-08 (J10 validé), aucune tâche du plan n'est ouverte, et P9 (tableau de bord) est reportée après J10 (ADR-0136), reprise non planifiée (décision du propriétaire du 2026-11-08).
+- Tape `/tache <NOM-DE-TACHE>` pour lancer une tâche. `@git` doit créer la branche de phase `phase/P<n>-<slug>` et la branche de tâche **sans te demander de permission**. Les règles d'un agent passent après les règles globales, et c'est la dernière règle qui correspond qui l'emporte. Seul un push te demandera confirmation.
 
 ### Mode `--auto` : travailler sans demandes d'autorisation (ADR-0026)
 
