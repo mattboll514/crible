@@ -92,7 +92,21 @@ def fake_dependencies(rows_by_corpus, reconstruction_ms=1.0, calls=None):
     }
 
 
-def test_replay_one_asks_k_per_corpus_for_a_mono_perimeter():
+def fixed_timed(durations):
+    """Stand-in for ``replay.timed``: fixed durations, the call still runs."""
+
+    remaining = list(durations)
+
+    def timed(call):
+        return remaining.pop(0), call()
+
+    return timed
+
+
+def test_replay_one_asks_k_per_corpus_for_a_mono_perimeter(monkeypatch):
+    # The durations are fixed: the three fields are rounded independently, and
+    # a real clock made this test fail about once in four runs (2026-11-08).
+    monkeypatch.setattr(replay, "timed", fixed_timed([0.0004999, 2.0004999]))
     calls = []
     dependencies = fake_dependencies(
         {"titres_textes": [{"src_id": "T1", "distance": 0.2}]}, calls=calls
@@ -107,6 +121,9 @@ def test_replay_one_asks_k_per_corpus_for_a_mono_perimeter():
     run = replay.replay_one(entry, dependencies, None)
     assert calls == [("api.recherche_semantique", "titres_textes", 10)]
     assert [row["doc_id"] for row in run["results"]] == ["T1"]
+    assert run["sql"] == 0.0
+    assert run["reconstruction"] == 2.0
+    assert run["total"] == 2.001
     # Each field is rounded to 0.001 ms independently, so the sum can differ by
     # up to 0.0015 ms.
     assert run["total"] == pytest.approx(run["sql"] + run["reconstruction"], abs=0.002)

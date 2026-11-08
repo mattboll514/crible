@@ -186,4 +186,5 @@ Chiffres de la séance du 2026-11-07 ; le détail est dans
   passe B ne fait aucun geste sur Supabase, ouvre les index en lecture seule et ne laisse aucune
   écriture durable sous `/data`. La passe C ouvre MES-02 et MES-03 en **écriture** avec la reprise
   (`dense_latency` → `GenerationStore::open`), permise par le complément d'ADR-0141 ; MES-05
-  n'ouvre **aucun index** et ne monte que `/models:ro`.
+  n'ouvre **aucun index** et ne monte aucun dossier d'index (`/models` et `/in` en lecture seule,
+  `/out`).

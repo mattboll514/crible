@@ -1221,6 +1221,19 @@ impl GenerationStore {
             Duration::ZERO
         };
 
+        // ADR-0134, decision 2: a step is published at its start. The manifest
+        // names the segments of the committed generation and needs no filter
+        // structure, so step 5 runs before step 6, in the order of
+        // `docs/02-architecture.md`. The snapshot derivation below therefore runs
+        // under `snapshot`, never under the `lexical` step that precedes it.
+        progress(ProtocolStep::Manifest);
+        let manifest_started = Instant::now();
+        let segments = segments_of(&self.records, &epoch_dir)?;
+        write_manifest_of(&epoch_dir, self.lease.epoch, generation, &segments)?;
+        let manifest_time = manifest_started.elapsed();
+        failpoint!("after_manifest");
+
+        progress(ProtocolStep::Snapshot);
         let snapshot_started = Instant::now();
         let snapshot = build_snapshot_after_commit(
             &self.records,
@@ -1228,18 +1241,11 @@ impl GenerationStore {
             &previous,
             generation,
             &delta,
+            segments,
             PublishedLexical::from_step(lexical),
             Arc::clone(&self.lease),
         )?;
         let snapshot_time = snapshot_started.elapsed();
-
-        progress(ProtocolStep::Manifest);
-        let manifest_started = Instant::now();
-        write_manifest(&epoch_dir, self.lease.epoch, &snapshot)?;
-        let manifest_time = manifest_started.elapsed();
-        failpoint!("after_manifest");
-
-        progress(ProtocolStep::Snapshot);
         self.snapshot.store(Arc::new(snapshot));
         failpoint!("after_publish");
         Ok(CommittedGeneration {
@@ -2608,12 +2614,17 @@ fn build_snapshot(
 /// generation is committed but was never published, and `delta` would leave its
 /// rows out. The snapshot is then rebuilt from `records.sqlite`, which is what
 /// the next [`GenerationStore::open`] would do (INV-04).
+///
+/// `segments` is the list the caller wrote in the manifest of `generation`
+/// (step 5): the two uses share one read of the `segment.json` files.
+#[allow(clippy::too_many_arguments)]
 fn build_snapshot_after_commit(
     records: &RecordStore,
     epoch_dir: &Path,
     previous: &Snapshot,
     generation: Generation,
     delta: &CommitDelta,
+    segments: Vec<SegmentMeta>,
     lexical: PublishedLexical,
     lease: Arc<EpochLease>,
 ) -> Result<Snapshot, CribleError> {
@@ -2633,7 +2644,6 @@ fn build_snapshot_after_commit(
     } else {
         FilterIndex::from_records(records.connection(), previous.filters().schema())?
     };
-    let segments = segments_of(records, epoch_dir)?;
     // A segment is immutable: the arrays of the previous snapshot are reused
     // through `Arc`, so a commit reads only the codes of the segments it adds.
     let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, Some(previous))?;
@@ -2775,8 +2785,23 @@ fn segments_of(records: &RecordStore, epoch_dir: &Path) -> Result<Vec<SegmentMet
 
 /// Writes the derived manifest of `snapshot`, atomically.
 fn write_manifest(epoch_dir: &Path, epoch: Epoch, snapshot: &Snapshot) -> Result<(), CribleError> {
-    let path = manifest_path(epoch_dir, snapshot.generation());
-    let bytes = manifest_json(epoch, snapshot)?;
+    write_manifest_of(epoch_dir, epoch, snapshot.generation(), snapshot.segments())
+}
+
+/// Writes the derived manifest of generation `generation` of `segments`,
+/// atomically.
+///
+/// The manifest needs the segments of the generation and nothing else, so the
+/// commit writes it before deriving the snapshot's filter structures
+/// (`docs/02-architecture.md`, step 5 then step 6).
+fn write_manifest_of(
+    epoch_dir: &Path,
+    epoch: Epoch,
+    generation: Generation,
+    segments: &[SegmentMeta],
+) -> Result<(), CribleError> {
+    let path = manifest_path(epoch_dir, generation);
+    let bytes = manifest_json(epoch, generation, segments)?;
     write_atomically(&path, bytes.as_bytes())
 }
 
@@ -2794,12 +2819,16 @@ fn ensure_manifest(epoch_dir: &Path, epoch: Epoch, snapshot: &Snapshot) -> Resul
 /// its generation, its epoch and its segments, with the same fields as
 /// `segment.json`, so an operator can read one generation with `cat`. It
 /// carries the version of its own format (INV-15).
-fn manifest_json(epoch: Epoch, snapshot: &Snapshot) -> Result<String, CribleError> {
-    let segments: Vec<Value> = snapshot.segments().iter().map(segment_value).collect();
+fn manifest_json(
+    epoch: Epoch,
+    generation: Generation,
+    segments: &[SegmentMeta],
+) -> Result<String, CribleError> {
+    let segments: Vec<Value> = segments.iter().map(segment_value).collect();
     let manifest = json!({
         "epoch": epoch.get(),
         "format_version": MANIFEST_FORMAT_VERSION,
-        "generation": snapshot.generation().get(),
+        "generation": generation.get(),
         "segments": segments,
     });
     serde_json::to_string(&manifest).map_err(|error| {

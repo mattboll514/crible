@@ -127,7 +127,7 @@ def test_perimeter_admission():
     assert audit_expected.perimeter_admits("droit_en_vigueur", in_force)
     assert not audit_expected.perimeter_admits("droit_en_vigueur", {"etat": "MODIFIE"})
     # `droit_en_vigueur` is the documented `etat in VIGUEUR*` filter, without a
-    # date clause (docs/legifacile/index-legifacile.md:318): a future
+    # date clause (docs/legifacile/index-legifacile.md:317): a future
     # `VIGUEUR_DIFF` is admitted by the perimeter, even though `is_current`
     # rejects it.
     future = {

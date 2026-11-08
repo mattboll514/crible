@@ -16,12 +16,16 @@
 //! Each argument is a `lexical/` directory. The output is one JSON object per
 //! directory, on one line: `path`, `field`, `segments`, `docs`, `tokens`.
 //!
-//! **Read a copy, never a served index.** `Index::open_in_dir` takes Tantivy's
-//! writer lock: it opens `.tantivy-meta.lock` in write mode and creates it when
-//! it is absent. On a copy (the campaign copied the six `lexical/` directories
-//! under `data/p10-import/lexical/`) that is harmless. On an index a server
-//! serves, or on a volume opened for writing, it takes the lock of a live index;
-//! copy the directory first.
+//! **Read a copy, never a served index.** Reading the totals opens a Tantivy
+//! reader (`index.reader()`), which takes `META_LOCK`, the blocking lock of
+//! `.tantivy-meta.lock`, so that the segment files it opens are not garbage
+//! collected under it. On a copy (the campaign copied the six `lexical/`
+//! directories under `data/p10-import/lexical/`) that is harmless. On an index
+//! a server serves, or on a volume opened for writing, it takes a lock of a live
+//! index, and a segment the writer deletes has no stable total; copy the
+//! directory first. The lock of the writer is another file,
+//! `.tantivy-writer.lock` (`INDEX_WRITER_LOCK`), and it belongs to the
+//! `IndexWriter`, which this example never opens.
 
 use std::path::Path;
 

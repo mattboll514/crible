@@ -101,6 +101,18 @@ const REST_ROUNDS: usize = 50;
 /// criterion to see one blocked read.
 const HELD_ROUNDS: usize = 10;
 
+/// Absolute floor of the per-request criterion (ADR-0113, complement of
+/// 2026-11-08, decision 1).
+///
+/// The threshold of a writing phase is the greater of three times the p99 of
+/// the rest phase and this floor: the p99 of a rest phase is a statistic of 200
+/// samples, so one scheduling hiccup of a shared runner could push three times
+/// it under a single honest search. The floor stays forty times under a real
+/// block, which costs at least the 1 000 ms `busy_timeout` of ADR-0038 or never
+/// returns, and it is fixed: a later failure is still a failure. MES-16 keeps
+/// the bare p99 × 3 (`tools/bench/mes16/`).
+const FLOOR: Duration = Duration::from_millis(25);
+
 /// Serialises the access to the process-global `CRIBLE_TEST_BARRIER` and to the
 /// process-global `CRIBLE_TEST_SEGMENT_READERS`.
 ///
@@ -395,13 +407,23 @@ fn p99(samples: &mut [Duration]) -> Duration {
 }
 
 /// Asserts that every latency of the writing phase is under `reference`.
+///
+/// `reference` is the threshold of the phase, `max(3 × p99 of the rest phase,
+/// 25 ms)`; the message names the floor when it is the one that applies
+/// (ADR-0113, complement of 2026-11-08, decision 5).
 fn assert_all_under(samples: &[Duration], reference: Duration, phase: &str) {
+    let criterion = if reference == FLOOR {
+        "the 25 ms floor of the criterion, three times the p99 of the rest phase \
+         being no higher"
+    } else {
+        "three times the p99 of the rest phase"
+    };
     for sample in samples {
         assert!(
             *sample < reference,
             "a dense search took {sample:?} during the {phase}, which is over \
-             three times the p99 of the rest phase ({reference:?}): the write \
-             blocks a read (INV-02; ADR-0113, decision 1)"
+             {criterion} ({reference:?}): the write blocks a read (INV-02; \
+             ADR-0113, decision 1 and the complement of 2026-11-08)"
         );
     }
 }
@@ -431,7 +453,7 @@ async fn inv_02_dense_searches_stay_under_the_criterion_while_an_attach_is_held(
         "a search of the rest phase opened a segment reader: {:?} (ADR-0126, decision 1)",
         slot.events()
     );
-    let reference = p99(&mut rest) * 3;
+    let reference = (p99(&mut rest) * 3).max(FLOOR);
 
     let barrier = Barrier::armed(slot, &["attach-after-sqlite-commit"]);
     let accepted = submit(&router, upsert("batch-held", AFTER, "1241")).await;
@@ -505,7 +527,7 @@ async fn inv_02_dense_searches_stay_under_the_criterion_while_a_compaction_is_he
         "the rest phase reads the published generation: {answer}"
     );
     assert!(slot.events().is_empty(), "the rest phase opens no reader");
-    let reference = p99(&mut rest) * 3;
+    let reference = (p99(&mut rest) * 3).max(FLOOR);
 
     let barrier = Barrier::armed(slot, &[]);
     let path = format!("/v1/indexes/{INDEX}/compact?wait=false");

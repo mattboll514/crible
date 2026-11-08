@@ -118,7 +118,7 @@ def perimeter_admits(perimeter: str, fields: Mapping[str, Any]) -> bool:
     """Whether the MCP perimeter of the line admits the document.
 
     `droit_en_vigueur` and `droit_historique` follow the documented state
-    filters (`docs/legifacile/index-legifacile.md:318`), which carry no date
+    filters (`docs/legifacile/index-legifacile.md:317-318`), which carry no date
     clause; `is_current` is the in-force test, used by `current_versions`.
     """
 

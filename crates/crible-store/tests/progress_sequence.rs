@@ -18,6 +18,7 @@
 //! | `an_attach_that_changes_text_publishes_the_six_steps_in_order` | the attach runs the six steps of `docs/02`, in order, always with the passages of its manifest as `total` |
 //! | `an_attach_that_changes_no_text_publishes_no_segment_and_no_lexical` | a batch that adds no passage text runs neither `segment` nor `lexical`, and still reports the other four steps |
 //! | `a_patch_publishes_transaction_then_manifest_then_snapshot` | a patch runs exactly `transaction`, `manifest`, `snapshot`, with its document count as `total`, and never `lexical` |
+//! | `the_snapshot_step_starts_after_the_manifest_of_the_generation_is_written` | the manifest is written inside its own step, before the `snapshot` step starts |
 //!
 //! ```text
 //! cargo test -p crible-store --test progress_sequence
@@ -225,5 +226,69 @@ fn a_patch_publishes_transaction_then_manifest_then_snapshot() {
         assert_one_total(&reported),
         1,
         "the total is the number of documents of the patch: {reported:?}"
+    );
+}
+
+/// Number of manifests written under the single epoch of `index`.
+fn manifest_count(index: &Path) -> usize {
+    common::directory_entries(&common::manifests_dir(index))
+        .iter()
+        .filter(|name| name.ends_with(".json"))
+        .count()
+}
+
+/// The manifest of the generation is written inside the `manifest` step,
+/// before the `snapshot` step starts.
+///
+/// ADR-0134, decision 2, publishes a step at its start, and
+/// `docs/02-architecture.md` puts step 5 (the manifest) before step 6 (the
+/// snapshot). The test observes the published steps and the number of manifests
+/// on disk at each of them. It does not observe which step is in force while the
+/// snapshot is derived: no hook sits inside that derivation, and this test adds
+/// none. What it pins is the order of the two publications around the manifest.
+#[test]
+fn the_snapshot_step_starts_after_the_manifest_of_the_generation_is_written() {
+    let (temp, index) = common::temp_index();
+    let schema = common::fixture_schema();
+    let config = common::test_config_with_lexical("test", &schema, true);
+    let mut store = common::create_store_with_config(&index, &schema, &config);
+    let batches = temp.path().join("batches");
+    let first = common::write_batch(&batches, "progress-manifest-first", &common::TWO_DOCUMENTS);
+    attach_recording(&mut store, &index, &first);
+    let before = manifest_count(&index);
+    assert!(
+        before >= 1,
+        "the first attach writes the manifests of the index: {:?}",
+        common::directory_entries(&common::manifests_dir(&index))
+    );
+
+    let second = common::write_batch(&batches, "progress-manifest-second", &common::TWO_DOCUMENTS);
+    let mut counts = Vec::new();
+    attach_with_progress(
+        &mut store,
+        &second,
+        &index_config_of(&index),
+        &fixture_model(),
+        None,
+        None,
+        &mut |step, _total| counts.push((step, manifest_count(&index))),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "the fixture attach must succeed: {}: {}",
+            error.code().as_str(),
+            error.message()
+        )
+    });
+    assert_eq!(
+        counts,
+        vec![
+            (ProtocolStep::Validation, before),
+            (ProtocolStep::Transaction, before),
+            (ProtocolStep::Manifest, before),
+            (ProtocolStep::Snapshot, before + 1),
+        ],
+        "the manifest is written inside its own step, before the snapshot step \
+         starts: {counts:?}"
     );
 }

@@ -343,7 +343,8 @@ sh tools/bench/p10-macmini/run_pass_c.sh encode fp32 4
 ```
 
 Chaque exécution tourne dans un conteneur `--rm` au premier plan, le volume des modèles monté en
-lecture seule. `measure_queries` **n'ouvre aucun index** : le conteneur ne monte que `/models:ro`
+lecture seule. `measure_queries` **n'ouvre aucun index** : le conteneur ne monte aucun dossier d'index
+(`/models` et `/in` en lecture seule, `/out`)
 (`tools/bench/p10-macmini/run_pass_c.sh:96`). Les 2 000 appels d'une précision sont regroupés pour
 les percentiles ; les deux exécutions sont aussi données séparément. Percentiles au rang le plus
 proche ; l'agrégateur recalcule et refuse tout désaccord.

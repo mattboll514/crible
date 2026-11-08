@@ -38,7 +38,9 @@
 //! read from SQLite, as `jobs.sqlite` already does (ADR-0103, ADR-0118
 //! decisions 3 and 5). An event deposited by a request is therefore attached to
 //! the minute of the flush that writes it, up to one flush interval away from
-//! the instant it happened.
+//! the instant it happened. The tests pin that instant instead
+//! (`AnalyticsStore::write_at`, `missing_days_at`), so a flush and a read of
+//! one test never straddle a real minute or day.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -505,6 +507,24 @@ impl AnalyticsStore {
         shapes: &[ShapeCount],
         days: &[DayIndex],
     ) -> Result<(), CribleError> {
+        self.write_at(None, minute, shapes, days)
+    }
+
+    /// Writes one flush at the instant `at`, or at the instant SQLite reads.
+    ///
+    /// `Some` fixes the minute and the day of the flush. The minute is
+    /// truncated to `AAAA-MM-JJTHH:MM:00Z`, so an instant that carries seconds
+    /// still lands in the row of its minute. Only the tests take it: they pin
+    /// the instant, so two flushes of one test land in the same row whatever
+    /// the wall clock says (ADR-0118, decision 3). A production caller goes
+    /// through [`AnalyticsStore::write`], which passes `None`.
+    fn write_at(
+        &self,
+        at: Option<&str>,
+        minute: &[MinuteEvent],
+        shapes: &[ShapeCount],
+        days: &[DayIndex],
+    ) -> Result<(), CribleError> {
         if minute.is_empty() && shapes.is_empty() && days.is_empty() {
             return Ok(());
         }
@@ -512,21 +532,27 @@ impl AnalyticsStore {
             let transaction = connection.transaction().map_err(|error| {
                 crate::records::database_error("open the analytics flush", &error)
             })?;
-            let now: String = transaction
-                .query_row("SELECT strftime('%Y-%m-%dT%H:%M:00Z', 'now')", [], |row| {
-                    row.get(0)
-                })
-                .map_err(|error| crate::records::database_error("read the minute", &error))?;
+            let minute_key: String = match at {
+                Some(instant) => minute_of(instant).unwrap_or_else(|| instant.to_owned()),
+                None => transaction
+                    .query_row("SELECT strftime('%Y-%m-%dT%H:%M:00Z', 'now')", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(|error| crate::records::database_error("read the minute", &error))?,
+            };
             for event in minute {
-                write_minute(&transaction, &now, event)?;
+                write_minute(&transaction, &minute_key, event)?;
             }
             for shape in shapes {
-                write_shape(&transaction, &now, shape)?;
+                write_shape(&transaction, &minute_key, shape)?;
             }
             if !days.is_empty() {
-                let day: String = transaction
-                    .query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))
-                    .map_err(|error| crate::records::database_error("read the day", &error))?;
+                let day: String = match at {
+                    Some(instant) => day_of(instant).unwrap_or(instant).to_owned(),
+                    None => transaction
+                        .query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))
+                        .map_err(|error| crate::records::database_error("read the day", &error))?,
+                };
                 for row in days {
                     write_day(&transaction, &day, row)?;
                 }
@@ -548,17 +574,36 @@ impl AnalyticsStore {
     ///
     /// The SQLite failure.
     pub fn missing_days(&self, indexes: &[String]) -> Result<Vec<String>, CribleError> {
+        self.missing_days_at(None, indexes)
+    }
+
+    /// Names of `indexes` that have no `day_indexes` row for the day of `at`,
+    /// or for the current UTC day when `at` is `None`.
+    ///
+    /// Only the tests pass `Some`, for the same reason as
+    /// [`AnalyticsStore::write_at`].
+    fn missing_days_at(
+        &self,
+        at: Option<&str>,
+        indexes: &[String],
+    ) -> Result<Vec<String>, CribleError> {
         let present = self.with(|connection| {
+            let day: String = match at {
+                Some(instant) => day_of(instant).unwrap_or(instant).to_owned(),
+                None => connection
+                    .query_row("SELECT strftime('%Y-%m-%d', 'now')", [], |row| row.get(0))
+                    .map_err(|error| crate::records::database_error("read the day", &error))?,
+            };
             let mut statement = connection
                 .prepare(
                     "SELECT \"index\" FROM day_indexes
-                     WHERE day = strftime('%Y-%m-%d', 'now')",
+                     WHERE day = ?1",
                 )
                 .map_err(|error| {
                     crate::records::database_error("prepare the daily rows query", &error)
                 })?;
             let names = statement
-                .query_map([], |row| row.get::<_, String>(0))
+                .query_map([day], |row| row.get::<_, String>(0))
                 .map_err(|error| crate::records::database_error("list the daily rows", &error))?
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(|error| crate::records::database_error("read the daily rows", &error))?;
@@ -1848,6 +1893,14 @@ fn day_of(minute: &str) -> Option<&str> {
     minute.get(..10)
 }
 
+/// The `AAAA-MM-JJTHH:MM:00Z` minute of a pinned instant.
+///
+/// [`AnalyticsStore::write_at`] takes the instant of a test, which may carry
+/// seconds; the key of a minute row is always the minute (ADR-0118, decision 3).
+fn minute_of(instant: &str) -> Option<String> {
+    instant.get(..16).map(|prefix| format!("{prefix}:00Z"))
+}
+
 /// Joins the conditions, or yields an always-true one when there is none.
 fn clause(conditions: Vec<String>) -> String {
     if conditions.is_empty() {
@@ -2064,16 +2117,19 @@ mod tests {
     #[test]
     fn a_flush_merges_the_rows_of_one_minute() {
         // ADR-0118, decision 3: a flush is one transaction, and a row of the same
-        // key gains the counts and the buckets of the flush.
+        // key gains the counts and the buckets of the flush. The instant is
+        // pinned: the two flushes must not straddle a real minute boundary, which
+        // is what made this test fail once in CI (2026-11-08).
+        const MINUTE: &str = "2026-11-08T21:10:00Z";
         let (_directory, path, store) = store();
         let first = event(3);
         store
-            .write(std::slice::from_ref(&first), &[], &[])
+            .write_at(Some(MINUTE), std::slice::from_ref(&first), &[], &[])
             .expect("the first flush writes");
         let mut second = event(3);
         second.zero_results = 1;
         store
-            .write(&[second], &[], &[])
+            .write_at(Some(MINUTE), &[second], &[], &[])
             .expect("the second flush writes");
         let rows = read_minute_events(&path).expect("the file is readable");
         assert_eq!(
@@ -2081,11 +2137,30 @@ mod tests {
             1,
             "one row for one key and one minute: {rows:?}"
         );
+        assert_eq!(rows[0].minute, MINUTE, "the row carries the pinned minute");
         assert_eq!(rows[0].count, 2, "the counts are added");
         assert_eq!(rows[0].zero_results, 1);
         assert_eq!(
             rows[0].latency_total[3], 2,
             "the buckets are added sample by sample"
+        );
+    }
+
+    #[test]
+    fn a_pinned_instant_is_truncated_to_its_minute() {
+        // ADR-0118, decision 3: the key of a minute row is `AAAA-MM-JJTHH:MM:00Z`.
+        // A pinned instant may carry seconds, and the row must still land in the
+        // minute it names rather than in a key SQLite would never produce.
+        const INSTANT: &str = "2026-11-08T21:10:42Z";
+        let (_directory, path, store) = store();
+        store
+            .write_at(Some(INSTANT), &[event(1)], &[], &[])
+            .expect("the flush writes");
+        let rows = read_minute_events(&path).expect("the file is readable");
+        assert_eq!(rows.len(), 1, "one row for one flush: {rows:?}");
+        assert_eq!(
+            rows[0].minute, "2026-11-08T21:10:00Z",
+            "the key is truncated to the minute of the pinned instant"
         );
     }
 
@@ -2141,11 +2216,13 @@ mod tests {
     #[test]
     fn a_daily_row_is_written_once_per_day_and_index() {
         // ADR-0118, decision 5: the first flush of the day writes the row, the
-        // next ones leave it alone.
+        // next ones leave it alone. The instant is pinned, so the flush and the
+        // query of the missing days cannot fall on two sides of midnight.
+        const INSTANT: &str = "2026-11-08T09:00:00Z";
         let (_directory, path, store) = store();
         assert_eq!(
             store
-                .missing_days(&["alpha".to_owned(), "beta".to_owned()])
+                .missing_days_at(Some(INSTANT), &["alpha".to_owned(), "beta".to_owned()])
                 .expect("the missing days are readable"),
             vec!["alpha".to_owned(), "beta".to_owned()],
             "no index has a row yet"
@@ -2167,10 +2244,12 @@ mod tests {
                 ..DayIndex::default()
             },
         ];
-        store.write(&[], &[], &rows).expect("the daily rows write");
+        store
+            .write_at(Some(INSTANT), &[], &[], &rows)
+            .expect("the daily rows write");
         assert!(
             store
-                .missing_days(&["alpha".to_owned(), "beta".to_owned()])
+                .missing_days_at(Some(INSTANT), &["alpha".to_owned(), "beta".to_owned()])
                 .expect("the missing days are readable")
                 .is_empty(),
             "both indexes have their row of the day"

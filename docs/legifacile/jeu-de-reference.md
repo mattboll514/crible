@@ -150,6 +150,17 @@ les partitionne. Le corpus d'une question y est donc exprimé par un filtre, cel
 `etat exists: false` pour `droit_historique`. C'est la correspondance de `index-legifacile.md`,
 appliquée telle quelle.
 
+Le périmètre `jurisprudence` suit la **fusion multi-corpus du MCP**. Les 45 requêtes de ce
+périmètre rejouent la forme de `mcp.jsonl` : les deux corpus `juri_sommaires` et
+`juri_texte_integral` sont interrogés séparément, chacun rend `k × 2` résultats, puis le MCP
+fusionne les deux classements et coupe à `k`. C'est la forme du rejeu de `COMPARER-AVEC-PGVECTOR`,
+et non la lecture de `juri_texte_integral` seul que faisait MES-00. La règle est écrite ici sur
+décision du propriétaire du 2026-11-08, d'après l'action 3 de
+`docs/mesures/comparaison-pgvector-2026-11-06.md`. Elle ne change **aucune ligne** du jeu : les
+45 appels portaient déjà le périmètre `jurisprudence`, sans membre `corpus`. L'index `decisions`
+reste la cible physique du périmètre (`index-legifacile.md:319`, filtre ajouté « aucun »), parce
+qu'il réunit les deux corpus ; la fusion est le fait du MCP, pas un filtre d'index.
+
 ### Modes visés
 
 - **Dense** : tout le jeu. C'est le mode que `COMPARER-AVEC-PGVECTOR` confronte à pgvector.

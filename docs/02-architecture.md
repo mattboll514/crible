@@ -227,7 +227,7 @@ La **génération reste G** : une restauration ne l'incrémente pas, c'est ce qu
 
 **Règle : ce qui est parcouru en entier à chaque requête est en RAM ; ce qui est lu seulement pour quelques candidats reste sur disque (mmap).**
 
-| Pièce | Où | Ordre de grandeur pour Legifacile (8,58 M × 768) |
+| Pièce | Où | Ordre de grandeur pour Legifacile (valeurs calculées pour 8,58 M passages à la conception ; à 9 600 105 à l'import du 2026-11-06, environ 12 % de plus ; × 768) |
 |---|---|---|
 | Codes binaires | RAM, chargés en mémoire (pas en mmap, pour ne pas être évincés) | 0,82 Go |
 | Bitmaps (keyword, bool, vivants) | RAM | quelques Mo à ~50 Mo |
