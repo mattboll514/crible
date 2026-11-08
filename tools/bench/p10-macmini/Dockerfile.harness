@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+#
+# Harness image of the pass C of MESURER-SUR-MAC-MINI (P10, ADR-0141,
+# decisions 1 and 5). It grafts the measurement examples of MES-02, MES-03 and
+# MES-05 onto the runtime of `crible:p10`, so the Mac mini runs the same
+# libraries as the served image. No production code is changed.
+#
+# Build, from the repository root:
+#
+#   docker build -f tools/bench/p10-macmini/Dockerfile.harness \
+#     -t crible-p10-harness:dev .
+#
+# The context is the repository root, filtered by `.dockerignore`, which
+# excludes `.env*`, `data/`, `models/` and `tools/`.
+
+ARG RUST_VERSION=1.99.1
+ARG DEBIAN_VERSION=bookworm
+ARG BASE_IMAGE=crible:p10
+
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+
+RUN cargo build --release --locked \
+        --example dense_latency -p crible \
+        --example measure_queries -p crible-encode
+
+FROM ${BASE_IMAGE}
+
+COPY --from=builder /build/target/release/examples/dense_latency /usr/local/bin/dense_latency
+COPY --from=builder /build/target/release/examples/measure_queries /usr/local/bin/measure_queries
+
+USER crible
+WORKDIR /data
+ENTRYPOINT ["dense_latency"]

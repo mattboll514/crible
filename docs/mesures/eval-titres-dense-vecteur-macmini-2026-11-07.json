@@ -1,0 +1,103 @@
+{
+  "command": "crible eval --data /data --index titres --queries /in/titres-dense-vecteur-macmini.jsonl --models /models --modes dense --k 10 --out /out --exact-threshold 5000 --repeat 3",
+  "date": "2026-11-07",
+  "exact_threshold": 5000,
+  "format_version": 2,
+  "game": "titres-dense-vecteur-macmini",
+  "generation": 1,
+  "index": "titres",
+  "k": 10,
+  "modes": {
+    "dense": {
+      "dense_strategy": {
+        "binary": 3
+      },
+      "fidelity": {
+        "n": 3,
+        "overlap_at_10": 1.0,
+        "recall_at_10": 1.0
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 19.18,
+          "p95": 30.091,
+          "p99": 30.091
+        },
+        "fetch": {
+          "p50": 0.211,
+          "p95": 0.271,
+          "p99": 0.271
+        },
+        "filter": {
+          "p50": 0.105,
+          "p95": 0.115,
+          "p99": 0.115
+        },
+        "group": {
+          "p50": 0.002,
+          "p95": 0.002,
+          "p99": 0.002
+        },
+        "latency_basis": "server_stages",
+        "total": {
+          "p50": 19.532,
+          "p95": 30.461,
+          "p99": 30.461
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0
+        }
+      },
+      "quality": {
+        "mrr_at_k": 1.0,
+        "n": 3,
+        "recall_at_k": 1.0
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0011",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0015",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0016",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    }
+  },
+  "pool_size": 1477883,
+  "queries": 3,
+  "queries_with_expected": 3,
+  "repeat": 3,
+  "rescore_candidates": 5000,
+  "rescore_candidates_source": "configuration",
+  "source": {
+    "mode": "local"
+  },
+  "version": "0.1.0"
+}

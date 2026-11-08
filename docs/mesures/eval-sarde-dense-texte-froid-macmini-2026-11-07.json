@@ -1,0 +1,159 @@
+{
+  "command": "crible eval --data /data --index sarde --queries /in/sarde-dense-texte-froid-macmini.jsonl --models /models --modes dense --k 10 --out /out --exact-threshold 5000 --repeat 3",
+  "date": "2026-11-07",
+  "exact_threshold": 5000,
+  "format_version": 2,
+  "game": "sarde-dense-texte-froid-macmini",
+  "generation": 1,
+  "index": "sarde",
+  "k": 10,
+  "modes": {
+    "dense": {
+      "dense_strategy": {
+        "binary": 6,
+        "exact": 2
+      },
+      "fidelity": {
+        "n": 8,
+        "overlap_at_10": 1.0,
+        "recall_at_10": 1.0
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 8.797,
+          "p95": 9.955,
+          "p99": 10.249
+        },
+        "encode": {
+          "p50": 0.003,
+          "p95": 0.004,
+          "p99": 0.004
+        },
+        "fetch": {
+          "p50": 0.229,
+          "p95": 0.27,
+          "p99": 0.275
+        },
+        "filter": {
+          "p50": 0.02,
+          "p95": 0.021,
+          "p99": 0.023
+        },
+        "group": {
+          "p50": 0.001,
+          "p95": 0.003,
+          "p99": 0.003
+        },
+        "latency_basis": "server_stages",
+        "total": {
+          "p50": 9.124,
+          "p95": 10.307,
+          "p99": 10.567
+        },
+        "validate": {
+          "p50": 0.0,
+          "p95": 0.006,
+          "p99": 0.009
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.8166666666666668,
+        "n": 8,
+        "recall_at_k": 1.0
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q25",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q26",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q27",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.3333333333333333,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q25-THEME",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q26-THEME",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0002",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0003",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.2,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0008",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    }
+  },
+  "pool_size": 214578,
+  "queries": 8,
+  "queries_with_expected": 8,
+  "repeat": 3,
+  "rescore_candidates": 5000,
+  "rescore_candidates_source": "configuration",
+  "source": {
+    "mode": "local"
+  },
+  "version": "0.1.0"
+}
