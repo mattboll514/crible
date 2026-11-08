@@ -1,6 +1,6 @@
 # ADR-0142 — Limites acceptées de la v1 : reconstruction lexicale et mémoire d'un `replace_all` complet
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-08, « ADR-0142 et complément d'ADR-0113 acceptés, ajoute la règle dans docs/07 »)
 - **Date** : 2026-11-08
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, à la demande de l'orchestrateur, hors pipeline de tâche, pour préparer la tâche `NETTOYER-P10` (phase P10). Le texte reprend la décision du propriétaire du 2026-11-08 — « ok je valide tes recos, tu peux mettre C de coté pour le moment on le garde en note pour plus tard » — et les faits mesurés de la campagne `IMPORTER-BASE-COMPLETE`.
@@ -91,10 +91,10 @@ Ce qui n'est **pas** décidé ici : aucun seuil chiffré ne sépare un « grand 
 
 ## Application
 
-Rien n'est appliqué avant que le propriétaire n'ait accepté cet ADR. À l'acceptation :
+Cet ADR est accepté par le propriétaire le 2026-11-08. L'application de ses décisions est la suivante :
 
-1. **`docs/jalons/J10-bilan.md`** (tâche `BILAN-V1`, `docs/phases/P10-validation-a-l-echelle-reelle.md:197-205`, livrable nommé `:200`) reçoit les deux limites mesurées — reconstruction lexicale de 71, 127 et 185 s sur `jorf`, `articles` et `decisions` ; 0,58 Gio de marge à l'attache complète de `decisions` sur la VM de 11,67 Gio — et les **deux points de v2** des décisions 1 et 4 : paralléliser l'écrivain lexical, et retirer les textes de `CommitDelta.created`.
-2. **La règle d'exploitation de la décision 3 s'écrit dans `docs/07-stack-et-de-deploiement.md`**, section « Docker », sous-section « Contraintes propres au Mac » (`:145-148`). C'est l'endroit de `docs/01` à `docs/08` qui décrit déjà les contraintes du Mac de service, dont la RAM de la VM Docker (`:146`). La règle prend la forme d'une puce de plus, après `:146` : un `replace_all` complet d'un grand index se fait sur la machine de développement, puis l'index passe par instantané et restauration (ADR-0064, ADR-0065) ; les lots quotidiens s'attachent sur le Mac mini.
+1. **`docs/jalons/J10-bilan.md`** (tâche `BILAN-V1`, `docs/phases/P10-validation-a-l-echelle-reelle.md:197-205`, livrable nommé `:200`) reçoit les deux limites mesurées — reconstruction lexicale de 71, 127 et 185 s sur `jorf`, `articles` et `decisions` ; 0,58 Gio de marge à l'attache complète de `decisions` sur la VM de 11,67 Gio — et les **deux points de v2** des décisions 1 et 4 : paralléliser l'écrivain lexical, et retirer les textes de `CommitDelta.created`. Cette écriture n'est pas faite à ce jour : elle appartient à la tâche `BILAN-V1`, qui n'a pas encore été exécutée.
+2. **La règle d'exploitation de la décision 3 est écrite dans `docs/07-stack-et-deploiement.md`**, section « Docker », sous-section « Contraintes propres au Mac », où elle prend la forme d'une puce de plus après la puce de la RAM de la VM (`:146`). C'est l'endroit de `docs/01` à `docs/08` qui décrit déjà les contraintes du Mac de service. La puce écrit qu'un `replace_all` complet d'un grand index se fait sur la machine de développement, puis que l'index passe par instantané et restauration (ADR-0064, ADR-0065) ; les lots quotidiens s'attachent sur le Mac mini.
 3. **L'orchestrateur cite `ADR-0142`** dans les deux lignes du suivi qui portent la décision, `docs/suivi.md:789` et `:790`, et dans la section « Écarts à la conception » si le propriétaire y voit un écart. `@greffier` ne touche pas à `docs/suivi.md`.
 4. **Aucune autre modification.** Le corps d'ADR-0139, celui d'ADR-0047, celui d'ADR-0087 et les fiches de tâches ne changent pas ; aucune mesure n'est refaite.
 

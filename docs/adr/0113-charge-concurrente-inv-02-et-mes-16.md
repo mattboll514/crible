@@ -156,7 +156,7 @@ Le harnais **n'ajoute aucune dépendance** : il utilise `crible.AsyncClient` et 
 
 ## Complément du 2026-11-08 (plancher du critère d'INV-02)
 
-- **Statut** : `Proposé`.
+- **Statut** : `Accepté (décidé par le propriétaire le 2026-11-08, « ADR-0142 et complément d'ADR-0113 acceptés, ajoute la règle dans docs/07 »)`.
 - **Date** : 2026-11-08.
 - **Proposé par** : agent `@greffier`, à la demande de l'orchestrateur, hors pipeline de tâche, pour préparer le passage A de la tâche `NETTOYER-P10` (phase P10). Le texte reprend la décision du propriétaire du 2026-11-08 et le verdict de `@architecte` qui en propose la valeur.
 - **Portée** : ce complément ne réécrit aucune des neuf décisions ci-dessus. Il fixe un **plancher** au seuil du critère par requête de la décision 1, tel que les tests `inv_02_*` de `crible-server` l'appliquent.
