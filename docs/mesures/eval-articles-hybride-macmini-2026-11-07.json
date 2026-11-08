@@ -1,0 +1,316 @@
+{
+  "command": "crible eval --data /data --index articles --queries /in/articles-hybride-macmini.jsonl --models /models --modes hybrid --k 10 --out /out --exact-threshold 5000 --repeat 3",
+  "date": "2026-11-07",
+  "exact_threshold": 5000,
+  "format_version": 2,
+  "game": "articles-hybride-macmini",
+  "generation": 1,
+  "index": "articles",
+  "k": 10,
+  "modes": {
+    "hybrid": {
+      "dense_strategy": {
+        "binary": 25
+      },
+      "fidelity": {
+        "n": 25,
+        "overlap_at_10": 1.0,
+        "recall_at_10": 1.0
+      },
+      "fidelity_excluded": [],
+      "latency": {
+        "dense": {
+          "p50": 22.485,
+          "p95": 28.897,
+          "p99": 30.236
+        },
+        "encode": {
+          "p50": 0.004,
+          "p95": 0.013,
+          "p99": 0.017
+        },
+        "fetch": {
+          "p50": 0.334,
+          "p95": 0.49,
+          "p99": 0.681
+        },
+        "filter": {
+          "p50": 0.423,
+          "p95": 59.072,
+          "p99": 65.113
+        },
+        "fusion": {
+          "p50": 0.044,
+          "p95": 0.058,
+          "p99": 0.062
+        },
+        "group": {
+          "p50": 0.002,
+          "p95": 0.002,
+          "p99": 0.003
+        },
+        "latency_basis": "server_stages",
+        "lexical": {
+          "p50": 54.728,
+          "p95": 100.432,
+          "p99": 103.755
+        },
+        "total": {
+          "p50": 57.96,
+          "p95": 105.144,
+          "p99": 128.62
+        },
+        "validate": {
+          "p50": 0.008,
+          "p95": 0.013,
+          "p99": 0.026
+        }
+      },
+      "quality": {
+        "mrr_at_k": 0.2905555555555555,
+        "n": 25,
+        "recall_at_k": 0.56
+      },
+      "queries": [
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q01",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q02",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.1111111111111111,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q03",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q04",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q05",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q06",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q07",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q08",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q09",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q10",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.125,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q11",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q12",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.5,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q30",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q02-VARIANTE-COURTE",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q02-APPLICABLE",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.125,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q30-APPLICABLE",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q01-CODE",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q06-FONDS",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "Q01-ANNEE",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0004",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0007",
+          "quality_found": [],
+          "quality_mrr_at_k": 0.0,
+          "quality_recall_at_k": 0.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0009",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.125,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0013",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.1111111111111111,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0019",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 0.16666666666666666,
+          "quality_recall_at_k": 1.0
+        },
+        {
+          "fidelity_overlap_at_10": 1.0,
+          "fidelity_recall_at_10": 1.0,
+          "id": "MES00-q0021",
+          "quality_found": [
+            0
+          ],
+          "quality_mrr_at_k": 1.0,
+          "quality_recall_at_k": 1.0
+        }
+      ]
+    }
+  },
+  "pool_size": 2476715,
+  "queries": 25,
+  "queries_with_expected": 25,
+  "repeat": 3,
+  "rescore_candidates": 5000,
+  "rescore_candidates_source": "configuration",
+  "source": {
+    "mode": "local"
+  },
+  "version": "0.1.0"
+}

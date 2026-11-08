@@ -4,7 +4,7 @@
 - **Date** : 2026-11-07
 - **Décideurs** : propriétaire
 - **Proposé par** : `@greffier`, à la demande de l'orchestrateur, pour la tâche `MESURER-SUR-MAC-MINI` (P10), d'après les verdicts de `@architecte` du 2026-11-07 et les faits relevés les 2026-11-06 et 2026-11-07
-- **Remplace** : — (aucun ADR ; voir la décision 1 pour les deux clauses d'ADR-0129 qu'il remplace, pour cette tâche seulement, sans modification de son corps)
+- **Remplace** : — (aucun ADR). Il remplace, **pour cette tâche seulement et sans modification du corps d'ADR-0129**, trois clauses : la clause « installation par le propriétaire » de la décision 2 (`:100`) et le critère d'exploitation de la fiche (`:193`), par la décision 1 ; le point 4 de la décision 9, sur l'arrêt et le redémarrage (`:192`), par la décision 1 ; et la règle 2 de la décision 9, sur les écritures sous `/data` (`:190`), par le complément du 2026-11-07, écartée pour le seul volume `crible-p10-data` et acceptée par le propriétaire.
 
 ## Contexte
 
@@ -111,6 +111,47 @@ Rien n'est appliqué avant que le propriétaire n'ait accepté cet ADR. À l'acc
 - sur demande du propriétaire, `@greffier` ajoute une note à la ligne d'index d'ADR-0129 — « clauses de la décision 2 `:100` et de la décision 9 point 4 `:192` remplacées, pour la seule tâche `MESURER-SUR-MAC-MINI`, par ADR-0141 » — et aligne la fiche aux lignes `:177` et `:193`, en citant `ADR-0141` ;
 - l'orchestrateur ajoute la ligne de l'écart dans `docs/suivi.md`, section « Écarts à la conception » (`:506-510`), avec le numéro `ADR-0141` ;
 - les rapports de la campagne vont dans `docs/mesures/`, au modèle de `docs/mesures/README.md`.
+
+## Complément du 2026-11-07 (relecture, tour 1)
+
+- **Statut** : `Accepté (décidé par le propriétaire le 2026-11-07, « complément accepté »)`.
+- **Date** : 2026-11-07.
+- **Proposé par** : `@greffier`, à la demande de l'orchestrateur, pour la tâche `MESURER-SUR-MAC-MINI` (P10), après la relecture du tour 1.
+- **Portée** : ce complément ne réécrit aucune des sept décisions ci-dessus. Il fixe l'application de la règle 2 de la décision 9 d'ADR-0129 au volume `crible-p10-data`, point que la décision 1 n'a pas tranché. Il est accepté le 2026-11-07 et s'applique à la tâche `MESURER-SUR-MAC-MINI` : la règle 2 ne vaut, pour ce seul volume, que dans les limites ci-dessous.
+
+### Le point de la relecture
+
+Le rapport de la passe C déclare le volume `crible-p10-data` monté en **lecture-écriture** (`docs/mesures/mac-mini-2026-11-07.md:44-50`). La fiche interdit « aucune écriture sous le dossier de données de Crible ni dans le dépôt Legifacile » (`docs/phases/P10-validation-a-l-echelle-reelle.md:186`), et ADR-0129, décision 9 règle 2, écrit la même interdiction (`:190`). ADR-0141 ne déroge qu'à la clause d'installation par le propriétaire de la décision 2 (`:58`) et au point 4 de la décision 9, sur l'arrêt et le redémarrage (`:56`). La règle 2 n'est donc pas couverte, et aucun ADR `Accepté` ne tranche cet écart. Le déclarer dans le rapport ne suffit pas : la règle du projet veut une décision écrite.
+
+### Les faits qui pèsent
+
+- **Les gestes autorisés écrivent sous `/data` par construction.** La décision 1 permet de créer `crible-p10-data`, d'y restaurer les six instantanés et de démarrer le serveur de Crible dessus (`:53-56`) ; la décision 2 précise que la restauration se fait dans ce volume (`:64`). Une restauration écrit les fichiers d'index restaurés, et le serveur écrit ses journaux et ses bases d'exploitation.
+- **SQLite refuse un montage `:ro`.** La passe B de `COMPARER-AVEC-PGVECTOR` a constaté que « SQLite refuse ses fichiers WAL sur un montage `:ro` » ; le volume y était donc monté en lecture-écriture, alors que `crible eval` ouvrait l'index en lecture seule (`docs/mesures/comparaison-pgvector-2026-11-06.md:66-68`). Les vérifications de cette passe montrent que seuls des fichiers `records.sqlite-wal` et `-shm` transitoires apparaissent puis disparaissent, sans écriture durable (`:333-339`).
+- **Le serveur ouvre les index en écriture.** ADR-0099, section « Index », dispose que le serveur ouvre chaque index « en écriture », avec la reprise : il nettoie les fichiers temporaires, répare le lexical et reconstruit les `codes.bin` manquants (`docs/adr/0099-cycle-de-vie-du-serveur-demarrage-health-ready-arret-propre.md:38`). La reconstruction de `codes.bin` est celle d'ADR-0069, décision 1 : fichier dérivé, écrit à l'ouverture en écriture, sans génération ni époque nouvelle (`docs/adr/0069-reconstruction-et-format-de-codes-bin.md:63-67`). Le fichier `jobs.sqlite` est, lui, à la racine de `<data>` (`docs/adr/0103-jobs-de-l-instance-table-etats-retention-file-et-retry-after.md:33`).
+- **Le volume ne sert aucun utilisateur.** La règle 2 a été écrite alors que l'installation revenait au propriétaire (`docs/adr/0129-replanification-de-la-fin-du-plan.md:100`) et que le Mac mini était la machine de référence de la latence (`:196`). `crible-p10-data` est l'instance de campagne : Legifacile n'y est pas branché, et le branchement serait une décision et un geste du propriétaire (ADR-0141, décision 6, `:99`). Aucune clause d'ADR-0129 ne décrit ce cas.
+
+### Décision — la règle 2 ne s'applique pas à `crible-p10-data`
+
+Pour la seule tâche `MESURER-SUR-MAC-MINI`, la règle 2 de la décision 9 d'ADR-0129 ne s'applique pas au volume `crible-p10-data`, instance installée par les agents et qui ne sert aucun utilisateur.
+
+- **Écritures techniques permises sous `/data`** : la restauration des instantanés ; les fichiers dérivés reconstruits à l'ouverture, dont `codes.bin` ; les journaux et les bases d'exploitation du serveur, dont `jobs.sqlite` ; les fichiers `-wal` et `-shm` transitoires de SQLite.
+- **Écritures d'index interdites sous `/data`** : l'attache, le patch de métadonnées, la suppression, la compaction et tout changement de configuration d'index. Elles se font dans le volume distinct de la décision 1, `crible-p10-recette`, selon la règle 3 d'ADR-0129 (`:191`) ; la recette y écrit déjà (`docs/mesures/mac-mini-2026-11-07.md:239-260`).
+- **La règle 2 reste entière** pour le dépôt Legifacile et pour toute instance future que Legifacile servirait. Ce complément ne crée aucune permission générale : il nomme un volume, une tâche et des écritures techniques.
+
+### Conséquences de ce complément
+
+- **Positives** : l'écart du rapport devient une décision explicite, bornée à un volume qui ne sert aucun utilisateur ; les écritures admises sont nommées, et les écritures d'index restent séparées dans `crible-p10-recette` ; la campagne peut continuer sans modifier le code de Crible.
+- **Négatives / coûts** : la règle de lecture seule d'ADR-0129 reçoit une exception de plus ; le montage en lecture-écriture rend possible une écriture qui ne serait pas technique, et la surveillance doit le montrer ; l'ouverture en écriture du serveur peut réparer le lexical, ce qui reste une écriture d'index technique et non une écriture de données.
+- **À surveiller** : la génération de chaque index avant et après la série, les comptes d'`inspect`, l'absence de fichier `-wal` ou `-shm` durable, et l'absence de changement de configuration. Une génération qui bouge, ou un compte qui change, arrête la campagne et rouvre ce complément. Si `crible-p10-data` devient un jour l'instance servie par Legifacile, la règle 2 s'applique de nouveau sans exception.
+
+### Alternatives écartées
+
+| Alternative | Pourquoi écartée |
+|---|---|
+| Rejouer toute la campagne avec un montage `:ro` | SQLite refuse ses fichiers WAL sur un montage `:ro` (`docs/mesures/comparaison-pgvector-2026-11-06.md:66-68`), et le serveur ouvre les index en écriture avec la reprise (ADR-0099, section « Index », `:38`). Le montage en lecture seule est impossible sans changer le code. |
+| Ouvrir SQLite en mode `immutable` | Cette ouverture demanderait une modification du code de Crible ; la tâche ne la prévoit pas, et ADR-0141 ne change pas le code. |
+| Déclarer l'écart dans le rapport sans ADR | Aucun ADR `Accepté` ne couvre l'écriture sous `/data` ; le rapport décrit un fait, il ne tranche pas une règle du projet. |
+| Renoncer aux mesures qui écrivent sous `/data` | La restauration et le serveur sont le protocole même de la tâche ; y renoncer perdrait la mesure contraignante de J10. |
 
 ## Conséquences
 

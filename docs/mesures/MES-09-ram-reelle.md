@@ -567,3 +567,67 @@ Recommandations, **à valider par le propriétaire** :
    passe A). Si l'import reprend, la VM doit être plus grande ou les lots plus petits.
 3. **Redémarrer avant toute mesure de mémoire** : la rétention de 7 GiB après un job fausserait une
    série MES-09, et la campagne l'a évitée par construction.
+
+## Campagne en conteneur sur le Mac mini (P10, ADR-0141) — 2026-11-07
+
+- **Tâche** : `MESURER-SUR-MAC-MINI`, passe C. Commit
+  `439d946bf28d63214e64aa7cb2e09e458f81a45d` plus le harnais `tools/bench/p10-macmini/`, aucun code
+  de production modifié.
+- **Machine** : Mac mini M1, 8 cœurs, 16 Gio, macOS 26.5.2 ; **VM Docker mesurée 8 vCPU,
+  10 418 937 856 o (9,703 GiB)**, aucun plafond `--memory`.
+- **Jeu de données** : volume `crible-p10-data` restauré, **six index ouverts**, 6 660 239 documents,
+  9 600 105 passages. Conteneur `crible-p10` seul dans la VM, Supabase arrêté.
+- **Portée** : **série d'instance seulement**. La série par index n'est pas faite, parce qu'elle
+  demanderait de déplacer des dossiers sous `/data` (ADR-0129, règle 2 de la décision 9 ; ADR-0141,
+  décision 5). L'absence est une décision, pas un échec.
+
+### Protocole
+
+```sh
+sh tools/bench/p10-macmini/run_pass_c_mes09.sh record rest
+# 97 requêtes de référence en texte, par POST direct
+sh tools/bench/p10-macmini/run_pass_c_mes09.sh record after-load
+```
+
+Chaque relevé lit `VmRSS` et `VmSwap` dans `/proc/1/status` du conteneur, puis `memory.current` et
+`memory.stat` dans le cgroup, `docker stats --no-stream` et `vm.swapusage` sur l'hôte. Le relevé
+« repos » suit un redémarrage du serveur, sans requête. Le relevé « après charge » suit les 97
+requêtes en texte : il inclut donc la session ONNX.
+
+### Résultats
+
+En GiB, six index ouverts :
+
+| État | VmRSS | Anonyme (cgroup) | Fichier (cgroup) | `memory.current` | `docker stats` | VmSwap |
+|---|---:|---:|---:|---:|---:|---:|
+| repos | 3,559 | 3,529 | 5,474 | 9,048 | 3,696 | 0 |
+| après charge | 7,846 | 1,303 | 7,791 | 9,196 | 6,168 | 2,275 |
+
+L'hôte garde **2 309,38 Mo de swap utilisé sur 3 072 Mo**, identique avant et après : sous le seuil
+d'arrêt de 4 Go. La page de l'hôte fait 16 384 o ; celle du conteneur, 4 096 o.
+
+### Conclusion
+
+- **L'instance tient dans la VM, avec une marge mince.** `memory.current` monte de 9,048 à 9,196 GiB
+  pour une VM de 9,703 GiB : la marge après charge est de **0,51 GiB**.
+- **La charge ne crée pas d'anonyme, elle déplace des pages.** L'anonyme baisse de 3,529 à 1,303 GiB,
+  le fichier monte de 5,474 à 7,791 GiB, et l'instance entre en swap pour **2,275 GiB**. La mesure ne
+  sépare pas la part du runtime, de la session ONNX et des index : aucune cause n'est établie.
+- **Le plancher de l'instance reste proche de celui de la campagne du 2026-11-06** (3,53 GiB
+  d'anonyme au repos, contre 3,54 GiB sur la VM de 11,67 Gio). La VM plus petite n'a donc pas changé
+  le plancher, mais elle laisse moins de cache.
+- **Aucune limite `--memory` n'est posée** : la RAM de la VM est la borne (ADR-0135, décision 5 ;
+  ADR-0139, décision 3).
+
+Ce que la mesure **ne** permet pas d'affirmer :
+
+- la mémoire par index ;
+- la répartition exacte de l'anonyme entre le runtime, la session et les index ;
+- la mémoire en pointe d'une requête à `k` ou `N` plus grands ;
+- l'effet d'une attache sur cette VM : la recette tourne dans un volume distinct, et son pic n'est pas
+  relevé.
+
+**Recommandation, à valider par le propriétaire** : garder la VM à 9,70 GiB pour le service, mais
+**surveiller le swap** ; une attache ou une reconstruction lexicale sur cette VM n'a pas été mesurée
+et pourrait manquer de marge, comme le prévient déjà la recommandation 2 de la campagne du
+2026-11-06.

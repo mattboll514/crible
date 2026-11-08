@@ -1,0 +1,41 @@
+{
+  "format_version": 1,
+  "measure": "MESURER-SUR-MAC-MINI",
+  "pass": "C",
+  "date": "2026-11-07",
+  "commit": "439d946bf28d63214e64aa7cb2e09e458f81a45d",
+  "invariant": "INV-12",
+  "index": "dole",
+  "volume": "crible-p10-recette",
+  "batch": {
+    "batch_id": "dole-refus-model",
+    "source_batch_id": "dole-full-v1",
+    "mode": "replace_all",
+    "manifest_sha256": "5a281780847a2cd28b1eda90f227b985291d916721f9f85cfbf79e68a1de738b",
+    "files": [
+      "documents.parquet",
+      "passages-0001.parquet"
+    ],
+    "model_hf_id": "lightonai/other",
+    "index_model_hf_id": "lightonai/mDenseOn",
+    "difference": "the manifest declares another hf_id; the two Parquet files are those of dole-full-v1, so the refusal is decided before any acceptance re-encoding"
+  },
+  "expected": "acceptance_failed or incompatible_model (docs/08, INV-12)",
+  "result": {
+    "exit_code": 1,
+    "error_code": "incompatible_model",
+    "error_field": "hf_id",
+    "message": "incompatible model: field 'hf_id' is 'lightonai/other' in the batch but 'lightonai/mDenseOn' in the index; re-encode the batch with the index model"
+  },
+  "generation_before": 1,
+  "generation_after": 1,
+  "inspect_after": {
+    "documents": 3600,
+    "passages_live": 7653,
+    "passages_dead": 0,
+    "segments": 1
+  },
+  "host_swap_mb_before": 2309.38,
+  "host_swap_mb_after": 2309.38,
+  "tests": "inv_12_* run in CI (cargo test -p crible --test recette_import inv_12_); they are not replayed on the Mac mini"
+}
