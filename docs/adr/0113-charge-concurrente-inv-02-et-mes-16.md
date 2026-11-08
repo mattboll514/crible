@@ -153,3 +153,40 @@ Le harnais **n'ajoute aucune dépendance** : il utilise `crible.AsyncClient` et 
 - `AGENTS.md`, règle 7 (mesure par `@mesureur`).
 - ADR-0077 (percentiles au rang le plus proche), ADR-0102 (`503 overloaded`, `Retry-After`), ADR-0103 (`Retry-After: 1`), ADR-0067 (échéance des écritures), ADR-0017 (compaction et écritures), ADR-0068 (features `failpoints` en CI), ADR-0091 (harnais `tools/bench/mes06/`).
 - `docs/jalons/J2-demo.md` (modèle de démonstration).
+
+## Complément du 2026-11-08 (plancher du critère d'INV-02)
+
+- **Statut** : `Proposé`.
+- **Date** : 2026-11-08.
+- **Proposé par** : agent `@greffier`, à la demande de l'orchestrateur, hors pipeline de tâche, pour préparer le passage A de la tâche `NETTOYER-P10` (phase P10). Le texte reprend la décision du propriétaire du 2026-11-08 et le verdict de `@architecte` qui en propose la valeur.
+- **Portée** : ce complément ne réécrit aucune des neuf décisions ci-dessus. Il fixe un **plancher** au seuil du critère par requête de la décision 1, tel que les tests `inv_02_*` de `crible-server` l'appliquent.
+
+### L'origine
+
+Le test `inv_02_dense_searches_stay_under_the_criterion_while_an_attach_is_held` (`crates/crible-server/tests/inv_02_dense_readers.rs:415`) a échoué une fois en CI distante, au run `42248695549` : une recherche a pris **3,28 ms** pour un seuil de **3,25 ms**, soit trois fois le p99 de la phase de repos. Relancé seul, le même job est passé au deuxième essai, sans changement de code (`docs/suivi.md:1378`). Le propriétaire a décidé d'ajouter un plancher absolu, et `@architecte` en a proposé la valeur.
+
+### Point 1 — le seuil des tests devient `max(3 × p99 du repos, 25 ms)`
+
+Le seuil du critère par requête d'INV-02, dans les tests `inv_02_*` de `crible-server`, devient `max(3 × p99 de la phase de repos, 25 ms)`. La valeur **25 ms** est une constante nommée du fichier de test, près de `CLIENTS` (`crates/crible-server/tests/inv_02_dense_readers.rs:94`) et de `REST_ROUNDS` (`:96-98`).
+
+### Point 2 — pourquoi 25 ms
+
+Le dépassement observé est du **bruit d'ordonnancement d'un runner partagé** : 3,28 ms contre un seuil de 3,25 ms, pour un p99 au repos d'environ 1,08 ms (3,25 ms divisé par 3). Le p99 au repos est le **deuxième plus grand de 200 échantillons** — 4 clients (`:94`) sur 50 tours chacun (`:96-98`) —, comparé à chacun des **40 échantillons** de la phase d'écriture (`:99-100`, critère appliqué en `:398-407`). C'est une statistique instable : un seul aléa d'ordonnancement suffit à franchir un seuil posé sur elle.
+
+### Point 3 — ce n'est pas un affaiblissement du critère
+
+Un blocage réel coûte au moins **1 000 ms**, le `busy_timeout` d'ADR-0038 (`docs/adr/0038-delai-d-attente-sqlite-busy-timeout.md:30` et `:35`), ou ne rend jamais la main, puisque l'écrivain est retenu par le point de panne et ne la relâche qu'à la fin du test (`crates/crible-server/tests/inv_02_dense_readers.rs:436` et `:466`, `:510` et `:545`). Le plancher de 25 ms reste donc **40 fois sous** le coût d'un blocage réel. Le critère de la décision 1 ne change pas : chaque recherche de la phase d'écriture reste sous le seuil. Le critère de MES-16 reste, lui, le p99 × 3 **sans plancher** (`tools/bench/mes16/mes16_charge.py:159`, `FACTOR = 3.0`) : la campagne garde sa sensibilité.
+
+### Point 4 — le plancher est fixe et daté
+
+La décision 9 ci-dessus dispose que le critère n'est jamais relâché pour faire passer une campagne. Le plancher respecte cette règle : il est **fixe** et **daté**, et ce n'est pas une réaction à une campagne ratée. Il ne se relève pas après un nouvel échec ; un échec postérieur au plancher reste un échec, et s'analyse.
+
+### Point 5 — portée, nombre de sites et forme du message
+
+Deux sites appliquent le seuil : `crates/crible-server/tests/inv_02_dense_readers.rs:434` (attache retenue) et `:508` (compaction retenue). Ils se traitent **ensemble**, sans quoi les deux tests ne mesureraient plus la même chose. Le message d'échec est ajusté avec eux (`:402-404`, « over three times the p99 »), pour nommer le plancher quand il s'applique.
+
+`crates/crible-store/tests/inv_02_compaction_reads.rs:14-17` n'est pas concerné : ce fichier dit lui-même que la partie « p99 × 3 » d'INV-02 est une mesure de charge, et il ne porte aucun seuil. `docs/08-invariants-et-tests.md:10` et `:81` restent inchangés. La décision 3 (`:53`), qui veut des tests `inv_02_*` « déterministes et sans seuil de latence », est **précisée**, pas contredite : ce plafond grossier reste dans la CI, et le critère fin reste celui de MES-16 (décisions 1 et 7).
+
+### Application
+
+Rien n'est appliqué avant que le propriétaire n'ait accepté ce complément. À l'acceptation, le test est corrigé dans la tâche `NETTOYER-P10`, passage A : la constante de plancher est ajoutée près de `CLIENTS` et de `REST_ROUNDS`, les deux sites de `inv_02_dense_readers.rs` la prennent ensemble, et le message d'échec la nomme. Le corps du présent ADR, `docs/08` et `tools/bench/mes16/` ne changent pas.
