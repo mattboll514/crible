@@ -4,9 +4,13 @@ Harnais des trois passes de la tâche `IMPORTER-BASE-COMPLETE` — import, mesur
 conforme au protocole d'ADR-0139 (décision 5). Il ne modifie ni le code de production, ni un ADR, ni un
 document de conception, et ne supprime rien.
 
+Les arborescences `data/p10-import/` et `data/p10-exchange/` qu'il produit ont été mises à la
+corbeille le 2026-11-08, à la validation de J10 : une reprise les recrée, `prepare.sh` pour
+l'échange et les scripts pour les sorties brutes.
+
 | Fichier | Rôle |
 |---|---|
-| `prepare.sh` | contrôle d'espace, image `crible:p10`, volumes `crible-p10-data` et `crible-p10-models`, arborescence `data/p10-exchange/`, clé d'API, conteneur `crible-p10-server` (port 18090) |
+| `prepare.sh` | contrôle d'espace, image `crible:p10`, volumes `crible-p10-data` et `crible-p10-models`, arborescence `data/p10-exchange/` (à recréer, voir l'introduction), clé d'API, conteneur `crible-p10-server` (port 18090) |
 | `start.sh` | démarre `crible-p10-server-a2` (ou le crée avec les six montages), échantillonne `memory.current`, `anon`, `file` et le RSS toutes les 5 s pendant l'ouverture des index, imprime le délai jusqu'à `/ready` |
 | `import.py` | client HTTP : `create` (six index), `attach` (un lot, `?wait=true` puis suivi du job, `--sample-container` pour la mémoire), `wait` (reprise du suivi), `state` et `collect` (`GET /v1/indexes`) |
 | `attach-all.sh` | attache les lots dans l'ordre croissant, relève `df` sur l'hôte et dans la VM avant et après chaque attache, s'arrête sous 40 Go libres sur l'hôte |
@@ -42,7 +46,7 @@ sh tools/bench/p10-import/mes09-per-index.sh decisions
 
 # passe C : instantanés, serveur arrêté (ADR-0064, décision 3)
 python3 tools/bench/p10-import/snapshot.py dole sarde titres jorf articles decisions
-# restauration de contrôle du plus petit, dans un dossier jetable
+# restauration de contrôle du plus petit, dans un dossier jetable (`data/p10-exchange/` à recréer si absente)
 docker run --rm -v /tmp/p10-restore-check:/restore \
     -v "$PWD/data/p10-exchange/snapshots/dole-e1-g1":/snapshot:ro \
     crible:p10 restore --data /restore --snapshot /snapshot
@@ -69,7 +73,7 @@ est un seul composant de chemin).
 
 ## Sorties brutes
 
-Toutes sous `data/p10-import/`, gitignoré :
+Toutes sous `data/p10-import/`, gitignoré et à recréer par le harnais (mise à la corbeille le 2026-11-08) :
 
 | Chemin | Contenu |
 |---|---|

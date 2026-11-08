@@ -11,11 +11,11 @@ Crible est un moteur de recherche **dense + BM25** pour données structurées.
 - **Débuggable par construction** : plan d'exécution, temps par étape, rang de chaque résultat dans chaque branche, `explain_ids`, journal de debug, éval par rejeu.
 - **Analytics d'usage sans aucune donnée d'entrée.**
 
-Premier cas réel : **Legifacile**, une recherche juridique sur l'open data de la DILA (8,58 M passages, mDenseOn 768 dimensions). Sa migration depuis pgvector valide la v1.
+Premier cas réel : **Legifacile**, une recherche juridique sur l'open data de la DILA (9 600 105 passages et 6 660 239 documents sur six index, mDenseOn 768 dimensions). Sa migration depuis pgvector a validé la v1.
 
 ## État
 
-**Conception terminée, développement non commencé.** Le plan compte 10 phases (P0 → P9), chacune fermée par un jalon validé par le propriétaire, et 83 tâches. Voir [`docs/suivi.md`](docs/suivi.md).
+**Version 1.0.0, livrée le 2026-11-08.** Le plan compte 11 phases, dans l'ordre P0 → … → P8 → P10 → P9 ; chacune des phases livrées est fermée par un jalon validé par le propriétaire, et la phase P9 (tableau de bord) est reportée après J10 (ADR-0136), reprise non planifiée (décision du propriétaire du 2026-11-08). Voir [`docs/suivi.md`](docs/suivi.md).
 
 ## Documentation et décisions
 
@@ -36,7 +36,7 @@ colgrep --install-agent                        # modèle local de ColGrep-Agent 
 cd crible && opencode                          # l'agent par défaut est l'orchestrateur
 ```
 
-Il te faut aussi Rust stable (`rustup`), `uv`, et ONNX Runtime à partir de la phase 2.
+Il te faut aussi Rust stable (`rustup`), `uv`, et ONNX Runtime dès que tu encodes ou que tu attaches un lot `onnx`.
 
 **L'orchestrateur** (agent par défaut) fait exécuter chaque tâche par des sous-agents, selon un pipeline fixe (ADR-0023) :
 
@@ -56,7 +56,7 @@ Le propriétaire :
 
 L'agent `@git` fait toutes les opérations git, et ne fusionne dans `main` que sur ordre du propriétaire.
 
-## Organisation du dépôt (cible)
+## Organisation du dépôt
 
 ```
 crates/          crible-core, crible-store, crible-encode, crible-search, crible-server, crible (CLI)

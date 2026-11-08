@@ -27,7 +27,7 @@
 - [`adr/`](adr/) : une décision par fichier ; nouveau sujet → `/adr <sujet>` (statut `Proposé`), décision → le propriétaire.
 - [`jalons/`](jalons/) : rapports et démos de jalon (`_modele-rapport.md`).
 - [`mesures/`](mesures/) : rapports de mesure (`README.md` pour le modèle).
-- [`legifacile/`](legifacile/) : les six configurations d'index de Legifacile et leur document de définition, base des tâches d'export et de branchement du MCP.
+- [`legifacile/`](legifacile/) : les six configurations d'index de Legifacile et leur document de définition, base des tâches d'export ; le branchement du MCP vit dans le projet Legifacile.
 
 ## Phases
 
@@ -42,7 +42,7 @@
 | P6 | [Serveur et API](phases/P6-serveur-et-api.md) |
 | P7 | [Observabilité](phases/P7-observabilite.md) |
 | P8 | [Docker et déploiement](phases/P8-docker-et-deploiement.md) |
-| P9 | [Tableau de bord](phases/P9-tableau-de-bord.md) |
+| P9 | [Tableau de bord](phases/P9-tableau-de-bord.md) — reportée après J10 (ADR-0136), hors de la v1 |
 | P10 | [Validation à l'échelle réelle](phases/P10-validation-a-l-echelle-reelle.md) |
 
 Les cinq fiches de mise en service du projet Legifacile (producteur quotidien, MCP, mode ombre, tâche quotidienne, bascule) quittent le plan de Crible et vivent dans [`passation-legifacile.md`](passation-legifacile.md), avec le contrat que Crible garantit à ce projet (ADR-0129).

@@ -29,6 +29,10 @@ mesure tournent avec `--rm` : la campagne n'en laisse aucun derrière elle. L'im
 `debian:bookworm-slim` servait déjà de base à l'image `crible:dev` ; elle n'est pas propre à cette
 recette.
 
+Le volume nommé `crible-mes-p8-data` et l'image du harnais `crible-mes-p8-harness:dev` sont **à
+retirer par le propriétaire** (`docs/suivi.md`, « Données de mesure conservées ») : le tableau
+ci-dessus garde leurs tailles observées, et `prepare.sh` les recrée.
+
 `data/mes-p8-conteneur/` (gitignoré) contient les documents bruts (`raw/`), le contrôle natif au même
 harnais (`native/raw/`) et les fichiers d'environnement (`staging/`).
 

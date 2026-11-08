@@ -38,7 +38,7 @@ les autres réglages (`lexical`, `search`, `ingest`, `compaction`) sont accepté
 et ignorés.
 
 `model` est la configuration résolue du modèle, **déjà en mémoire** : le writer
-ne lit pas `models/<name>/model.json` (il n'est produit qu'en P2). Il en dérive
+ne lit pas `models/<name>/model.json`. Il en dérive
 le membre `model` du manifeste, prend `vector_dtype` dans
 `index_config.reference_precision` et laisse `model.runtime` absent. Pour un
 modèle `onnx`, `hf_id`, `revision`, `pooling` et `prompts.document` sont requis ;

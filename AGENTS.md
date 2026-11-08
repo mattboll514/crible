@@ -1,6 +1,6 @@
 # Crible — règles pour les agents
 
-Crible est un moteur de recherche **dense + BM25** pour données structurées, écrit en **Rust** (serveur) avec des producteurs et un client en **Python**. Une instance par projet, CPU seulement, exact par défaut sur les pools filtrés, débuggable par construction. Le premier projet servi est Legifacile (8,58 M passages). La conception est **terminée** et figée dans `docs/`, et chaque décision est tracée dans un ADR (`docs/adr/`). Le développement suit un plan de 11 phases (P0 → P10), dont les tâches sont suivies dans `docs/suivi.md` (ADR-0129, ADR-0130), piloté par l'**orchestrateur** (ADR-0023), qui tourne dans Claude Code (ADR-0033).
+Crible est un moteur de recherche **dense + BM25** pour données structurées, écrit en **Rust** (serveur) avec des producteurs et un client en **Python**. Une instance par projet, CPU seulement, exact par défaut sur les pools filtrés, débuggable par construction. Le premier projet servi est Legifacile (9,6 M passages). La conception est **terminée** et figée dans `docs/`, et chaque décision est tracée dans un ADR (`docs/adr/`). La v1 est **livrée le 2026-11-08** (J10). Le plan compte 11 phases, dans l'ordre P0 → … → P8 → P10 → P9 : la phase P9 (tableau de bord) est reportée après J10 (ADR-0136), reprise non planifiée (décision du propriétaire du 2026-11-08). Les tâches sont suivies dans `docs/suivi.md` (ADR-0129, ADR-0130) et pilotées par l'**orchestrateur** (ADR-0023), qui tourne dans Claude Code (ADR-0033).
 
 ## Où trouver quoi
 

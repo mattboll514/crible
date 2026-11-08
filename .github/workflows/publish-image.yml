@@ -63,8 +63,8 @@ jobs:
       # workspace version, so a mistaken tag fails before any build instead of
       # publishing an image whose label lies.
       #
-      # `<version>`, the image tag, is the tag without its `v`: `v0.1.0`
-      # publishes `0.1.0`, because the `v` is a version control convention that
+      # `<version>`, the image tag, is the tag without its `v`: `v1.0.0`
+      # publishes `1.0.0`, because the `v` is a version control convention that
       # no image reference needs.
       #
       # `:cpu` is the moving tag of the latest *stable* release, and it is moved

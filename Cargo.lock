@@ -867,7 +867,7 @@ dependencies = [
 
 [[package]]
 name = "crible"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arrow",
  "axum",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "crible-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "proptest",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "crible-encode"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "crible-core",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "crible-search"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "crible-core",
  "crible-store",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "crible-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "crible-core",
@@ -969,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "crible-store"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "arrow",
