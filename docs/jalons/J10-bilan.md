@@ -34,8 +34,10 @@ ADR-0081), aucune `Proposé` ni `Rejeté` (`docs/adr/README.md`, index des déci
 Deux limites restent assumées et écrites : la reconstruction lexicale prend **71, 127 et 185 s**
 sur `jorf`, `articles` et `decisions` contre un budget de 60 s, et un `replace_all` complet de
 `decisions` demande **10,99 GiB** d'anonyme pour une marge de **0,58 GiB** sur la VM de 11,67 GiB
-(ADR-0142:52, `:42` ; `docs/mesures/import-legifacile-2026-11-06.md:40`, `:43`). La v2 est donc
-priorisée autour de la mémoire et du redémarrage, avant les gains de rappel ou de latence.
+(ADR-0142:52, `:42` ; `docs/mesures/import-legifacile-2026-11-06.md:40`, `:43`). La v2 suit le
+branchement de Legifacile sur Crible : aucune tâche de Crible n'est ouverte avant que la tâche
+quotidienne de Legifacile ait tourné quelques jours, et ses durées et sa mémoire réelles décideront
+de ce qui compte (décision du propriétaire du 2026-11-08, D2 ; section 5).
 
 ## 2. Mesures comparées aux cibles
 
@@ -44,7 +46,7 @@ priorisée autour de la mémoire et du redémarrage, avant les gains de rappel o
 | Critère (ADR-0129, décision 7) | Exigé | Mesuré | Verdict | Source |
 |---|---|---|---|---|
 | Six configs d'index définies et validées | oui | `DEFINIR-INDEX-LEGIFACILE` `FAIT` | tenu | suivi, « Tâches », P10, `DEFINIR-INDEX-LEGIFACILE` (ligne 149) |
-| Import à l'échelle réelle | 8,58 M passages, comptes égaux à pgvector, MES-07 et MES-09 faites | 9 600 105 passages, 6 660 239 documents, comptes égaux ; MES-07 et MES-09 faites | tenu, avec la réserve de `docs/08:57` | `docs/mesures/import-legifacile-2026-11-06.md:35-36`, `:41-42` |
+| Import à l'échelle réelle | 8,58 M passages, comptes égaux à pgvector, MES-07 et MES-09 faites | 9 600 105 passages, 6 660 239 documents, comptes égaux ; MES-07 et MES-09 faites | tenu | `docs/mesures/import-legifacile-2026-11-06.md:35-36`, `:41-42` |
 | Jeu de référence validé et identique | oui | 97 lignes, 97 `expected`, 35 filtres | tenu | `docs/mesures/comparaison-pgvector-2026-11-06.md:23-25` |
 | Rappel global ≥ 0,482 | 0,482 sur 56 questions | 0,500000 | tenu (+0,018) | `docs/mesures/comparaison-pgvector-2026-11-06.md:543`, `:553-554` |
 | Rappel `juri_texte_integral` ≥ 0,290 | 0,290 sur 31 questions | 0,322581 | tenu (+0,032581) | `docs/mesures/comparaison-pgvector-2026-11-06.md:544` |
@@ -108,7 +110,7 @@ ADR-0142 accepte deux dépassements mesurés et en tire une règle d'exploitatio
 |---|---|---|
 | Reconstruction lexicale | 71 s (`jorf`), 127 s (`articles`), 185 s (`decisions`) contre 60 s, pour 1 022 144 487 jetons | aucune correction en v1 ; le budget de 60 s n'est pas relevé ; la v2 passe à plus d'un thread d'écriture (ADR-0142:52 ; `docs/mesures/import-legifacile-2026-11-06.md:43`) |
 | `replace_all` complet de `decisions` | 10,99 GiB d'anonyme, 0,58 GiB de marge sur une VM de 11,67 GiB | pas de correction en v1 ; un grand `replace_all` se fait sur la machine de développement, puis l'index rejoint le Mac mini par instantané et restauration (ADR-0142:56 ; `docs/mesures/import-legifacile-2026-11-06.md:40`) |
-| Mémoire après attache | 10,55 Gio d'anonyme après l'attache, 3,57 Gio après redémarrage | en v2, retirer les textes de `CommitDelta.created`, gain attendu d'environ 5 Go, **non mesuré** (ADR-0142:58, `:79`) |
+| Mémoire après attache | 10,55 Gio d'anonyme après l'attache, 3,57 Gio après redémarrage | en v2, retirer les textes de `CommitDelta.created`, gain attendu d'environ 5 Go, **non mesuré**, et seulement si une mesure de la tâche quotidienne le montre (D2, section 5 ; ADR-0142:58, `:79`) |
 
 La règle d'exploitation est écrite dans `docs/07` : les lots quotidiens, petits, s'attachent
 directement sur le Mac mini ; les grands index passent par un instantané
@@ -182,32 +184,44 @@ trancher un par un.
 
 ## 5. Liste priorisée pour la v2
 
-L'ordre suit trois blocs, dans cet ordre : **risque pour l'exploitation de Legifacile** (points 1 à
-6), **gains annoncés, non mesurés** (points 7 à 10), puis **coût** (point 11). Aucun point n'a de
-gain mesuré : un gain annoncé est signalé comme tel et ne justifie pas, à lui seul, une tâche. Le
-point 12 est une décision, pas un travail.
+L'ordre suit la décision du propriétaire du 2026-11-08 (D2, section 7.1) : **la v2 suit le
+branchement de Legifacile sur Crible. Aucune tâche de Crible n'est ouverte avant que la tâche
+quotidienne de Legifacile ait tourné quelques jours : ses durées et sa mémoire réelles décident de
+ce qui compte.** Les cinq groupes vont dans cet ordre :
 
-| # | Élément | Pourquoi | Gain ou risque | Source |
-|---:|---|---|---|---|
-| 1 | Allocateur qui ne rend pas la mémoire au système | 10,55 Gio d'anonyme restent après l'attache, contre 3,57 Gio après redémarrage | risque d'exploitation direct | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (ligne 789) |
-| 2 | Retirer les textes de `CommitDelta.created` | environ 5 Go attendus sur `decisions` | risque d'exploitation ; gain non mesuré | ADR-0142:58 |
-| 3 | Reconstruction lexicale à plus d'un thread d'écriture | 71, 127 et 185 s contre 60 s, payés à chaque redémarrage ou compaction d'un grand index | risque de reprise ; gain non mesuré | ADR-0142:52 ; `docs/mesures/import-legifacile-2026-11-06.md:43` |
-| 4 | `crible inspect` bloqué sur un volume ouvert en écriture ; fusion tantivy annulée après un changement d'époque | diagnostic et intégrité de l'index | risque d'exploitation | suivi, « Contenu de NETTOYER-P10 », passage C (lignes 526-528) |
-| 5 | `refresh_updated_documents` : exclure du delta les documents entièrement créés | 1,6 M requêtes, ≤ 92 s après le commit sur `jorf`, ≤ 227 s sur `decisions` | risque de durée d'attache | suivi, « Idées hors périmètre », 2026-11-06, `CORRIGER-BLOCAGE-APRES-COMMIT` (ligne 783) |
-| 6 | `KeywordField::clear` reste O(V) par passage | coût quadratique si un patch nettoie en masse un champ de forte cardinalité | risque futur, pas observé en v1 | suivi, « Idées hors périmètre », 2026-11-06, `CORRIGER-BLOCAGE-APRES-COMMIT` (ligne 784) |
-| 7 | Observabilité d'exploitation : durées par étape dans la CLI, nombre de jetons analysés, écart de 552,7 MiB de MES-09 | trois angles morts de mesure et de capacité | gain de diagnostic | suivi, « Idées hors périmètre », 2026-11-06 : `CORRIGER-MEMOIRE-APRES-COMMIT` (ligne 787), `IMPORTER-BASE-COMPLETE` (lignes 794 et 796) |
-| 8 | Rerank (late interaction) | étape distante après la fusion, avec repli `reranked: false` | gain non mesuré ; à chiffrer | `docs/03-recherche.md:138-142` ; `docs/01-vision-et-perimetre.md:50` |
-| 9 | IVF par segment | prévu au-delà de ~30 M passages ; la v1 tient à 9,6 M | gain non mesuré à la taille actuelle | `docs/02-architecture.md:249` ; `docs/01-vision-et-perimetre.md:49` |
-| 10 | Fusions progressives de segments | si la compaction complète devient trop longue ; 371,0 s sur `decisions` | gain non mesuré, dépend de la croissance | `docs/02-architecture.md:250` ; ADR-0006:37, `:44` |
-| 11 | Découpeur par défaut dans le moteur | un projet sans pipeline doit découper lui-même | coût de conception ; hors v1 par ADR-0010 | ADR-0010:25 ; `docs/01-vision-et-perimetre.md:51` |
-| 12 | Reprise de P9 et tableau de bord, dont Next.js | P9 est reportée après J10, hors v1 ; Next.js ajoute Node, un build et probablement CORS | **décision du propriétaire**, pas une tâche : nouvel ADR obligatoire avant toute tâche | ADR-0136:59-71, `:93-100`, `:172` ; voir 7.2 |
+1. **Utile dès le branchement, petits sujets** : points 1 à 3.
+2. **Seulement si une mesure de la tâche quotidienne le montre** : points 4 à 7.
+3. **Confort d'exploitation** : points 8 à 10.
+4. **Fonctions, selon le besoin du produit** : points 11 à 14.
+5. **En dernier** : point 15, P9 et tableau de bord, en reprise non planifiée.
 
-Les points 8 à 11 sont les « rerank, IVF, fusions progressives, découpeur par défaut » demandés par
-la fiche de `BILAN-V1` (`docs/phases/P10-validation-a-l-echelle-reelle.md:204`). Les points 2 et 3
+Aucun point n'a de gain mesuré : un gain annoncé est signalé comme tel et ne justifie pas, à lui
+seul, une tâche. Le point 15 est une décision, pas un travail.
+
+| # | Groupe | Élément | Pourquoi | Gain ou risque | Source |
+|---:|---|---|---|---|---|
+| 1 | 1 — Branchement | `crible inspect` bloqué sur un volume ouvert en écriture | il doit échouer vite derrière le serveur, au lieu de rester bloqué plus de 120 s sans message | risque d'exploitation : une commande de lecture seule ne doit pas attendre sans fin | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (passe A, ligne 790) ; « Contenu de NETTOYER-P10 », passage C, 2026-11-08 |
+| 2 | 1 — Branchement | Durées par étape dans le rapport de `crible attach` | la CLI ne les affiche pas ; seul le journal du serveur les donne, et la mesure native a dû passer par une impression temporaire | gain de diagnostic pour suivre la tâche quotidienne | suivi, « Idées hors périmètre », 2026-11-06, `CORRIGER-MEMOIRE-APRES-COMMIT` (ligne 787) |
+| 3 | 1 — Branchement | Fusion tantivy annulée après un changement d'époque | fusion de segments annulée sur `epochs/tmp-2` puis `tmp-3` pendant les compactions de `jorf`, sans perte constatée | intégrité de l'index ; les mises à jour quotidiennes mèneront à des compactions | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (passe B, ligne 793) ; « Contenu de NETTOYER-P10 », passage C, 2026-11-08 |
+| 4 | 2 — Si une mesure le montre | Allocateur qui ne rend pas la mémoire au système | 10,55 Gio d'anonyme restent après l'attache, contre 3,57 Gio après redémarrage | risque d'exploitation direct | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (ligne 789) |
+| 5 | 2 — Si une mesure le montre | `refresh_updated_documents` : exclure du delta les documents entièrement créés | 1,6 M requêtes, ≤ 92 s après le commit sur `jorf`, ≤ 227 s sur `decisions` | risque de durée d'attache | suivi, « Idées hors périmètre », 2026-11-06, `CORRIGER-BLOCAGE-APRES-COMMIT` (ligne 783) |
+| 6 | 2 — Si une mesure le montre | `KeywordField::clear` reste O(V) par passage | coût quadratique si un patch nettoie en masse un champ de forte cardinalité | risque futur, pas observé en v1 | suivi, « Idées hors périmètre », 2026-11-06, `CORRIGER-BLOCAGE-APRES-COMMIT` (ligne 784) |
+| 7 | 2 — Si une mesure le montre | Retirer les textes de `CommitDelta.created` | environ 5 Go attendus sur `decisions` | risque d'exploitation ; gain non mesuré | ADR-0142:58 |
+| 8 | 3 — Confort d'exploitation | Reconstruction lexicale à plus d'un thread d'écriture | 71, 127 et 185 s contre 60 s, payés à chaque redémarrage ou compaction d'un grand index | risque de reprise ; gain non mesuré | ADR-0142:52 ; `docs/mesures/import-legifacile-2026-11-06.md:43` |
+| 9 | 3 — Confort d'exploitation | Nombre de jetons analysés publié par la CLI ou le serveur | ni la CLI ni le serveur ne le publient ; il a fallu un exemple dédié, sur une copie des index lexicaux | gain de diagnostic | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (ligne 796) |
+| 10 | 3 — Confort d'exploitation | Écart de 552,7 MiB de MES-09 | ouvrir les six index ensemble coûte 552,7 Mio de plus que la somme des ouvertures séparées, sans explication | gain de capacité | suivi, « Idées hors périmètre », 2026-11-06, `IMPORTER-BASE-COMPLETE` (ligne 794) ; `docs/mesures/MES-09-ram-reelle.md:509` |
+| 11 | 4 — Fonctions | Rerank (late interaction) | étape distante après la fusion, avec repli `reranked: false` | gain non mesuré ; à chiffrer | `docs/03-recherche.md:138-142` ; `docs/01-vision-et-perimetre.md:50` |
+| 12 | 4 — Fonctions | IVF par segment | prévu au-delà de ~30 M passages ; la v1 tient à 9,6 M | gain non mesuré à la taille actuelle | `docs/02-architecture.md:249` ; `docs/01-vision-et-perimetre.md:49` |
+| 13 | 4 — Fonctions | Fusions progressives de segments | si la compaction complète devient trop longue ; 371,0 s sur `decisions` | gain non mesuré, dépend de la croissance | `docs/02-architecture.md:250` ; ADR-0006:37, `:44` |
+| 14 | 4 — Fonctions | Découpeur par défaut dans le moteur | un projet sans pipeline doit découper lui-même | coût de conception ; hors v1 par ADR-0010 | ADR-0010:25 ; `docs/01-vision-et-perimetre.md:51` |
+| 15 | 5 — En dernier | Reprise de P9 et tableau de bord, dont Next.js | P9 est reportée après J10, hors v1 ; Next.js ajoute Node, un build et probablement CORS | **décision du propriétaire**, pas une tâche : reprise non planifiée, et nouvel ADR obligatoire avant toute tâche | ADR-0136:57-71, `:93-100`, `:108-113`, `:172` ; D4, section 7.1 |
+
+Les points 11 à 14 sont les « rerank, IVF, fusions progressives, découpeur par défaut » demandés par
+la fiche de `BILAN-V1` (`docs/phases/P10-validation-a-l-echelle-reelle.md:204`). Les points 7 et 8
 sont les deux points de v2 d'ADR-0142 : le retrait des textes de `CommitDelta.created` (décision 4)
-et la reconstruction lexicale à plus d'un thread (décision 1). L'allocateur du point 1 vient du
-suivi, pas d'ADR-0142. Les points 1 et 4 à 7 viennent du suivi et de `NETTOYER-P10`. Le point 12 est
-une décision du propriétaire (7.2), pas une tâche de v2.
+et la reconstruction lexicale à plus d'un thread (décision 1) ; D2 les place dans deux groupes
+différents. Les points 1 à 6 et 9 à 10 viennent du suivi et de `NETTOYER-P10`. Le point 15 vient
+d'ADR-0136 et de D4 (7.1) : c'est une décision du propriétaire, pas une tâche de v2.
 
 ## 6. Ce qui revient au projet Legifacile
 
@@ -225,35 +239,61 @@ Trois conséquences pour la v2 :
 - **Le script d'export** (`legifacile-sandbox/scripts/export_crible_full.py`) et la règle « grand
   `replace_all` sur la machine de développement » sont des outils de migration, utiles au
   branchement de Legifacile, pas des fonctions du moteur
-  (suivi, « Idées hors périmètre », 2026-11-06, `EXPORTER-BASE-LEGIFACILE`, ligne 782 ; ADR-0142:60).
-  Le script n'est donc pas un point de la v2.
+  (suivi, « Idées hors périmètre », 2026-11-06, `EXPORTER-BASE-LEGIFACILE` ; ADR-0142:60).
+  Le script n'est donc pas un point de la v2. **Tout ce qui est lié à `legifacile-sandbox` va être
+  arrêté** (décision du propriétaire du 2026-11-08) : le script ne sera pas relancé, et ses trois
+  défauts, relevés par `@relecteur` le 2026-11-06, sont sans objet (suivi, « Idées hors périmètre »,
+  2026-11-06, `EXPORTER-BASE-LEGIFACILE`, ligne 782).
 - **Les volumes `crible-p10-*` et l'installation du Mac mini** sont gardés jusqu'au branchement de
   Legifacile, sur décision du propriétaire (suivi, « Idées hors périmètre », 2026-11-08,
   `MESURER-SUR-MAC-MINI`, ligne 807).
 
-## 7. Décisions qui restent au propriétaire
+## 7. Décisions
+
+### 7.1 Décisions prises le 2026-11-08
+
+Le propriétaire a validé les recommandations du bilan le 2026-11-08 et ajouté une décision propre :
+« je valide tes recos, Supabase ne restera pas sur le Mac mini, et tout ce qui vas etre liee a
+legifacile-sandbox vas etre arrêté ». D1 à D4 reprennent les quatre recommandations ; la cinquième
+décision porte sur `legifacile-sandbox`.
+
+1. **D1 — `docs/08:57` aligné sur l'import.** La ligne `legifacile-full` donne désormais 8,58 M
+   passages à la conception et 9 600 105 à l'import du 2026-11-06, comme `docs/02:230` et la mesure
+   (`docs/mesures/import-legifacile-2026-11-06.md:35-36`). La réserve du critère d'import est levée.
+2. **D2 — ordre de la v2.** La v2 suit le branchement de Legifacile sur Crible, et aucune tâche de
+   Crible n'est ouverte avant que la tâche quotidienne de Legifacile ait tourné quelques jours : ses
+   durées et sa mémoire réelles décident de ce qui compte. La section 5 reprend les cinq groupes de
+   la décision.
+3. **D3 — pas de plafond mémoire sur le Mac mini.** Au repos, la mémoire anonyme de l'instance vaut
+   3,529 GiB, et le reste de `memory.current` est surtout du cache de fichiers récupérable
+   (`docs/mesures/mac-mini-2026-11-07.md`, section MES-09, `:245-264`). Un `replace_all` complet est
+   exclu du Mac mini par ADR-0142, décision 3, et Supabase ne restera pas sur le Mac mini : Crible
+   n'aura donc pas de voisin à protéger dans la VM. Le point « à surveiller » d'ADR-0142 reste
+   valable.
+4. **D4 — P9 en reprise non planifiée.** ADR-0136 exige déjà un nouvel ADR avant toute tâche de P9
+   (`:57`, `:108-113`) ; aucun ADR n'est ouvert maintenant, et la reprise de P9 ne figure pas au
+   plan de la v2.
+5. **Arrêt de `legifacile-sandbox`.** Tout ce qui est lié à `legifacile-sandbox` va être arrêté. Le
+   script `legifacile-sandbox/scripts/export_crible_full.py` ne sera donc pas relancé, et ses trois
+   défauts relevés par `@relecteur` le 2026-11-06 sont sans objet (suivi, « Idées hors périmètre »,
+   2026-11-06, `EXPORTER-BASE-LEGIFACILE`, ligne 782).
+
+### 7.2 Décisions qui restent au propriétaire
 
 1. **Valider ce bilan et taguer la v1** : c'est le critère d'acceptation de `BILAN-V1`, et le tag
    est posé par le propriétaire seul (`docs/phases/P10-validation-a-l-echelle-reelle.md:205` ;
    ADR-0129, décision 7).
-2. **Décider la reprise de P9** et le contenu du tableau de bord : ADR-0136 suspend l'application
-   d'ADR-0130 et exige un nouvel ADR, écrit à la reprise et avant toute tâche de P9, pour trancher
-   le framework, dont Next.js (ADR-0136:108-113, `:172`).
-3. **Corriger `docs/08:57`** (8,58 M contre 9 600 105) : la ligne est signalée dans le suivi, mais
-   aucune décision ne l'a encore visée (suivi, « Idées hors périmètre », 2026-11-08, `NETTOYER-P10`,
-   ligne 808).
-4. **Arbitrer la priorité de la v2** : la liste ci-dessus est ordonnée par risque, puis gains
-   annoncés, puis coût ; aucun point n'a de gain mesuré. Ouvrir les tâches reste une décision du
-   propriétaire.
-5. **Décider si la marge de 0,58 GiB impose un plafond de mémoire** sur le Mac mini : ADR-0142
-   laisse le point « à surveiller » et ne fixe aucun plafond (ADR-0142:75-76).
+2. **Ouvrir les tâches de la v2 au vu de la tâche quotidienne** : la liste de D2 n'est pas un plan.
+   Les durées et la mémoire réelles de la tâche quotidienne de Legifacile diront quels points
+   ouvrir, et cette ouverture reste une décision du propriétaire.
 
 Le sort de l'installation du Mac mini n'est plus ouvert : il a été tranché par le propriétaire le
 2026-11-08. L'image et les volumes `crible-p10-*` sont gardés jusqu'au branchement de Legifacile ;
 les instantanés du dossier d'échange du SSD ont été supprimés par `@mesureur` ce jour-là (23,9 Gio) ;
 `docker-backup` est gardé une semaine, puis retiré par le propriétaire ; le branchement de
 Legifacile suit le tag de la v1 et reste un geste du propriétaire (suivi, « Idées hors périmètre »,
-2026-11-08, `MESURER-SUR-MAC-MINI`, ligne 807).
+2026-11-08, `MESURER-SUR-MAC-MINI`, ligne 807). Supabase ne restera pas sur le Mac mini (décision du
+2026-11-08, section 7.1) : il n'est donc plus à relancer sur cette machine.
 
 ## 8. Contrôle des citations
 
@@ -269,17 +309,15 @@ Dix citations ont été tirées au hasard et relues dans les fichiers, après r�
 | `docs/mesures/MES-09-ram-reelle.md:527` | plancher **3,54 GiB**, minimum **4 Gio** |
 | `docs/adr/0142-limites-acceptees-de-la-v1-reconstruction-lexicale-et-memoire-d-un-replace-all.md:52` | reconstruction lexicale à **plus d'un thread** en v2, budget de 60 s non relevé |
 | suivi, section « Écarts à la conception », lignes 544-614 | **71** lignes d'écart (comptage des lignes `\| 2026`) |
-| suivi, « Idées hors périmètre », 2026-11-08, `NETTOYER-P10` (ligne 808) | `docs/08:57` donne encore **8,58 M** contre **9 600 105** |
-| `docs/08-invariants-et-tests.md:57` | `legifacile-full` : « Toute la base (**8,58 M**) » |
+| `docs/02-architecture.md:230` | « 8,58 M passages à la conception », **9 600 105** à l'import du 2026-11-06 |
+| `docs/08-invariants-et-tests.md:57` | `legifacile-full` : « 8,58 M passages à la conception, 9 600 105 à l'import du 2026-11-06 » (D1) |
 
-Les dix concordent. `git status --short` ne montre que `docs/suivi.md` modifié par l'orchestrateur
-et ce fichier ajouté ; aucun autre fichier n'a été touché.
+Les dix concordent. Depuis l'application des décisions du 2026-11-08, `git status --short` montre
+`docs/08-invariants-et-tests.md` et `docs/jalons/J10-bilan.md` modifiés ; aucun autre fichier n'a été
+touché.
 
-Trois incohérences restent à signaler, sans correction dans cette tâche :
+Deux incohérences restent à signaler, sans correction dans cette tâche :
 
-- **`docs/08:57`** garde 8,58 M passages là où l'import en compte 9 600 105
-  (`docs/08-invariants-et-tests.md:57` ; suivi, « Idées hors périmètre », 2026-11-08, `NETTOYER-P10`,
-  ligne 808) ;
 - **le rapport MES-16 de P6** nomme la machine « Mac mini `Mac15,12` (Apple M4) »
   (`docs/mesures/MES-16-charge-concurrente.md:12`), alors que `Mac15,12` est le MacBook Air M3 dans
   les autres rapports (`docs/mesures/MES-01-fidelite-scan-binaire.md:26`) et que la campagne de
