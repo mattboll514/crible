@@ -217,7 +217,7 @@ reste celui du tableau précédent. Les étapes sont celles de `debug.timings_ms
 | `sarde` | 0,000 / 0,005 / 0,006 | 0,004 / 0,007 / 0,007 | 0,002 / 0,002 / 0,002 | 4,983 / 6,731 / 6,989 | 0,164 / 0,190 / 0,195 | 0,001 / 0,002 / 0,002 |
 | `titres` | 0,000 / 0,000 / 0,000 | 0,022 / 0,030 / 0,030 | 0,002 / 0,002 / 0,002 | 10,258 / 11,270 / 11,270 | 0,139 / 0,192 / 0,192 | 0,001 / 0,001 / 0,001 |
 
-L'écart entre les deux passes, en valeur absolue, atteint au plus 0,491 ms au p50 (`titres`),
+L'écart entre les deux passes, en valeur absolue sur le `total`, atteint au plus 0,491 ms au p50 (`titres`),
 1,173 ms au p95 (`decisions`) et 4,549 ms au p99 (`decisions`) ; il change de signe selon
 l'index.
 

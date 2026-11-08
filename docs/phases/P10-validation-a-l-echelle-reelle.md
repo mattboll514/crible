@@ -174,7 +174,7 @@ La **tâche quotidienne stable 14 jours** et le **retour arrière testé** ne co
 
 ### MESURER-SUR-MAC-MINI
 - **Objectif** : la mesure **contraignante** de latence, en conteneur, sur le Mac mini, sur l'instantané restauré.
-- **Dépend de** : IMPORTER-BASE-COMPLETE (l'instantané de départ) et COMPARER-AVEC-PGVECTOR (le rapport de comparaison) ; l'**installation de Crible sur le Mac mini par le propriétaire**, qui est hors du champ des agents (ADR-0129, décisions 2 et 9). Placée **avant** `BILAN-V1`.
+- **Dépend de** : IMPORTER-BASE-COMPLETE (l'instantané de départ) et COMPARER-AVEC-PGVECTOR (le rapport de comparaison) ; l'**installation de Crible sur le Mac mini par le propriétaire**, qui est hors du champ des agents (ADR-0129, décisions 2 et 9 ; pour MESURER-SUR-MAC-MINI, voir ADR-0141). Placée **avant** `BILAN-V1`.
 - **À lire** : `08-invariants-et-tests.md` (cibles), `docs/mesures/MES-00-reference-pgvector.md`, `docs/phases/P8-docker-et-deploiement.md` (`MESURER-EN-CONTENEUR-MAC`, protocoles repris), ADR-0077, ADR-0084, ADR-0064, ADR-0065, ADR-0032, ADR-0129.
 - **Livrables** :
   - le transfert de l'index comparé vers le Mac mini, par **instantané puis restauration** (`crible snapshot`, `crible restore`), sans réimport ni ré-encodage : iid, segments et comptes sont conservés ;
@@ -190,7 +190,7 @@ La **tâche quotidienne stable 14 jours** et le **retour arrière testé** ne co
   - la **latence p95** est au plus **698 ms** (MES-00) sur le jeu de référence, mesurée en conteneur sur le Mac mini : c'est le critère de J10 ;
   - les rapports sont consignés et comparés à MES-00 ;
   - si la cible est dépassée, J10 n'est pas tenu : la question de l'index de plage (ADR-0046) ou de la cible est rouverte par un ADR ;
-  - aucun geste d'exploitation n'a été fait par un agent.
+  - aucun geste d'exploitation n'a été fait par un agent (pour MESURER-SUR-MAC-MINI, voir ADR-0141).
 - **Invariants / mesures** : MES-02, MES-03, MES-05, MES-09 ; INV-12 (recette).
 - **Hors périmètre** : toute correction de performance dans cette tâche ; l'installation, l'arrêt et le redémarrage des services, réservés au propriétaire.
 
