@@ -39,7 +39,7 @@ use crate::analytics::Analytics;
 use crate::auth::Auth;
 use crate::config::{Config, DebugJournalConfig};
 use crate::debug_journal::DebugJournal;
-use crate::error::{internal, invalid};
+use crate::error::{internal, invalid, starting};
 use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
 use crate::limits::SearchLimit;
@@ -161,6 +161,10 @@ impl Loaded {
     ///
     /// [`ErrorCode::Internal`] when the registry is poisoned: an empty list
     /// would answer `200` with no index while the instance still serves them.
+    ///
+    /// The poisoned branch is its own, distinct from the `503 overloaded` that
+    /// ADR-0146 decides before the publication: a poisoned registry is a failure
+    /// of an instance that is serving, never a startup.
     pub fn indexes(&self) -> Result<Vec<Arc<IndexHandle>>, CribleError> {
         self.indexes
             .read()
@@ -173,7 +177,8 @@ impl Loaded {
     /// # Errors
     ///
     /// [`ErrorCode::Internal`] when the registry is poisoned: `None` would
-    /// render `404` for an index the instance still serves.
+    /// render `404` for an index the instance still serves. That branch is the
+    /// one of a failure, not the `503 overloaded` of ADR-0146.
     pub fn index(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
         let indexes = self
             .indexes
@@ -201,6 +206,12 @@ impl Loaded {
             .map_err(|_| internal("the index registry is poisoned"))?;
         let position = indexes.iter().position(|handle| handle.name == name);
         Ok(position.map(|position| indexes.remove(position)))
+    }
+
+    /// Root of `<data>`.
+    #[must_use]
+    pub fn data_root(&self) -> &Path {
+        &self.data
     }
 
     /// Root of `[paths].exchange`, for the batch, export and snapshot routes.
@@ -458,6 +469,23 @@ impl AppState {
         self.loaded.get().map(Arc::as_ref)
     }
 
+    /// The state published at the end of the startup, or the `503 overloaded` of
+    /// ADR-0146 when the loading has not published it yet.
+    ///
+    /// It is the access point of every route that reads the registry or the
+    /// state opened with it: the refusal is decided here, and never by a layer
+    /// or on [`is_ready`](Self::is_ready), so the `401` of ADR-0100 and the `400`
+    /// of ADR-0110 keep coming first, and the drainage of ADR-0104 keeps serving
+    /// the reads (ADR-0146, decisions 3 and 4).
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Overloaded`] with the fixed message "the server is starting"
+    /// before the publication.
+    pub fn published(&self) -> Result<&Loaded, CribleError> {
+        self.loaded.get().map(Arc::as_ref).ok_or_else(starting)
+    }
+
     /// The analytics of the instance, once the startup has opened them.
     ///
     /// `None` before the startup, and on a loader that ran outside a tokio
@@ -561,15 +589,16 @@ impl AppState {
 
     /// Default `timeout_ms` of a search.
     ///
+    /// Read by the validation step of the multi-index route, before any index is
+    /// examined (ADR-0110, decision 7), so an instance that has not published
+    /// its state answers the `503` of ADR-0146 rather than a `500`.
+    ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`] when the instance has not loaded its
-    /// configuration.
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication.
     pub fn default_timeout_ms(&self) -> Result<u64, CribleError> {
-        self.loaded
-            .get()
-            .map(|loaded| loaded.default_timeout_ms())
-            .ok_or_else(|| internal("the instance has not loaded its indexes"))
+        self.published().map(Loaded::default_timeout_ms)
     }
 
     /// Query encoder of a model, shared by every request.
@@ -646,23 +675,41 @@ impl AppState {
     }
 
     /// Job board of the instance, once the startup has opened it.
-    #[must_use]
-    pub fn jobs(&self) -> Option<&Arc<JobBoard>> {
-        self.jobs.get()
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication: the table is opened and purged by the loading (ADR-0103,
+    /// decision 5), so an empty list would describe a state that does not exist
+    /// yet.
+    pub fn jobs(&self) -> Result<&Arc<JobBoard>, CribleError> {
+        self.jobs.get().ok_or_else(starting)
     }
 
     /// Reads one retained job, if the instance serves one.
-    #[must_use]
-    pub fn job(&self, id: &str) -> Option<JobView> {
-        self.jobs.get()?.job(id)
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication: the table is not open yet, so a `None` would render `404` for
+    /// a job the instance will keep.
+    pub fn job(&self, id: &str) -> Result<Option<JobView>, CribleError> {
+        Ok(self.jobs()?.job(id))
     }
 
     /// Lists the retained jobs, filtered by `index` and `state`.
-    #[must_use]
-    pub fn list_jobs(&self, index: Option<&str>, state: Option<JobState>) -> Vec<JobView> {
-        self.jobs
-            .get()
-            .map_or_else(Vec::new, |board| board.list(index, state))
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication: an empty list would say that no job exists while the table is
+    /// still being opened and purged (ADR-0103, decision 5).
+    pub fn list_jobs(
+        &self,
+        index: Option<&str>,
+        state: Option<JobState>,
+    ) -> Result<Vec<JobView>, CribleError> {
+        Ok(self.jobs()?.list(index, state))
     }
 
     /// Submits a job to the writer of `index`, the internal API the write routes
@@ -693,10 +740,7 @@ impl AppState {
                 SHUTTING_DOWN_MESSAGE,
             ));
         }
-        let loaded = self
-            .loaded
-            .get()
-            .ok_or_else(|| internal("the instance has not loaded its indexes"))?;
+        let loaded = self.published()?;
         let writer = loaded
             .index(index)?
             .map(|handle| Arc::clone(&handle.writer))
@@ -711,24 +755,26 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication: the indexes exist on disk, they are not opened yet, so a
+    /// `None` would render `404 unknown_index` for an index the instance serves,
+    /// and [`ErrorCode::Internal`] when the registry is poisoned, which is a
+    /// distinct branch (ADR-0146, decision 5).
     pub fn index(&self, name: &str) -> Result<Option<Arc<IndexHandle>>, CribleError> {
-        match self.loaded.get() {
-            Some(loaded) => loaded.index(name),
-            None => Ok(None),
-        }
+        self.published()?.index(name)
     }
 
     /// Every served index, sorted by name.
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::Internal`] when the registry is poisoned.
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication: an empty list would answer `200 {"indexes":[]}` while the
+    /// instance is still opening the indexes of the disk, and
+    /// [`ErrorCode::Internal`] when the registry is poisoned (ADR-0146,
+    /// decisions 3 and 5).
     pub fn indexes(&self) -> Result<Vec<Arc<IndexHandle>>, CribleError> {
-        match self.loaded.get() {
-            Some(loaded) => loaded.indexes(),
-            None => Ok(Vec::new()),
-        }
+        self.published()?.indexes()
     }
 
     /// Root of `<data>`, once the startup has published its configuration.
@@ -814,13 +860,11 @@ impl AppState {
     /// # Errors
     ///
     /// [`ErrorCode::InvalidRequest`] for a refused name, a name already taken, an
-    /// absent or unreadable model and a configuration the store refuses, and the
-    /// errors of the store and of the job table otherwise.
+    /// absent or unreadable model and a configuration the store refuses,
+    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
+    /// publication, and the errors of the store and of the job table otherwise.
     pub fn create_index(&self, config: IndexConfig) -> Result<Arc<IndexHandle>, CribleError> {
-        let loaded = self
-            .loaded
-            .get()
-            .ok_or_else(|| internal("the instance has not loaded its indexes"))?;
+        let loaded = self.published()?;
         let _creation = loaded
             .creation
             .lock()
@@ -1115,9 +1159,16 @@ fn named(error: CribleError, context: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreationQuarantine, ModelKind, read_model_parts};
+    use super::{
+        AppState, CreationQuarantine, DebugJournalConfig, Loaded, ModelKind, ModelRegistry, Mutex,
+        PathBuf, Precision, RwLock, ScanPool, SearchLimit, read_model_parts,
+    };
+    use crate::error::STARTING_MESSAGE;
+    use crible_core::error::ErrorCode;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
 
     /// Names left under `<data>/tmp`.
     fn quarantined(data: &Path) -> Vec<String> {
@@ -1209,5 +1260,71 @@ mod tests {
             index.join("index.json").is_file(),
             "a completed creation keeps its directory"
         );
+    }
+
+    /// A published registry with no index, and nothing else the routes read.
+    fn an_empty_registry() -> Loaded {
+        Loaded {
+            models: Arc::new(ModelRegistry::new()),
+            indexes: RwLock::new(Vec::new()),
+            data: PathBuf::from("/nonexistent/data"),
+            models_root: PathBuf::from("/nonexistent/models"),
+            exchange: PathBuf::from("/nonexistent/exchange"),
+            writer_queue: 16,
+            creation: Mutex::new(()),
+            search_limit: Arc::new(SearchLimit::new(1)),
+            scan_pool: Arc::new(ScanPool::new(1).expect("the scan pool is creatable")),
+            default_timeout_ms: 2_000,
+            query_cache_entries: 16,
+            query_precision: Precision::Fp32,
+            debug_journal: DebugJournalConfig {
+                enabled: false,
+                sample_rate: 0.0,
+                ttl_days: 7,
+                max_rows: 500_000,
+                max_bytes: 500_000,
+            },
+            query_encoders: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn a_poisoned_registry_stays_internal_and_is_not_a_starting_refusal() {
+        // ADR-0146, decision 5: the two branches are distinct. A registry that is
+        // not loaded yet is the `503` of decision 1, with its fixed message; a
+        // registry whose read lock is poisoned is the `500 internal` of an
+        // instance that is serving, with its own message. A single `503` for both
+        // would hide a failure behind a wait.
+        let starting = match AppState::new().indexes() {
+            Ok(_) => panic!("an instance that has not loaded answers no list"),
+            Err(failure) => failure,
+        };
+        assert_eq!(starting.code(), ErrorCode::Overloaded);
+        assert_eq!(starting.message(), STARTING_MESSAGE);
+
+        let loaded = Arc::new(an_empty_registry());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = loaded.indexes.write().expect("the registry is writable");
+            panic!("a writer panics while it holds the registry");
+        }));
+        assert!(poisoned.is_err(), "the panic poisons the registry");
+
+        let state = AppState::new();
+        state
+            .loaded
+            .set(Arc::clone(&loaded))
+            .unwrap_or_else(|_| panic!("the state is published once"));
+        let list = match state.indexes() {
+            Ok(_) => panic!("the poisoned registry answers no list"),
+            Err(failure) => failure,
+        };
+        let one = match state.index("alpha") {
+            Ok(_) => panic!("the poisoned registry answers no index"),
+            Err(failure) => failure,
+        };
+        for failure in [list, one] {
+            assert_eq!(failure.code(), ErrorCode::Internal);
+            assert_eq!(failure.message(), "the index registry is poisoned");
+        }
     }
 }

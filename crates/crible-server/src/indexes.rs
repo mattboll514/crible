@@ -63,7 +63,8 @@ use crate::state::IndexHandle;
         (status = 400, description = "Refused configuration, name already taken or absent model", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn create_index(
@@ -117,7 +118,8 @@ async fn create_index_inner(
         (status = 200, description = "The served indexes, sorted by name", body = crate::openapi::IndexList),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn list_indexes(
@@ -174,7 +176,8 @@ async fn list_indexes_inner(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn get_index(
@@ -248,7 +251,7 @@ async fn get_index_inner(
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 409, description = "Frozen setting", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn patch_index(
@@ -373,7 +376,7 @@ async fn patch_index_inner(
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn delete_index(

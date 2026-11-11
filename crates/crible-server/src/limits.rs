@@ -66,7 +66,20 @@ pub const TIMEOUT_MESSAGE: &str = "the search exceeded its deadline (timeout_ms)
 ///
 /// [`ErrorCode::InvalidRequest`] when the value is outside the bounds.
 pub fn timeout(value: Option<u64>, default_ms: u64) -> Result<Duration, CribleError> {
-    let milliseconds = value.unwrap_or(default_ms);
+    bounded(value.unwrap_or(default_ms))
+}
+
+/// Checks one `timeout_ms` value against the bounds of ADR-0102, decision 3.
+///
+/// The search routes use it to refuse an explicit value of the body **before**
+/// they read `[limits].default_timeout_ms`, which needs the published state: a
+/// body fault stays a `400` even while the server starts (ADR-0110, decision 7;
+/// ADR-0146, decision 3).
+///
+/// # Errors
+///
+/// [`ErrorCode::InvalidRequest`] when the value is outside the bounds.
+pub(crate) fn bounded(milliseconds: u64) -> Result<Duration, CribleError> {
     if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&milliseconds) {
         return Err(error::invalid(format!(
             "'timeout_ms' must be between {MIN_TIMEOUT_MS} and {MAX_TIMEOUT_MS} milliseconds"

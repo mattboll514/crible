@@ -100,7 +100,7 @@ const RRF_CONSTANT: f32 = 60.0;
         (status = 404, description = "Unknown target index", body = crate::openapi::Error),
         (status = 422, description = "Targets with different model fingerprints", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable", body = crate::openapi::Error),
+        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error),
         (status = 504, description = "`timeout_ms` reached", body = crate::openapi::Error)
     )
 )]
@@ -528,8 +528,13 @@ fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Pl
     request.common.check_explain_targets(&names)?;
     let common = request.common;
     // (a) bounds of the body, and the entries of an explicit mode, before any
-    // index is read. `targets` was already checked by the parser.
-    let deadline = limits::timeout(common.timeout_ms, state.default_timeout_ms()?)?;
+    // index is read. `targets` was already checked by the parser. Reading
+    // `[limits].default_timeout_ms` needs the published configuration, so it
+    // comes last: a fault of the body stays a `400` even while the server starts
+    // (ADR-0110, decision 7; ADR-0146, decision 3).
+    if let Some(milliseconds) = common.timeout_ms {
+        limits::bounded(milliseconds)?;
+    }
     let grouping = api::grouping(
         common.by_document,
         common.passages_per_document,
@@ -539,6 +544,7 @@ fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Pl
         Some(mode) => Some(common.inputs(mode)?),
         None => None,
     };
+    let deadline = limits::timeout(common.timeout_ms, state.default_timeout_ms()?)?;
 
     // (b) existence of each index, in the order of `targets`: no partial
     // result, a single `404` naming the first unknown index.

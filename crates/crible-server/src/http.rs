@@ -189,7 +189,8 @@ fn jobs_routes() -> Router<Arc<AppState>> {
         (status = 400, description = "`state` outside the four states", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The job table is not open yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn list_jobs(
@@ -208,7 +209,10 @@ async fn list_jobs(
         },
         None => None,
     };
-    let jobs = state.list_jobs(query.get("index").map(String::as_str), wanted);
+    let jobs = match state.list_jobs(query.get("index").map(String::as_str), wanted) {
+        Ok(jobs) => jobs,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
     Json(json!({
         "jobs": jobs.iter().map(JobView::to_json).collect::<Vec<_>>()
     }))
@@ -228,7 +232,8 @@ async fn list_jobs(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown or purged job", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The job table is not open yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn get_job(
@@ -237,11 +242,12 @@ async fn get_job(
     Path(job_id): Path<String>,
 ) -> Response {
     match state.job(&job_id) {
-        Some(job) => (StatusCode::OK, Json(job.to_json())).into_response(),
-        None => {
+        Ok(Some(job)) => (StatusCode::OK, Json(job.to_json())).into_response(),
+        Ok(None) => {
             let failure = CribleError::new(ErrorCode::NotFound, "job not found");
             error::rendered(&failure, &identifier.0)
         }
+        Err(failure) => error::rendered(&failure, &identifier.0),
     }
 }
 
@@ -274,7 +280,8 @@ async fn get_job(
         (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure, or a payload the route cannot render", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure, or a payload the route cannot render", body = crate::openapi::Error),
+        (status = 503, description = "The published configuration is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn debug_queries(
@@ -286,9 +293,11 @@ async fn debug_queries(
         Ok(filter) => filter,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let enabled = state
-        .loaded()
-        .is_some_and(|loaded| loaded.debug_journal_config().enabled);
+    let loaded = match state.published() {
+        Ok(loaded) => loaded,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
+    let enabled = loaded.debug_journal_config().enabled;
     let cap = state
         .debug_journal()
         .map_or(crate::debug_journal::CapCounters::default(), |journal| {
@@ -306,11 +315,7 @@ async fn debug_queries(
         };
         return Json(list).into_response();
     }
-    let Some(root) = state.data_root() else {
-        let failure = error::internal("the instance has not loaded its configuration");
-        return error::rendered(&failure, &identifier.0);
-    };
-    let rows = match crate::debug_journal::page(root, filter).await {
+    let rows = match crate::debug_journal::page(loaded.data_root(), filter).await {
         Ok(rows) => rows,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
@@ -445,7 +450,8 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
         (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure, or an analytics file this build cannot read", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure, or an analytics file this build cannot read", body = crate::openapi::Error),
+        (status = 503, description = "The published configuration is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn stats(
@@ -457,11 +463,13 @@ async fn stats(
         Ok(filter) => filter,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let Some(root) = state.data_root().map(std::path::Path::to_path_buf) else {
-        let failure = error::internal("the instance has not loaded its configuration");
-        return error::rendered(&failure, &identifier.0);
+    let loaded = match state.published() {
+        Ok(loaded) => loaded,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let path = root.join(crible_store::analytics::ANALYTICS_FILE_NAME);
+    let path = loaded
+        .data_root()
+        .join(crible_store::analytics::ANALYTICS_FILE_NAME);
     let read =
         tokio::task::spawn_blocking(move || crible_store::analytics::read_stats(&path, &filter))
             .await;

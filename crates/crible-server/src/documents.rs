@@ -105,7 +105,7 @@ struct PatchBody {
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn post_documents(
@@ -240,7 +240,7 @@ async fn post_documents_inner(
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn patch_documents(
@@ -361,7 +361,8 @@ async fn patch_documents_inner(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index, or unknown or removed document", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn get_document(
