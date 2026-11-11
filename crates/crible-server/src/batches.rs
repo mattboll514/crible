@@ -168,7 +168,7 @@ async fn post_batch_inner(
         crate::barriers::wait("batch");
         let directory = inbox_directory(&exchange, &directory)?;
         let index_config = writer.configuration()?;
-        let model = holder.model(&index_config.model)?;
+        let model = holder.model_for(&name, &index_config.model)?;
         let token_counter = match model.config.kind {
             crible_core::model::ModelKind::Onnx => Some(model.token_counter()?),
             crible_core::model::ModelKind::External => None,

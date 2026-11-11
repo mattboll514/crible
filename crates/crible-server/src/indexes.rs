@@ -447,6 +447,15 @@ async fn delete_index_inner(
             // the removal of the registry entry, a search that already holds its
             // snapshot finishes on it (the files it mapped stay valid), and a
             // read of the detail answers `404` because the directory is gone.
+            // ADR-0151, decision 2: the memory of the instance just before the
+            // directory leaves its name, then after the quarantined files are
+            // gone, so the memory a deletion gives back can be read.
+            crate::memory::log(crate::memory::Point::delete(
+                crate::memory::Step::DeleteBeforeRename,
+                progress.job_id(),
+                JobKind::DeleteIndex.as_str(),
+                &name,
+            ));
             rename_to_quarantine(&source, &target)?;
             // ADR-0150, decision 4: a test of the `failpoints` build holds the
             // job here to send a creation of the same name in the window where
@@ -469,6 +478,12 @@ async fn delete_index_inner(
             }
             writer.mark_deleted();
             remove_quarantined(&target);
+            crate::memory::log(crate::memory::Point::delete(
+                crate::memory::Step::DeleteAfterRemoval,
+                progress.job_id(),
+                JobKind::DeleteIndex.as_str(),
+                &name,
+            ));
             Ok(JobOutcome {
                 generation: None,
                 durations: None,

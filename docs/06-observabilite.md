@@ -184,3 +184,23 @@ Chaque ligne porte `id`, puis **exactement un** de `query` ou `vector` ; `filter
 - **`GET /ready`** : les modèles sont chargés, chaque index a publié un instantané, et il n'y a pas de reprise en cours. Il rend `503` tant que ces trois conditions ne sont pas réunies, puis `200` ; `/health` rend `200` dès la liaison au port (ADR-0099). Une instance sans index est prête, et un index dont le lexical est refusé ne bloque pas `/ready` : la génération est publiée et seule la branche lexicale est refusée (ADR-0087, ADR-0088, ADR-0089).
 - **Logs** : `tracing` au format JSON sur stdout (Docker). Chaque ligne porte le `request_id` quand il existe.
 - **Ce que les logs ne contiennent jamais** : le texte des requêtes et les valeurs de filtre, à aucun niveau de log et quel que soit `RUST_LOG` (INV-13, ADR-0096).
+
+### Mémoire
+
+Trois chiffres de mémoire circulent et ne mesurent pas la même chose. La règle qui dit lequel fait foi est celle d'ADR-0151, et c'est elle qui sert à vérifier un budget ou à lire un OOM.
+
+- **`memory.current` du cgroup v2 fait foi pour la limite du conteneur et pour l'OOM** (ADR-0151, ADR-0135 décisions 5 et 7). Sa source est `/sys/fs/cgroup/memory.current`, ou le fichier `memory.current` du cgroup du processus quand le conteneur n'est pas à la racine. C'est le compteur que le noyau compare à `memory.max`, donc le seul dont le dépassement tue le processus. Il se **ventile par `memory.stat`** : `anon` pour la mémoire anonyme, `file` pour le cache de pages ; le reste — slab, piles noyau, tables de pages — n'est pas ventilé et se déclare comme tel.
+- **`RssAnon` du processus fait foi pour la mémoire possédée.** Sa source est `/proc/<pid>/status`, complété par `VmRSS`, `RssFile` et `RssShmem`. C'est le chiffre qui répond à « qu'est-ce que Crible garde pour lui ».
+- **`RssFile` et `file` du cgroup sont le cache évinçable des `mmap`.** Les pages des vecteurs fp16 et de tantivy peuvent y monter sans faute : sous pression, le noyau les réclame (règle de mémoire de `docs/02`).
+- **`docker stats` ne fait pas foi.** Il affiche le même compteur de cgroup avec le cache compris, et son échantillonnage coûte environ 1,5 s par appel. Quand il s'écarte de `memory.current`, c'est `memory.current` qui a raison.
+- **La session ONNX ne se sépare que par différence au chargement** (ADR-0077, décision 5) : aucun compteur par session n'existe, la `Session` de `crible-encode` restant sous un `Mutex`. La part du modèle se lit donc entre deux états, l'un avant le chargement, l'autre après.
+- **Hors Linux, aucun de ces chiffres n'existe** : ni cgroup v2, ni `/proc` au sens du noyau Linux. Une mesure native ne se compare pas à une mesure en conteneur.
+
+**La ligne `memory`.** Sous Linux seulement, le serveur émet une ligne `tracing` de **niveau `info`** dont le message est `memory` (ADR-0151). Ses champs, tous en octets, sont `rss_bytes`, `rss_anon_bytes`, `rss_file_bytes` pour le processus, et `cgroup_current_bytes`, `cgroup_anon_bytes`, `cgroup_file_bytes` pour le cgroup ; s'y ajoutent `job_id`, `kind`, `index` et `step` selon le point d'émission. Les sources sont lues par `std::fs`, sans dépendance, comme `/proc/self/mountinfo` l'est à l'amorçage.
+
+- **Points d'émission** : `step` vaut `job_end` à la fin de chaque job, quel qu'il soit ; `delete_before_rename` dans le job `delete_index`, juste avant le renommage du dossier vers la quarantaine ; `delete_after_removal` après la suppression du dossier ; `session_load` au chargement d'une session ONNX, `index` nommant alors l'index qui l'a déclenché. Sous charge, la ligne `session_load` peut nommer un index qui n'a pas déclenché le chargement : le compteur de chargements est partagé par l'instance, donc il est un signal et non une attribution (ADR-0151, erratum du 2026-11-11).
+- **Source illisible** : le champ est **absent**, jamais une erreur et jamais un `0`, qui serait un état inventé. Aucun démarrage, aucune requête et aucun job n'échoue à cause de cette ligne.
+- **Hors Linux** : aucune ligne n'est émise.
+- **Confidentialité** : la ligne ne porte que des nombres, un identifiant de job, un genre de job, un nom d'index et une étape. Aucun texte de requête, aucune valeur de filtre, aucun identifiant interne (INV-13, ADR-0096).
+
+Cette ventilation est ce que mesure MES-17 (`docs/08`). Elle n'est exposée par aucune route : un chiffre nouveau dans `GET /v1/stats` serait un écart à ADR-0124, décision 1, et toute correction de la mémoire — déchargement d'une session, `madvise`, `malloc_trim`, allocateur — demande la mesure puis un ADR distinct (ADR-0151).

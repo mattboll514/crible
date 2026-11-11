@@ -816,6 +816,32 @@ impl AppState {
             .model(name)
     }
 
+    /// Number of encoder loads the shared model registry has performed so far.
+    ///
+    /// The `memory` line uses it to tell a load from a cached access
+    /// (ADR-0151). The registry is shared by the instance, so a load started by
+    /// another index in the same window counts too: the counter is a signal,
+    /// not an attribution.
+    pub(crate) fn encoder_loads(&self) -> usize {
+        self.loaded.get().map_or(0, |loaded| loaded.models.loads())
+    }
+
+    /// Model of `name`, used by the index `index`, logging the `session_load`
+    /// memory line when this call is the one that loaded the graph
+    /// (ADR-0151).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`AppState::model`].
+    pub(crate) fn model_for(&self, index: &str, name: &str) -> Result<ModelAccess, CribleError> {
+        let before = self.encoder_loads();
+        let access = self.model(name)?;
+        if self.encoder_loads() > before {
+            crate::memory::log(crate::memory::Point::session_load(index));
+        }
+        Ok(access)
+    }
+
     /// Configuration of the model of a served index, without loading its graph.
     ///
     /// The checks that run on the request thread before the concurrency token
@@ -1141,6 +1167,7 @@ fn load_model(
         )
     })?;
     if model.kind == ModelKind::Onnx {
+        let before = models.loads();
         models.get_or_load(&directory).map_err(|error| {
             named(
                 error,
@@ -1152,6 +1179,12 @@ fn load_model(
                 ),
             )
         })?;
+        // ADR-0151, decision 2: a graph loaded for `index` says so in the
+        // `memory` line, so the part of the model session in the memory of the
+        // instance can be read.
+        if models.loads() > before {
+            crate::memory::log(crate::memory::Point::session_load(&index.name));
+        }
     }
     Ok(())
 }

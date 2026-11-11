@@ -451,13 +451,19 @@ impl JobBoard {
     /// ADR-0103, decision 3, say it is never persisted, so a job read back after a
     /// restart carries none. Every other report is already persisted elsewhere
     /// (the `batches` history for an attach), so it is written to the table.
+    ///
+    /// The job end is also where the `memory` line of ADR-0151 is emitted, for
+    /// every kind and every outcome: the job has done its work, and the line
+    /// names it.
     fn mark_finished(
         &self,
         id: &str,
         kind: JobKind,
+        index: &str,
         outcome: Result<JobOutcome, CribleError>,
         progress: &JobProgress,
     ) {
+        crate::memory::log(crate::memory::Point::job_end(id, kind.as_str(), index));
         let progress = progress.current();
         match outcome {
             Ok(outcome) => {
@@ -1222,6 +1228,7 @@ impl IndexWriter {
                 self.board.mark_finished(
                     &command.id,
                     command.kind,
+                    &self.index,
                     Err(error::internal(BROKEN_MESSAGE)),
                     &command.progress,
                 );
@@ -1232,6 +1239,7 @@ impl IndexWriter {
                 self.board.mark_finished(
                     &command.id,
                     command.kind,
+                    &self.index,
                     Err(error::internal(BROKEN_MESSAGE)),
                     &command.progress,
                 );
@@ -1260,7 +1268,7 @@ impl IndexWriter {
                         command.progress.complete();
                     }
                     self.board
-                        .mark_finished(&id, kind, outcome, &command.progress);
+                        .mark_finished(&id, kind, &self.index, outcome, &command.progress);
                     if failed && kind == JobKind::Compact {
                         holder = self.reopen_off_threads(holder.take()).await;
                     }
@@ -1275,6 +1283,7 @@ impl IndexWriter {
                     self.board.mark_finished(
                         &id,
                         kind,
+                        &self.index,
                         Err(error::internal(format!(
                             "the blocking task of a write job failed: {join}"
                         ))),
@@ -1432,6 +1441,7 @@ async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, i
         board.mark_finished(
             &command.id,
             command.kind,
+            index,
             Err(CribleError::new(
                 ErrorCode::UnknownIndex,
                 format!("unknown index '{index}'"),
