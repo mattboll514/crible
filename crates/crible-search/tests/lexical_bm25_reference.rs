@@ -57,6 +57,7 @@
 mod common;
 
 use common::lexical::{LexicalFixture, doc, match_all};
+use crible_core::config::LexicalIdentifiers;
 use crible_core::ids::Iid;
 use crible_search::dense::Scored;
 use crible_search::lexical;
@@ -116,14 +117,18 @@ fn keys_of_corpus() -> Vec<String> {
         .collect()
 }
 
-/// Tokens the analysis chain of `code` produces for `text`, in order.
+/// Tokens the 1.0 analysis chain of `code` produces for `text`, in order.
+///
+/// `identifiers` is `None`, the chain of an index that does not use the canonical
+/// identifier token (ADR-0148, decision 5).
 fn tokens(code: &str, text: &str) -> Vec<String> {
-    let mut analyzer = crible_store::lexical::analyzer::analyzer(code).unwrap_or_else(|error| {
-        panic!(
-            "the analysis chain of {code} must build: {}",
-            error.message()
-        )
-    });
+    let mut analyzer = crible_store::lexical::analyzer::analyzer(code, LexicalIdentifiers::None)
+        .unwrap_or_else(|error| {
+            panic!(
+                "the analysis chain of {code} must build: {}",
+                error.message()
+            )
+        });
     let mut stream = analyzer.token_stream(text);
     let mut tokens = Vec::new();
     while let Some(token) = stream.next() {

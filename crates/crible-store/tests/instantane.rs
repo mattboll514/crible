@@ -19,6 +19,8 @@
 //! | `inv_14_restore_rolls_back_and_keeps_the_replaced_epoch` | a higher-generation target is accepted, the replaced epoch stays (ADR-0065 §3, §4; INV-14) |
 //! | `restore_creates_an_absent_index_at_the_initial_epoch` | the absent target gets the initial epoch, generation G (ADR-0065 §2, §3) |
 //! | `restore_refuses_a_divergent_index_json` | a different `index.json` is refused, the setting named (ADR-0065 §3) |
+//! | `snapshot_round_trip_of_an_index_without_identifiers_restores` | an index without `lexical.identifiers` snapshots and restores (ADR-0148 §6) |
+//! | `restore_refuses_a_target_that_names_identifiers_none_explicitly` | an explicitly named `"none"` differs from the omitted form, and the key is named (ADR-0148 §6) |
 //! | `restore_refuses_a_snapshot_that_names_another_index_in_its_index_json` | the attestation and the copied `index.json` must name the same index (ADR-0064 §1, ADR-0065 §3) |
 //! | `restore_refuses_an_absent_attestation` | no `snapshot.json` (ADR-0064 §1) |
 //! | `inv_15_restore_refuses_an_unknown_format_version` | unknown `format_version` (ADR-0064 §1, INV-15) |
@@ -410,6 +412,103 @@ fn restore_refuses_a_divergent_index_json() {
     .unwrap_or_else(|error| panic!("the target configuration must be written: {error}"));
 
     assert_refused(&instance, &directory, "$.search.rescore_candidates");
+}
+
+#[test]
+fn snapshot_round_trip_of_an_index_without_identifiers_restores() {
+    // ADR-0148, decision 6: the stored form of `"none"` is the **absence** of
+    // the key, so an index created by this build snapshots and restores without
+    // any special case, and its restored configuration still omits the key.
+    let instance = Instance::new();
+    instance.snapshot();
+    let directory = instance.snapshot_directory();
+    let path = instance.index.join(INDEX_CONFIG_FILE_NAME);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the target configuration must be readable: {error}"));
+    let value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the target configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "the fixture must omit identifiers, which is the stored form of \"none\": {value}"
+    );
+
+    let report = restore_into(&instance.data, &directory);
+    assert_eq!(
+        report.replaced_generation,
+        Some(Generation::new(1)),
+        "the restore must accept an index without lexical.identifiers"
+    );
+
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the restored configuration must be readable: {error}"));
+    let value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the restored configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "a restore must not materialise \"none\": {value}"
+    );
+    let store = common::open_store(&instance.index);
+    assert_eq!(
+        store.generation(),
+        Generation::new(1),
+        "the restored index must open at the generation of the snapshot"
+    );
+}
+
+#[test]
+fn restore_refuses_a_target_that_names_identifiers_none_explicitly() {
+    // ADR-0148, decision 6: the comparison of ADR-0065 compares the JSON tree,
+    // so a target that spells `"none"` out differs from a snapshot that omits it
+    // and the restore is refused, with the key named. This is why the stored
+    // form has to omit the default.
+    let instance = Instance::new();
+    instance.snapshot();
+    let directory = instance.snapshot_directory();
+    let path = instance.index.join(INDEX_CONFIG_FILE_NAME);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the target configuration must be readable: {error}"));
+    let mut value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the target configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "the target must start without the key: {value}"
+    );
+    value["lexical"]["identifiers"] = json!("none");
+    fs::write(
+        &path,
+        serde_json::to_vec(&value)
+            .unwrap_or_else(|error| panic!("the configuration must serialize: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("the target configuration must be written: {error}"));
+
+    // The refusal must come from the comparison of the two trees, not from the
+    // parsing of the target: `"none"` is a valid value (decision 6), so the
+    // message names the divergent setting of ADR-0065, decision 3.
+    let pointer = instance.pointer();
+    let error = instance
+        .restore(&directory)
+        .err()
+        .unwrap_or_else(|| panic!("the restore must be refused"));
+    assert_eq!(
+        error.code(),
+        ErrorCode::InvalidRequest,
+        "a snapshot Crible cannot use is refused in invalid_request: {}",
+        error.message()
+    );
+    let message = error.message();
+    assert!(
+        message.contains("$.lexical.identifiers"),
+        "the refusal must name the key: {message}"
+    );
+    assert!(
+        message.contains("differs from the snapshot"),
+        "the refusal must be the divergence of ADR-0065, not a parse error: {message}"
+    );
+    assert_eq!(
+        instance.pointer(),
+        pointer,
+        "a refused restore must not move CURRENT_EPOCH"
+    );
 }
 
 #[test]

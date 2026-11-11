@@ -532,6 +532,68 @@ async fn a_lexical_language_patch_queues_a_rebuild_lexical_job() {
 }
 
 #[tokio::test]
+async fn a_lexical_identifiers_patch_queues_a_rebuild_lexical_job() {
+    // ADR-0148, decision 5: `lexical.identifiers` is modifiable by `PATCH`, and
+    // it is an analysis setting, so the job is `rebuild_lexical`; it is not
+    // frozen, so the answer is never `409 immutable_setting` (INV-16).
+    //
+    // The fixture of `instance_with_alpha` disables the lexical branch, and an
+    // analysis setting of a disabled branch queues `patch_config`: the index is
+    // created with the branch enabled, so the patch changes `identifiers` alone.
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    let mut config = index_config(INDEX);
+    config["lexical"]["enabled"] = json!(true);
+    let (status, _headers, body) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(config),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "the index is created: {body}");
+
+    let (status, _headers, body) = send(
+        &router,
+        Method::PATCH,
+        "/v1/indexes/alpha",
+        ADMIN_SECRET,
+        Some(json!({ "lexical": { "identifiers": "v1" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["kind"], "rebuild_lexical", "{body}");
+    assert_eq!(body["index"], INDEX);
+    assert_eq!(body["state"], "queued");
+}
+
+#[tokio::test]
+async fn a_lexical_identifiers_outside_the_domain_is_refused_before_queueing() {
+    // ADR-0148, decision 5: the closed domain of `"none" | "v1"` is applied by
+    // the validation that runs before any queueing (ADR-0105, decision 4).
+    let (_instance, router) = instance_with_alpha().await;
+    let (status, _headers, body) = send(
+        &router,
+        Method::PATCH,
+        "/v1/indexes/alpha",
+        ADMIN_SECRET,
+        Some(json!({ "lexical": { "identifiers": "v2" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["code"], "invalid_request", "{body}");
+    let message = body["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {body}"));
+    assert!(
+        message.contains("$.lexical.identifiers"),
+        "the message names the setting: {message}"
+    );
+}
+
+#[tokio::test]
 async fn a_search_patch_is_applied_at_the_end_of_its_job() {
     // ADR-0105, decision 4: `search.*` is applied at the end of the job, and the
     // configuration read afterwards is the new one.

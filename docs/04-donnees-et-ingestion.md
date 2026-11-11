@@ -46,7 +46,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 | Figé à la création (changer = recréer l'index et ré-encoder) | Réglable ensuite (`PATCH`) |
 |---|---|
 | `name` | `search.*` |
-| `model` (son empreinte est copiée dans `index.json`) | `lexical.enabled`, `lexical.language` (domaine d'ADR-0086), `lexical.positions` : déclenchent un job de reconstruction du lexical |
+| `model` (son empreinte est copiée dans `index.json`) | `lexical.enabled`, `lexical.language` (domaine d'ADR-0086), `lexical.positions`, `lexical.identifiers` (domaine `"none"` / `"v1"`, ADR-0148) : déclenchent un job de reconstruction du lexical |
 | `reference_precision` | `cluster_by` : pris en compte à la prochaine compaction |
 | Type et niveau des champs existants | `filterable` et `returned` : les bitmaps sont reconstruites |
 | | Ajout d'un champ (nullable) |
@@ -70,6 +70,14 @@ Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la con
 | `lexical.language` | dix-huit codes ISO 639-1 en minuscules : `ar`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`, `ta`, `tr` | `"fr"` (exemple plus haut) |
 
 Aucune autre valeur n'est acceptée, et aucune normalisation n'est faite en silence : `"FR"`, `"Fr"`, `" fr"`, `"français"`, `"French"` et `""` sont refusés avec `invalid_request` (400). La valeur stockée dans `index.json` est donc toujours la forme canonique. La table d'ADR-0086 nomme pour chaque code la variante tantivy, la présence du stemmer et celle d'une liste de mots vides : `ar`, `el`, `ro`, `ta` et `tr` n'en ont pas, et leur chaîne d'analyse omet `StopWordFilter`. Un `PATCH` accepté sur ce réglage déclenche un job de reconstruction du lexical, comme les autres réglages de `lexical.*`.
+
+`lexical.identifiers` a lui aussi un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0148), sous forme de valeurs nommées :
+
+| Réglage | Domaine | Défaut |
+|---|---|---|
+| `lexical.identifiers` | `"none"` ou `"v1"` : version des formes d'identifiant reconnues par la chaîne d'analyse | `"none"`, c'est-à-dire le comportement 1.0, par **absence** de la clé |
+
+Toute autre valeur est refusée avec `invalid_request` (400), à la création de l'index comme au `PATCH`, et l'absence de la clé vaut `"none"`. La **forme stockée** suit ADR-0148, décision 6 : `IndexConfig::to_value` n'écrit pas `identifiers` quand il vaut `"none"` et l'écrit quand il vaut `"v1"`, et `from_value` lit l'absence **et** `"none"` comme la même valeur. Un index créé ou patché sans le réglage ne porte donc aucune clé 1.1 et reste lisible par une instance 1.0 (ADR-0143, décision 2) ; et comme la comparaison d'un instantané porte sur l'arbre JSON d'`index.json` (ADR-0065, décision 3), un `index.json` qui nommerait `"none"` explicitement ne correspondrait plus à un instantané qui l'omet. Un `PATCH` accepté sur ce réglage déclenche un job `rebuild_lexical`, comme les autres réglages de `lexical.*` (ADR-0105), et la valeur en vigueur ne change qu'à la fin du job.
 
 Parmi les réglages de `search`, `fusion` a lui aussi un **domaine** depuis ADR-0090 :
 

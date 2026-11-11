@@ -202,6 +202,29 @@ pub fn test_config_with_lexical(name: &str, schema: &Schema, enabled: bool) -> S
     test_config_full(name, schema, &[], enabled)
 }
 
+/// Index configuration of [`test_config_with_lexical`], with
+/// `lexical.identifiers` set to `identifiers` when it is `Some` (ADR-0148).
+///
+/// `None` writes the key **absent**, which ADR-0148, decision 6, makes the
+/// stored form of `"none"`: a test that compares the two forms passes `None`
+/// here and `Some("none")` there, once the reader accepts both.
+pub fn test_config_with_lexical_identifiers(
+    name: &str,
+    schema: &Schema,
+    enabled: bool,
+    identifiers: Option<&str>,
+) -> String {
+    let base = test_config_with_lexical(name, schema, enabled);
+    let Some(identifiers) = identifiers else {
+        return base;
+    };
+    let mut value: serde_json::Value = serde_json::from_str(&base)
+        .unwrap_or_else(|error| panic!("the fixture configuration must be JSON: {error}"));
+    value["lexical"]["identifiers"] = serde_json::Value::String(identifiers.to_owned());
+    serde_json::to_string(&value)
+        .unwrap_or_else(|error| panic!("the fixture configuration must serialize: {error}"))
+}
+
 /// Body of the three configurations above: the only varying settings are
 /// `cluster_by` and `lexical.enabled`.
 fn test_config_full(name: &str, schema: &Schema, fields: &[&str], lexical: bool) -> String {
