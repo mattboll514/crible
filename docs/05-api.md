@@ -239,6 +239,12 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
   - le message d'erreur nomme ce qui était attendu ;
   - un champ marqué `filterable: false` donne `invalid_filter`.
 
+**Ce que `filterable` promet, et ce qu'il ne promet pas.** `filterable` dit qu'un champ est stocké pour le filtre et accepté par la validation contre le schéma de cet index ; il ne promet pas qu'un filtre rende un résultat non vide. Un champ déclaré mais toujours nul dans un index donne un pool vide sous `in`, et non une erreur : aucune comparaison n'est satisfaite par un null (ADR-0035) ; `exists: false` le sélectionne, et un `$not` de comparaison aussi, puisqu'il complète sur les vivants, nulls compris (voir « Valeurs nulles » plus haut). Un champ `filterable: false` et un champ inconnu rendent le même `invalid_filter`, avec un message qui nomme le champ et `details.path`.
+
+Le filtre vaut à l'identique dans les trois modes : les branches dense et lexicale partagent le même pool filtré (`03-recherche.md`, « Fusion (mode `hybrid`) » ; INV-05), donc `dense`, `lexical` et `hybrid` acceptent et appliquent un champ déclaré de la même façon, et aucun mode ne refuse un champ déclaré. Réserver un champ à un usage — un mode de recherche, un corpus, un client — est un choix de l'appelant, que le schéma ne porte pas et que la configuration d'index n'exprime pas.
+
+Pour diagnostiquer un filtre accepté qui rend un pool vide, lire `pool_size` de la réponse — `targets[].pool_size` en multi-index —, et, pour un document précis, `in_pool` d'`explain_ids`, qui dit si l'id demandé est dans le pool filtré.
+
 Exemples tirés de Legifacile :
 
 <!-- openapi: Filter -->
@@ -274,6 +280,18 @@ Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'É
 | `debug` | bool | false | Ajoute plan, temps et rangs (ADR-0119) ; alimente le journal de debug quand il est activé : **toujours** pour `debug: true`, par échantillonnage sinon (ADR-0122, décisions 1 et 2) |
 | `explain_ids` | liste de `doc_id` ou de clés `doc_id#ord` ; en multi-index, objets `{ "index", "id" }` | [] | Diagnostic de documents précis, 100 ids au plus (ADR-0123) |
 | `timeout_ms` | 1 à 30000 | 2000 | Délai maximal |
+
+**Ce que `query` couvre.** `query` ne porte que sur le **texte des passages** : la branche lexicale analyse ce texte, et la branche dense compare le vecteur du passage au vecteur de la requête. `doc_id` et `doc_hash` ne sont indexés dans aucune branche : un document tantivy est un passage à deux champs, `iid` et `text` (`03-recherche.md`, « Branche lexicale (tantivy) »), et le vecteur d'un passage ne décrit que ce texte. En `lexical`, la requête est un sac de termes liés par un **OU**. Un identifiant que l'analyse laisse en **un seul jeton**, par exemple `A42XYZ`, ne retrouve un passage que si le texte de ce passage porte ce jeton ; un identifiant **ponctué**, comme `A-42` ou `10-13.625`, est découpé en plusieurs jetons par l'analyseur, OUés comme les autres termes, donc un passage qui n'en porte qu'un seul est rendu, souvent très loin dans le classement (ADR-0094) ; et dans une requête à plusieurs termes, un identifiant ne pèse que comme ses termes, pas davantage. En `dense` et en `hybrid`, l'identifiant est encodé comme un texte quelconque, et le score ne mesure qu'une similarité avec le texte du passage : rien ne garantit que le document qui porte cet identifiant soit retrouvé, et aucune branche ne compare l'identifiant à un `doc_id`. Les champs de document n'entrent pas dans ce texte non plus : le texte indexé est l'entrée encodeur composée par le producteur, et le moteur n'y ajoute rien (`04-donnees-et-ingestion.md`, « Le découpage : qui fait quoi » ; ADR-0010, ADR-0020). Un champ de document n'est donc cherchable comme texte que si le gabarit du producteur le recopie dans le passage.
+
+Pour lire un document connu, employer `GET /v1/indexes/{index}/documents/{doc_id}` ; pour savoir pourquoi un document attendu ne sort pas d'une recherche, employer `explain_ids`. Avec `mode: "lexical"` et `explain_ids` sur un identifiant que le texte des passages ne contient pas, la réponse ne porte aucun résultat et l'explication dit que le document existe et qu'il est dans le pool :
+
+<!-- openapi: SearchExplain -->
+```json
+{ "explain": [
+  { "id": "A-42", "doc_id": "A-42", "exists": true, "alive": true, "in_pool": true } ] }
+```
+
+Aucune clause de filtre ne l'exclut, d'où l'absence d'`excluded_by`. Aucun objet de branche ne le décrit : la branche dense n'a pas tourné en mode `lexical`, la branche lexicale ne le classe pas faute d'un terme analysé de la requête dans son texte, et `fused` est absent parce que le passage n'entre dans aucune liste fusionnée. Un membre sans valeur est omis, jamais rendu `null` (ADR-0119, décision 3 ; ADR-0123) ; la forme complète de `explain` est décrite dans « Recherche : réponse ».
 
 **Entrées selon le mode** (ADR-0109). `dense` prend **exactement un** de `query` ou `vector` : les deux ensemble, ou aucun des deux, rendent `invalid_request` (400). `lexical` exige `query` et **refuse** `vector` (400). `hybrid` exige `query` — la branche lexicale note le texte — et accepte un `vector` facultatif, qui sert alors la branche dense **à la place** de l'encodage de `query`. Sur un index à modèle `external`, qui n'encode pas, `dense` exige `vector` et `hybrid` exige `query` **et** `vector` ; un `query` sans `vector` y est refusé en `invalid_request` (400), avec un message qui nomme le modèle. La CLI suit la même règle : `--query` et `--vector-file` ensemble sont acceptés en `hybrid`.
 
@@ -440,6 +458,23 @@ Les membres absents suivent la même règle qu'en simple : on les omet, jamais `
 ```
 
 - Le rapport donne six comptes **par document et mutuellement exclusifs** : `added`, `replaced`, `unchanged`, `metadata_updated`, `deleted`, `ignored` (ADR-0041, et `docs/04-donnees-et-ingestion.md` pour la définition de chaque clé). Leur somme vaut le nombre de documents traités.
+
+Un lot **sans passage**, qui ne porte que des `deletions`, n'a ni ajout ni recette : son rapport ne compte que des suppressions. Deux `doc_id` inconnus de l'index y donnent ce job :
+
+<!-- openapi: Job -->
+```json
+{ "id": "job_…", "kind": "online_batch", "index": "decisions", "state": "succeeded",
+  "created_at": "…", "started_at": "…", "finished_at": "…", "generation": 1289,
+  "progress": { "step": "snapshot", "done": 0, "total": 0 },
+  "result": { "report": { "generation": 1289, "added": 0, "replaced": 0, "unchanged": 0,
+                          "metadata_updated": 0, "deleted": 0, "ignored": 2,
+                          "acceptance": null } },
+  "error": null }
+```
+
+- `ignored` compte les `doc_id` de `deletions` que l'index ne connaît pas ; c'est le seul compte qu'une suppression de document inconnu peut produire (`04-donnees-et-ingestion.md`, « Contrôles et recette, dans l'ordre », tableau du rapport d'attache). Le rapport ne dit pas **pourquoi** une suppression est ignorée : sa forme est celle des six compteurs (ADR-0041), sans compteur par cause ; INV-01 ne vise que l'`iid`, jamais le `doc_id`.
+- `acceptance: null` veut dire « aucun passage à recetter », jamais « recette échouée » : le lot ne porte aucun passage, il n'y a rien à tirer au sort (`04-donnees-et-ingestion.md`, « Contrôles et recette, dans l'ordre », étape 9 ; ADR-0054). Une recette qui refuse un lot fait échouer le job, avec `error.code` à `acceptance_failed` (même étape 9 ; ci-dessus, « Erreurs d'attache »).
+- Le corps d'un tel lot est décrit dans « Lot en ligne », qui donne aussi le sens d'`acceptance: null` pour un lot sans passage ; les définitions d'`acceptance: null` et d'`ignored` sont dans `04-donnees-et-ingestion.md`, « Contrôles et recette, dans l'ordre ». Son rapport suit la règle des six comptes ci-dessus, et `progress` compte des passages, d'où `done` et `total` à `0`.
 - `progress` n'est publié que par `attach_batch`, `online_batch` et `patch_documents` ; les autres `kind` gardent `progress: null`, membre toujours présent. `progress.done` et `progress.total` comptent les **passages** traités pour `attach_batch` et `online_batch`, comme `counts.passages` du manifeste, et les **documents** pour `patch_documents` ; ils ne se comparent pas aux comptes du rapport. `progress.step` prend les noms d'étapes du protocole : `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` pour `attach_batch` et `online_batch`, et `transaction`, `manifest`, `snapshot` pour `patch_documents` ; une étape que le protocole saute pour un job donné n'est pas publiée. `done` avance aux **frontières d'étape**, pas passage par passage : `total` est connu dès la lecture du manifeste ou du corps du patch, `step` prend son nom au début de chaque étape, et `done` vaut `total` à la fin d'un job réussi — l'exemple ci-dessus, `succeeded`, est à cette dernière étape. Un job réussi qui n'a joué aucune étape, comme le rejeu d'un lot déjà attaché, garde `progress: null` : un client ne doit donc pas supposer `done = total` sur tout job réussi (ADR-0134). Un job échoué garde la dernière progression publiée, éventuellement avec `done < total`, ou `null` si l'échec précède la première publication. Pendant l'encodage d'un `online_batch`, avant que le lot interne et son manifeste existent, `progress` reste `null` ; il suit ensuite les étapes de l'attache, en passages. Pendant le job, `progress` est lu **en mémoire** ; la table `jobs` n'est écrite qu'aux transitions d'état et porte alors la progression de l'instant (ADR-0103, décision 3 ; ADR-0134).
 - `result.report` est le rapport **persisté** de l'attache : il ne porte pas de durées. Les durées par étape sont de la télémétrie d'appel (ADR-0042) : le serveur les **journalise une fois, à la fin du job**, au niveau `info`, avec `job_id`, `kind` et `index`, et **aucune réponse de l'API ne les rend**, `?wait=true` compris ; elles ne sont ni persistées ni portées par le job (ADR-0107). La CLI continue de les afficher à son appelant. Pour `patch_documents`, le rapport `{ updated, unchanged, generation }` n'est **pas** persisté : le job le porte en mémoire, pour sa durée de vie, et un job relu plus tard n'en donne rien (ADR-0060).
 - `kind` vaut `attach_batch`, `online_batch`, `patch_documents`, `patch_config`, `compact`, `export`, `snapshot`, `rebuild_lexical` ou `delete_index`. `patch_config` est le patch d'un réglage de l'index qui ne reconstruit pas le lexical, et `rebuild_lexical` celui qui le reconstruit (ADR-0105).
