@@ -1,10 +1,13 @@
 # ADR-0149 — Durées d'attache dans l'objet `Job`, en mémoire et jamais persistées
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-11)
 - **Date** : 2026-11-11
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche v1.1 `T02-DUREES-ATTACHE-DANS-JOB`, sur demande de l'orchestrateur, d'après le verdict de `@architecte` du 2026-11-11 et la décision du propriétaire du 2026-11-11
 - **Remplace** : ADR-0107, **décision 4 seulement, et en partie** — la ligne de journal `attach durations` reste. Le reste d'ADR-0107 n'est pas modifié.
+- **Décision** : confirmée par le propriétaire le 2026-11-11, sa réponse : « ADR-0149 accepté ».
+
+**Erratum du 2026-11-11 (correction d'une phrase de plan devenue sans objet, sans réécriture d'aucune décision).** Le tableau d'application portait, pour `docs/05-api.md:467-476`, la phrase « l'autre exemple d'objet sans durée reste `null` ». Elle était sans objet : la section « Jobs » de `docs/05` ne contient que deux exemples d'objet `Job`, ceux d'un `attach_batch` et d'un `online_batch`, et les deux portent désormais `durations`. La ligne du tableau est corrigée ci-dessous et ne demande plus que l'ajout du membre à l'exemple `online_batch`. Aucun argument, aucune décision et aucune alternative ne changent.
 
 ## Contexte
 
@@ -155,7 +158,7 @@ Après acceptation seulement, sur la branche de la tâche `T02-DUREES-ATTACHE-DA
 | Document ou code | Modification |
 |---|---|
 | `docs/05-api.md:454-461` | exemple d'un job `attach_batch` : ajouter `"durations": { … }` avec les six clés, à côté de `progress` |
-| `docs/05-api.md:467-476` | exemple d'un job `online_batch` : ajouter `"durations": { … }` ; l'autre exemple d'objet sans durée reste `null` |
+| `docs/05-api.md:467-476` | exemple d'un job `online_batch` : ajouter `"durations": { … }` |
 | `docs/05-api.md:482` | remplacer « **aucune réponse de l'API ne les rend**, `?wait=true` compris ; elles ne sont ni persistées ni portées par le job » par la règle de cet ADR : l'objet `Job` porte `durations`, en mémoire, `null` quand il n'y a rien, jamais dans `report` ni dans la table ; la ligne de journal reste |
 | `docs/05-api.md:71` | ligne des deux routes de jobs : mention « `durations` d'attache en mémoire, `null` sinon » |
 | `docs/04-donnees-et-ingestion.md:247` | « Durées d'attache » : les durées sont rendues par l'objet `Job` au membre `durations`, en mémoire, jamais persistées ; le rapport persisté reste sans durées (ADR-0149) |
