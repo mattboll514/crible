@@ -46,7 +46,7 @@ use crate::analytics::{self, Operation};
 use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
-use crate::jobs::{JobOutcome, log_attach_durations};
+use crate::jobs::{DurationsMillis, JobOutcome, log_attach_durations};
 
 /// Body of `POST /v1/indexes/{index}/documents`.
 ///
@@ -191,14 +191,11 @@ async fn post_documents_inner(
             &deletions,
             &mut |step, total| progress.set(step.as_str(), 0, total),
         )?;
-        log_attach_durations(
-            progress.job_id(),
-            JobKind::OnlineBatch,
-            &name,
-            report.durations,
-        );
+        let durations = report.durations.map(DurationsMillis::of);
+        log_attach_durations(progress.job_id(), JobKind::OnlineBatch, &name, durations);
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: durations.map(DurationsMillis::to_json),
             result: Some(json!({ "report": report.to_json() })),
         })
     });
@@ -317,6 +314,7 @@ async fn patch_documents_inner(
         )?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "updated": report.updated,

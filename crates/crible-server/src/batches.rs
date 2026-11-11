@@ -44,7 +44,7 @@ use crate::analytics::{self, Operation};
 use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
-use crate::jobs::{JobOutcome, log_attach_durations};
+use crate::jobs::{DurationsMillis, JobOutcome, log_attach_durations};
 
 /// Body of `POST /v1/indexes/{index}/batches`.
 #[derive(Debug, Deserialize)]
@@ -189,14 +189,11 @@ async fn post_batch_inner(
                 format!("index '{name}': {}", failure.message()),
             )
         })?;
-        log_attach_durations(
-            progress.job_id(),
-            JobKind::AttachBatch,
-            &name,
-            report.durations,
-        );
+        let durations = report.durations.map(DurationsMillis::of);
+        log_attach_durations(progress.job_id(), JobKind::AttachBatch, &name, durations);
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: durations.map(DurationsMillis::to_json),
             result: Some(json!({ "report": report.to_json() })),
         })
     });

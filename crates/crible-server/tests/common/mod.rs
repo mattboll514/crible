@@ -678,6 +678,85 @@ pub async fn lock_barrier_environment() -> tokio::sync::MutexGuard<'static, ()> 
         .await
 }
 
+/// Environment variable naming the barrier directory of `src/barriers.rs`.
+#[cfg(feature = "failpoints")]
+const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
+
+/// Attach barrier just before the SQLite `COMMIT`.
+#[cfg(feature = "failpoints")]
+const ATTACH_BEFORE_COMMIT: &str = "attach-before-commit";
+
+/// Attach barrier just after the SQLite `COMMIT`.
+#[cfg(feature = "failpoints")]
+const ATTACH_AFTER_SQLITE_COMMIT: &str = "attach-after-sqlite-commit";
+
+/// Temporary directory that arms the two attach barriers of `src/barriers.rs`
+/// (the `failpoints` build only).
+///
+/// [`arm`](AttachBarrier::arm) sets `CRIBLE_TEST_BARRIER`, writes the
+/// `armed-attach` mark, and releases `attach-after-sqlite-commit` up front, so
+/// that barrier never holds the release of the one a test observes. The value
+/// removes the variable when it drops, so the caller keeps
+/// [`lock_barrier_environment`] until after that drop, which the declaration
+/// order of a test gives when the slot comes first.
+#[cfg(feature = "failpoints")]
+pub struct AttachBarrier {
+    /// Directory holding the marks; removed when the value drops.
+    directory: TempDir,
+}
+
+#[cfg(feature = "failpoints")]
+impl AttachBarrier {
+    /// Arms the attach steps in a fresh temporary directory.
+    #[must_use]
+    pub fn arm() -> Self {
+        let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
+        // SAFETY: the caller holds `lock_barrier_environment` for the whole
+        // test, so no other test of the binary reads the variable meanwhile,
+        // and `Drop` removes it before the caller releases the slot.
+        unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
+        std::fs::write(directory.path().join("armed-attach"), b"")
+            .expect("the attach steps are armable");
+        std::fs::write(
+            directory
+                .path()
+                .join(format!("go-{ATTACH_AFTER_SQLITE_COMMIT}")),
+            b"",
+        )
+        .expect("the later barrier is releasable");
+        Self { directory }
+    }
+
+    /// Waits until the attach reaches `attach-before-commit`.
+    pub async fn wait_before_commit(&self) {
+        let path = self
+            .directory
+            .path()
+            .join(format!("ready-{ATTACH_BEFORE_COMMIT}"));
+        wait_for(ATTACH_BEFORE_COMMIT, &path).await;
+    }
+
+    /// Releases the attach held at `attach-before-commit`.
+    pub fn release_before_commit(&self) {
+        std::fs::write(
+            self.directory
+                .path()
+                .join(format!("go-{ATTACH_BEFORE_COMMIT}")),
+            b"",
+        )
+        .expect("the held attach is releasable");
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl Drop for AttachBarrier {
+    fn drop(&mut self) {
+        // SAFETY: the caller still holds `lock_barrier_environment`, so no
+        // other test of the binary armed the variable meanwhile.
+        unsafe { std::env::remove_var(BARRIER_ENV) };
+    }
+}
+
 /// Asserts that no key of `value` at any depth contains `iid` (INV-01).
 pub fn assert_no_iid_key(label: &str, value: &Value) {
     match value {

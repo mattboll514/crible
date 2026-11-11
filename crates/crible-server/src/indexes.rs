@@ -336,6 +336,7 @@ async fn patch_index_inner(
             writer.publish(candidate, snapshot, summary)?;
             Ok(JobOutcome {
                 generation: Some(store.generation().get()),
+                durations: None,
                 result: None,
             })
         },
@@ -465,6 +466,7 @@ async fn delete_index_inner(
             remove_quarantined(&target);
             Ok(JobOutcome {
                 generation: None,
+                durations: None,
                 result: None,
             })
         },

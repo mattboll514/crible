@@ -120,6 +120,7 @@ async fn compact_inner(
         let report = compact_for_job(store, &index_config)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "from_epoch": report.from_epoch.get(),
@@ -180,6 +181,7 @@ async fn exports_inner(
         let report = export(store, &index_config, &model.config, &destination)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "generation": report.generation.get(),
@@ -244,6 +246,7 @@ async fn snapshots_inner(
         let report = snapshot::create(store, &index_config, &destination)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "index": report.index,

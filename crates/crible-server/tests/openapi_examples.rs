@@ -354,6 +354,106 @@ fn the_debug_query_list_is_closed_and_carries_the_cap_counters() {
     );
 }
 
+/// `durations` is a closed object of six whole-millisecond integers, `null` when
+/// there is nothing to render (ADR-0149, decision 1).
+///
+/// The examples of `docs/05-api.md` carry the member; this test fixes its shape,
+/// so a member added to it, or a fraction, is refused.
+#[test]
+fn the_job_schema_describes_durations_as_a_closed_object() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let properties = &specification["components"]["schemas"]["Job"]["properties"];
+    assert!(
+        properties.get("durations").is_some(),
+        "the component `Job` declares `durations` (ADR-0149, application table)"
+    );
+    let required = specification["components"]["schemas"]["Job"]["required"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the component `Job` declares its required members"));
+    assert!(
+        required
+            .iter()
+            .any(|name| name.as_str() == Some("durations")),
+        "`durations` is required: the member is always present, `null` when there is nothing \
+         to render (ADR-0149, decision 1)"
+    );
+
+    let validator = validator("Job");
+    let documented = serde_json::json!({
+        "id": "job_0000000000000000000000000000000a",
+        "kind": "attach_batch",
+        "index": "alpha",
+        "state": "succeeded",
+        "created_at": "2026-11-11T00:00:00Z",
+        "started_at": null,
+        "finished_at": null,
+        "generation": 1,
+        "progress": null,
+        "durations": {
+            "validation_ms": 1,
+            "segment_ms": 2,
+            "transaction_ms": 3,
+            "lexical_ms": 0,
+            "manifest_ms": 4,
+            "snapshot_ms": 5,
+        },
+        "result": null,
+        "error": null,
+    });
+    assert!(
+        validator.validate(&documented).is_ok(),
+        "the documented object of six keys is accepted"
+    );
+
+    let mut empty = documented.clone();
+    empty["durations"] = serde_json::Value::Null;
+    assert!(
+        validator.validate(&empty).is_ok(),
+        "`durations: null` is accepted: it is the answer of every other kind"
+    );
+
+    let mut extra = documented.clone();
+    extra["durations"]["total_ms"] = serde_json::json!(15);
+    assert!(
+        validator.validate(&extra).is_err(),
+        "the object is closed: a seventh key is refused"
+    );
+
+    for missing in [
+        "validation_ms",
+        "segment_ms",
+        "transaction_ms",
+        "lexical_ms",
+        "manifest_ms",
+        "snapshot_ms",
+    ] {
+        let mut without = documented.clone();
+        without["durations"]
+            .as_object_mut()
+            .expect("the documented durations are an object")
+            .remove(missing);
+        assert!(
+            validator.validate(&without).is_err(),
+            "`{missing}` is always rendered, worth 0 when the step did not run"
+        );
+    }
+
+    for (label, value) in [
+        ("a fraction", serde_json::json!(1.5)),
+        ("a negative number", serde_json::json!(-1)),
+        ("a string", serde_json::json!("1")),
+        ("null in place of a step", serde_json::Value::Null),
+    ] {
+        let mut wrong = documented.clone();
+        wrong["durations"]["lexical_ms"] = value;
+        assert!(
+            validator.validate(&wrong).is_err(),
+            "a step is a whole non-negative number of milliseconds: `{label}` is refused"
+        );
+    }
+}
+
 #[test]
 fn every_marker_is_a_valid_component_or_none() {
     let specification = crible_server::openapi::specification()
