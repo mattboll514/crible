@@ -1,6 +1,6 @@
 # ADR-0147 — Domaine de `[limits].default_timeout_ms`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, sur délégation du propriétaire du 2026-11-11 : « pour l'idée notée je te laisse décider ce qui est le mieux »)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-11)
 - **Date** : 2026-11-11 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, pour la tâche `BORNER-DEFAULT-TIMEOUT` de la v1.1 (hors tickets de Legifacile), sur la base du verdict de `@architecte` du 2026-11-11 rendu pendant la relecture de `T06-LISTE-INDEX-AU-DEMARRAGE`
