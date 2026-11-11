@@ -269,6 +269,8 @@ def test_every_method_targets_the_route_of_the_api() -> None:
         client.job("job_1")
         client.compact("i")
         client.export("i")
+        client.delete_index("i", confirm="i")
+        client.snapshot("i")
 
     assert calls == [
         ("POST", "/v1/indexes"),
@@ -283,6 +285,8 @@ def test_every_method_targets_the_route_of_the_api() -> None:
         ("GET", "/v1/jobs/job_1"),
         ("POST", "/v1/indexes/i/compact"),
         ("POST", "/v1/indexes/i/exports"),
+        ("DELETE", "/v1/indexes/i"),
+        ("POST", "/v1/indexes/i/snapshots"),
     ]
 
 
@@ -401,6 +405,106 @@ def test_the_asynchronous_client_builds_the_same_request() -> None:
     assert asyncio.run(scenario()) == {"results": []}
     assert seen[1].content == sync_body[0]
     assert seen[1].headers["authorization"] == "Bearer secret"
+
+
+# --- deletion and snapshot (ADR-0144) -------------------------------------
+
+
+def test_delete_index_sends_the_confirm_as_given_and_returns_the_job() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            202, json={"id": "job_1", "kind": "delete_index", "state": "queued"}
+        )
+
+    with mock_client(handler) as client:
+        job = client.delete_index("archives", confirm="not-the-index")
+
+    request = seen[0]
+    assert request.method == "DELETE"
+    assert request.url.path == "/v1/indexes/archives"
+    assert request.url.params["confirm"] == "not-the-index", (
+        "the client sends confirm as given and never corrects it (ADR-0144)"
+    )
+    assert request.content == b"", "a deletion carries no body"
+    assert job == {"id": "job_1", "kind": "delete_index", "state": "queued"}
+
+
+def test_snapshot_posts_without_a_body_and_returns_the_job() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"id": "job_2", "kind": "snapshot", "state": "queued"})
+
+    with mock_client(handler) as client:
+        job = client.snapshot("decisions")
+
+    request = seen[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/indexes/decisions/snapshots"
+    assert request.content == b"", "the snapshots route takes no body"
+    assert job == {"id": "job_2", "kind": "snapshot", "state": "queued"}
+
+
+def test_deletion_and_snapshot_encode_the_index_as_one_path_component() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"id": "job_1", "state": "queued"})
+
+    with mock_client(handler) as client:
+        client.delete_index("a/b", confirm="a/b")
+        client.snapshot("a/b")
+
+    assert seen[0].url.raw_path.split(b"?")[0] == b"/v1/indexes/a%2Fb"
+    assert seen[1].url.raw_path == b"/v1/indexes/a%2Fb/snapshots"
+
+
+def test_the_asynchronous_client_deletes_and_snapshots_the_same_way() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"id": "job_1", "state": "queued"})
+
+    async def scenario() -> tuple[dict, dict]:
+        async with mock_async_client(handler) as client:
+            deleted = await client.delete_index("archives", confirm="archives")
+            snapshotted = await client.snapshot("archives")
+            return deleted, snapshotted
+
+    assert asyncio.run(scenario()) == ({"id": "job_1", "state": "queued"},) * 2
+    assert [
+        (request.method, request.url.path, request.url.params.get("confirm"), request.content)
+        for request in seen
+    ] == [
+        ("DELETE", "/v1/indexes/archives", "archives", b""),
+        ("POST", "/v1/indexes/archives/snapshots", None, b""),
+    ]
+
+
+def test_confirm_is_a_mandatory_keyword_of_delete_index() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(202, json={"id": "job_1", "state": "queued"})
+
+    with mock_client(handler) as client:
+        with pytest.raises(TypeError):
+            client.delete_index("i")  # type: ignore[call-arg]
+        with pytest.raises(TypeError):
+            client.delete_index("i", "i")  # type: ignore[call-arg]
+
+    async def scenario() -> None:
+        async with mock_async_client(handler) as client:
+            with pytest.raises(TypeError):
+                await client.delete_index("i")  # type: ignore[call-arg]
+            with pytest.raises(TypeError):
+                await client.delete_index("i", "i")  # type: ignore[call-arg]
+
+    asyncio.run(scenario())
 
 
 # --- wait -----------------------------------------------------------------
