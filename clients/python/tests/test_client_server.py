@@ -196,6 +196,80 @@ def test_the_essentials_run_asynchronously(instance) -> None:
     asyncio.run(play_the_essentials(instance))
 
 
+# --- deletion and snapshot against the binary (ADR-0144) ------------------
+
+
+def test_a_snapshot_job_succeeds(instance) -> None:
+    name = "snapshotted"
+    with Client(instance.base_url, instance.keys["admin"]) as client:
+        client.create_index(index_config(name))
+        client.wait(client.upsert_documents(name, "snapshot-online", [document("S0", 0)]))
+        job = client.snapshot(name)
+        assert job["kind"] == "snapshot"
+        assert job["state"] in ("queued", "running", "succeeded")
+        done = client.wait(job)
+    assert done["state"] == "succeeded"
+    assert done["kind"] == "snapshot"
+    report = done["result"]["report"]
+    assert report["index"] == name
+    assert (instance.exchange / report["directory"]).is_dir()
+
+
+def test_delete_index_with_the_right_confirm_removes_the_index(instance) -> None:
+    name = "deleted"
+    with Client(instance.base_url, instance.keys["admin"]) as client:
+        client.create_index(index_config(name))
+        job = client.delete_index(name, confirm=name)
+        assert job["kind"] == "delete_index"
+        # A 202 does not mean the index is gone: the job in the queue of the
+        # index does it (docs/05-api.md).
+        done = client.wait(job)
+        assert done["state"] == "succeeded"
+        with pytest.raises(UnknownIndexError) as caught:
+            client.get_index(name)
+    assert caught.value.status == 404
+
+
+def test_delete_index_with_a_wrong_confirm_is_invalid_request(instance) -> None:
+    name = "guarded"
+    with Client(instance.base_url, instance.keys["admin"]) as client:
+        client.create_index(index_config(name))
+        with pytest.raises(InvalidRequestError) as caught:
+            client.delete_index(name, confirm=f"{name}-typo")
+        assert client.get_index(name)["config"]["name"] == name
+    assert caught.value.code == "invalid_request"
+    assert caught.value.status == 400
+    assert "confirm" in caught.value.message
+
+
+def test_deletion_and_snapshot_require_the_admin_role(instance) -> None:
+    name = "admin-only"
+    with Client(instance.base_url, instance.keys["admin"]) as client:
+        client.create_index(index_config(name))
+    with Client(instance.base_url, instance.keys["write"]) as client:
+        with pytest.raises(ForbiddenError) as deletion:
+            client.delete_index(name, confirm=name)
+    with Client(instance.base_url, instance.keys["read"]) as client:
+        with pytest.raises(ForbiddenError) as snapshot:
+            client.snapshot(name)
+    assert deletion.value.code == "forbidden"
+    assert snapshot.value.code == "forbidden"
+
+
+def test_a_deletion_runs_asynchronously(instance) -> None:
+    name = "async-deleted"
+
+    async def scenario() -> None:
+        async with AsyncClient(instance.base_url, instance.keys["admin"]) as client:
+            await client.create_index(index_config(name))
+            done = await client.wait(await client.delete_index(name, confirm=name))
+            assert done["kind"] == "delete_index"
+            with pytest.raises(UnknownIndexError):
+                await client.get_index(name)
+
+    asyncio.run(scenario())
+
+
 # --- error codes reachable against the binary -----------------------------
 
 

@@ -136,6 +136,22 @@ class _Core:
         """``POST /v1/indexes/{index}/exports``; the route takes no body."""
         return _Call("POST", f"/v1/indexes/{_component(index)}/exports")
 
+    def delete_index(self, index: str, confirm: str) -> _Call:
+        """``DELETE /v1/indexes/{index}?confirm=...``.
+
+        ``confirm`` is sent as given: the server checks it against the name
+        (ADR-0105), and the client neither verifies nor fills it (ADR-0144).
+        """
+        return _Call(
+            "DELETE",
+            f"/v1/indexes/{_component(index)}",
+            params={"confirm": confirm},
+        )
+
+    def snapshot(self, index: str) -> _Call:
+        """``POST /v1/indexes/{index}/snapshots``; the route takes no body."""
+        return _Call("POST", f"/v1/indexes/{_component(index)}/snapshots")
+
     def decode(self, response: httpx.Response) -> dict[str, Any]:
         """Returns the JSON body of a success, or raises the typed error."""
         if not response.is_success:
@@ -283,6 +299,18 @@ class Client:
         """Starts an export to ``exchange/outbox``; returns its job."""
         return self._send(self._core.export(index))
 
+    def delete_index(self, index: str, *, confirm: str) -> dict[str, Any]:
+        """Starts the deletion of an index; returns its job.
+
+        ``confirm`` is mandatory and sent as given: the server refuses it if it
+        does not repeat the name of the index (ADR-0105, ADR-0144).
+        """
+        return self._send(self._core.delete_index(index, confirm))
+
+    def snapshot(self, index: str) -> dict[str, Any]:
+        """Starts a snapshot to ``exchange/snapshots``; returns its job."""
+        return self._send(self._core.snapshot(index))
+
     def _send(self, call: _Call) -> dict[str, Any]:
         try:
             response = self._http.request(
@@ -390,6 +418,14 @@ class AsyncClient:
     async def export(self, index: str) -> dict[str, Any]:
         """Starts an export to ``exchange/outbox``; returns its job."""
         return await self._send(self._core.export(index))
+
+    async def delete_index(self, index: str, *, confirm: str) -> dict[str, Any]:
+        """Starts the deletion of an index; same contract as :meth:`Client.delete_index`."""
+        return await self._send(self._core.delete_index(index, confirm))
+
+    async def snapshot(self, index: str) -> dict[str, Any]:
+        """Starts a snapshot to ``exchange/snapshots``; returns its job."""
+        return await self._send(self._core.snapshot(index))
 
     async def _send(self, call: _Call) -> dict[str, Any]:
         try:
