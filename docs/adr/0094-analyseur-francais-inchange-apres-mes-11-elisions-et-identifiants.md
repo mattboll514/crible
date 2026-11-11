@@ -1,6 +1,6 @@
 # ADR-0094 — Analyseur français inchangé après MES-11 : élisions et identifiants (Q-04)
 
-- **Statut** : Accepté (décision du propriétaire le 2026-10-29)
+- **Statut** : Remplacé par ADR-0148 (décision du propriétaire le 2026-11-11)
 - **Date** : 2026-10-29 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Décision** : le propriétaire retient la recommandation de MES-11, dans sa forme prudente : la chaîne d'analyse d'ADR-0086 reste inchangée, aucun filtre d'élision ni traitement d'identifiant n'est ajouté, et V2 (identifiants en un seul jeton) reste une option de produit non retenue.

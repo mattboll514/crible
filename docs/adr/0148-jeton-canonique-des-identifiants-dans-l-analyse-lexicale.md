@@ -1,10 +1,10 @@
 # ADR-0148 — Jeton canonique des identifiants dans l'analyse lexicale
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décision du propriétaire le 2026-11-11)
 - **Date** : 2026-11-11
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T14-IDENTIFIANTS-NUS-LEXICAL` (v1.1), sur la base du verdict de `@architecte` du 2026-11-11 et du ticket 14 de Legifacile
-- **Remplace** : ADR-0094 (à l'acceptation), en reprenant telle quelle sa décision sur les élisions (V1 écartée, effet nul mesuré)
+- **Remplace** : ADR-0094, en reprenant telle quelle sa décision sur les élisions (V1 écartée, effet nul mesuré)
 
 ## Contexte
 
