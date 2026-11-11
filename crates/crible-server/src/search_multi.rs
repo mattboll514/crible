@@ -584,7 +584,7 @@ fn validate(state: &AppState, request: MultiRequest, sampled: bool) -> Result<Pl
     let mut targets = Vec::with_capacity(published_targets.len());
     for (target, published) in published_targets {
         if mode.uses_lexical() && !published.config.lexical.enabled {
-            return Err(error::invalid(format!(
+            return Err(error::lexical_branch_disabled(format!(
                 "lexical branch is disabled for this index: '{}'",
                 target.index
             )));

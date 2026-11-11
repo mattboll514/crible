@@ -206,7 +206,7 @@ async fn search_inner(
         .unwrap_or_else(|| Mode::default_for(published.config.lexical.enabled));
     if mode.uses_lexical() && !published.config.lexical.enabled {
         return observed.refused(
-            &error::invalid("lexical branch is disabled for this index"),
+            &error::lexical_branch_disabled("lexical branch is disabled for this index"),
             &identifier.0,
         );
     }
