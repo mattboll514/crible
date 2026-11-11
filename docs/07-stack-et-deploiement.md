@@ -103,7 +103,7 @@ query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-
 
 [limits]
 writer_queue = 16             # jobs en attente par index, le job en cours exclu ; au-delà, 503 overloaded (ADR-0103)
-default_timeout_ms = 2000
+default_timeout_ms = 2000     # 1 à 30000 ; hors bornes, refusé au démarrage ; surcharge CRIBLE_LIMITS__DEFAULT_TIMEOUT_MS (ADR-0147)
 wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067) ; borne aussi l'attente des jobs à l'arrêt (ADR-0104)
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```

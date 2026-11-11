@@ -612,7 +612,7 @@ Un lot **sans passage**, qui ne porte que des `deletions`, n'a ni ajout ni recet
 | Corps d'un patch de métadonnées | 32 Mio, 10 000 documents (mêmes bornes pour le fichier de `crible patch`) |
 | File d'écriture par index | 16 jobs en attente, puis `503 overloaded` avec `Retry-After: 1` (ADR-0103) |
 | Recherches concurrentes | 2 × le nombre de cœurs (`[server].max_concurrent_searches`, 0 = 2 × cœurs), puis `503 overloaded` avec `Retry-After: 1` |
-| `timeout_ms` | 2 000 par défaut (`[limits].default_timeout_ms`), 30 000 au plus ; à l'échéance, `504 timeout` |
+| `timeout_ms` | 2 000 par défaut (`[limits].default_timeout_ms`), 30 000 au plus ; `[limits].default_timeout_ms` est lui-même borné de 1 à 30 000, et une valeur hors bornes empêche le serveur de démarrer (ADR-0147) ; à l'échéance, `504 timeout` |
 | `wait_timeout_ms` | 60 000 par défaut : attente au plus de `?wait=true`, puis `202` avec le job dans son état courant (ADR-0067) |
 | Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |
 
