@@ -1779,7 +1779,7 @@ impl Modify for BearerAuth {
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full, server draining or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn compact_doc() {}
@@ -1801,7 +1801,7 @@ pub fn compact_doc() {}
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full, generation race or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full, generation race or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn exports_doc() {}
@@ -1823,7 +1823,7 @@ pub fn exports_doc() {}
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn snapshots_doc() {}

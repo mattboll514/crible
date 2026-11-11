@@ -65,6 +65,27 @@ pub(crate) fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message.into())
 }
 
+/// Fixed message of the `503` of a route read before the startup published the
+/// index registry or the state opened with it (ADR-0146, decisions 1 and 2).
+pub const STARTING_MESSAGE: &str = "the server is starting";
+
+/// Builds the `503 overloaded` of a route that runs before the startup
+/// published the registry or the published state (ADR-0146, decisions 1 to 3).
+///
+/// The message is fixed and names neither an index, nor a path, nor a duration:
+/// the window is bounded by the loading, not by a count the server would
+/// announce. It is the **single** constructor of that case, so every route
+/// inherits the same body through [`rendered`]: `details: {}`, `x-request-id` and
+/// `Retry-After: 1` (ADR-0101, ADR-0098, ADR-0103 decision 9).
+///
+/// The refusal is decided at the access itself, never by a layer and never on
+/// `is_ready()`: a layer would answer `503` before the `401` of ADR-0100 and
+/// before the `400` of ADR-0110, and `is_ready()` is false during the drainage
+/// of ADR-0104, which keeps serving the reads.
+pub(crate) fn starting() -> CribleError {
+    CribleError::new(ErrorCode::Overloaded, STARTING_MESSAGE)
+}
+
 /// Builds the refusal of a lexical branch that the index disables.
 ///
 /// `lexical` and `hybrid` are inapplicable to an index whose `lexical.enabled`

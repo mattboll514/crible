@@ -136,7 +136,7 @@ pub(crate) const DEFAULT_K: usize = 10;
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable", body = crate::openapi::Error),
+        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error),
         (status = 504, description = "`timeout_ms` reached", body = crate::openapi::Error)
     )
 )]

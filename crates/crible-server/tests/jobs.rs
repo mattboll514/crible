@@ -318,7 +318,10 @@ fn a_finished_job_is_read_after_a_restart() {
             state.jobs().expect("the board is open").drained().await;
             job
         });
-        let finished = state.job(&job.id).expect("the job is kept");
+        let finished = state
+            .job(&job.id)
+            .expect("the board is open")
+            .expect("the job is kept");
         assert_eq!(finished.state, JobState::Succeeded);
         job
     };
@@ -327,7 +330,10 @@ fn a_finished_job_is_read_after_a_restart() {
     restarted
         .load(&instance.config)
         .unwrap_or_else(|error| panic!("the instance restarts: {}", error.message()));
-    let read = restarted.job(&job.id).expect("the finished job survived");
+    let read = restarted
+        .job(&job.id)
+        .expect("the board is open")
+        .expect("the finished job survived");
     assert_eq!(read.state, JobState::Succeeded);
     assert_eq!(read.generation, Some(7));
     assert_eq!(read.result, Some(json!({"report": "kept"})));
@@ -349,7 +355,10 @@ async fn an_interrupted_job_is_failed_at_the_next_startup() {
             .expect("the job starts");
     }
     let (state, _shutdown) = instance.state();
-    let job = state.job(INTERRUPTED_ID).expect("the job is kept");
+    let job = state
+        .job(INTERRUPTED_ID)
+        .expect("the board is open")
+        .expect("the job is kept");
     assert_eq!(job.state, JobState::Failed);
     let error = job.error.expect("the failed job carries an error");
     assert_eq!(error["code"], "internal");
@@ -543,7 +552,12 @@ async fn a_full_queue_renders_503_with_retry_after() {
     // The writer task takes the first job out of the queue: the slot the second
     // submission needs is free only from that moment.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while state.job(&running.id).map(|job| job.state) != Some(JobState::Running) {
+    while state
+        .job(&running.id)
+        .expect("the board is open")
+        .map(|job| job.state)
+        != Some(JobState::Running)
+    {
         assert!(
             std::time::Instant::now() < deadline,
             "the writer never started the first job"
@@ -606,6 +620,7 @@ async fn a_full_queue_renders_503_with_retry_after() {
     assert_eq!(
         state
             .list_jobs(Some("alpha"), Some(JobState::Succeeded))
+            .expect("the board is open")
             .len(),
         2,
         "the refused job is not visible"
@@ -613,6 +628,7 @@ async fn a_full_queue_renders_503_with_retry_after() {
     assert_eq!(
         state
             .job(&running.id)
+            .expect("the board is open")
             .expect("the running job is kept")
             .state,
         JobState::Succeeded
@@ -782,6 +798,7 @@ async fn the_shutdown_drains_the_accepted_jobs_and_refuses_the_later_ones() {
     assert!(
         state
             .list_jobs(Some("alpha"), None)
+            .expect("the board is open")
             .iter()
             .all(|job| job.state == JobState::Succeeded),
         "every accepted job is terminal"
