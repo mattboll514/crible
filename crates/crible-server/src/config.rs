@@ -43,6 +43,7 @@ use crible_encode::Precision;
 use toml::{Table, Value};
 
 use crate::error::invalid;
+use crate::limits::{MAX_TIMEOUT_MS, MIN_TIMEOUT_MS};
 
 /// Prefix of every override variable.
 const VARIABLE_PREFIX: &str = "CRIBLE_";
@@ -227,8 +228,10 @@ pub struct LimitsConfig {
     pub writer_queue: usize,
     /// Longest life of a request, in milliseconds.
     ///
-    /// ADR-0099 bounds the shutdown drainage with it plus 1 000 ms; no key is
-    /// added for the bound.
+    /// Bounded to 1 to 30 000 ms, the bounds of the request `timeout_ms`
+    /// (ADR-0102, decision 3); a value outside them fails the startup
+    /// (ADR-0147). ADR-0099 bounds the shutdown drainage with it plus 1 000 ms;
+    /// no key is added for the bound.
     pub default_timeout_ms: u64,
     /// Longest wait of `?wait=true`, in milliseconds (ADR-0067).
     pub wait_timeout_ms: u64,
@@ -415,9 +418,24 @@ impl Config {
                 "query_cache_entries",
             ],
         )?;
+        let default_timeout_ms = milliseconds(limits, "limits", "default_timeout_ms", overrides)?;
+        if !(MIN_TIMEOUT_MS..=MAX_TIMEOUT_MS).contains(&default_timeout_ms) {
+            // ADR-0147: the default of a search goes through the bounds of the
+            // request `timeout_ms` (ADR-0102, decision 3), so a value outside
+            // them would refuse every search that omits `timeout_ms`, blaming
+            // the client for a fault of the server's configuration. The same
+            // bound keeps the shutdown drainage, `default_timeout_ms` + 1 000 ms
+            // (ADR-0099), under `wait_timeout_ms` at its own default, where an
+            // unbounded value could exceed it. The startup fails instead.
+            return Err(invalid(format!(
+                "setting 'default_timeout_ms' must be between {MIN_TIMEOUT_MS} and \
+                 {MAX_TIMEOUT_MS} at {}, got {default_timeout_ms}",
+                origin(overrides, "limits.default_timeout_ms")
+            )));
+        }
         let limits = LimitsConfig {
             writer_queue: count(limits, "limits", "writer_queue", overrides)?,
-            default_timeout_ms: milliseconds(limits, "limits", "default_timeout_ms", overrides)?,
+            default_timeout_ms,
             wait_timeout_ms: milliseconds(limits, "limits", "wait_timeout_ms", overrides)?,
             query_cache_entries: count(limits, "limits", "query_cache_entries", overrides)?,
         };
@@ -1174,6 +1192,77 @@ query_cache_entries = 1024
         let accepted = load(EXAMPLE, &[("CRIBLE_DEBUG_JOURNAL__MAX_BYTES", "1048576")])
             .expect("one MiB is accepted");
         assert_eq!(accepted.debug_journal.max_bytes, 1_048_576);
+    }
+
+    #[test]
+    fn a_default_timeout_outside_the_bounds_is_refused_naming_the_key() {
+        // ADR-0147: the default of a search goes through the bounds of the
+        // request `timeout_ms`; outside them, every search that omits
+        // `timeout_ms` would be `400`, so the startup fails instead.
+        for refused in ["0", "30001", "60000"] {
+            let raw = EXAMPLE.replace(
+                "default_timeout_ms = 2000",
+                &format!("default_timeout_ms = {refused}"),
+            );
+            let error = load(&raw, &[]).expect_err("a default outside the bounds is refused");
+            let message = message(error);
+            assert!(message.contains("default_timeout_ms"), "got {message}");
+            assert!(
+                message.contains("limits.default_timeout_ms"),
+                "the message names the key path, got {message}"
+            );
+            assert!(
+                message.contains("between 1 and 30000"),
+                "the message names the domain, got {message}"
+            );
+            assert!(
+                message.contains(&format!("got {refused}")),
+                "the message names the received value, got {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_timeout_outside_the_bounds_names_the_variable() {
+        // ADR-0147, decision 2 and ADR-0097: a refusal that comes from the key
+        // names the variable that set it.
+        let error = load(EXAMPLE, &[("CRIBLE_LIMITS__DEFAULT_TIMEOUT_MS", "60000")])
+            .expect_err("a default outside the bounds is refused");
+        let message = message(error);
+        assert!(
+            message.contains("limits.default_timeout_ms"),
+            "got {message}"
+        );
+        assert!(
+            message.contains("CRIBLE_LIMITS__DEFAULT_TIMEOUT_MS"),
+            "got {message}"
+        );
+        assert!(message.contains("got 60000"), "got {message}");
+    }
+
+    #[test]
+    fn the_bounds_of_the_default_timeout_are_accepted() {
+        // ADR-0147, decision 1: the domain is 1 to 30 000 ms inclusive, and the
+        // documented default of 2 000 ms is unchanged.
+        let low = load(
+            &EXAMPLE.replace("default_timeout_ms = 2000", "default_timeout_ms = 1"),
+            &[],
+        )
+        .expect("one millisecond is accepted");
+        assert_eq!(low.limits.default_timeout_ms, 1);
+        let high = load(
+            &EXAMPLE.replace("default_timeout_ms = 2000", "default_timeout_ms = 30000"),
+            &[],
+        )
+        .expect("thirty thousand milliseconds is accepted");
+        assert_eq!(high.limits.default_timeout_ms, 30_000);
+        assert_eq!(
+            load(EXAMPLE, &[])
+                .expect("the documented configuration is accepted")
+                .limits
+                .default_timeout_ms,
+            2_000
+        );
     }
 
     #[test]
