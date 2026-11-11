@@ -244,6 +244,23 @@ pub struct LexicalConfig {
     pub language: String,
     /// Whether term positions are stored.
     pub positions: bool,
+    /// Version of the identifier forms the chain adds a canonical token for
+    /// (ADR-0148). Absent, it is `none`, and the creation does not write it.
+    #[schema(nullable = false)]
+    pub identifiers: Option<LexicalIdentifiers>,
+}
+
+/// Version of the identifier forms of the analysis chain (ADR-0148, decision 3).
+///
+/// The domain is closed: `none` is the 1.0 chain, `v1` adds the canonical token
+/// of an article or of a number. Extending it is a new value, hence a new ADR.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LexicalIdentifiers {
+    /// The 1.0 chain: no identifier is recognised.
+    None,
+    /// The 1.0 tokens, plus the canonical token of a recognised identifier.
+    V1,
 }
 
 /// Dense search settings of an index.
@@ -350,6 +367,10 @@ pub struct LexicalPatch {
     /// New state of the positions.
     #[schema(nullable = false)]
     pub positions: Option<bool>,
+    /// New version of the identifier forms (ADR-0148); a change rebuilds the
+    /// lexical branch.
+    #[schema(nullable = false)]
+    pub identifiers: Option<LexicalIdentifiers>,
 }
 
 /// Dense part of a `PATCH` of configuration.

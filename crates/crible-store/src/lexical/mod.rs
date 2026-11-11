@@ -60,9 +60,9 @@
 //! # Configuration changes
 //!
 //! This module indexes with the configuration the epoch's `index.json` declares.
-//! A change of `lexical.language` or `lexical.positions` on an epoch that already
-//! has a lexical index requires the rebuild job of `RECONSTRUIRE-LEXICAL`; this
-//! task does not detect that change.
+//! A change of `lexical.language`, `lexical.positions` or `lexical.identifiers`
+//! on an epoch that already has a lexical index requires the rebuild job of
+//! `RECONSTRUIRE-LEXICAL`; this task does not detect that change.
 
 pub mod analyzer;
 
@@ -70,7 +70,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crible_core::config::LexicalConfig;
+use crible_core::config::{LexicalConfig, LexicalIdentifiers};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_core::ids::{Generation, Iid, PassageKey};
 use tantivy::directory::MmapDirectory;
@@ -134,19 +134,24 @@ const WRITER_THREADS: usize = 1;
 /// settles whether the value is right.
 const WRITER_MEMORY_BUDGET_IN_BYTES: usize = 50 * 1024 * 1024;
 
-/// Analysis chain an index was built with (ADR-0106, decision 1).
+/// Analysis chain an index was built with (ADR-0106, decision 1; ADR-0148,
+/// decision 7).
 ///
-/// The two settings `lexical.language` and `lexical.positions` describe the
-/// chain that analysed the text: the tokenizer, its filters and its stemmer, and
-/// whether term positions were indexed. The chain is recorded in the payload of
-/// the last tantivy commit, beside the generation, so an open can compare it with
-/// the configuration it is asked to serve.
+/// The three settings `lexical.language`, `lexical.positions` and
+/// `lexical.identifiers` describe the chain that analysed the text: the
+/// tokenizer, its filters and its stemmer, whether term positions were indexed,
+/// and the version of the identifier forms whose canonical token was added. The
+/// chain is recorded in the payload of the last tantivy commit, beside the
+/// generation, so an open can compare it with the configuration it is asked to
+/// serve.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisChain {
     /// Language of the analyzer, one of `lexical.language`.
     pub language: String,
     /// Whether term positions were indexed.
     pub positions: bool,
+    /// Version of the identifier forms the chain adds a canonical token for.
+    pub identifiers: LexicalIdentifiers,
 }
 
 impl AnalysisChain {
@@ -156,6 +161,7 @@ impl AnalysisChain {
         Self {
             language: config.language.clone(),
             positions: config.positions,
+            identifiers: config.identifiers,
         }
     }
 }
@@ -508,9 +514,10 @@ pub(crate) fn observe(
     }
     // ADR-0106, decision 2: a recorded chain that differs from the configuration
     // is a state the write open repairs and the read-only open refuses. A
-    // payload of the previous format carries no chain and is read as built with
+    // payload of the first format carries no chain and is read as built with
     // the configuration's chain (decision 3), so an existing index is never
-    // rebuilt for the sole fact of this ADR.
+    // rebuilt for the sole fact of this ADR; a payload of version 2 carries
+    // `identifiers` absent, read as `"none"` (ADR-0148, decision 7).
     let expected = AnalysisChain::of(config);
     if let Some(recorded) = payload.as_ref().and_then(|payload| payload.chain.as_ref())
         && recorded != &expected
@@ -519,9 +526,11 @@ pub(crate) fn observe(
             epoch = %epoch_dir.display(),
             recorded_language = %recorded.language,
             recorded_positions = recorded.positions,
+            recorded_identifiers = recorded.identifiers.as_str(),
             configured_language = %expected.language,
             configured_positions = expected.positions,
-            "the lexical index was built with another analysis chain (ADR-0106)"
+            configured_identifiers = expected.identifiers.as_str(),
+            "the lexical index was built with another analysis chain (ADR-0106, ADR-0148)"
         );
         return Ok(LexicalObservation::without_reader(
             LexicalStatus::OtherChain,
@@ -779,7 +788,7 @@ fn existing_index(directory: &Path) -> Result<Option<Index>, CribleError> {
 /// of `lexical.language` takes the name [`TOKENIZER_NAME`], the one the schema of
 /// the index refers to.
 fn register_analyzer(index: &Index, config: &LexicalConfig) -> Result<(), CribleError> {
-    let chain = analyzer::analyzer(&config.language)?;
+    let chain = analyzer::analyzer(&config.language, config.identifiers)?;
     index.tokenizers().register(TOKENIZER_NAME, chain);
     Ok(())
 }
@@ -831,31 +840,49 @@ struct CommitPayload {
     chain: Option<AnalysisChain>,
 }
 
-/// Version of the payload written by this build (ADR-0106, decision 1).
-const PAYLOAD_VERSION: u32 = 2;
+/// Version of the payload written by this build (ADR-0148, decision 7).
+///
+/// Version 1 wrote the generation alone, as a decimal number; version 2 wrote a
+/// JSON object with `language` and `positions`; version 3 adds `identifiers`.
+/// All three are read, field by field.
+const PAYLOAD_VERSION: u32 = 3;
+
+/// First version that wrote a JSON object rather than a decimal number
+/// (ADR-0106, decision 3).
+const FIRST_OBJECT_PAYLOAD_VERSION: u32 = 2;
 
 /// Payload of a commit: its version, its generation and its analysis chain.
 ///
 /// The format is a JSON object rather than the decimal number of the previous
 /// version, so a reader can tell the two apart without a side file. The previous
-/// version wrote `Gt` alone; it is still read (decision 3).
+/// versions are still read (ADR-0106, decision 3; ADR-0148, decision 7).
+///
+/// Version 3 always names the three fields of the chain, `identifiers` included
+/// when it is `"none"`: the payload is an internal marker of a derived
+/// directory, never a public format, and an unknown payload is rebuilt.
 fn payload(generation: Generation, chain: &AnalysisChain) -> String {
     serde_json::json!({
         "version": PAYLOAD_VERSION,
         "generation": generation.get(),
         "language": &chain.language,
         "positions": chain.positions,
+        "identifiers": chain.identifiers.as_str(),
     })
     .to_string()
 }
 
 /// The payload `payload`, decoded.
 ///
-/// A payload of the previous format is a decimal number and carries no chain: it
-/// is read as built with the chain of `index.json` (ADR-0106, decision 3). Any
-/// other text is an internal error: the state is undecidable and the derived
-/// directory has to be rebuilt. [`observe`] reports it as
-/// [`LexicalStatus::Unreadable`] and logs the message built here.
+/// A payload of the first format is a decimal number and carries no chain: it
+/// is read as built with the chain of `index.json` (ADR-0106, decision 3). A
+/// JSON payload is read **field by field**, an absent field taking its 1.0 value
+/// (ADR-0148, decision 7): version 2 has no `identifiers`, which is then
+/// `"none"`, so an index built by 1.0 is never rebuilt for the sole fact of this
+/// ADR. Version 1 is that decimal number; the object form starts at version 2.
+/// Any other version, and any text that is neither, is an internal error: the
+/// state is undecidable and the derived directory has to be rebuilt.
+/// [`observe`] reports it as [`LexicalStatus::Unreadable`] and logs the message
+/// built here.
 fn parse_payload(payload: &str, directory: &Path) -> Result<CommitPayload, CribleError> {
     let trimmed = payload.trim();
     if trimmed.starts_with('{') {
@@ -870,7 +897,12 @@ fn parse_payload(payload: &str, directory: &Path) -> Result<CommitPayload, Cribl
             )
         })?;
         let version = value.get("version").and_then(serde_json::Value::as_u64);
-        if version != Some(u64::from(PAYLOAD_VERSION)) {
+        if !matches!(
+            version,
+            Some(version)
+                if (u64::from(FIRST_OBJECT_PAYLOAD_VERSION)..=u64::from(PAYLOAD_VERSION))
+                    .contains(&version)
+        ) {
             return Err(CribleError::new(
                 ErrorCode::Internal,
                 format!(
@@ -921,11 +953,43 @@ fn parse_payload(payload: &str, directory: &Path) -> Result<CommitPayload, Cribl
                     ),
                 )
             })?;
+        // ADR-0148, decision 7: a version 2 payload, and any payload without the
+        // field, names no identifier form, which is the 1.0 chain.
+        let identifiers = match value.get("identifiers") {
+            None => LexicalIdentifiers::None,
+            Some(raw) => match raw.as_str() {
+                Some("none") => LexicalIdentifiers::None,
+                Some("v1") => LexicalIdentifiers::V1,
+                Some(other) => {
+                    return Err(CribleError::new(
+                        ErrorCode::Internal,
+                        format!(
+                            "the payload {:?} of the lexical index {} names the identifier \
+                             forms {other:?}, which this build does not know",
+                            payload,
+                            directory.display()
+                        ),
+                    ));
+                }
+                None => {
+                    return Err(CribleError::new(
+                        ErrorCode::Internal,
+                        format!(
+                            "the payload {:?} of the lexical index {} has an identifiers field \
+                             that is not a string",
+                            payload,
+                            directory.display()
+                        ),
+                    ));
+                }
+            },
+        };
         return Ok(CommitPayload {
             generation: Generation::new(generation),
             chain: Some(AnalysisChain {
                 language: language.to_owned(),
                 positions,
+                identifiers,
             }),
         });
     }
@@ -979,7 +1043,7 @@ mod tests {
         AnalysisChain, LexicalState, index_directory, parse_payload, payload, read_state,
         remove_index, writer,
     };
-    use crible_core::config::LexicalConfig;
+    use crible_core::config::{LexicalConfig, LexicalIdentifiers};
     use crible_core::error::ErrorCode;
     use crible_core::ids::{Generation, Iid};
 
@@ -989,6 +1053,7 @@ mod tests {
             enabled: true,
             language: "fr".to_owned(),
             positions: false,
+            identifiers: LexicalIdentifiers::None,
         }
     }
 
@@ -1019,6 +1084,27 @@ mod tests {
         };
         assert_eq!(error.code(), ErrorCode::Internal);
         assert!(error.message().contains("gen-412"), "{}", error.message());
+
+        // ADR-0148, decision 7: an unknown identifier form, or an `identifiers`
+        // field that is not a string, makes the chain undecidable, so it is an
+        // internal error and the derived directory has to be rebuilt.
+        for (text, fragment) in [
+            (
+                r#"{"version": 3, "generation": 412, "language": "fr", "positions": false, "identifiers": "v2"}"#,
+                "v2",
+            ),
+            (
+                r#"{"version": 3, "generation": 412, "language": "fr", "positions": false, "identifiers": 1}"#,
+                "not a string",
+            ),
+        ] {
+            let error = match parse_payload(text, directory) {
+                Ok(payload) => panic!("{text} must be refused, got {payload:?}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code(), ErrorCode::Internal, "{text}");
+            assert!(error.message().contains(fragment), "{}", error.message());
+        }
     }
 
     /// An epoch without a lexical directory reads as the default state, never as

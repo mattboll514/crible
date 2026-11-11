@@ -458,6 +458,49 @@ fn lexical_language(value: &Value, path: &str) -> Result<String, CribleError> {
     Ok(language)
 }
 
+/// Version of the identifier forms the analysis chain recognises (ADR-0148,
+/// decision 3).
+///
+/// The domain is closed and names the **version of the forms**, not a switch:
+/// extending it to ECLI, decimals or thousands separated by a space is a new
+/// value, hence a new ADR. A boolean could not say that, and the analysis
+/// fingerprint would not see an extension (ADR-0148, "Alternatives écartées").
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LexicalIdentifiers {
+    /// The 1.0 chain: the tokenizer cuts identifiers on their punctuation and
+    /// adds nothing. This is the value of an absent setting (ADR-0148,
+    /// decision 5).
+    #[default]
+    None,
+    /// The 1.0 tokens, plus the canonical token of each recognised identifier
+    /// (ADR-0148, decisions 2 and 3).
+    V1,
+}
+
+impl LexicalIdentifiers {
+    /// Wire name used in the configuration and in a `GET /v1/indexes` body.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::V1 => "v1",
+        }
+    }
+
+    /// Reads a value of the closed domain, and reports `path` when it is
+    /// outside it (ADR-0148, decision 5).
+    fn parse(value: &Value, path: &str) -> Result<Self, CribleError> {
+        let raw = json::string(value, path)?;
+        match raw.as_str() {
+            "none" => Ok(Self::None),
+            "v1" => Ok(Self::V1),
+            other => Err(json::invalid(format!(
+                "unknown lexical identifiers '{other}' at {path}; expected none or v1"
+            ))),
+        }
+    }
+}
+
 /// Lexical branch settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexicalConfig {
@@ -467,12 +510,24 @@ pub struct LexicalConfig {
     pub language: String,
     /// Whether term positions are stored.
     pub positions: bool,
+    /// Version of the identifier forms the chain adds a canonical token for
+    /// (ADR-0148).
+    ///
+    /// Optional in `index.json`: absent, it means
+    /// [`LexicalIdentifiers::None`], and [`IndexConfig::to_value`] does not
+    /// write that value, so an index that does not use the setting stays
+    /// readable by a 1.0 instance (ADR-0148, decision 6).
+    pub identifiers: LexicalIdentifiers,
 }
 
 impl LexicalConfig {
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
-        json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &["enabled", "language", "positions", "identifiers"],
+        )?;
         let language = lexical_language(
             json::member(object, path, "language")?,
             &format!("{path}.language"),
@@ -481,6 +536,15 @@ impl LexicalConfig {
             enabled: json::boolean_member(object, path, "enabled")?,
             language,
             positions: json::boolean_member(object, path, "positions")?,
+            // ADR-0148, decision 6: an absent key and `"none"` are the same
+            // value, so a hand-written `"none"` stays readable.
+            identifiers: optional_patch(
+                object,
+                "identifiers",
+                &format!("{path}.identifiers"),
+                LexicalIdentifiers::parse,
+            )?
+            .unwrap_or_default(),
         })
     }
 }
@@ -689,19 +753,34 @@ impl IndexConfig {
     /// (ADR-0074), so the value is the materialised form of `docs/04` and
     /// round-trips through [`IndexConfig::from_value`]. The `PATCH` job of
     /// ADR-0105 writes that form to `index.json`.
+    ///
+    /// One exception: `lexical.identifiers` is **omitted** when it is
+    /// [`LexicalIdentifiers::None`] (ADR-0148, decision 6). Writing the default
+    /// would put a 1.1 key in every `index.json`, and a 1.0 instance refuses to
+    /// start on an unknown key; a constant default has no reason to be
+    /// materialised, unlike the derived default of `search.exact_threshold`.
     #[must_use]
     pub fn to_value(&self) -> Value {
+        let mut lexical = serde_json::json!({
+            "enabled": self.lexical.enabled,
+            "language": &self.lexical.language,
+            "positions": self.lexical.positions,
+        });
+        if self.lexical.identifiers != LexicalIdentifiers::None
+            && let Some(lexical) = lexical.as_object_mut()
+        {
+            lexical.insert(
+                "identifiers".to_owned(),
+                Value::String(self.lexical.identifiers.as_str().to_owned()),
+            );
+        }
         serde_json::json!({
             "name": &self.name,
             "model": &self.model,
             "reference_precision": self.reference_precision.as_str(),
             "schema": self.schema.to_value(),
             "cluster_by": &self.cluster_by,
-            "lexical": {
-                "enabled": self.lexical.enabled,
-                "language": &self.lexical.language,
-                "positions": self.lexical.positions,
-            },
+            "lexical": lexical,
             "search": {
                 "scan": self.search.scan.as_str(),
                 "rescore_candidates": self.search.rescore_candidates,
@@ -1185,12 +1264,17 @@ struct LexicalPatch {
     enabled: Option<bool>,
     language: Option<String>,
     positions: Option<bool>,
+    identifiers: Option<LexicalIdentifiers>,
 }
 
 impl LexicalPatch {
     fn from_value(value: &Value, path: &str) -> Result<Self, CribleError> {
         let object = json::object(value, path)?;
-        json::reject_unknown_keys(object, path, &["enabled", "language", "positions"])?;
+        json::reject_unknown_keys(
+            object,
+            path,
+            &["enabled", "language", "positions", "identifiers"],
+        )?;
         Ok(Self {
             enabled: match object.get("enabled") {
                 Some(value) => Some(json::boolean(value, &format!("{path}.enabled"))?),
@@ -1206,6 +1290,14 @@ impl LexicalPatch {
                 Some(value) => Some(json::boolean(value, &format!("{path}.positions"))?),
                 None => None,
             },
+            // ADR-0148, decision 5: modifiable by `PATCH`, with the same closed
+            // domain and the same path as the creation.
+            identifiers: optional_patch(
+                object,
+                "identifiers",
+                &format!("{path}.identifiers"),
+                LexicalIdentifiers::parse,
+            )?,
         })
     }
 
@@ -1218,6 +1310,9 @@ impl LexicalPatch {
         }
         if let Some(positions) = self.positions {
             config.positions = positions;
+        }
+        if let Some(identifiers) = self.identifiers {
+            config.identifiers = identifiers;
         }
     }
 }

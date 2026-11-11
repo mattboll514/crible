@@ -147,6 +147,29 @@ pub fn test_config_with_precision_and_lexical(
     )
 }
 
+/// Index configuration declaring `schema`, a reference precision, the state of
+/// the lexical branch and `lexical.identifiers` (ADR-0148, decision 5).
+///
+/// `identifiers` is written only when it is `Some`: the absent form is the
+/// stored form of `"none"` (ADR-0148, decision 6).
+pub fn test_config_with_precision_lexical_and_identifiers(
+    name: &str,
+    schema: &Schema,
+    precision: ReferencePrecision,
+    lexical: bool,
+    identifiers: Option<&str>,
+) -> String {
+    let base = test_config_with_precision_and_lexical(name, schema, precision, lexical);
+    let Some(identifiers) = identifiers else {
+        return base;
+    };
+    let mut value: serde_json::Value = serde_json::from_str(&base)
+        .unwrap_or_else(|error| panic!("the fixture configuration must be JSON: {error}"));
+    value["lexical"]["identifiers"] = serde_json::Value::String(identifiers.to_owned());
+    serde_json::to_string(&value)
+        .unwrap_or_else(|error| panic!("the fixture configuration must serialize: {error}"))
+}
+
 /// One index in a temporary directory, its writer, and the rows it holds.
 pub struct Fixture {
     // The directory must outlive the index: dropping it removes the files.

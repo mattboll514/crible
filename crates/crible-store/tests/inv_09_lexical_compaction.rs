@@ -63,17 +63,18 @@ use std::sync::Arc;
 
 use arrow::array::{FixedSizeBinaryArray, Int64Array, StringArray, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
-use crible_core::config::IndexConfig;
+use crible_core::config::{IndexConfig, LexicalIdentifiers};
 use crible_core::ids::{Generation, Iid};
 use crible_core::model::ModelConfig;
 use crible_store::attach::attach;
 use crible_store::compact::compact;
 use crible_store::generation::GenerationStore;
-use crible_store::lexical::LexicalStatus;
+use crible_store::lexical::{AnalysisChain, LexicalStatus, read_state};
 use crible_store::records::ReadPool;
 use half::f16;
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
+use tantivy::query::{BooleanQuery, Query};
+use tantivy::tokenizer::TokenStream;
 
 /// Dimensionality of the fixture vectors.
 const DIMS: usize = 4;
@@ -179,6 +180,37 @@ const L3: [FixtureDoc; 2] = [
 /// The eight live documents of the fixture after `L1`, `L2` and `L3`: the
 /// corpus a reference index is built from once the dead passages are removed.
 const LIVE: [FixtureDoc; 8] = [L1[1], L1[2], L1[3], L1[5], L2[0], L2[1], L3[0], L3[1]];
+
+/// Corpus of the ADR-0148 test: three short passages, two of them carrying an
+/// identifier the `v1` chain adds a canonical token for.
+///
+/// The third passage carries no identifier and no term of the identifier
+/// queries: it is the control that says the ranking is decided by the canonical
+/// token and not by the length of the index.
+const IDENTIFIERS: [FixtureDoc; 3] = [
+    FixtureDoc {
+        doc_id: "cass-10-13-625",
+        hash: "blake3:cass-10-13-625-v1",
+        text: "pourvoi 10-13.625 chambre sociale",
+        vector: [1.0, 0.0, 0.0, 0.0],
+    },
+    FixtureDoc {
+        doc_id: "cass-81-70-489",
+        hash: "blake3:cass-81-70-489-v1",
+        text: "pourvoi 81-70.489 chambre commerciale",
+        vector: [0.0, 1.0, 0.0, 0.0],
+    },
+    FixtureDoc {
+        doc_id: "article-l1132-1",
+        hash: "blake3:article-l1132-1-v1",
+        text: "article L. 1132-1 du code du travail",
+        vector: [0.0, 0.0, 1.0, 0.0],
+    },
+];
+
+/// Queries of the ADR-0148 test: the two identifiers of the corpus, and a word
+/// that matches the third passage alone.
+const IDENTIFIER_QUERIES: [&str; 3] = ["10-13.625", "81-70.489", "travail"];
 
 /// Queries compared before and after a compaction or a rebuild.
 ///
@@ -344,6 +376,17 @@ fn config_json() -> String {
     common::test_config_with_lexical("test", &common::fixture_schema(), true)
 }
 
+/// Configuration of the fixture index under `lexical.identifiers = "v1"`
+/// (ADR-0148, decision 5).
+fn config_json_with_identifiers() -> String {
+    common::test_config_with_lexical_identifiers(
+        "test",
+        &common::fixture_schema(),
+        true,
+        Some("v1"),
+    )
+}
+
 /// Creates the fixture index, with a lexical branch and no passage.
 fn create_index(temp: &Path) -> (PathBuf, GenerationStore) {
     let index_dir = temp.join("indexes").join("test");
@@ -362,6 +405,25 @@ fn fixture_config(index_dir: &Path) -> IndexConfig {
     });
     IndexConfig::from_json_str(&raw)
         .unwrap_or_else(|error| panic!("the index configuration must be valid: {error}"))
+}
+
+/// Decoded payload of the last tantivy commit of `epoch_dir` (ADR-0148,
+/// decision 7).
+fn payload_value(epoch_dir: &Path) -> serde_json::Value {
+    let path = epoch_dir.join("lexical").join("meta.json");
+    let raw = fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "the tantivy metadata {} must be readable: {error}",
+            path.display()
+        )
+    });
+    let meta: serde_json::Value = serde_json::from_str(&raw)
+        .unwrap_or_else(|error| panic!("the tantivy metadata must be JSON: {error}"));
+    let payload = meta["payload"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the commit must carry a payload, got {}", meta["payload"]));
+    serde_json::from_str(payload)
+        .unwrap_or_else(|error| panic!("the payload {payload:?} must be a JSON object: {error}"))
 }
 
 /// Attaches the batch of `batch` to the index, with the configuration and the
@@ -393,14 +455,35 @@ fn reference_index(temp: &Path, documents: &[FixtureDoc]) -> GenerationStore {
     store
 }
 
+/// The query `query` as the lexical branch builds it: the analysis chain the
+/// epoch registers turns the text into terms, and the branch scores them as one
+/// `Should` bag (`docs/03`, "Requête"; ADR-0148, decision 4).
+///
+/// The bag is built here rather than parsed by `QueryParser`, which would turn
+/// a literal of several tokens into a phrase query: that query needs positions
+/// indexed, and the branch never builds one.
+fn lexical_query(
+    index: &tantivy::Index,
+    field: tantivy::schema::Field,
+    query: &str,
+) -> Box<dyn Query> {
+    // The name the schema of the index refers to (ADR-0086).
+    let mut analyzer = index.tokenizers().get("crible").unwrap_or_else(|| {
+        panic!("the lexical index must register the analysis chain under 'crible'")
+    });
+    let mut terms = Vec::new();
+    let mut stream = analyzer.token_stream(query);
+    while let Some(token) = stream.next() {
+        terms.push(tantivy::Term::from_field_text(field, &token.text));
+    }
+    Box::new(BooleanQuery::new_multiterms_query(terms))
+}
+
 /// Runs the BM25 query `query` on the lexical index of the snapshot `store`
 /// publishes, and returns its `limit` best passages by public key.
 ///
-/// The query is the one `RECHERCHER-BM25-DANS-LE-POOL` will build: the analysis
-/// chain of the epoch turns the text into terms, which a `Should` bag scores with
-/// tantivy's BM25 (`docs/03`, "Requête"). The pool restriction is not applied
-/// here: the lexical index of an up-to-date epoch holds the live passages only,
-/// so the whole index is the pool.
+/// The pool restriction is not applied here: the lexical index of an up-to-date
+/// epoch holds the live passages only, so the whole index is the pool.
 fn lexical_hits(store: &GenerationStore, query: &str, limit: usize) -> Vec<Hit> {
     let snapshot = store.snapshot();
     let status = snapshot.lexical_status();
@@ -417,10 +500,7 @@ fn lexical_hits(store: &GenerationStore, query: &str, limit: usize) -> Vec<Hit> 
     let text_field = schema.get_field("text").unwrap_or_else(|error| {
         panic!("the lexical schema of the epoch must hold the field 'text': {error}")
     });
-    let parser = QueryParser::new(schema, vec![text_field], index.tokenizers().clone());
-    let parsed = parser
-        .parse_query(query)
-        .unwrap_or_else(|error| panic!("the query {query:?} must be analysed: {error}"));
+    let parsed = lexical_query(index, text_field, query);
     let top = searcher
         .search(&parsed, &TopDocs::with_limit(limit).order_by_score())
         .unwrap_or_else(|error| panic!("the lexical search of {query:?} must run: {error}"));
@@ -785,4 +865,81 @@ fn inv_09_a_rebuilt_lexical_index_over_dead_passages_scores_like_an_index_built_
             actual,
         );
     }
+}
+
+/// `INV-09` under `lexical.identifiers = "v1"` (ADR-0148, decision 5): the
+/// compaction copies the texts and rebuilds the lexical index with the chain of
+/// the configuration, so the same queries return the same passages in the same
+/// order and with the same scores, and the new epoch records the `v1` chain in a
+/// version 3 payload.
+#[test]
+fn inv_09_lexical_results_are_the_same_after_compaction_under_identifiers_v1() {
+    let temp = tempfile::tempdir()
+        .unwrap_or_else(|error| panic!("a temporary directory must be creatable: {error}"));
+    let index_dir = temp.path().join("indexes").join("test");
+    let mut store = common::create_store_with_config(
+        &index_dir,
+        &common::fixture_schema(),
+        &config_json_with_identifiers(),
+    );
+    attach_batch(
+        &mut store,
+        &index_dir,
+        &write_batch(&temp.path().join("batches"), "identifiers", &IDENTIFIERS),
+    );
+
+    let before = store
+        .state()
+        .unwrap_or_else(|error| panic!("the state of the index must be readable: {error}"));
+    assert_eq!(
+        before.dead_passages, 0,
+        "this test compares scores exactly, which is sound only when the epoch holds no tombstone"
+    );
+    let state = read_state(&common::epoch_dir(&index_dir))
+        .unwrap_or_else(|error| panic!("the lexical state must be readable: {error}"));
+    assert_eq!(
+        state.chain.map(|chain| chain.identifiers),
+        Some(LexicalIdentifiers::V1),
+        "the fixture must really index under \"v1\", otherwise the comparison proves nothing"
+    );
+
+    let answers_before = lexical_answers(&store, &IDENTIFIER_QUERIES);
+
+    let report = compact(&mut store, &fixture_config(&index_dir)).unwrap_or_else(|error| {
+        panic!(
+            "the compaction must succeed, got {}: {}",
+            error.code().as_str(),
+            error.message()
+        )
+    });
+
+    let answers_after = lexical_answers(&store, &IDENTIFIER_QUERIES);
+    for ((query, expected), actual) in IDENTIFIER_QUERIES
+        .iter()
+        .zip(&answers_before)
+        .zip(&answers_after)
+    {
+        assert_same_results("the compaction under \"v1\"", query, expected, actual);
+    }
+
+    // ADR-0148, decision 7: the compaction writes the chain of the
+    // configuration, so the new epoch records `"v1"` in a version 3 payload.
+    let epoch_dir = common::epoch_dir_of(&index_dir, report.to_epoch.get());
+    let state = read_state(&epoch_dir)
+        .unwrap_or_else(|error| panic!("the compacted lexical state must be readable: {error}"));
+    assert_eq!(
+        state.chain,
+        Some(AnalysisChain {
+            language: "fr".to_owned(),
+            positions: false,
+            identifiers: LexicalIdentifiers::V1,
+        }),
+        "the compaction records the current chain"
+    );
+    let payload = payload_value(&epoch_dir);
+    assert_eq!(payload["version"], 3, "{payload}");
+    assert_eq!(
+        payload["identifiers"], "v1",
+        "the compacted payload carries the current setting: {payload}"
+    );
 }
