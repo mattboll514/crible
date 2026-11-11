@@ -602,6 +602,36 @@ pub struct JobError {
     pub details: FreeObject,
 }
 
+/// Durations of an attach, as the member `durations` of a job renders them
+/// (ADR-0149).
+///
+/// The object is **closed** and has exactly six keys, the names of the
+/// `attach durations` journal line, each a whole number of milliseconds. A step
+/// the protocol did not play is `0`, never absent: the member is `null` only
+/// when there is nothing to render.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobDurations {
+    /// Time of the `validation` step.
+    #[schema(minimum = 0)]
+    pub validation_ms: u64,
+    /// Time of the `segment` step.
+    #[schema(minimum = 0)]
+    pub segment_ms: u64,
+    /// Time of the `transaction` step.
+    #[schema(minimum = 0)]
+    pub transaction_ms: u64,
+    /// Time of the `lexical` step, `0` when it does not run.
+    #[schema(minimum = 0)]
+    pub lexical_ms: u64,
+    /// Time of the `manifest` step.
+    #[schema(minimum = 0)]
+    pub manifest_ms: u64,
+    /// Time of the `snapshot` step.
+    #[schema(minimum = 0)]
+    pub snapshot_ms: u64,
+}
+
 /// One job as the API renders it (`docs/05-api.md`, "Jobs").
 ///
 /// Every absent member is `null`, so a client reads the same keys on every job.
@@ -626,6 +656,15 @@ pub struct Job {
     pub generation: Option<u64>,
     /// Fine progression.
     pub progress: Option<JobProgress>,
+    /// Durations of an attach, kept in memory and never persisted; the member
+    /// is always present and `null` when there is nothing to render (ADR-0149).
+    ///
+    /// It carries exactly the numbers of the `attach durations` line for the
+    /// same job. It is `null` for a job that is not `succeeded` yet, for a
+    /// failed attach, for the replay of an applied batch, for another kind, and
+    /// for a job read back after a restart.
+    #[schema(required = true)]
+    pub durations: Option<JobDurations>,
     /// Report of the job, when its kind carries one. Its form depends on the
     /// kind: `{ "report": … }` for an attach, a metadata patch or an online
     /// batch.
@@ -1926,6 +1965,7 @@ pub fn snapshots_doc() {}
         JobKind,
         JobProgress,
         JobError,
+        JobDurations,
         Job,
         JobList,
         DebugQuery,

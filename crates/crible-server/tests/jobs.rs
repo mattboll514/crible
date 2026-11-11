@@ -309,6 +309,7 @@ fn a_finished_job_is_read_after_a_restart() {
                     Box::new(|_store, _progress, _writer| {
                         Ok(JobOutcome {
                             generation: Some(7),
+                            durations: None,
                             result: Some(json!({"report": "kept"})),
                         })
                     }),

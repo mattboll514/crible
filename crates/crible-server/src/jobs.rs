@@ -74,6 +74,15 @@ pub struct JobView {
     pub generation: Option<u64>,
     /// Fine progression, `{ "step", "done", "total" }`.
     pub progress: Option<Value>,
+    /// Durations of an attach, six whole-millisecond steps, kept in memory and
+    /// never persisted (ADR-0149).
+    ///
+    /// It is `None` when there is nothing to render: a job that is not
+    /// `succeeded` yet, a failed attach, a replay, another kind, or a job read
+    /// back from the table after a restart. It carries exactly the numbers the
+    /// `attach durations` line publishes for the same job, as both come from
+    /// the same conversion, `DurationsMillis`.
+    pub durations: Option<Value>,
     /// Report of the job, when it is persisted elsewhere.
     pub result: Option<Value>,
     /// Error of a failed job.
@@ -93,6 +102,9 @@ impl JobView {
             finished_at: record.finished_at,
             generation: record.generation,
             progress: parse_optional("progress", record.progress.as_deref(), &record.id)?,
+            // The member lives in memory only: the table has no column for it
+            // (ADR-0149, decisions 2 and 4), so a row read back renders `null`.
+            durations: None,
             result: parse_optional("result", record.result.as_deref(), &record.id)?,
             error: parse_optional("error", record.error.as_deref(), &record.id)?,
         })
@@ -114,6 +126,7 @@ impl JobView {
             "finished_at": self.finished_at,
             "generation": self.generation,
             "progress": self.progress,
+            "durations": self.durations,
             "result": self.result,
             "error": self.error,
         })
@@ -219,9 +232,66 @@ impl JobProgress {
 pub struct JobOutcome {
     /// Generation published by the job, when it has one.
     pub generation: Option<u64>,
+    /// Durations of an attach, when its call measured them (ADR-0149).
+    ///
+    /// The member lives in memory only: the board publishes it with the
+    /// terminal transition and never writes it to the table. It is `None` for
+    /// every other kind and for the replay of an applied batch, which plays no
+    /// step.
+    pub durations: Option<Value>,
     /// Report kept with the job, when it is persisted elsewhere (ADR-0042,
     /// ADR-0060).
     pub result: Option<Value>,
+}
+
+/// The six steps of an attach in whole milliseconds: the single source of the
+/// member `durations` of a job and of the fields of its `attach durations`
+/// line (ADR-0149, decisions 1 and 2).
+///
+/// [`millis`] is the only conversion, so a step cannot render one number in the
+/// object and another in the journal line. A step that did not run is `0`, never
+/// absent: [`AttachDurations`] measures it and the line writes `0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DurationsMillis {
+    /// `validation` step.
+    validation_ms: u64,
+    /// `segment` step.
+    segment_ms: u64,
+    /// `transaction` step.
+    transaction_ms: u64,
+    /// `lexical` step, zero when it does not run.
+    lexical_ms: u64,
+    /// `manifest` step.
+    manifest_ms: u64,
+    /// `snapshot` step.
+    snapshot_ms: u64,
+}
+
+impl DurationsMillis {
+    /// Converts the durations of the call that ran the attach.
+    pub(crate) fn of(durations: AttachDurations) -> Self {
+        Self {
+            validation_ms: millis(durations.validation),
+            segment_ms: millis(durations.segment),
+            transaction_ms: millis(durations.transaction),
+            lexical_ms: millis(durations.lexical),
+            manifest_ms: millis(durations.manifest),
+            snapshot_ms: millis(durations.snapshot),
+        }
+    }
+
+    /// Renders the closed object of six keys of the member `durations`
+    /// (ADR-0149, decision 1).
+    pub(crate) fn to_json(self) -> Value {
+        json!({
+            "validation_ms": self.validation_ms,
+            "segment_ms": self.segment_ms,
+            "transaction_ms": self.transaction_ms,
+            "lexical_ms": self.lexical_ms,
+            "manifest_ms": self.manifest_ms,
+            "snapshot_ms": self.snapshot_ms,
+        })
+    }
 }
 
 /// Work of a job, run on the writer of its index with the exclusive access to
@@ -346,6 +416,7 @@ impl JobBoard {
             finished_at: None,
             generation: None,
             progress: None,
+            durations: None,
             result: None,
             error: None,
         };
@@ -395,6 +466,11 @@ impl JobBoard {
                 } else {
                     None
                 };
+                // The durations of an attach appear with the terminal
+                // transition, in the same published view, so a reader never
+                // sees a succeeded attach without them when its call measured
+                // some (ADR-0149, decision 2).
+                let durations = outcome.durations;
                 let persisted = if kind == JobKind::PatchDocuments {
                     None
                 } else {
@@ -406,7 +482,7 @@ impl JobBoard {
                     progress.as_deref(),
                     persisted.as_deref(),
                 ) {
-                    Ok(record) => self.publish_with(record, in_memory),
+                    Ok(record) => self.publish_with(record, in_memory, durations),
                     Err(failure) => self.fail_transition(id, failure),
                 }
             }
@@ -452,18 +528,21 @@ impl JobBoard {
 
     /// Publishes a row and decrements the pending count when it is terminal.
     fn publish(&self, record: JobRecord) {
-        self.publish_with(record, None);
+        self.publish_with(record, None, None);
     }
 
     /// Publishes a row, adding `in_memory` as the result when the row carries
-    /// none. This is how the report of a `patch_documents` job reaches its
-    /// author without being persisted (ADR-0060, ADR-0103).
-    fn publish_with(&self, record: JobRecord, in_memory: Option<Value>) {
+    /// none, and `durations` as the in-memory durations of an attach. This is
+    /// how the report of a `patch_documents` job and the durations of an attach
+    /// reach the reader without being persisted (ADR-0060, ADR-0103,
+    /// ADR-0149).
+    fn publish_with(&self, record: JobRecord, in_memory: Option<Value>, durations: Option<Value>) {
         match JobView::from_record(record) {
             Ok(mut view) => {
                 if view.result.is_none() {
                     view.result = in_memory;
                 }
+                view.durations = durations;
                 self.store_and_notify(view);
             }
             Err(failure) => error!(
@@ -1368,17 +1447,18 @@ fn fill_readers(
     Ok(Arc::new(filled))
 }
 
-/// Logs the durations of an attach once, at the end of its job (ADR-0107,
-/// decision 4).
+/// Logs the durations of an attach once, at the end of its job (ADR-0149;
+/// replaces ADR-0107, decision 4, for the response only).
 ///
-/// No response and no job body carries them (ADR-0042): this line is the only
-/// place they are read back. It names the job, its kind and its index, never a
-/// document, a field value or a passage text (INV-13, ADR-0096).
+/// The six numbers come from [`DurationsMillis`], the same value the member
+/// `durations` of the job renders, so the line and the member cannot diverge.
+/// It names the job, its kind and its index, never a document, a field value or
+/// a passage text (INV-13, ADR-0096).
 pub(crate) fn log_attach_durations(
     job_id: &str,
     kind: JobKind,
     index: &str,
-    durations: Option<AttachDurations>,
+    durations: Option<DurationsMillis>,
 ) {
     let Some(durations) = durations else {
         return;
@@ -1387,18 +1467,18 @@ pub(crate) fn log_attach_durations(
         job_id = %job_id,
         kind = kind.as_str(),
         index = %index,
-        validation_ms = millis(durations.validation),
-        segment_ms = millis(durations.segment),
-        transaction_ms = millis(durations.transaction),
-        lexical_ms = millis(durations.lexical),
-        manifest_ms = millis(durations.manifest),
-        snapshot_ms = millis(durations.snapshot),
+        validation_ms = durations.validation_ms,
+        segment_ms = durations.segment_ms,
+        transaction_ms = durations.transaction_ms,
+        lexical_ms = durations.lexical_ms,
+        manifest_ms = durations.manifest_ms,
+        snapshot_ms = durations.snapshot_ms,
         "attach durations"
     );
 }
 
-/// One duration in whole milliseconds, for the line of
-/// [`log_attach_durations`].
+/// One duration in whole milliseconds, the unit of [`DurationsMillis`], so of
+/// the member `durations` and of the line `attach durations` (ADR-0149).
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

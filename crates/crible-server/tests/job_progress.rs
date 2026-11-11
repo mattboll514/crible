@@ -28,8 +28,6 @@ mod common;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(feature = "failpoints")]
-use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
@@ -37,6 +35,8 @@ use crible_server::jobs::JobOutcome;
 use crible_store::jobs::{JOBS_FILE_NAME, JobKind, JobStore};
 use serde_json::{Value, json};
 
+#[cfg(feature = "failpoints")]
+use common::AttachBarrier;
 use common::{
     ADMIN_SECRET, DOC_ID, INDEX, Instance, WRITE_SECRET, base64_vector, export_index, index_config,
     instance_with_alpha, online_batch, post_documents, send, terminal_job,
@@ -44,26 +44,6 @@ use common::{
 
 /// Vector of the document every fixture of this file writes.
 const VECTOR: [f32; 4] = [0.6, 0.8, 0.0, 0.0];
-
-/// Environment variable of the test barrier (`src/barriers.rs`).
-#[cfg(feature = "failpoints")]
-const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
-
-/// Attach barrier just before the SQLite `COMMIT`.
-#[cfg(feature = "failpoints")]
-const ATTACH_BEFORE_COMMIT: &str = "attach-before-commit";
-
-/// Attach barrier just after the SQLite `COMMIT`.
-#[cfg(feature = "failpoints")]
-const ATTACH_AFTER_SQLITE_COMMIT: &str = "attach-after-sqlite-commit";
-
-/// Longest wait of a test for a barrier to be reached.
-#[cfg(feature = "failpoints")]
-const TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Granularity of the polling loop, in milliseconds.
-#[cfg(feature = "failpoints")]
-const POLL: Duration = Duration::from_millis(5);
 
 /// `GET /v1/jobs/{id}`.
 async fn job(router: &Router, id: &str) -> Value {
@@ -141,23 +121,7 @@ async fn patch_documents(router: &Router, body: Value) -> (StatusCode, Value) {
 async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
     let _slot = common::lock_barrier_environment().await;
     let (_instance, state, router) = instance_with_alpha().await;
-    let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
-    // SAFETY: the slot is held for the whole test, and no other test of this
-    // binary reads `CRIBLE_TEST_BARRIER` meanwhile; the variable is removed
-    // before the slot is released.
-    unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
-    std::fs::write(directory.path().join("armed-attach"), b"")
-        .expect("the attach steps are armable");
-    // This test observes the step before the commit; the barrier after the
-    // commit would hold the release of the first one, so it is released up
-    // front.
-    std::fs::write(
-        directory
-            .path()
-            .join(format!("go-{ATTACH_AFTER_SQLITE_COMMIT}")),
-        b"",
-    )
-    .expect("the later barrier is releasable");
+    let barrier = AttachBarrier::arm();
 
     let path = format!("/v1/indexes/{INDEX}/documents?wait=false");
     let (status, accepted) = send(
@@ -179,18 +143,7 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
     );
     let id = id_of(&accepted);
 
-    let ready = directory
-        .path()
-        .join(format!("ready-{ATTACH_BEFORE_COMMIT}"));
-    let deadline = Instant::now() + TIMEOUT;
-    while !ready.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the attach never reached {}",
-            ready.display()
-        );
-        tokio::time::sleep(POLL).await;
-    }
+    barrier.wait_before_commit().await;
 
     let running = job(&router, &id).await;
     assert_eq!(running["state"], "running", "the job is held: {running}");
@@ -210,11 +163,7 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
         "done advances at the end of a successful job, not per passage: {running}"
     );
 
-    std::fs::write(
-        directory.path().join(format!("go-{ATTACH_BEFORE_COMMIT}")),
-        b"",
-    )
-    .expect("the held attach is releasable");
+    barrier.release_before_commit();
     let finished = terminal_job(&router, &state, &accepted).await;
     assert_eq!(
         finished["state"], "succeeded",
@@ -225,9 +174,6 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
         json!({ "step": "snapshot", "done": 1, "total": 1 }),
         "a successful job ends at its last step and at `total`: {finished}"
     );
-
-    // SAFETY: see above; the job is terminal, so no write reads the variable.
-    unsafe { std::env::remove_var(BARRIER_ENV) };
 }
 
 /// A successful `attach_batch` ends at `snapshot` with `done == total`, and the

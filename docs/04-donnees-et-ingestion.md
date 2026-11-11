@@ -244,7 +244,7 @@ Le rapport **persisté** donne aussi :
 - les statistiques de la recette ;
 - la génération obtenue.
 
-Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` — est mesurée, mais ces durées sont de la **télémétrie d'appel** : elles sont rendues au seul appelant d'origine de l'attache et restent disponibles pour la journalisation et les mesures. Aucune n'entre dans `batches.report`, et aucune écriture SQLite n'a lieu après le point de commit (ADR-0016).
+Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` — est mesurée, et ces durées sont de la **télémétrie d'appel** : le serveur les rend dans le membre `durations` de l'objet `Job`, à six clés de millisecondes entières (`validation_ms`, `segment_ms`, `transaction_ms`, `lexical_ms`, `manifest_ms`, `snapshot_ms`), gardé **en mémoire** et **jamais persisté**, lisible par toute clé qui peut lire le job ; il les journalise aussi une fois, à la fin du job, dans la ligne `attach durations` (ADR-0149). Aucune n'entre dans `batches.report` ni dans `jobs.sqlite`, et aucune écriture SQLite n'a lieu après le point de commit (ADR-0016).
 
 ## Mode en ligne (sans producteur)
 
