@@ -454,6 +454,50 @@ fn the_job_schema_describes_durations_as_a_closed_object() {
     }
 }
 
+/// The error component admits the refusal of ADR-0150 and documents it.
+///
+/// `details` is a free object: the closed vocabulary of its keys lives in
+/// `docs/05-api.md` and in the description of the member (ADR-0101, decision 3).
+/// The refusal of a name held by a `delete_index` job adds two keys, `reason`
+/// with the new value `index_deleting` and `job_id`, and no `path` (ADR-0150,
+/// decision 1). This test fixes both halves: the description of `details` names
+/// the pair, so a client generated from the specification can read it, and the
+/// schema accepts the body the server renders.
+#[test]
+fn the_error_schema_documents_reason_index_deleting_with_its_job_id() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let details = &specification["components"]["schemas"]["ErrorBody"]["properties"]["details"];
+    let description = details["description"].as_str().unwrap_or_else(|| {
+        panic!("the member `details` of `ErrorBody` carries a description: {details}")
+    });
+    for value in ["index_deleting", "job_id"] {
+        assert!(
+            description.contains(value),
+            "the description of `details` names `{value}` for the refusal of a name held by \
+             a deletion (ADR-0150, decision 7): {description}"
+        );
+    }
+
+    let validator = validator("Error");
+    let refusal = serde_json::json!({
+        "error": {
+            "code": "invalid_request",
+            "message": "index already exists: 'decisions'",
+            "details": { "reason": "index_deleting", "job_id": "job_7f3c0a1b2c3d4e5f60718293a4b5c6d7" },
+            "request_id": "openapi-examples-1",
+        }
+    });
+    assert!(
+        validator.validate(&refusal).is_ok(),
+        "the schema admits the refusal of ADR-0150, decision 1: {refusal}"
+    );
+    assert!(
+        refusal["error"]["details"].get("path").is_none(),
+        "the refusal carries no `path`: no field of the body is faulty"
+    );
+}
+
 #[test]
 fn every_marker_is_a_valid_component_or_none() {
     let specification = crible_server::openapi::specification()

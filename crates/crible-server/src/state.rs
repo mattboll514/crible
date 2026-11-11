@@ -39,7 +39,7 @@ use crate::analytics::Analytics;
 use crate::auth::Auth;
 use crate::config::{Config, DebugJournalConfig};
 use crate::debug_journal::DebugJournal;
-use crate::error::{internal, invalid, starting};
+use crate::error::{index_deleting, internal, invalid, starting};
 use crate::jobs::{IndexWriter, JobBoard, JobView, JobWork, Published, SHUTTING_DOWN_MESSAGE};
 use crate::lifecycle::Shutdown;
 use crate::limits::SearchLimit;
@@ -853,16 +853,20 @@ impl AppState {
     ///
     /// Blocking: the caller runs it off the async threads, because it hashes a
     /// model, loads its session and writes the index. The order is the one of
-    /// ADR-0105: name, model, configuration write, store creation, writer
-    /// construction, registry insertion. A failure after the beginning of the
-    /// write quarantines the directory, so a name is never left half created.
+    /// ADR-0105, with the control of ADR-0150 in front of it: name, non-terminal
+    /// `delete_index` job of that name, model, configuration write, store
+    /// creation, writer construction, registry insertion. A failure after the
+    /// beginning of the write quarantines the directory, so a name is never left
+    /// half created.
     ///
     /// # Errors
     ///
-    /// [`ErrorCode::InvalidRequest`] for a refused name, a name already taken, an
-    /// absent or unreadable model and a configuration the store refuses,
-    /// [`ErrorCode::Overloaded`] with the fixed message of ADR-0146 before the
-    /// publication, and the errors of the store and of the job table otherwise.
+    /// [`ErrorCode::InvalidRequest`] for a refused name, a name already taken, a
+    /// name held by a `delete_index` job that is not terminal (ADR-0150,
+    /// decision 1), an absent or unreadable model and a configuration the store
+    /// refuses, [`ErrorCode::Overloaded`] with the fixed message of ADR-0146
+    /// before the publication, and the errors of the store and of the job table
+    /// otherwise.
     pub fn create_index(&self, config: IndexConfig) -> Result<Arc<IndexHandle>, CribleError> {
         let loaded = self.published()?;
         let _creation = loaded
@@ -870,6 +874,22 @@ impl AppState {
             .lock()
             .map_err(|_| internal("the creation lock of the instance is poisoned"))?;
         let name = path_component(&config.name, "index name")?.to_owned();
+        // ADR-0150, decision 3, rule 1: a `delete_index` job holds the name
+        // until it is terminal, and this check precedes the registry and the
+        // directory. A queued deletion still serves its index, and a running one
+        // between the rename and the deregistration still holds the name while
+        // the directory is gone: both answer `index_deleting`, with the job a
+        // client follows instead of polling the name (decisions 1 and 4).
+        let jobs = self
+            .jobs
+            .get()
+            .ok_or_else(|| internal("the job board of the instance is not open"))?;
+        if let Some(deletion) = jobs.deleting(&name) {
+            return Err(index_deleting(
+                format!("index already exists: '{name}'"),
+                deletion.id,
+            ));
+        }
         if loaded.index(&name)?.is_some() {
             return Err(invalid(format!("index already exists: '{name}'")));
         }
@@ -884,10 +904,6 @@ impl AppState {
         write_index_config(&directory, &text)?;
         let store = GenerationStore::create(&directory, INITIAL_EPOCH, &config.schema)
             .map_err(|error| named(error, &format!("index '{name}'")))?;
-        let jobs = self
-            .jobs
-            .get()
-            .ok_or_else(|| internal("the job board of the instance is not open"))?;
         let writer = Arc::new(IndexWriter::new(
             name.clone(),
             store,

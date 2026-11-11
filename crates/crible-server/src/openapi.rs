@@ -75,12 +75,15 @@ pub struct ErrorBody {
     pub message: String,
     /// Keyed explanation; empty, except the documented keys of a code.
     ///
-    /// `docs/05-api.md` documents `path` alone for `invalid_filter`, and, for
-    /// an `invalid_request` that carries a reason, `path` with `reason` — so
-    /// far `{"path": "$.mode", "reason": "lexical_branch_disabled"}` for a
-    /// disabled lexical branch (ADR-0101, decision 3; ADR-0145). A message
-    /// never carries an internal id (INV-01) nor an absolute path of the
-    /// server.
+    /// `docs/05-api.md` documents `path` alone for `invalid_filter`, `path`
+    /// with `reason` for an `invalid_request` that carries one — so far
+    /// `{"path": "$.mode", "reason": "lexical_branch_disabled"}` for a disabled
+    /// lexical branch (ADR-0101, decision 3; ADR-0145) — and `reason` with
+    /// `job_id` for the refusal of a name held by a `delete_index` job that is
+    /// not terminal: `{"reason": "index_deleting", "job_id": "job_…"}`, without
+    /// a `path`, because no field of the request is faulty (ADR-0150,
+    /// decision 1). A message never carries an internal id (INV-01) nor an
+    /// absolute path of the server.
     #[schema(value_type = Object)]
     pub details: FreeObject,
     /// Identifier of the request, the same as the `x-request-id` header (ADR-0098).

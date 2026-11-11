@@ -448,6 +448,11 @@ async fn delete_index_inner(
             // snapshot finishes on it (the files it mapped stay valid), and a
             // read of the detail answers `404` because the directory is gone.
             rename_to_quarantine(&source, &target)?;
+            // ADR-0150, decision 4: a test of the `failpoints` build holds the
+            // job here to send a creation of the same name in the window where
+            // the directory is gone and the registry still holds the name.
+            #[cfg(feature = "failpoints")]
+            crate::barriers::wait_delete_after_rename(&source);
             // ADR-0116, decision 2: the server releases the writer lock of an
             // index once it deleted it. The release comes **after** the rename,
             // so a rename that fails keeps the index locked while it stays

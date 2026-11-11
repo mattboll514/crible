@@ -30,6 +30,7 @@
 //! |---|---|
 //! | `inv_01_write_routes_render_no_iid_key_or_value` | INV-01 on every response and job body of the seven routes |
 //! | `inv_01_write_routes_journal_carries_no_iid` | INV-01 on the journal of those calls |
+//! | `inv_01_index_deleting_refusal_carries_only_the_public_job_id` | INV-01 on the refusal of ADR-0150: a public `job_id`, no iid, no server path |
 //!
 //! The instance serves an `external` model and the online batch carries its
 //! vectors in base64: no ONNX Runtime is loaded.
@@ -401,5 +402,108 @@ fn inv_01_write_routes_journal_carries_no_iid() {
     assert!(
         !text.to_ascii_lowercase().contains("iid"),
         "the journal names an internal id (INV-01): {text}"
+    );
+}
+
+/// INV-01 on the refusal of ADR-0150, decision 1: `details.job_id` is the public
+/// identifier of `JobView::id` (ADR-0103), the only identifier the refusal
+/// carries; the body names no iid, no absolute path of the server and no text of
+/// a request. The refusal is produced while a `delete_index` job is queued behind
+/// a held attach, which is the one body that carries a `job_id`.
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn inv_01_index_deleting_refusal_carries_only_the_public_job_id() {
+    use common::{AttachBarrier, index_config, lock_barrier_environment};
+
+    let _slot = lock_barrier_environment().await;
+    let (instance, state, router) = instance_with_alpha().await;
+    let barrier = AttachBarrier::arm();
+
+    let path = format!("/v1/indexes/{INDEX}/documents?wait=false");
+    let (status, accepted) = send(
+        &router,
+        Method::POST,
+        &path,
+        WRITE_SECRET,
+        Some(online_batch()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the online batch is queued: {accepted}"
+    );
+    barrier.wait_before_commit().await;
+
+    let path = format!("/v1/indexes/{INDEX}?confirm={INDEX}");
+    let (status, deletion) = send(&router, Method::DELETE, &path, ADMIN_SECRET, None).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the deletion is queued: {deletion}"
+    );
+    let id = deletion["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the acceptance carries the job id: {deletion}"))
+        .to_owned();
+
+    let (status, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the name is held by the queued deletion: {answer}"
+    );
+
+    let details = answer["error"]["details"]
+        .as_object()
+        .unwrap_or_else(|| panic!("the refusal carries an object of details: {answer}"));
+    let mut keys: Vec<&str> = details.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["job_id", "reason"],
+        "the refusal carries the two documented keys and no key of the engine \
+         (INV-01): {answer}"
+    );
+    assert_eq!(details["job_id"], id.as_str(), "{answer}");
+    assert_eq!(details["reason"], "index_deleting", "{answer}");
+    assert!(
+        id.starts_with("job_")
+            && id.len() == 36
+            && id[4..]
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "the identifier is the public `job_` id of ADR-0103, not an iid (INV-01): {id}"
+    );
+
+    assert_no_iid_key("the index_deleting refusal", &answer);
+    let live_iids = [0, 1];
+    assert_no_iid_value("the index_deleting refusal", &answer, &live_iids);
+    let root = instance.root().display().to_string();
+    assert!(
+        !answer.to_string().contains(&root),
+        "the refusal carries no absolute path of the server (INV-01): {answer}"
+    );
+
+    barrier.release_before_commit();
+    // The release wakes the held attach, which lets the deletion run. The test
+    // waits for it before it ends: dropping the barrier directory with the job
+    // still inside would leave it to its 30 s deadline (the marks of a released
+    // barrier are what the job polls).
+    let finished = state
+        .wait_for_job(&id)
+        .await
+        .unwrap_or_else(|| panic!("the deletion reaches a terminal state"));
+    assert_eq!(
+        finished.state.as_str(),
+        "succeeded",
+        "the deletion runs once the held attach released the writer"
     );
 }
