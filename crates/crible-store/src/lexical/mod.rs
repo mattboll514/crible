@@ -513,14 +513,26 @@ pub(crate) fn observe(
         ));
     }
     // ADR-0106, decision 2: a recorded chain that differs from the configuration
-    // is a state the write open repairs and the read-only open refuses. A
-    // payload of the first format carries no chain and is read as built with
-    // the configuration's chain (decision 3), so an existing index is never
-    // rebuilt for the sole fact of this ADR; a payload of version 2 carries
-    // `identifiers` absent, read as `"none"` (ADR-0148, decision 7).
+    // is a state the write open repairs and the read-only open refuses.
+    //
+    // ADR-0106, decision 3: a payload of the first format is a bare generation
+    // and carries no chain. `language` and `positions` were those of
+    // `index.json`, which is why they are taken from the configuration.
+    // `identifiers` is read field by field, like every field of a version 2
+    // payload (ADR-0148, decision 7): absent, it takes its 1.0 value, `"none"`.
+    // An index whose `index.json` names `"v1"` but whose payload is version 1
+    // was therefore built by the 1.0 chain and must be rebuilt, never served
+    // with the 1.0 analysis under a 1.1 configuration.
     let expected = AnalysisChain::of(config);
-    if let Some(recorded) = payload.as_ref().and_then(|payload| payload.chain.as_ref())
-        && recorded != &expected
+    let recorded = payload.as_ref().map(|payload| {
+        payload.chain.clone().unwrap_or_else(|| AnalysisChain {
+            language: config.language.clone(),
+            positions: config.positions,
+            identifiers: LexicalIdentifiers::None,
+        })
+    });
+    if let Some(recorded) = recorded
+        && recorded != expected
     {
         tracing::warn!(
             epoch = %epoch_dir.display(),
@@ -874,7 +886,9 @@ fn payload(generation: Generation, chain: &AnalysisChain) -> String {
 /// The payload `payload`, decoded.
 ///
 /// A payload of the first format is a decimal number and carries no chain: it
-/// is read as built with the chain of `index.json` (ADR-0106, decision 3). A
+/// was built by the chain of `index.json`, so its `language` and `positions` are
+/// those of the configuration (ADR-0106, decision 3), and its `identifiers` is
+/// the 1.0 value, `"none"`, which [`observe`] applies to decide a rebuild. A
 /// JSON payload is read **field by field**, an absent field taking its 1.0 value
 /// (ADR-0148, decision 7): version 2 has no `identifiers`, which is then
 /// `"none"`, so an index built by 1.0 is never rebuilt for the sole fact of this

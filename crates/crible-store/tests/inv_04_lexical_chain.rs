@@ -27,6 +27,8 @@
 //! | `inv_04_a_read_only_open_refuses_another_chain_and_keeps_the_files` | the read-only open refuses and writes nothing |
 //! | `inv_04_a_read_only_open_refuses_another_identifiers_and_keeps_the_files` | idem for `identifiers` |
 //! | `inv_04_a_legacy_payload_is_served_without_rebuild` | a version 1 payload is read, never rebuilt |
+//! | `inv_04_a_write_open_rebuilds_a_legacy_payload_asked_to_serve_identifiers_v1` | a version 1 payload reads `identifiers` as `"none"` and is rebuilt for `"v1"` |
+//! | `inv_04_a_read_only_open_refuses_a_legacy_payload_asked_to_serve_identifiers_v1` | idem on a read-only open, which keeps the files |
 //! | `inv_04_a_version_2_payload_is_read_with_identifiers_none_without_rebuild` | a version 2 payload reads with `"none"`, never rebuilt |
 //! | `inv_04_a_compaction_records_the_current_chain` | a compaction writes the current chain |
 //! | `inv_04_a_canonical_identifier_keeps_its_position_in_the_segments` | the canonical token keeps the position of its first piece through the serialization |
@@ -220,8 +222,9 @@ fn lexical_meta_path(index: &Path) -> std::path::PathBuf {
     common::epoch_dir(index).join("lexical").join("meta.json")
 }
 
-/// Decoded payload of the last tantivy commit of the epoch.
-fn payload_value(index: &Path) -> serde_json::Value {
+/// Payload of the last tantivy commit of the epoch, exactly as stored: the bare
+/// decimal number of the first format, or a JSON object.
+fn raw_payload(index: &Path) -> String {
     let path = lexical_meta_path(index);
     let raw = fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!(
@@ -231,10 +234,16 @@ fn payload_value(index: &Path) -> serde_json::Value {
     });
     let meta: serde_json::Value = serde_json::from_str(&raw)
         .unwrap_or_else(|error| panic!("the tantivy metadata must be JSON: {error}"));
-    let payload = meta["payload"]
+    meta["payload"]
         .as_str()
-        .unwrap_or_else(|| panic!("the commit must carry a payload, got {}", meta["payload"]));
-    serde_json::from_str(payload)
+        .unwrap_or_else(|| panic!("the commit must carry a payload, got {}", meta["payload"]))
+        .to_owned()
+}
+
+/// Decoded payload of the last tantivy commit of the epoch.
+fn payload_value(index: &Path) -> serde_json::Value {
+    let payload = raw_payload(index);
+    serde_json::from_str(&payload)
         .unwrap_or_else(|error| panic!("the payload {payload:?} must be a JSON object: {error}"))
 }
 
@@ -478,11 +487,18 @@ fn inv_04_a_read_only_open_refuses_another_identifiers_and_keeps_the_files() {
 
 #[test]
 fn inv_04_a_legacy_payload_is_served_without_rebuild() {
-    // ADR-0106, decision 3: a payload of the previous format (a bare generation
-    // number) carries no chain. It is read as built with the chain of
-    // `index.json`, so the branch serves without any rebuild, in a read-only
-    // open as in a write open, and the payload keeps its old format.
+    // ADR-0106, decision 3, and ADR-0148, decision 7: a payload of the previous
+    // format (a bare generation number) carries no chain. Its `language` and
+    // `positions` are those of `index.json`, and its absent `identifiers` is the
+    // 1.0 value, `"none"`. The fixture names no identifier form, so the branch
+    // serves without any rebuild, in a read-only open as in a write open, and
+    // the payload keeps its old format.
     let (_temp, index, schema) = index_with_a_passage();
+    assert_eq!(
+        index_config_of(&index).lexical.identifiers,
+        LexicalIdentifiers::None,
+        "the fixture names no identifier form, which the legacy payload reads as \"none\""
+    );
     write_legacy_payload(&index);
 
     let store = GenerationStore::open_read_only(&index, &schema)
@@ -651,5 +667,87 @@ fn inv_04_a_canonical_identifier_keeps_its_position_in_the_segments() {
         term_positions(&index, "apre"),
         vec![4],
         "the token after the identifier keeps the position of the 1.0 chain"
+    );
+}
+
+#[test]
+fn inv_04_a_write_open_rebuilds_a_legacy_payload_asked_to_serve_identifiers_v1() {
+    // ADR-0148, decision 7, with ADR-0106, decision 4: a version 1 payload
+    // carries no chain, and its absent `identifiers` is the 1.0 value, `"none"`,
+    // whatever `index.json` names. An index whose configuration asks for `"v1"`
+    // was built by the 1.0 chain: the write open rebuilds it, and the payload
+    // becomes the version 3 of the current build.
+    let (_temp, index, schema) = index_with_a_passage();
+    write_legacy_payload(&index);
+    set_identifiers(&index, LexicalIdentifiers::V1);
+
+    let store = GenerationStore::open(&index, &schema)
+        .unwrap_or_else(|error| panic!("the write open must rebuild and succeed: {error}"));
+    assert_eq!(
+        store.generation().get(),
+        1,
+        "the rebuild publishes the same generation"
+    );
+    assert_eq!(
+        store.snapshot().lexical_status(),
+        LexicalStatus::Ready {
+            committed: crible_core::ids::Generation::new(1)
+        },
+        "the rebuilt index describes the committed generation"
+    );
+    drop(store);
+
+    let payload = payload_value(&index);
+    assert_eq!(
+        payload["version"], 3,
+        "the rebuild writes the payload of this build: {payload}"
+    );
+    assert_eq!(payload["generation"], 1, "{payload}");
+    assert_eq!(
+        payload["identifiers"], "v1",
+        "the rebuilt index names the configured identifier form: {payload}"
+    );
+    let state = read_state(&common::epoch_dir(&index))
+        .unwrap_or_else(|error| panic!("the rebuilt lexical state must be readable: {error}"));
+    assert_eq!(
+        state.chain,
+        Some(AnalysisChain {
+            language: "fr".to_owned(),
+            positions: false,
+            identifiers: LexicalIdentifiers::V1,
+        }),
+        "the rebuilt index records the configured chain"
+    );
+}
+
+#[test]
+fn inv_04_a_read_only_open_refuses_a_legacy_payload_asked_to_serve_identifiers_v1() {
+    // ADR-0148, decision 7, with ADR-0106, decision 4, second half: the same
+    // index served by a read-only open is another chain. It writes nothing, so
+    // the payload keeps its version 1, and the refusal is stable across reads.
+    let (_temp, index, schema) = index_with_a_passage();
+    write_legacy_payload(&index);
+    set_identifiers(&index, LexicalIdentifiers::V1);
+    assert_eq!(
+        raw_payload(&index),
+        "1",
+        "the fixture starts on the payload of the first format"
+    );
+
+    for _ in 0..2 {
+        let store = GenerationStore::open_read_only(&index, &schema).unwrap_or_else(|error| {
+            panic!("a read-only open must not fail on another chain: {error}")
+        });
+        assert_eq!(
+            store.snapshot().lexical_status(),
+            LexicalStatus::OtherChain,
+            "the lexical branch is refused, the dense branch stays served"
+        );
+        drop(store);
+    }
+    assert_eq!(
+        raw_payload(&index),
+        "1",
+        "a read-only open never rewrites the payload (ADR-0056)"
     );
 }
