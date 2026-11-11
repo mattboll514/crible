@@ -757,6 +757,63 @@ impl Drop for AttachBarrier {
     }
 }
 
+/// Barrier of the `delete_index` step that follows the rename of the index
+/// directory (ADR-0150, decision 4).
+///
+/// [`arm`](DeleteRenameBarrier::arm) sets `CRIBLE_TEST_BARRIER` and writes the
+/// `delete-after-rename-path` file holding `source`, the directory the deletion
+/// quarantines: only that deletion reaches the step, so the deletions of the
+/// other tests of the binary — some of them of an index of the same name in
+/// another data root — run at full speed. The value removes the variable when it
+/// drops, so the caller keeps [`lock_barrier_environment`] until after that
+/// drop, which the declaration order of a test gives when the slot comes first.
+#[cfg(feature = "failpoints")]
+pub struct DeleteRenameBarrier {
+    /// Directory holding the marks; removed when the value drops.
+    directory: TempDir,
+}
+
+#[cfg(feature = "failpoints")]
+impl DeleteRenameBarrier {
+    /// Arms the step for the directory `source` in a fresh temporary directory.
+    #[must_use]
+    pub fn arm(source: &Path) -> Self {
+        let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
+        // SAFETY: the caller holds `lock_barrier_environment` for the whole
+        // test, so no other test of the binary reads the variable meanwhile,
+        // and `Drop` removes it before the caller releases the slot.
+        unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
+        std::fs::write(
+            directory.path().join("delete-after-rename-path"),
+            source.display().to_string(),
+        )
+        .expect("the step is armable");
+        Self { directory }
+    }
+
+    /// Waits until the deletion has renamed its directory and not yet left the
+    /// registry.
+    pub async fn wait_after_rename(&self) {
+        let path = self.directory.path().join("ready-delete-after-rename");
+        wait_for("delete-after-rename", &path).await;
+    }
+
+    /// Releases the deletion held between the rename and the deregistration.
+    pub fn release_after_rename(&self) {
+        std::fs::write(self.directory.path().join("go-delete-after-rename"), b"")
+            .expect("the held deletion is releasable");
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl Drop for DeleteRenameBarrier {
+    fn drop(&mut self) {
+        // SAFETY: the caller still holds `lock_barrier_environment`, so no
+        // other test of the binary armed the variable meanwhile.
+        unsafe { std::env::remove_var(BARRIER_ENV) };
+    }
+}
+
 /// Asserts that no key of `value` at any depth contains `iid` (INV-01).
 pub fn assert_no_iid_key(label: &str, value: &Value) {
     match value {

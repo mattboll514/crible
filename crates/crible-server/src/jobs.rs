@@ -634,6 +634,28 @@ impl JobBoard {
             .collect()
     }
 
+    /// The `delete_index` job that holds `index`, if any (ADR-0150,
+    /// decision 3).
+    ///
+    /// A job holds the name until it is terminal: the name is released at the
+    /// deregistration, which precedes the terminal state (ADR-0150, decision 4).
+    /// When several of them are not terminal, the oldest is returned —
+    /// `created_at` ascending, then `id`, the order the jobs of one index run
+    /// in (ADR-0103, decision 7; ADR-0150, decision 3, rule 6). It reads the
+    /// table in memory only: no file, no snapshot, and no state to reconcile
+    /// after a restart (ADR-0150, decisions 3 and 6).
+    #[must_use]
+    pub fn deleting(&self, index: &str) -> Option<JobView> {
+        self.unfinished()
+            .into_iter()
+            .filter(|view| view.kind == JobKind::DeleteIndex && view.index == index)
+            .min_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            })
+    }
+
     /// Waits until every accepted job is terminal.
     ///
     /// The future is created **before** the second count: `notified` records the

@@ -14,7 +14,12 @@
 //! |---|---|
 //! | `an_index_created_by_the_route_is_served_without_a_restart` | creation, `201` with the detail body, the index is served |
 //! | `an_index_created_by_the_route_holds_its_writer_lock` | a created index holds its `WRITER_LOCK` (ADR-0116, decision 2) |
-//! | `a_creation_with_a_taken_name_is_refused_with_400` | name already taken, in the registry then on disk |
+//! | `a_creation_with_a_taken_name_is_refused_with_400` | name already taken in the registry, `details` empty (ADR-0150, decision 2) |
+//! | `a_creation_with_a_directory_outside_the_registry_is_refused_with_empty_details` | a directory present on disk, `details` empty (ADR-0150, decision 2) |
+//! | `a_creation_while_a_delete_is_queued_carries_the_delete_job_id` | a `delete_index` queued, `details` names its job (ADR-0150, decision 1, `failpoints` build) |
+//! | `a_creation_in_the_window_after_the_rename_names_the_running_delete_job` | a `delete_index` running, between the rename and the deregistration (ADR-0150, decisions 1 and 4, `failpoints` build) |
+//! | `a_creation_while_two_deletes_are_queued_names_the_oldest_job` | two non-terminal deletions, the oldest named (ADR-0150, decision 3, rule 6, `failpoints` build) |
+//! | `a_creation_of_a_name_after_its_delete_job_ends_is_accepted` | the same name once the job is terminal (ADR-0150, decision 3, `failpoints` build) |
 //! | `a_creation_with_an_absent_model_leaves_no_directory` | the model is read before any write |
 //! | `the_list_is_sorted_by_name_and_the_detail_exposes_no_internal_id` | envelope, order, `segments` is a count (INV-01) |
 //! | `a_lexical_language_patch_queues_a_rebuild_lexical_job` | the `kind` of the `PATCH` |
@@ -52,6 +57,8 @@ use crible_store::jobs::JobKind;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tower::ServiceExt;
+
+mod common;
 
 /// Secret of the `admin` key.
 const ADMIN_SECRET: &str = "admin-secret-of-the-routes-indexes-tests";
@@ -306,6 +313,90 @@ fn refused_write_open(instance: &Instance) -> CribleError {
     }
 }
 
+/// Body of an online batch of one document and one passage, with its vector.
+///
+/// The fixture model is `external`, so the vector travels in the body
+/// (`docs/format-lot-v1.md`), and no ONNX Runtime is loaded.
+#[cfg(feature = "failpoints")]
+fn online_batch(batch_id: &str) -> Value {
+    json!({
+        "batch_id": batch_id,
+        "mode": "upsert",
+        "documents": [
+            {
+                "doc_id": "DOC-1",
+                "fields": { "numero": "1240" },
+                "passages": [
+                    {
+                        "text": "le contrat fait la loi des parties",
+                        "fields": { "texte": "contrat" },
+                        "vector": common::base64_vector([0.6, 0.8, 0.0, 0.0])
+                    }
+                ]
+            }
+        ]
+    })
+}
+
+/// Queues an online batch, waits for the barrier that holds its attach before
+/// the SQLite `COMMIT`, and returns the identifier of its job.
+///
+/// The held attach occupies the writer of the index, which is what keeps a
+/// `delete_index` submitted afterwards in the queue, in the state a `POST
+/// /v1/indexes` must discriminate (ADR-0150, decision 1).
+#[cfg(feature = "failpoints")]
+async fn hold_an_attach(
+    router: &Router,
+    batch_id: &str,
+    barrier: &common::AttachBarrier,
+) -> String {
+    let path = format!("/v1/indexes/{INDEX}/documents?wait=false");
+    let (status, _headers, accepted) = send(
+        router,
+        Method::POST,
+        &path,
+        WRITE_SECRET,
+        Some(online_batch(batch_id)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the online batch is queued: {accepted}"
+    );
+    barrier.wait_before_commit().await;
+    accepted["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the acceptance carries the job id: {accepted}"))
+        .to_owned()
+}
+
+/// Queues the deletion of the fixture index and returns the identifier of its
+/// `delete_index` job (`202`, no `?wait`, ADR-0105, decision 5).
+#[cfg(feature = "failpoints")]
+async fn queue_delete(router: &Router) -> String {
+    let path = format!("/v1/indexes/{INDEX}?confirm={INDEX}");
+    let (status, _headers, accepted) =
+        send(router, Method::DELETE, &path, ADMIN_SECRET, None).await;
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "the deletion is accepted and queued: {accepted}"
+    );
+    assert_eq!(
+        accepted["kind"], "delete_index",
+        "the accepted mutation is a deletion: {accepted}"
+    );
+    assert!(
+        matches!(accepted["state"].as_str(), Some("queued" | "running")),
+        "the deletion is not terminal yet: {accepted}"
+    );
+    accepted["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the acceptance carries the job id: {accepted}"))
+        .to_owned()
+}
+
 #[tokio::test]
 async fn an_index_created_by_the_route_is_served_without_a_restart() {
     // ADR-0105, decisions 1 and 2: the index is created at runtime, served by
@@ -386,7 +477,9 @@ async fn an_index_created_by_the_route_holds_its_writer_lock() {
 #[tokio::test]
 async fn a_creation_with_a_taken_name_is_refused_with_400() {
     // ADR-0105, decision 2: a name taken, in the registry or on disk, is
-    // `400 invalid_request` with the message of the CLI.
+    // `400 invalid_request` with the message of the CLI. ADR-0150, decision 2:
+    // an index alive in the registry is no deletion in progress, so `details`
+    // stays empty, and that absence is the discriminant a client reads.
     let (_instance, router) = instance_with_alpha().await;
 
     let (status, _headers, answer) = send(
@@ -406,6 +499,11 @@ async fn a_creation_with_a_taken_name_is_refused_with_400() {
         message.contains("index already exists"),
         "the message of the CLI: {message}"
     );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({}),
+        "an index alive in the registry leaves `details` empty (ADR-0150, decision 2): {answer}"
+    );
 
     // A second name is accepted: the refusal above is specific to the name.
     let (status, _headers, answer) = send(
@@ -420,6 +518,321 @@ async fn a_creation_with_a_taken_name_is_refused_with_400() {
         status,
         StatusCode::CREATED,
         "another name is accepted: {answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_creation_with_a_directory_outside_the_registry_is_refused_with_empty_details() {
+    // ADR-0150, decision 2: a directory present on disk without an entry in the
+    // registry — an orphan index, or a creation that was interrupted — keeps the
+    // body of ADR-0105, decision 2: `400`, and `details: {}`, because no
+    // `delete_index` job will free the name.
+    let (instance, router) = instance_with_alpha().await;
+    let orphan = instance.data().join("indexes").join("orphan");
+    std::fs::create_dir_all(&orphan).expect("the orphan directory is creatable");
+
+    let (status, _headers, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config("orphan")),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a taken name: {answer}");
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    assert_eq!(
+        answer["error"]["message"], "index already exists: 'orphan'",
+        "the message of ADR-0105, decision 2, unchanged: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({}),
+        "a directory outside the registry is no deletion in progress \
+         (ADR-0150, decision 2): {answer}"
+    );
+    assert!(
+        orphan.is_dir(),
+        "a refused creation leaves the directory it refused untouched"
+    );
+}
+
+/// A creation of a name that a `delete_index` job holds is refused with the
+/// identifier of that job, and nothing else (ADR-0150, decision 1).
+///
+/// The job is **queued**, not running: an attach is held before its SQLite
+/// commit, so it occupies the writer of the index. The refusal is therefore
+/// deterministic, and a client that reads `details` knows which job to follow
+/// with `GET /v1/jobs/{job_id}` instead of polling the name (ticket 03).
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_creation_while_a_delete_is_queued_carries_the_delete_job_id() {
+    let _slot = common::lock_barrier_environment().await;
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+
+    let barrier = common::AttachBarrier::arm();
+    hold_an_attach(&router, "deleting-queued", &barrier).await;
+    let delete = queue_delete(&router).await;
+
+    let (status, _headers, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config(INDEX)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a name held by a queued deletion is refused: {answer}"
+    );
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    assert_eq!(
+        answer["error"]["message"],
+        format!("index already exists: '{INDEX}'"),
+        "the code and the message of ADR-0105, decision 2, do not change \
+         (ADR-0150, decision 1): {answer}"
+    );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({ "reason": "index_deleting", "job_id": delete }),
+        "the refusal names the reason and the job to wait for, without a `path` \
+         (ADR-0150, decision 1): {answer}"
+    );
+
+    // The index is still registered and served: a queued deletion engages it,
+    // it does not hide it (ADR-0105, decision 5).
+    let (status, _headers, detail) = send(
+        &router,
+        Method::GET,
+        &format!("/v1/indexes/{INDEX}"),
+        READ_SECRET,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the index of a queued deletion is still served: {detail}"
+    );
+
+    barrier.release_before_commit();
+    let finished = state
+        .wait_for_job(&delete)
+        .await
+        .unwrap_or_else(|| panic!("the deletion reaches a terminal state"));
+    assert_eq!(
+        finished.state.as_str(),
+        "succeeded",
+        "the deletion runs once the held attach released the writer"
+    );
+}
+
+/// A creation sent between the rename of the index directory and its
+/// deregistration answers the running deletion, with its identifier
+/// (ADR-0150, decisions 1 and 4).
+///
+/// The window is real, not reproduced by hand: a `delete_index` job of the same
+/// index starts, renames the directory, and is held by the barrier of the
+/// `failpoints` build. The registry still holds the name while the directory is
+/// gone, so the refusal is the one of ADR-0150, decision 1, and never a silent
+/// `index already exists` (decision 4, rule 1).
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_creation_in_the_window_after_the_rename_names_the_running_delete_job() {
+    let _slot = common::lock_barrier_environment().await;
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+
+    let barrier = common::DeleteRenameBarrier::arm(&instance.data().join("indexes").join(INDEX));
+    let delete = queue_delete(&router).await;
+    barrier.wait_after_rename().await;
+
+    let directory = instance.data().join("indexes").join(INDEX);
+    assert!(
+        !directory.exists(),
+        "the held deletion renamed the directory before it stopped"
+    );
+    assert!(
+        instance
+            .data()
+            .join("tmp")
+            .join(format!("deleted-{INDEX}-{delete}"))
+            .is_dir(),
+        "the quarantined directory of the running deletion is on disk"
+    );
+
+    let (status, _headers, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config(INDEX)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the name is held while the deletion runs: {answer}"
+    );
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    assert_eq!(
+        answer["error"]["message"],
+        format!("index already exists: '{INDEX}'"),
+        "the code and the message of ADR-0105, decision 2, do not change: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({ "reason": "index_deleting", "job_id": delete }),
+        "the running deletion is named, without a `path` (ADR-0150, \
+         decisions 1 and 4): {answer}"
+    );
+    assert!(
+        !directory.exists(),
+        "a refused creation creates no directory while the deletion runs"
+    );
+
+    barrier.release_after_rename();
+    let finished = state
+        .wait_for_job(&delete)
+        .await
+        .unwrap_or_else(|| panic!("the deletion reaches a terminal state"));
+    assert_eq!(
+        finished.state.as_str(),
+        "succeeded",
+        "the deletion finishes once the barrier released it"
+    );
+
+    let body = create(&router, INDEX).await;
+    assert_eq!(
+        body["state"]["generation"], 0,
+        "the name is free once the job is terminal (ADR-0150, decision 3): {body}"
+    );
+}
+
+/// When two `delete_index` jobs of the same name are not terminal, the refusal
+/// names the oldest one (ADR-0150, decision 3, rule 6).
+///
+/// The two jobs are separated by more than one second on purpose: `created_at`
+/// is whole seconds (ADR-0103), so the order of the rule is then readable in the
+/// stamps, and the assertion does not replay the sort of the list over one
+/// second and two random identifiers.
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_creation_while_two_deletes_are_queued_names_the_oldest_job() {
+    use std::time::Duration;
+
+    let _slot = common::lock_barrier_environment().await;
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+
+    let barrier = common::AttachBarrier::arm();
+    hold_an_attach(&router, "two-deletes", &barrier).await;
+    let oldest = queue_delete(&router).await;
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    let newest = queue_delete(&router).await;
+    assert_ne!(oldest, newest, "the two deletions are two distinct jobs");
+
+    let (status, _headers, answer) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config(INDEX)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the name is held by the two deletions: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({ "reason": "index_deleting", "job_id": oldest }),
+        "the oldest deletion is the one that will free the name \
+         (ADR-0150, decision 3, rule 6): {answer}"
+    );
+
+    barrier.release_before_commit();
+    let first = state
+        .wait_for_job(&oldest)
+        .await
+        .unwrap_or_else(|| panic!("the oldest deletion reaches a terminal state"));
+    assert_eq!(
+        first.state.as_str(),
+        "succeeded",
+        "the oldest deletion runs first and frees the name"
+    );
+    let second = state
+        .wait_for_job(&newest)
+        .await
+        .unwrap_or_else(|| panic!("the second deletion reaches a terminal state"));
+    assert_eq!(
+        second.state.as_str(),
+        "failed",
+        "the deletion behind the first finds no directory to rename"
+    );
+}
+
+/// The same name is accepted once the `delete_index` job is terminal
+/// (ADR-0150, decision 3): the name is released at the deregistration, which
+/// precedes the terminal state of the job.
+#[cfg(feature = "failpoints")]
+#[tokio::test]
+async fn a_creation_of_a_name_after_its_delete_job_ends_is_accepted() {
+    let _slot = common::lock_barrier_environment().await;
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = instance.router(&state);
+    create(&router, INDEX).await;
+
+    let barrier = common::AttachBarrier::arm();
+    hold_an_attach(&router, "deleting-then-created", &barrier).await;
+    let delete = queue_delete(&router).await;
+    let (status, _headers, refused) = send(
+        &router,
+        Method::POST,
+        "/v1/indexes",
+        ADMIN_SECRET,
+        Some(index_config(INDEX)),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "the name is held while the deletion is queued: {refused}"
+    );
+
+    barrier.release_before_commit();
+    let finished = state
+        .wait_for_job(&delete)
+        .await
+        .unwrap_or_else(|| panic!("the deletion reaches a terminal state"));
+    assert_eq!(
+        finished.state.as_str(),
+        "succeeded",
+        "the deletion runs once the held attach released the writer"
+    );
+
+    // `create` asserts the `201` and the body of `GET /v1/indexes/{index}`
+    // (ADR-0105, decision 2).
+    let body = create(&router, INDEX).await;
+    assert_eq!(body["name"], INDEX, "{body}");
+    assert_eq!(
+        body["state"]["generation"], 0,
+        "the accepted creation is a fresh index, not the deleted one: {body}"
+    );
+    assert_eq!(
+        body["state"]["documents"], 0,
+        "the passages of the deleted index are gone: {body}"
     );
 }
 
