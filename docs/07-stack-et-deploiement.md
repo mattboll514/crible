@@ -140,6 +140,8 @@ Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 | `/exchange` | dossier monté depuis l'hôte | Lots (`inbox`), exports (`outbox`), instantanés : lectures et écritures séquentielles |
 | `/etc/crible/crible.toml` | fichier monté, en lecture seule | Configuration |
 
+**Montée et retour arrière.** Une instance se met à jour en épinglant l'image par sa version ou son empreinte, jamais par `:cpu`, étiquette mobile (ADR-0133, décision 4), après avoir pris un instantané de chaque index et gardé la configuration et l'image en place ; les contrôles sont la version rendue, les comptes de chaque index et `crible eval` sur le jeu de référence. Le retour arrière repart de l'image précédente et, quand la note de version le demande, des instantanés et de la configuration d'avant. Les commandes sont dans `docker/README.md`, sections « Monter de version » et « Revenir en arrière » ; la politique de version de la ligne 1.x qui encadre ces gestes est ADR-0143, et chaque mineure a sa note de version dans `docs/versions/<version>.md` (ADR-0143, décision 4).
+
 **Compose d'exemple** (Legifacile) : le service `crible` et le MCP de Legifacile partagent un réseau interne. Crible n'est **jamais exposé publiquement** : seul le MCP lui parle.
 
 **Contraintes propres au Mac** (ADR-0129) :

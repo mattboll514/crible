@@ -1,6 +1,6 @@
 # ADR-0143 — Politique de version de la ligne 1.x et procédure de montée et de retour arrière en production
 
-- **Statut** : Proposé
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-11, « L'adr 143 est accepté »)
 - **Date** : 2026-11-11
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, à la demande du propriétaire du 2026-11-11 (« oui volontiers, tu peux rédiger l'ADR »), hors tâche, sur l'audit en lecture seule de `@architecte` du 2026-11-11 consigné dans `docs/suivi.md:618-638`

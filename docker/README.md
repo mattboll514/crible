@@ -186,6 +186,152 @@ Les chemins de `[paths]` de `crible.toml` désignent `/data`, `/models` et
 implicites : sans configuration montée, `crible serve` échoue et le conteneur
 sort avec un code non nul.
 
+## Monter de version
+
+La montée en production est un **geste du propriétaire** : les agents y sont en
+lecture seule et ne redémarrent aucun service (ADR-0032). La politique de
+version qui encadre ce geste est ADR-0143 : une mineure n'apporte que des ajouts
+compatibles, un correctif ne change aucun contrat, et aucun `format_version` ne
+change dans la ligne 1.x sans un ADR de migration (décision 2).
+
+1. **Lire la note de version** `docs/versions/<version>.md` — `docs/versions/1.1.0.md`
+   par exemple. Le dossier `docs/versions/` est créé par la première note ; celle
+   de `1.1.0` sera écrite par la tâche `PUBLIER-V1.1.0` (ADR-0143, décision 4).
+   Elle donne les ajouts de contrat, les corrections de comportement avec leur ADR,
+   les reconstructions au premier démarrage avec la durée attendue par index, les
+   clés de configuration ajoutées et les conditions du retour arrière.
+
+2. **Prendre un instantané de chaque index**, serveur encore en marche. La route
+   `POST /v1/indexes/{index}/snapshots` est réservée au rôle `admin`, ne prend
+   aucun corps et rend `202` avec un job `snapshot` (ADR-0107). Pendant la copie,
+   l'écrivain est suspendu et les lectures continuent (ADR-0017, ADR-0065) :
+
+   ```
+   curl -sS -X POST -H "Authorization: Bearer <clé admin>" \
+     http://127.0.0.1:8080/v1/indexes/<index>/snapshots
+   ```
+
+   `crible snapshot --data <dir> --exchange <dir> --index <nom>` convient aussi,
+   mais **serveur arrêté** (ADR-0065, décision 1). Relever la génération et
+   l'époque que le job ou la commande rapportent : ce sont les valeurs à
+   retrouver après la montée. Les instantanés vont sous
+   `/exchange/snapshots/<index>-e<E>-g<G>/` et occupent donc le volume
+   `/exchange` (ADR-0064, décision 3). Garder aussi une copie de la
+   **configuration** (`crible.toml`) et l'**image en place**, par sa version ou
+   par son empreinte :
+
+   ```
+   docker image inspect --format '{{index .RepoDigests 0}}' ghcr.io/<owner>/crible:<version>
+   ```
+
+3. **Arrêter le serveur, puis épingler la nouvelle image par sa version ou son
+   empreinte, jamais par `:cpu`** : `:cpu` est une étiquette mobile, qui suivrait
+   une version non choisie et ne donnerait aucune référence stable au retour
+   arrière (ADR-0133, décision 4). Recréer le conteneur avec la même
+   configuration et les mêmes volumes qu'à la section « Lancer » :
+
+   ```
+   docker stop -t 65 crible
+   docker rm crible
+   docker pull ghcr.io/<owner>/crible:<version>
+   docker run -d --name crible -p 8080:8080 \
+     --stop-timeout 65 \
+     -v crible-data:/data \
+     -v crible-models:/models \
+     -v "$PWD/exchange:/exchange" \
+     -v "$PWD/docker/crible.example.toml:/etc/crible/crible.toml:ro" \
+     ghcr.io/<owner>/crible:<version>
+   ```
+
+   Le délai d'arrêt reste au-dessus de `[limits].wait_timeout_ms` (ADR-0104).
+
+4. **Attendre `/ready`** : il vaut `503` jusqu'à la publication du dernier
+   instantané de chaque index, puis `200` (ADR-0099) :
+
+   ```
+   until curl -fsS -o /dev/null http://127.0.0.1:8080/ready; do sleep 2; done
+   ```
+
+   Un premier démarrage après une montée peut reconstruire des fichiers dérivés,
+   le lexical notamment : la note de version donne la durée attendue par index
+   (ADR-0143, décision 4 ; ADR-0142 donne les durées mesurées de la 1.0). Un
+   dépassement net signale un changement d'analyse non prévu, que l'empreinte
+   d'analyse doit de toute façon détecter (ADR-0143, décision 3).
+
+5. **Contrôler** : la version rendue, les comptes de chaque index, et la qualité
+   sur le jeu de référence.
+
+   ```
+   docker exec crible crible --version
+   docker exec crible crible inspect --data /data
+   ```
+
+   `crible inspect` rapporte l'époque, la génération, les documents, les passages
+   vivants et morts et le nombre de segments : ces valeurs doivent être **égales**
+   à celles relevées avant la montée. Puis `crible eval` sur le jeu de référence
+   de `docs/legifacile/reference/` :
+
+   ```
+   crible eval --data <dossier> --index <index> \
+     --queries docs/legifacile/reference/<index>.jsonl --models <dir> --out <dossier>
+   ```
+
+   La commande lit un index servi sans écrire (ADR-0116, décision 2) ; une
+   campagne par l'API existe aussi, avec `--url` et la variable
+   `CRIBLE_EVAL_API_KEY` (ADR-0131). Les rappels doivent être **au moins égaux** à
+   ceux de la version précédente, écarts expliqués s'il y en a : une baisse est un
+   défaut, pas un réglage (ADR-0143, décision 5).
+
+6. **Faire passer Legifacile ensuite** : la montée de son image épinglée et de son
+   client Python revient au projet Legifacile.
+
+## Revenir en arrière
+
+Le retour arrière repart de l'**image précédente**, plus la **restauration des
+instantanés** et la **configuration d'avant** quand la note de version le demande
+(ADR-0143, décisions 2 et 6). Viennent ensuite `/ready` et les **mêmes contrôles**
+qu'à la montée, version, comptes et `crible eval` compris.
+
+`crible restore` est **hors ligne** : le serveur est arrêté (ADR-0065, décision 1).
+La restauration installe l'instantané comme nouvelle époque en **laissant la
+génération à G** (ADR-0065, décision 2) : elle **remplace** donc tout ce qui a été
+commité après l'instantané, et les **lots attachés après la montée sont à
+rattacher**. L'époque remplacée n'est pas supprimée (ADR-0065, décision 4) :
+rien n'est détruit, mais le disque croît jusqu'à ce qu'elle soit supprimée à la
+main. `crible restore` ne prend pas d'option `--index` : le nom de l'index cible
+vient de `snapshot.json` (ADR-0065, décisions 3 et 6).
+
+Deux précisions d'ADR-0143 (décision 2) commandent ce retour :
+
+- **L'`index.json` de la cible doit être identique à celui de l'instantané**
+  (ADR-0065, décision 3 ; `docs/04-donnees-et-ingestion.md`, règles de la
+  restauration). Sous 1.1, le premier `PATCH` d'un index **matérialise** les clés
+  nouvelles même si personne ne les a réglées : l'`index.json` diverge alors de
+  tout instantané pris avant la montée, et une 1.0 ne le relit plus. Un index que
+  l'on veut pouvoir ramener en 1.0 ne reçoit donc aucun `PATCH` sous 1.1, ou bien
+  le retour arrière repasse par l'instantané. La note de version dit lequel.
+- **Le moyen de remettre en place l'`index.json` d'avant montée n'est pas
+  tranché** (ADR-0143, décision 2, point « à trancher ») : aucune commande
+  documentée ne réécrit l'`index.json` d'un index existant, et le chemin éprouvé
+  est celui d'un index **absent**, créé depuis l'`index.json` de l'instantané
+  (ADR-0065, décision 3). La note de version énonce la condition retenue pour
+  l'index concerné ; aucune procédure n'est écrite ici tant que ce point n'est pas
+  décidé.
+
+Serveur arrêté, restaurer chaque index depuis son instantané :
+
+```
+docker stop -t 65 crible
+docker rm crible
+docker run --rm -v crible-data:/data -v "$PWD/exchange:/exchange" \
+  ghcr.io/<owner>/crible:<version-précédente> \
+  restore --data /data --snapshot /exchange/snapshots/<index>-e<E>-g<G>
+```
+
+Recréer ensuite le conteneur avec l'image précédente et la configuration d'avant,
+comme à la section « Monter de version » avec `<version-précédente>`, puis
+attendre `/ready` et refaire les contrôles.
+
 ## Vérifier avec un modèle et un index de test
 
 Les données de développement vivent dans `data/`, gitignoré. Le plus petit
