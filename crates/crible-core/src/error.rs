@@ -98,6 +98,28 @@ impl ErrorCode {
     }
 }
 
+/// Why a request is refused, as the closed vocabulary of `details.reason`.
+///
+/// `docs/05-api.md` documents one value per documented case, so a client reads
+/// the discriminant instead of the English message (ADR-0145, decision 2). A
+/// new value is documented in `docs/05` and decided by its own ADR, in the same
+/// change as the code that produces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorReason {
+    /// The requested branch is disabled by the configuration of the index.
+    LexicalBranchDisabled,
+}
+
+impl ErrorReason {
+    /// Wire value used in `details.reason`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LexicalBranchDisabled => "lexical_branch_disabled",
+        }
+    }
+}
+
 /// Typed error carried by every fallible public function of the engine.
 ///
 /// The category is a [`ErrorCode`], so callers can branch on it without
@@ -108,6 +130,7 @@ pub struct CribleError {
     code: ErrorCode,
     message: String,
     path: Option<String>,
+    reason: Option<ErrorReason>,
 }
 
 impl CribleError {
@@ -118,16 +141,33 @@ impl CribleError {
             code,
             message: message.into(),
             path: None,
+            reason: None,
         }
     }
 
     /// Attaches the JSON path of the fault, for `details.path`.
     ///
-    /// Only `invalid_filter` publishes that key (`docs/05-api.md`); the message
-    /// keeps naming the path as well, so a CLI without a body still reads it.
+    /// `invalid_filter` publishes that key alone; an `invalid_request`
+    /// publishes it only together with a [`ErrorReason`] (ADR-0145, decision
+    /// 3). The message keeps naming the path as well, so a CLI without a body
+    /// still reads it.
     #[must_use]
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
+        self
+    }
+
+    /// Attaches the reason of the refusal, for `details.reason`.
+    ///
+    /// A [`ErrorReason`] says why the request is refused; it is the stable
+    /// discriminant a client reads, where the message is prose (ADR-0145,
+    /// decisions 2 and 3). The renderer publishes that key only together with
+    /// a [`with_path`](Self::with_path): an `invalid_request` that carries a
+    /// reason without a path publishes nothing, so a caller always pairs the
+    /// two.
+    #[must_use]
+    pub fn with_reason(mut self, reason: ErrorReason) -> Self {
+        self.reason = Some(reason);
         self
     }
 
@@ -147,5 +187,11 @@ impl CribleError {
     #[must_use]
     pub fn path(&self) -> Option<&str> {
         self.path.as_deref()
+    }
+
+    /// Reason of the refusal, when the error carries one.
+    #[must_use]
+    pub const fn reason(&self) -> Option<ErrorReason> {
+        self.reason
     }
 }

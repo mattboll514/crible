@@ -75,9 +75,12 @@ pub struct ErrorBody {
     pub message: String,
     /// Keyed explanation; empty, except the documented keys of a code.
     ///
-    /// Only `path` is documented today, for `invalid_filter` (ADR-0101,
-    /// decision 3). A message never carries an internal id (INV-01) nor an
-    /// absolute path of the server.
+    /// `docs/05-api.md` documents `path` alone for `invalid_filter`, and, for
+    /// an `invalid_request` that carries a reason, `path` with `reason` — so
+    /// far `{"path": "$.mode", "reason": "lexical_branch_disabled"}` for a
+    /// disabled lexical branch (ADR-0101, decision 3; ADR-0145). A message
+    /// never carries an internal id (INV-01) nor an absolute path of the
+    /// server.
     #[schema(value_type = Object)]
     pub details: FreeObject,
     /// Identifier of the request, the same as the `x-request-id` header (ADR-0098).

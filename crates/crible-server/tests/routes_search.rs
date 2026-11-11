@@ -16,7 +16,9 @@
 //! | `timeout_ms_is_read_from_the_body_and_bounded` | ADR-0102, decision 3 |
 //! | `a_query_on_an_external_model_is_refused_naming_the_model` | `docs/05:235` |
 //! | `a_vector_of_the_wrong_length_is_refused` | `docs/05:235` |
-//! | `a_lexical_mode_on_a_disabled_index_is_refused` | ADR-0089, decision 3 |
+//! | `a_lexical_mode_on_a_disabled_index_is_refused` | ADR-0089, decision 3; ADR-0145, decision 1 |
+//! | `an_unknown_mode_is_refused_with_empty_details` | ADR-0145, decision 3 |
+//! | `a_search_without_mode_on_a_disabled_index_is_served_in_dense` | ADR-0089, decision 3 |
 //! | `the_return_selection_bounds_the_payload` | `docs/05:243`, ADR-0043 |
 //! | `a_return_field_declared_not_returned_is_refused` | ADR-0109, decision 5 |
 //! | `a_filter_outside_its_grammar_is_an_invalid_filter_with_its_path` | `details.path`, ADR-0110, decision 2 |
@@ -326,7 +328,8 @@ async fn a_vector_of_the_wrong_length_is_refused() {
 }
 
 /// `lexical` and `hybrid` are refused on an index whose `lexical.enabled` is
-/// false, before any work (ADR-0089, decision 3); `dense` keeps serving it.
+/// false, before any work (ADR-0089, decision 3); `dense` keeps serving it. The
+/// body carries the stable discriminant of ADR-0145, decision 1.
 #[tokio::test]
 async fn a_lexical_mode_on_a_disabled_index_is_refused() {
     let (_instance, _state, router) = instance_with_alpha().await;
@@ -337,8 +340,58 @@ async fn a_lexical_mode_on_a_disabled_index_is_refused() {
             json!({ "query": "contrat", "mode": mode }),
         )
         .await;
-        refused(status, &answer, "lexical branch is disabled");
+        refused(status, &answer, "lexical branch is disabled for this index");
+        assert_eq!(
+            answer["error"]["details"],
+            json!({ "path": "$.mode", "reason": "lexical_branch_disabled" }),
+            "the {mode} refusal carries the documented details: {answer}"
+        );
     }
+}
+
+/// A mode that is not one of the three documented values stays an
+/// `invalid_request` whose message names `$.mode`, and it publishes no
+/// `details`: `path` alone would be ambiguous with the refusal of a disabled
+/// branch (ADR-0145, decision 3).
+#[tokio::test]
+async fn an_unknown_mode_is_refused_with_empty_details() {
+    let (_instance, _state, router) = instance_with_alpha().await;
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "query": "contrat", "mode": "semantic" }),
+    )
+    .await;
+    refused(
+        status,
+        &answer,
+        "'$.mode' must be dense, lexical or hybrid, got \"semantic\"",
+    );
+    assert_eq!(
+        answer["error"]["details"],
+        json!({}),
+        "an unknown mode publishes no details: {answer}"
+    );
+}
+
+/// A body without `mode` is never refused for a disabled branch: the default
+/// of an index without lexical is `dense` (ADR-0089, decision 3).
+#[tokio::test]
+async fn a_search_without_mode_on_a_disabled_index_is_served_in_dense() {
+    let (_instance, state, router) = instance_with_alpha().await;
+    fill(&router, &state).await;
+    let (status, answer) = search(
+        &router,
+        READ_SECRET,
+        json!({ "vector": base64_vector([1.0, 0.0, 0.0, 0.0]) }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the default mode is dense: {answer}"
+    );
+    assert_eq!(answer["results"][0]["score_type"], "cosine", "{answer}");
 }
 
 /// `return.fields` selects the payload and `return.text` removes the text;
@@ -461,8 +514,9 @@ async fn a_filter_outside_its_grammar_is_an_invalid_filter_with_its_path() {
     assert!(message.contains("unknown operator 'regex'"), "{message}");
     assert!(message.contains("$.filter.numero"), "{message}");
     assert_eq!(
-        answer["error"]["details"]["path"], "$.filter.numero",
-        "the details carry the full path of the filter: {answer}"
+        answer["error"]["details"],
+        json!({ "path": "$.filter.numero" }),
+        "the details carry the full path of the filter and nothing else: {answer}"
     );
 }
 

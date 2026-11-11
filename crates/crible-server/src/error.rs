@@ -32,7 +32,7 @@ use axum::http::header::RETRY_AFTER;
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use crible_core::error::{CribleError, ErrorCode};
+use crible_core::error::{CribleError, ErrorCode, ErrorReason};
 use serde_json::{Value, json};
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -63,6 +63,20 @@ pub(crate) fn invalid(message: impl Into<String>) -> CribleError {
 /// Builds an [`ErrorCode::Internal`] error.
 pub(crate) fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message.into())
+}
+
+/// Builds the refusal of a lexical branch that the index disables.
+///
+/// `lexical` and `hybrid` are inapplicable to an index whose `lexical.enabled`
+/// is false (ADR-0089, decisions 3 and 4). The body carries the stable
+/// discriminant `{"path": "$.mode", "reason": "lexical_branch_disabled"}`,
+/// while the code and the message stay those of `invalid_request`; on the
+/// multi-index route the message keeps naming the faulty index (ADR-0145,
+/// decision 1).
+pub(crate) fn lexical_branch_disabled(message: impl Into<String>) -> CribleError {
+    invalid(message)
+        .with_path("$.mode")
+        .with_reason(ErrorReason::LexicalBranchDisabled)
 }
 
 /// Builds the JSON body of an error, in the format of `docs/05-api.md`.
@@ -123,9 +137,11 @@ pub(crate) fn response(
 ///
 /// The message is the one of the error, except for `internal`, which keeps
 /// [`INTERNAL_MESSAGE`]: an unexpected failure names a server path or an
-/// internal structure (ADR-0101, decision 2). `details` is empty, except
-/// `path` for the `invalid_filter` error that carries one: `docs/05` documents
-/// that key for that code only (decision 3, ADR-0109, ADR-0110).
+/// internal structure (ADR-0101, decision 2). `details` is empty, except the
+/// keys that `docs/05` documents for that code (decision 3): `path` alone for
+/// `invalid_filter`, and `path` with `reason` for an `invalid_request` that
+/// carries one (ADR-0145, decision 3). An `invalid_request` that names a path
+/// without a reason publishes nothing: its message stays its only location.
 ///
 /// The message of an `internal` is not lost: it travels as a [`Cause`] in the
 /// extension of the response, and [`render_layer_errors`] journals it under the
@@ -137,8 +153,11 @@ pub(crate) fn rendered(failure: &CribleError, request_id: &str) -> Response {
         ErrorCode::Internal => INTERNAL_MESSAGE,
         _ => failure.message(),
     };
-    let details = match (code, failure.path()) {
-        (ErrorCode::InvalidFilter, Some(path)) => json!({ "path": path }),
+    let details = match (code, failure.path(), failure.reason()) {
+        (ErrorCode::InvalidFilter, Some(path), _) => json!({ "path": path }),
+        (ErrorCode::InvalidRequest, Some(path), Some(reason)) => {
+            json!({ "path": path, "reason": reason.as_str() })
+        }
         _ => json!({}),
     };
     let mut answer = response(code, message, details, request_id);
@@ -358,7 +377,7 @@ struct Preserved;
 mod tests {
     use super::{INTERNAL_MESSAGE, Rendered, rendered};
     use axum::response::Response;
-    use crible_core::error::{CribleError, ErrorCode};
+    use crible_core::error::{CribleError, ErrorCode, ErrorReason};
     use serde_json::{Value, json};
 
     /// Decodes the JSON body of a response.
@@ -437,6 +456,41 @@ mod tests {
         assert!(
             !INTERNAL_MESSAGE.contains("a message of the failure"),
             "the generic message hides the cause"
+        );
+    }
+
+    #[tokio::test]
+    async fn details_carry_only_the_keys_documented_for_the_code() {
+        // `invalid_filter` keeps `path` alone; an `invalid_request` publishes
+        // `path` only together with a `reason`, so an undocumented path is
+        // hidden and the message stays its only location (ADR-0145,
+        // decision 3).
+        let failure =
+            CribleError::new(ErrorCode::InvalidFilter, "a filter").with_path("$.filter.numero");
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({ "path": "$.filter.numero" }),
+            "invalid_filter publishes its path alone: {body}"
+        );
+
+        let failure =
+            CribleError::new(ErrorCode::InvalidRequest, "a path alone").with_path("$.mode");
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({}),
+            "an invalid_request without a reason publishes nothing: {body}"
+        );
+
+        let failure = CribleError::new(ErrorCode::InvalidRequest, "a reason")
+            .with_path("$.mode")
+            .with_reason(ErrorReason::LexicalBranchDisabled);
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({ "path": "$.mode", "reason": "lexical_branch_disabled" }),
+            "an invalid_request with a reason publishes both keys: {body}"
         );
     }
 }
