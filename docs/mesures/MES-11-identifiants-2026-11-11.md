@@ -243,7 +243,9 @@ jamais approché l'OOM de la VM de P10.
 
 ### Conclusion
 
-**Les quatre points de la règle de décision d'ADR-0148 sont satisfaits.**
+**Points 1 à 3 satisfaits — les deux critères bloquants et la non-régression. Point 4, le budget,
+dépassé et expliqué index par index (`"v1"` ÷ `"none"` ×1,91). La décision revient au
+propriétaire.**
 
 1. **Bloquant, critère du ticket — satisfait.** `10-13.625` en lexical sur `decisions` complet rend
    `JURITEXT000023607955` au **rang 1** (rang 234 sous `"none"`), plat comme groupé. Le jeton
