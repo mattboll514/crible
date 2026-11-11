@@ -1,6 +1,6 @@
 # ADR-0146 — Routes de l'API pendant le chargement au démarrage
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-11)
 - **Date** : 2026-11-11
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T06-LISTE-INDEX-AU-DEMARRAGE` (v1.1), sur la base du verdict de `@architecte` du 2026-11-11 et du ticket 06 du projet Legifacile

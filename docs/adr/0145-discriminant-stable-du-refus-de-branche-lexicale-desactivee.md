@@ -1,10 +1,12 @@
 # ADR-0145 — Discriminant stable du refus d'une branche lexicale désactivée dans `details`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-11, erratum compris)
 - **Date** : 2026-11-11 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, à la demande du propriétaire du 2026-11-11, pour la tâche `T15-CODE-REFUS-LEXICAL` de la v1.1, sur le verdict de `@architecte` du 2026-11-11 et sur le ticket 15 du projet Legifacile (`tickets-crible/15-code-stable-pour-le-refus-de-mode.md`, lecture seule)
 - **Remplace** : — (complète ADR-0089 et ADR-0101 sans modifier leur corps ; ne remplace aucun ADR)
+
+**Erratum du 2026-11-11 (correction de renvois de ligne, sans réécriture d'aucune décision ; validé par le propriétaire le 2026-11-11).** Cet ADR citait `docs/05-api.md:160` comme la ligne du `mode` par défaut de la route simple. Ce renvoi était faux : la ligne 160 est celle de la limite de 10 000 entrées d'un lot en ligne, dans la section « Lot en ligne », et non celle du défaut de `mode`. Le défaut de `mode` de la route simple est donné par la ligne du champ `mode` de la table des champs de la requête, section « Recherche : requête » : `docs/05-api.md:271` à la rédaction, `:273` au 2026-11-11. Les deux renvois fautifs — la section « Pourquoi `path` seul ne discrimine pas » du contexte et les références — sont corrigés ci-dessous ; ils citent désormais la section et le champ, avec le numéro de ligne courant en complément, pour survivre à un déplacement du fichier. La table de la décision 4 ne citait pas `:160` et ne change pas ; aucun argument, aucune décision et aucune alternative ne changent.
 
 ## Contexte
 
@@ -25,7 +27,7 @@ Le corps observé sur Crible 1.0.0 est `{"error":{"code":"invalid_request","mess
 
 `$.mode` est déjà le chemin d'une autre faute `invalid_request` : la valeur de mode inconnue, `parse_mode` (`crates/crible-server/src/search.rs:1704-1714`), dont le message est « '$.mode' must be dense, lexical or hybrid, got … ». Ce message contient le mot « lexical » lui-même. Un client qui lit `details.path == "$.mode"` ne peut donc pas distinguer « le mode demandé n'existe pas » de « le mode demandé est inapplicable à cet index » si `path` est publié sur l'un et pas sur l'autre avec le même sens.
 
-Un `mode` **absent** ne produit jamais ce refus, sur les deux routes : la route simple prend le défaut `dense` quand le lexical est désactivé (ADR-0089, décision 3, `docs/05-api.md:160`), et la route multi-index prend `hybrid` seulement si **toutes** les cibles ont le lexical (ADR-0110, `docs/05-api.md:393`). En cas de refus, `$.mode` est donc toujours présent dans le corps : le chemin est vrai, mais il n'est pas discriminant.
+Un `mode` **absent** ne produit jamais ce refus, sur les deux routes : la route simple prend le défaut `dense` quand le lexical est désactivé (ADR-0089, décision 3, `docs/05-api.md`, section « Recherche : requête », ligne du champ `mode`, `:273`), et la route multi-index prend `hybrid` seulement si **toutes** les cibles ont le lexical (ADR-0110, `docs/05-api.md:393`). En cas de refus, `$.mode` est donc toujours présent dans le corps : le chemin est vrai, mais il n'est pas discriminant.
 
 ### Ce que le rendu fait aujourd'hui
 
@@ -138,7 +140,7 @@ La documentation de la décision 4 est faite **sur la branche de la tâche** `ta
 ## Références
 
 - Ticket : `tickets-crible/15-code-stable-pour-le-refus-de-mode.md` (projet Legifacile, lecture seule), constat, reproduction et impact sur `mode_refused` du serveur MCP.
-- Conception : `docs/05-api.md:35` (règle de `details`), `:39` (ligne `invalid_request`), `:160` (défaut de `mode`), `:393` (mode par défaut multi-index) ; `docs/03-recherche.md:98` (branche désactivée).
+- Conception : `docs/05-api.md:35` (règle de `details`), `:39` (ligne `invalid_request`), section « Recherche : requête », ligne du champ `mode` (`:273`, défaut de `mode`), `:393` (mode par défaut multi-index) ; `docs/03-recherche.md:98` (branche désactivée).
 - Code : `crates/crible-core/src/error.rs:105-132` (`CribleError`, `with_path`), `crates/crible-core/src/filter.rs:396` (unique appelant), `crates/crible-server/src/error.rs:140-143` (rendu de `details`), `crates/crible-server/src/search.rs:204-212` (refus simple) et `:1704-1714` (`parse_mode`), `crates/crible-server/src/search_multi.rs:585-591` (refus multi-index), `crates/crible-search/src/lexical.rs:418-427` (refus de la bibliothèque), `crates/crible/src/commands.rs:772` (message de la CLI), `crates/crible-server/src/openapi.rs:76-82` (`ErrorBody.details`).
 - Suivi : `docs/suivi.md:176` (tâche `T15-CODE-REFUS-LEXICAL`, classe « ajout compatible »), section « Écarts à la conception » (ligne à ajouter par l'orchestrateur).
 - ADR : ADR-0089 (branche lexicale désactivée, code et messages), ADR-0101 (corps d'erreur, décision 3 sur `details`, décision 4 sur la journalisation), ADR-0110 (recherche multi-index, mode par défaut), ADR-0112 (client Python, `details` rendu tel quel), ADR-0143 (version sémantique, décisions 1, 4 et 7), ADR-0144 (méthodes récentes du client Python, sans effet ici).
