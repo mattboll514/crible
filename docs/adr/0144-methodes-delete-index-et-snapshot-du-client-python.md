@@ -1,6 +1,6 @@
 # ADR-0144 — Méthodes `delete_index` et `snapshot` du client Python
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, revue commune à venir)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-11)
 - **Date** : 2026-11-11
 - **Décideurs** : propriétaire
 - **Proposé par** : agent greffier, tâche T01-CLIENT-PYTHON-DELETE-SNAPSHOT (ligne `v1.1`), sur le verdict de `@architecte` du 2026-11-11 et la décision du propriétaire du même jour (« Si tu as des ADR à écrire tu peux les accepter par anticipation, on les regarde ensemble après »)
