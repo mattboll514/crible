@@ -15,7 +15,7 @@
 //! | `metrics_on_a_hand_built_case_are_exact` | quality at the document, hand-computed recall@k and MRR@k (decisions 4 and 5) |
 //! | `fidelity_compares_the_plan_against_exact` | fidelity against `exact: true`, hand-computed recall@10 and overlap@10 (decision 6) |
 //! | `latencies_are_reported_per_stage_at_nearest_rank` | keys per stage, p50 ≤ p95 ≤ p99, absent stage omitted (decision 9) |
-//! | `the_report_is_closed_and_carries_no_query_text` | closed JSON, `format_version: 2`, `source`, ids only (decisions 11 and 16 of ADR-0125, decision 7 of ADR-0131) |
+//! | `the_report_is_closed_and_carries_no_query_text` | closed JSON, `format_version: 3`, `source`, ids only (decisions 11 and 16 of ADR-0125, decision 7 of ADR-0131, decisions 2 to 4 of ADR-0155) |
 //! | `an_empty_exact_answer_is_excluded_and_counted` | empty exact answer excluded and counted, denominator written when not 10 (complément du 2026-11-01, point C1) |
 //! | `a_text_query_never_reaches_the_reports` | no query text in either report, lexical fixture without an encoder (decision 16) |
 //! | `an_invalid_line_stops_the_command_with_its_number` | closed input, line number and cause (decision 3) |
@@ -52,6 +52,7 @@ use std::process::Output;
 
 use crible_core::config::{ReferencePrecision, Schema};
 use crible_core::ids::{Epoch, Generation, Iid};
+use crible_core::model::ModelConfig;
 use crible_store::generation::{GenerationChange, GenerationStore};
 use crible_store::records::{DocumentRecord, PassageRecord};
 use crible_store::segment::{SegmentMeta, SegmentSpec, SegmentWriter};
@@ -251,6 +252,12 @@ fn configuration(name: &str, lexical: bool) -> String {
 
 /// Writes the only segment of a fixture index and returns its metadata.
 fn write_segment(index: &Path, vectors: &[[f32; 4]]) -> SegmentMeta {
+    let vectors: Vec<Vec<f32>> = vectors.iter().map(|vector| vector.to_vec()).collect();
+    write_segment_dims(index, &vectors, DIMS)
+}
+
+/// Writes the only segment of a fixture index of `dims` dimensions.
+fn write_segment_dims(index: &Path, vectors: &[Vec<f32>], dims: u32) -> SegmentMeta {
     let segments = index
         .join("epochs")
         .join(Epoch::new(1).get().to_string())
@@ -262,7 +269,7 @@ fn write_segment(index: &Path, vectors: &[[f32; 4]]) -> SegmentMeta {
         SegmentSpec {
             segment_id: "seg-1".to_owned(),
             iid_start: Iid::new(0),
-            dims: DIMS,
+            dims,
             generation: Generation::new(1),
             batch_id: "batch-eval".to_owned(),
             precision: ReferencePrecision::Fp16,
@@ -434,7 +441,10 @@ fn metrics_on_a_hand_built_case_are_exact() {
     let (json_path, _) = eval_ok(&instance, &lines, &["--modes", "dense", "--k", "3"]);
     let report = read_report(&json_path);
 
-    assert_eq!(report["format_version"], 2);
+    assert_eq!(
+        report["format_version"], 3,
+        "the replayable top-k is a version 3 report (ADR-0155, decision 1)"
+    );
     assert_eq!(report["k"], 3);
     assert_eq!(report["queries"], 3);
     assert_eq!(
@@ -615,7 +625,13 @@ fn the_report_is_closed_and_carries_no_query_text() {
         "filter": { "marqueur": FILTER_MARKER },
         "expected": ["A"],
     });
-    let (json_path, markdown_path) = eval_ok(&instance, &[line], &["--modes", "dense"]);
+    let models = model_root(&instance, "fixture", &onnx_model("fixture", DIMS));
+    let models = path(&models);
+    let (json_path, markdown_path) = eval_ok(
+        &instance,
+        &[line],
+        &["--models", models, "--modes", "dense"],
+    );
     let report = read_report(&json_path);
 
     let members: BTreeSet<&str> = report
@@ -643,9 +659,11 @@ fn the_report_is_closed_and_carries_no_query_text() {
             "rescore_candidates_source",
             "queries",
             "queries_with_expected",
+            "queries_fingerprint",
+            "model_fingerprint",
             "modes",
         ]),
-        "the report's members are fixed (decision 11)"
+        "the report's members are fixed (decision 11; ADR-0155, decisions 3 and 4)"
     );
     let mode: BTreeSet<&str> = report["modes"]["dense"]
         .as_object()
@@ -1113,6 +1131,14 @@ const SYNTH_QUERIES: usize = 50;
 /// could then be observed. Both runs of the test share this index, so the
 /// regression stays injected by the command line alone (ADR-0125, decision 8).
 fn synth_instance() -> (Instance, PathBuf) {
+    synth_instance_with(SYNTH_QUERIES)
+}
+
+/// Builds `synth-small` and replays its first `count` queries.
+///
+/// The determinism test of ADR-0155, decision 9, replays a handful of them: the
+/// fixture and its vectors are the ones of the CI dataset either way.
+fn synth_instance_with(count: usize) -> (Instance, PathBuf) {
     let dataset = synth_root();
     require_synth(&dataset);
 
@@ -1170,7 +1196,7 @@ fn synth_instance() -> (Instance, PathBuf) {
     let expected = common::read_json_lines(&dataset.join("expected.jsonl"));
     let lines: Vec<Value> = queries
         .iter()
-        .take(SYNTH_QUERIES)
+        .take(count)
         .zip(expected.iter())
         .map(|(row, reference)| {
             json!({
@@ -1260,4 +1286,1062 @@ fn the_help_states_when_models_is_needed() {
         help.contains("never for a `lexical` one"),
         "the `--models` help says a lexical run needs no encoder, got {stdout}"
     );
+}
+
+// --- Top-k rejouable (ADR-0155) --------------------------------------------
+//
+// ADR-0155 replaces the `format_version: 2` report with a version 3 that keeps
+// the ordered top-k of the grouped run (`doc_ids`), attributes an evolution
+// (`model_fingerprint`, `query_precision`, `queries_fingerprint`) and compares
+// the top-k of two campaigns without changing the exit code.
+//
+// The member names of the comparison are written down here because the ADR
+// fixes their meaning, not their spelling: `baseline.modes.<mode>.top_k` holds
+// `overlap_at_k`, `n`, `changed` and `excluded`, and `baseline.attribution`
+// holds the three mentions of decision 6. A version 1 or 2 reference carries
+// `top_k_not_compared` instead, on the model of `latency_not_compared`.
+
+/// A well-formed blake3 digest, for the declared files of the ONNX fixture.
+const FP32_BLAKE3: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A second well-formed digest, for the tokenizer of the ONNX fixture.
+const TOKENIZER_BLAKE3: &str = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
+
+/// Model configuration of kind `onnx`, as `docs/04` writes it.
+///
+/// A campaign of `vector` queries never builds the encoder, so this
+/// configuration needs no ONNX Runtime and no model file: only `model.json` is
+/// read, for its fingerprint (ADR-0155, decision 3).
+fn onnx_model(name: &str, dims: u32) -> Value {
+    json!({
+        "name": name,
+        "kind": "onnx",
+        "hf_id": "crible/fixture",
+        "revision": "fixture",
+        "dims": dims,
+        "pooling": "cls",
+        "normalize": true,
+        "max_tokens": 32,
+        "prompts": { "query": "query: ", "document": "document: " },
+        "files": {
+            "fp32": { "path": "model.onnx", "blake3": FP32_BLAKE3 },
+            "tokenizer": { "path": "tokenizer.json", "blake3": TOKENIZER_BLAKE3 },
+        },
+    })
+}
+
+/// Model configuration of kind `external`: no encoder and no fingerprint.
+fn external_model(name: &str, dims: u32) -> Value {
+    json!({ "name": name, "kind": "external", "dims": dims, "normalize": true })
+}
+
+/// Writes `<models>/<name>/model.json` under the temporary root and returns the
+/// models root, as `--models` receives it.
+fn model_root(instance: &Instance, name: &str, config: &Value) -> PathBuf {
+    let root = instance.temp.path().join("models");
+    let directory = root.join(name);
+    fs::create_dir_all(&directory)
+        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", directory.display()));
+    fs::write(directory.join("model.json"), config.to_string())
+        .unwrap_or_else(|error| panic!("the model configuration must be written: {error}"));
+    root
+}
+
+/// Creates and returns a report directory under the temporary root.
+fn out_dir(instance: &Instance, name: &str) -> PathBuf {
+    let out = instance.temp.path().join(name);
+    fs::create_dir_all(&out)
+        .unwrap_or_else(|error| panic!("{} must be creatable: {error}", out.display()));
+    out
+}
+
+/// Writes a derived JSON report, as a reference of `--baseline`.
+fn write_report(path: &Path, report: &Value) {
+    fs::write(path, format!("{report}\n"))
+        .unwrap_or_else(|error| panic!("{} must be writable: {error}", path.display()));
+}
+
+/// Asserts `value` is a bare, lowercase, 64-character blake3 digest (ADR-0028).
+fn assert_fingerprint(value: &Value, label: &str) -> String {
+    let text = value
+        .as_str()
+        .unwrap_or_else(|| panic!("{label} must be a bare hexadecimal string: {value}"));
+    assert_eq!(
+        text.len(),
+        64,
+        "{label} is the blake3 of the canonical JSON, so 64 characters: {text}"
+    );
+    assert!(
+        text.chars()
+            .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character)),
+        "{label} is lowercase hexadecimal, with no prefix: {text}"
+    );
+    text.to_owned()
+}
+
+/// The three queries of the top-k baseline tests, in file order.
+///
+/// `q1` and `q3` share the same answer on the fixture: `A`, `B`, `C`. `q2`
+/// filters on an absent value, so its measured top-k is empty and its reference
+/// is empty too: it is the query decision 5 excludes from the mean.
+fn top_k_lines() -> Vec<Value> {
+    vec![
+        query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"]),
+        json!({
+            "id": "q2",
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "filter": { "fonds": { "eq": "ABSENT" } },
+        }),
+        query("q3", &[1.0, 0.0, 0.0, 0.0], &["C"]),
+    ]
+}
+
+/// The quality fixture with an `onnx` model configuration, so the report can
+/// carry a real `model_fingerprint` without an encoder (vector queries only).
+fn top_k_setup() -> (Instance, String) {
+    let instance = Instance::new(&quality_fixture());
+    let root = model_root(&instance, "fixture", &onnx_model("fixture", DIMS));
+    (instance, path(&root).to_owned())
+}
+
+#[test]
+fn inv_13_eval_local_report_never_writes_query_text_or_filter_value() {
+    let _serial = common::SerialGuard::acquire();
+    // INV-13 and ADR-0155, decision 8: a version 3 report writes external
+    // `doc_id`s of results, and neither a query text, nor a filter value, nor
+    // an internal id or a `doc_id#ord` key. The marked passage makes the
+    // query text match, so the report really holds a non-empty `doc_ids`.
+    let mut index = lexical_fixture();
+    index.passages[0].text = format!("{QUERY_MARKER} corps de l'article");
+    let instance = Instance::new(&index);
+    let line = json!({
+        "id": "q-marqueur",
+        "query": QUERY_MARKER,
+        "filter": { "marqueur": FILTER_MARKER },
+        "expected": ["A"],
+    });
+    let (json_path, markdown_path) = eval_ok(&instance, &[line], &["--modes", "lexical"]);
+    let report = read_report(&json_path);
+    assert_eq!(
+        report["format_version"], 3,
+        "the replayable top-k is a version 3 report (ADR-0155, decision 1): {report}"
+    );
+    let rows = report["modes"]["lexical"]["queries"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the mode holds its per-query rows: {report}"));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        &rows[0]["doc_ids"],
+        &json!(["A"]),
+        "the marked passage is found, and its external `doc_id` is written: {report}"
+    );
+
+    let json_body = fs::read_to_string(&json_path).unwrap_or_else(|error| panic!("{error}"));
+    let markdown = fs::read_to_string(&markdown_path)
+        .unwrap_or_else(|error| panic!("the Markdown report must exist: {error}"));
+    assert!(
+        json_body.contains("\"doc_ids\""),
+        "the report really carries the member under test: {json_body}"
+    );
+    assert!(
+        !json_body.contains(QUERY_MARKER),
+        "the query text never reaches the JSON report (INV-13)"
+    );
+    assert!(
+        !markdown.contains(QUERY_MARKER),
+        "the query text never reaches the Markdown report (INV-13)"
+    );
+    assert!(
+        !json_body.contains(FILTER_MARKER) && !markdown.contains(FILTER_MARKER),
+        "the filter value never reaches a report (INV-13)"
+    );
+    assert!(
+        !json_body.contains('#'),
+        "no `doc_id#ord` key nor passage key reaches the JSON report: {json_body}"
+    );
+}
+
+#[test]
+fn report_v3_rows_carry_ordered_doc_ids_in_every_mode() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 2: every row of every mode carries `doc_ids`, the
+    // ordered external `doc_id`s of the grouped run, `[]` when the run rendered
+    // nothing, and it stays when the query has no `expected`.
+    let instance = Instance::new(&quality_fixture());
+    let lines = [
+        query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"]),
+        json!({
+            "id": "q2",
+            "vector": [1.0, 0.0, 0.0, 0.0],
+            "filter": { "fonds": { "eq": "ABSENT" } },
+        }),
+    ];
+    let (json_path, _) = eval_ok(&instance, &lines, &["--modes", "dense", "--k", "3"]);
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    let rows = report["modes"]["dense"]["queries"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the mode holds its per-query rows: {report}"));
+    assert_eq!(
+        &rows[0]["doc_ids"],
+        &json!(["A", "B", "C"]),
+        "the top-3 of `[1, 0, 0, 0]` is A, B, C, best first: {report}"
+    );
+    assert_eq!(
+        &rows[1]["doc_ids"],
+        &json!([]),
+        "an empty pool is measured, and its top-k is `[]`, not an absent member: {report}"
+    );
+    for row in rows {
+        let doc_ids = row["doc_ids"]
+            .as_array()
+            .unwrap_or_else(|| panic!("each row carries `doc_ids`: {row}"));
+        for doc_id in doc_ids {
+            let doc_id = doc_id
+                .as_str()
+                .unwrap_or_else(|| panic!("a `doc_id` is a string: {row}"));
+            assert!(
+                !doc_id.contains('#'),
+                "the list holds external `doc_id`s, not `doc_id#ord` keys: {row}"
+            );
+        }
+    }
+
+    // The lexical mode writes the member too, and a query without `expected`
+    // keeps its top-k: the ranking is a measurement of its own.
+    let instance = Instance::new(&lexical_fixture());
+    let (json_path, _) = eval_ok(
+        &instance,
+        &[json!({ "id": "q-text", "query": "passage" })],
+        &["--modes", "lexical"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    let row = &report["modes"]["lexical"]["queries"][0];
+    let doc_ids = row["doc_ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a lexical row carries `doc_ids`: {report}"));
+    assert!(
+        !doc_ids.is_empty(),
+        "the query matches the three passages, so its measured top-k is not empty: {report}"
+    );
+    assert!(
+        doc_ids.len() <= 10,
+        "the list holds at most `k` documents: {report}"
+    );
+}
+
+#[test]
+fn report_v3_header_carries_the_model_fingerprint_of_an_onnx_model() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 3: `model_fingerprint` is the bare blake3 of the model
+    // configuration, and `query_precision` is absent because a campaign of
+    // `vector` queries encoded no text.
+    let (instance, models) = top_k_setup();
+    let lines = [query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"])];
+    let (json_path, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    let expected = ModelConfig::from_json_str(&onnx_model("fixture", DIMS).to_string())
+        .unwrap_or_else(|error| panic!("the fixture model must parse: {error}"))
+        .fingerprint();
+    assert_eq!(
+        assert_fingerprint(&report["model_fingerprint"], "model_fingerprint"),
+        expected,
+        "the report carries `ModelConfig::fingerprint`, lowercase hexadecimal: {report}"
+    );
+    assert!(
+        report.get("query_precision").is_none(),
+        "a campaign of `vector` queries encodes no text, so it writes no precision: {report}"
+    );
+    assert_fingerprint(&report["queries_fingerprint"], "queries_fingerprint");
+}
+
+#[test]
+fn report_v3_header_omits_model_fingerprint_for_an_external_model() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 3: an `external` model carries neither files nor
+    // revision, so its fingerprint would say nothing about the encoder, and the
+    // report omits it.
+    let instance = Instance::new(&quality_fixture());
+    let root = model_root(&instance, "fixture", &external_model("fixture", DIMS));
+    let models = path(&root).to_owned();
+    let lines = [query("q1", &[1.0, 0.0, 0.0, 0.0], &["A"])];
+    let (json_path, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    assert!(
+        report.get("model_fingerprint").is_none(),
+        "an `external` model has no fingerprint worth writing: {report}"
+    );
+    assert!(
+        report.get("query_precision").is_none(),
+        "a campaign of `vector` queries encodes no text: {report}"
+    );
+    assert_fingerprint(&report["queries_fingerprint"], "queries_fingerprint");
+}
+
+#[test]
+fn report_v3_header_omits_query_precision_when_no_dense_text_is_encoded() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 3: `query_precision` is written only when the campaign
+    // encoded a dense text. A lexical campaign encodes nothing, even with a
+    // textual query: writing `"fp32"` there would be false.
+    let instance = Instance::new(&lexical_fixture());
+    let (json_path, _) = eval_ok(
+        &instance,
+        &[json!({ "id": "q-text", "query": "passage" })],
+        &["--modes", "lexical"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    assert!(
+        report.get("query_precision").is_none(),
+        "a lexical campaign encodes no dense text: {report}"
+    );
+    assert_fingerprint(&report["queries_fingerprint"], "queries_fingerprint");
+}
+
+#[test]
+fn a_lexical_campaign_reads_no_encoder_configuration_even_with_models() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0143 and ADR-0155, decision 3: a purely lexical campaign reads no
+    // encoder configuration, so `--models` keeps having no effect there. The
+    // models root does not hold the model of the index, and the campaign
+    // succeeds without writing `model_fingerprint`.
+    let instance = Instance::new(&lexical_fixture());
+    let models = path(&instance.temp.path().join("empty-models")).to_owned();
+    let lines = [json!({ "id": "q-text", "query": "passage" })];
+    let (json_path, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "lexical"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(report["format_version"], 3);
+    assert!(
+        report.get("model_fingerprint").is_none(),
+        "a campaign without a dense branch reads no encoder configuration: {report}"
+    );
+    assert!(
+        report.get("query_precision").is_none(),
+        "a lexical campaign encodes no dense text: {report}"
+    );
+    assert_fingerprint(&report["queries_fingerprint"], "queries_fingerprint");
+}
+
+#[test]
+#[ignore = "needs ONNX Runtime (ORT_DYLIB_PATH) for the query encoding of a text; run: ORT_DYLIB_PATH=/path/to/libonnxruntime.dylib cargo test -p crible --test eval_cli -- --ignored"]
+fn query_precision_is_fp32_when_a_dense_text_is_encoded() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 3 and ADR-0052: a dense text is encoded in fp32, and
+    // the report says so. The fake encoder of `crible-encode` produces the
+    // vectors, so this test needs ONNX Runtime and is `#[ignore]`d like the
+    // other ignored tests of the crate (ADR-0057).
+    let (instance, models) = onnx_text_instance();
+    let lines = [json!({
+        "id": "q-texte",
+        "query": "responsabilité du fait des choses",
+        "expected": ["A"],
+    })];
+    let (json_path, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense"],
+    );
+    let report = read_report(&json_path);
+    assert_eq!(
+        report["query_precision"], "fp32",
+        "the campaign encoded a dense text, in fp32 (ADR-0052): {report}"
+    );
+    assert_fingerprint(&report["model_fingerprint"], "model_fingerprint");
+}
+
+/// Builds an index served by the fake ONNX model of `crible-encode`.
+///
+/// The graph is the versioned fixture of the crate: no data of production is
+/// read, and the model directory is a copy made inside the temporary root of the
+/// test (ADR-0125, decision 14).
+fn onnx_text_instance() -> (Instance, String) {
+    let mut index = fixture("fixture", &[]);
+    index.configuration = configuration("fixture", false)
+        .replace("\"model\":\"fixture\"", "\"model\":\"fake-model\"");
+    let instance = Instance::with_data(&index);
+    let config = instance.temp.path().join("index.json");
+    fs::write(&config, &index.configuration)
+        .unwrap_or_else(|error| panic!("the configuration must be written: {error}"));
+    let data = path(&instance.data);
+    let config = path(&config);
+    let created = crible(&["index", "create", "--data", data, "--config", config]);
+    assert!(
+        created.status.success(),
+        "index create failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    let directory = instance.data.join("indexes").join("fixture");
+    // The store opens before the segment is written: the recovery of a write
+    // open drops a segment directory SQLite does not reference yet
+    // (`GenerationStore::open`, ADR-0116, decision 1), which is the order of
+    // `Instance::new`.
+    let mut store = GenerationStore::open(&directory, &schema())
+        .unwrap_or_else(|error| panic!("the fixture index must open: {error}"));
+    let mut first = vec![0.0_f32; 768];
+    first[0] = 1.0;
+    let mut second = vec![0.0_f32; 768];
+    second[0] = 0.9;
+    second[1] = 0.1;
+    let segment = write_segment_dims(&directory, &[first, second], 768);
+    let doc_ids = ["A", "B"];
+    let documents = doc_ids
+        .iter()
+        .enumerate()
+        .map(|(position, doc_id)| DocumentRecord {
+            doc_id: (*doc_id).to_owned(),
+            doc_hash: format!("blake3:doc-{position}"),
+            fields: json!({ "fonds": "LEGI", "marqueur": FILTER_MARKER }),
+            updated_generation: Generation::new(1),
+        })
+        .collect();
+    let passages = doc_ids
+        .iter()
+        .enumerate()
+        .map(|(position, doc_id)| PassageRecord {
+            iid: Iid::new(u32::try_from(position).unwrap_or_default()),
+            doc_id: (*doc_id).to_owned(),
+            ord: 0,
+            text: format!("passage {position}"),
+            passage_hash: format!("blake3:passage-{position}"),
+            fields: json!({ "partie": "corps" }),
+            segment_id: "seg-1".to_owned(),
+            created_generation: Generation::new(1),
+            dead_since_gen: None,
+        })
+        .collect();
+    store
+        .commit(GenerationChange {
+            segments: vec![segment],
+            documents,
+            passages,
+            deletions: Vec::new(),
+        })
+        .unwrap_or_else(|error| panic!("the fixture generation must commit: {error}"));
+
+    let models = instance.temp.path().join("models");
+    let model_directory = models.join("fake-model");
+    fs::create_dir_all(&model_directory)
+        .unwrap_or_else(|error| panic!("the model directory must be creatable: {error}"));
+    for file in [
+        "model.json",
+        "model.onnx",
+        "tokenizer.json",
+        "model.int8.onnx",
+    ] {
+        fs::copy(
+            common::fixture_directory().join(file),
+            model_directory.join(file),
+        )
+        .unwrap_or_else(|error| panic!("the fixture model file {file} must be copied: {error}"));
+    }
+    (instance, path(&models).to_owned())
+}
+
+#[test]
+fn queries_fingerprint_ignores_the_formatting_of_the_game_file() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 3: the hash is the blake3 of the canonical parsed game,
+    // not of the bytes. The same game, formatted differently, keeps its
+    // fingerprint; a changed query changes it.
+    let instance = Instance::new(&quality_fixture());
+    let compact = concat!(
+        "{\"id\":\"q1\",\"vector\":[1.0,0.0,0.0,0.0],\"filter\":{\"fonds\":\"LEGI\"},",
+        "\"expected\":[\"A\"]}\n",
+        "{\"id\":\"q2\",\"vector\":[0.0,1.0,0.0,0.0]}\n",
+    );
+    let pretty = concat!(
+        "{ \"expected\" : [ \"A\" ] , \"filter\" : { \"fonds\" : \"LEGI\" } , ",
+        "\"vector\" : [ 1.0 , 0.0 , 0.0 , 0.0 ] , \"id\" : \"q1\" }\n",
+        "{ \"vector\" : [ 0.0 , 1.0 , 0.0 , 0.0 ] , \"id\" : \"q2\" }\n",
+    );
+    let changed = concat!(
+        "{\"id\":\"q1\",\"vector\":[1.0,0.0,0.0,0.0],\"filter\":{\"fonds\":\"LEGI\"},",
+        "\"expected\":[\"A\"]}\n",
+        "{\"id\":\"q2\",\"vector\":[0.0,0.0,1.0,0.0]}\n",
+    );
+
+    let mut fingerprints = Vec::new();
+    for (name, body) in [
+        ("game-compact", compact),
+        ("game-pretty", pretty),
+        ("game-changed", changed),
+    ] {
+        let game = instance.temp.path().join(format!("{name}.jsonl"));
+        fs::write(&game, body).unwrap_or_else(|error| panic!("the game must be written: {error}"));
+        let out = out_dir(&instance, &format!("out-{name}"));
+        let output = instance.eval_file_at("fixture", &game, &out, &["--modes", "dense"]);
+        assert!(
+            output.status.success(),
+            "eval {name} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let (json_path, _) = reports(&output);
+        let report = read_report(&json_path);
+        assert_eq!(report["format_version"], 3);
+        fingerprints.push(assert_fingerprint(
+            &report["queries_fingerprint"],
+            "queries_fingerprint",
+        ));
+    }
+    assert_eq!(
+        fingerprints[0], fingerprints[1],
+        "spaces and key order do not change the parsed game, so the fingerprint is the same"
+    );
+    assert_ne!(
+        fingerprints[1], fingerprints[2],
+        "a changed vector changes the parsed game, so the fingerprint changes"
+    );
+}
+
+#[test]
+fn synth_small_two_local_runs_render_the_same_doc_ids() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 9: at the same generation and the same game, the
+    // grouped top-k is deterministic. The test proves determinism, never a
+    // recall target.
+    let (instance, queries) = synth_instance_with(10);
+    let first_out = out_dir(&instance, "out-first");
+    let first = instance.eval_file_at("synth-small", &queries, &first_out, &["--modes", "dense"]);
+    assert!(
+        first.status.success(),
+        "the first campaign failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let (first_json, _) = reports(&first);
+    let second_out = out_dir(&instance, "out-second");
+    let second = instance.eval_file_at("synth-small", &queries, &second_out, &["--modes", "dense"]);
+    assert!(
+        second.status.success(),
+        "the second campaign failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let (second_json, _) = reports(&second);
+
+    let doc_ids = |report: &Value| -> Vec<Vec<String>> {
+        report["modes"]["dense"]["queries"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the mode holds its per-query rows: {report}"))
+            .iter()
+            .map(|row| {
+                row["doc_ids"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("each row carries `doc_ids`: {row}"))
+                    .iter()
+                    .map(|doc_id| {
+                        doc_id
+                            .as_str()
+                            .unwrap_or_else(|| panic!("a `doc_id` is a string: {row}"))
+                            .to_owned()
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    let first_report = read_report(&first_json);
+    let second_report = read_report(&second_json);
+    let first_ids = doc_ids(&first_report);
+    let second_ids = doc_ids(&second_report);
+    assert_eq!(
+        first_ids, second_ids,
+        "two campaigns on the same generation render the same ordered top-k"
+    );
+    assert!(
+        first_ids.iter().any(|ids| !ids.is_empty()),
+        "at least one query rendered a document, so the equality is not vacuous"
+    );
+    assert_eq!(
+        first_report["queries_fingerprint"], second_report["queries_fingerprint"],
+        "the same game keeps the same fingerprint"
+    );
+    assert_eq!(first_report["generation"], second_report["generation"]);
+}
+
+#[test]
+fn a_baseline_compares_top_k_without_changing_the_exit_code() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decisions 5 and 7: `overlap_at_k` per query and its mean with
+    // its `n`, an empty reference excluded and counted apart, the `id`s whose
+    // ordered list changed, and the Markdown section. The comparison is
+    // informative: only the means of quality and fidelity can exit 1.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let mut reference = read_report(&reference_json);
+    let rows = reference["modes"]["dense"]["queries"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("the reference holds its per-query rows"));
+    for row in rows {
+        match row["id"].as_str().unwrap_or_default() {
+            // The same three documents in another order: an exchange of ranks
+            // counts, and the overlap stays 1.
+            "q1" => row["doc_ids"] = json!(["B", "A", "C"]),
+            // One document in common with the current `A`, `B`, `C`.
+            "q3" => row["doc_ids"] = json!(["D", "E", "B"]),
+            _ => {}
+        }
+    }
+    let reference_path = instance.temp.path().join("reference-top-k.json");
+    write_report(&reference_path, &reference);
+    let baseline = path(&reference_path).to_owned();
+
+    let out = out_dir(&instance, "out-top-k");
+    let output = instance.eval_at(
+        "fixture",
+        &lines,
+        &out,
+        &[
+            "--models",
+            models.as_str(),
+            "--modes",
+            "dense",
+            "--k",
+            "3",
+            "--baseline",
+            baseline.as_str(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a top-k change alone never exits 1: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (json_path, markdown_path) = reports(&output);
+    let report = read_report(&json_path);
+    assert_eq!(report["baseline"]["regression"], false);
+    assert_close(
+        number(&report, "/baseline/modes/dense/top_k/overlap_at_k"),
+        (1.0 + 1.0 / 3.0) / 2.0,
+        "mean overlap_at_k: q1 keeps its three documents, q3 keeps one of three",
+    );
+    assert_eq!(
+        report["baseline"]["modes"]["dense"]["top_k"]["n"], 2,
+        "q2 is excluded: its reference list is empty: {report}"
+    );
+    assert_eq!(
+        &report["baseline"]["modes"]["dense"]["top_k"]["changed"],
+        &json!(["q1", "q3"]),
+        "a rank exchange and a lost document both count: {report}"
+    );
+    assert_eq!(
+        &report["baseline"]["modes"]["dense"]["top_k"]["excluded"],
+        &json!(["q2"]),
+        "an empty reference is counted apart with its id: {report}"
+    );
+    let attribution = &report["baseline"]["attribution"];
+    assert_eq!(
+        attribution["generation"]["reference"], report["generation"],
+        "the same generation is mentioned, not refused: {report}"
+    );
+    assert_eq!(attribution["generation"]["current"], report["generation"]);
+    assert_eq!(attribution["model_fingerprint"], "same");
+    assert_eq!(attribution["queries_fingerprint"], "same");
+
+    let markdown = fs::read_to_string(&markdown_path)
+        .unwrap_or_else(|error| panic!("the Markdown report must exist: {error}"));
+    let lowered = markdown.to_lowercase();
+    assert!(
+        lowered.contains("top-k") && lowered.contains("recouvrement"),
+        "the Markdown carries the top-k overlap section (decision 7): {markdown}"
+    );
+    assert!(
+        lowered.contains("informative"),
+        "the section says the comparison is informative: {markdown}"
+    );
+    assert!(
+        markdown.contains("`q1`") && markdown.contains("`q3`"),
+        "the section names the changed queries: {markdown}"
+    );
+}
+
+#[test]
+fn a_query_present_in_one_report_only_is_counted_apart() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 5: a query present in one report only is counted
+    // apart, whichever report it comes from. The reference loses `q3` and gains
+    // `q4`, so the current `q3` is absent from the reference and the reference
+    // `q4` is absent from the current campaign.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let mut reference = read_report(&reference_json);
+    let rows = reference["modes"]["dense"]["queries"]
+        .as_array_mut()
+        .unwrap_or_else(|| panic!("the reference holds its per-query rows"));
+    rows.retain(|row| row["id"].as_str() != Some("q3"));
+    rows.push(json!({
+        "id": "q4",
+        "recall_at_k": 1.0,
+        "mrr_at_k": 1.0,
+        "doc_ids": ["A"],
+    }));
+    let reference_path = instance.temp.path().join("reference-one-sided.json");
+    write_report(&reference_path, &reference);
+    let baseline = path(&reference_path).to_owned();
+
+    let out = out_dir(&instance, "out-one-sided");
+    let output = instance.eval_at(
+        "fixture",
+        &lines,
+        &out,
+        &[
+            "--models",
+            models.as_str(),
+            "--modes",
+            "dense",
+            "--k",
+            "3",
+            "--baseline",
+            baseline.as_str(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "one-sided queries never refuse the reference: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (json_path, markdown_path) = reports(&output);
+    let report = read_report(&json_path);
+    let top_k = &report["baseline"]["modes"]["dense"]["top_k"];
+    let mut not_compared: Vec<&str> = top_k["not_compared"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the top-k names the queries it did not compare: {report}"))
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    not_compared.sort_unstable();
+    assert_eq!(
+        not_compared,
+        ["q3", "q4"],
+        "a current-only query and a reference-only query are both counted apart: {report}"
+    );
+    assert_eq!(
+        top_k["n"], 1,
+        "only `q1` is compared, `q2` excluded and the one-sided queries counted apart: {report}"
+    );
+    let markdown = fs::read_to_string(&markdown_path)
+        .unwrap_or_else(|error| panic!("the Markdown report must exist: {error}"));
+    assert!(
+        markdown.contains("`q3`") && markdown.contains("`q4`"),
+        "the Markdown names both one-sided queries: {markdown}"
+    );
+}
+
+#[test]
+fn a_mode_absent_from_the_reference_is_said_not_compared_in_the_top_k_section() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0131, decision 7 and ADR-0155, decision 7: a mode the reference does
+    // not carry is not compared, and the top-k section says it on its own line
+    // instead of disappearing with the mode.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let mut reference = read_report(&reference_json);
+    let removed = reference
+        .get_mut("modes")
+        .and_then(Value::as_object_mut)
+        .and_then(|modes| modes.remove("dense"));
+    assert!(
+        removed.is_some(),
+        "the reference holds its `dense` mode: {reference}"
+    );
+    let reference_path = instance.temp.path().join("reference-no-mode.json");
+    write_report(&reference_path, &reference);
+    let baseline = path(&reference_path).to_owned();
+
+    let out = out_dir(&instance, "out-no-mode");
+    let output = instance.eval_at(
+        "fixture",
+        &lines,
+        &out,
+        &[
+            "--models",
+            models.as_str(),
+            "--modes",
+            "dense",
+            "--k",
+            "3",
+            "--baseline",
+            baseline.as_str(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a mode absent from the reference is not refused: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (json_path, markdown_path) = reports(&output);
+    let report = read_report(&json_path);
+    assert_eq!(
+        &report["baseline"]["modes_not_compared"],
+        &json!(["dense"]),
+        "the mode absent from the reference is named: {report}"
+    );
+    assert!(
+        report["baseline"]["modes"].get("dense").is_none(),
+        "the mode is not compared: {report}"
+    );
+    let markdown = fs::read_to_string(&markdown_path)
+        .unwrap_or_else(|error| panic!("the Markdown report must exist: {error}"));
+    assert!(
+        markdown.contains("mode absent de la référence"),
+        "the top-k section says the mode was not compared: {markdown}"
+    );
+}
+
+#[test]
+fn a_baseline_of_format_version_1_or_2_skips_the_top_k_comparison() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 5: a version 1 or 2 reference carries no `doc_ids`. The
+    // means stay compared, the top-k is not, and the report says so instead of
+    // leaving a section that would read as a zero.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let reference = read_report(&reference_json);
+    for version in [1_u64, 2] {
+        let mut old = reference.clone();
+        old["format_version"] = json!(version);
+        let object = old
+            .as_object_mut()
+            .unwrap_or_else(|| panic!("the reference is a JSON object"));
+        for member in [
+            "model_fingerprint",
+            "query_precision",
+            "queries_fingerprint",
+        ] {
+            object.remove(member);
+        }
+        for row in old["modes"]["dense"]["queries"]
+            .as_array_mut()
+            .unwrap_or_else(|| panic!("the reference holds its per-query rows"))
+        {
+            row.as_object_mut()
+                .unwrap_or_else(|| panic!("a per-query row is a JSON object"))
+                .remove("doc_ids");
+        }
+        if version == 1 {
+            old["modes"]["dense"]["latency"]
+                .as_object_mut()
+                .unwrap_or_else(|| panic!("the mode holds its latency object"))
+                .remove("latency_basis");
+        }
+        let baseline_path = instance
+            .temp
+            .path()
+            .join(format!("reference-v{version}.json"));
+        write_report(&baseline_path, &old);
+        let baseline = path(&baseline_path).to_owned();
+        let out = out_dir(&instance, &format!("out-v{version}"));
+        let output = instance.eval_at(
+            "fixture",
+            &lines,
+            &out,
+            &[
+                "--models",
+                models.as_str(),
+                "--modes",
+                "dense",
+                "--k",
+                "3",
+                "--baseline",
+                baseline.as_str(),
+            ],
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "a version {version} reference is read: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let (json_path, markdown_path) = reports(&output);
+        let report = read_report(&json_path);
+        let entry = &report["baseline"]["modes"]["dense"];
+        assert!(
+            entry.pointer("/quality/recall_at_k/reference").is_some()
+                && entry.pointer("/quality/recall_at_k/current").is_some(),
+            "the means stay compared for a version {version} reference: {report}"
+        );
+        assert!(
+            entry.get("top_k").is_none(),
+            "a version {version} reference has no `doc_ids` to compare: {report}"
+        );
+        assert!(
+            entry.get("top_k_not_compared").is_some(),
+            "the report says the top-k was not compared: {report}"
+        );
+        assert_eq!(
+            report["baseline"]["attribution"]["model_fingerprint"], "unknown",
+            "a version {version} reference names no model fingerprint: {report}"
+        );
+        assert_eq!(
+            report["baseline"]["attribution"]["queries_fingerprint"], "unknown",
+            "a version {version} reference names no game fingerprint: {report}"
+        );
+        let markdown = fs::read_to_string(&markdown_path)
+            .unwrap_or_else(|error| panic!("the Markdown report must exist: {error}"));
+        let lowered = markdown.to_lowercase();
+        assert!(
+            lowered.contains("top-k") && lowered.contains("non compar"),
+            "the Markdown says the top-k was not compared, for version {version}: {markdown}"
+        );
+    }
+}
+
+#[test]
+fn a_baseline_of_format_version_4_is_refused_naming_it() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 1: the reader accepts 1, 2 and 3, and refuses any other
+    // version by a message that names the version it read.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let mut reference = read_report(&reference_json);
+    reference["format_version"] = json!(4);
+    let baseline_path = instance.temp.path().join("reference-v4.json");
+    write_report(&baseline_path, &reference);
+    let baseline = path(&baseline_path).to_owned();
+
+    let out = out_dir(&instance, "out-v4");
+    let output = instance.eval_at(
+        "fixture",
+        &lines,
+        &out,
+        &[
+            "--models",
+            models.as_str(),
+            "--modes",
+            "dense",
+            "--k",
+            "3",
+            "--baseline",
+            baseline.as_str(),
+        ],
+    );
+    assert!(!output.status.success(), "a version 4 reference is refused");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("format_version") && stderr.contains('4'),
+        "the refusal names the version it read: {stderr}"
+    );
+    let written: Vec<_> = fs::read_dir(&out)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", out.display()))
+        .collect();
+    assert!(
+        written.is_empty(),
+        "a refused baseline writes no report: {written:?}"
+    );
+}
+
+#[test]
+fn a_baseline_attributes_a_generation_or_fingerprint_difference_without_refusing() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 6: a generation, model or game fingerprint difference
+    // makes the cause ambiguous, not the figures false. The reference is read,
+    // the top-k is compared, and the mismatch is named.
+    let (instance, models) = top_k_setup();
+    let lines = top_k_lines();
+    let (reference_json, _) = eval_ok(
+        &instance,
+        &lines,
+        &["--models", models.as_str(), "--modes", "dense", "--k", "3"],
+    );
+    let mut reference = read_report(&reference_json);
+    let generation = reference["generation"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the reference names its generation: {reference}"));
+    reference["generation"] = json!(generation + 1);
+    reference["model_fingerprint"] = json!("f".repeat(64));
+    reference["queries_fingerprint"] = json!("e".repeat(64));
+    let baseline_path = instance.temp.path().join("reference-other.json");
+    write_report(&baseline_path, &reference);
+    let baseline = path(&baseline_path).to_owned();
+
+    let out = out_dir(&instance, "out-other");
+    let output = instance.eval_at(
+        "fixture",
+        &lines,
+        &out,
+        &[
+            "--models",
+            models.as_str(),
+            "--modes",
+            "dense",
+            "--k",
+            "3",
+            "--baseline",
+            baseline.as_str(),
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a generation or fingerprint difference never refuses the reference: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (json_path, _) = reports(&output);
+    let report = read_report(&json_path);
+    let attribution = &report["baseline"]["attribution"];
+    assert_eq!(attribution["generation"]["reference"], generation + 1);
+    assert_eq!(attribution["generation"]["current"], generation);
+    assert_eq!(
+        attribution["model_fingerprint"], "differs",
+        "the encoder changed, and the report says so: {report}"
+    );
+    assert_eq!(
+        attribution["queries_fingerprint"], "differs",
+        "the game changed, and the report says so: {report}"
+    );
+    // The comparison itself still runs: the lists are unchanged, so the overlap
+    // is 1 and no query moved.
+    assert_close(
+        number(&report, "/baseline/modes/dense/top_k/overlap_at_k"),
+        1.0,
+        "the lists did not move, and their overlap is 1",
+    );
+    assert_eq!(
+        &report["baseline"]["modes"]["dense"]["top_k"]["changed"],
+        &json!([]),
+        "no list moved: {report}"
+    );
+    assert_eq!(report["baseline"]["regression"], false);
 }

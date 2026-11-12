@@ -1,10 +1,22 @@
 # ADR-0155 — Top-k rejouable du rapport d'éval
 
-- **Statut** : Proposé
-- **Date** : 2026-11-12
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-12)
+- **Date** : 2026-11-12 (proposition et acceptation)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T16-TOP-K-REJOUABLE` (v1.1), sur le verdict de `@architecte` du 2026-11-12 et le ticket 16 du dépôt Legifacile (`../legifacile/tickets-crible/16-reference-top-k-rejouable.md`)
 - **Remplace** : — (complète ADR-0125, décisions 11, 12 et 16, et ADR-0131, décision 7, sans modifier le corps d'un ADR accepté, comme ADR-0131 l'a fait pour ADR-0125)
+- **Décision** : accepté par le propriétaire le 2026-11-12, sa réponse : « ADR-0155 accepté, tu peux lancer T16 », tel que proposé ; le tableau d'application de la décision 10 est appliqué aux documents de conception le 2026-11-12 ; erratum du 2026-11-12 compris, confirmé par le propriétaire le 2026-11-12, sa réponse : « l'erratum est accepté, tu peux commiter et fusionner ».
+
+> **Erratum du 2026-11-12, sur la relecture de la tâche `T16-TOP-K-REJOUABLE`.** Il précise la décision 3 et **amende sur place sa puce `model_fingerprint`**, pour qu'elle dise les quatre cas d'omission que le code applique. L'ADR reste accepté ; l'erratum du 2026-11-12 est **compris**, confirmé par le propriétaire le 2026-11-12, sa réponse : « l'erratum est accepté, tu peux commiter et fusionner ». Aucune autre décision ne change.
+>
+> Le code omet `model_fingerprint` dans quatre cas, et la décision 3 n'en nommait qu'un. Les voici, avec leur raison, tels que `model_fingerprint_of` et son appel les appliquent (`crates/crible/src/eval.rs:522-529` et `:674-686`) :
+>
+> 1. **Un modèle `kind: "external"`** : sa configuration ne porte ni fichiers ni révision, et une empreinte réduite à `dims` et `normalize` ferait croire à une attribution qu'elle ne permet pas. C'était le seul cas que la décision 3 écrivait.
+> 2. **Une campagne locale sans `--models`** : l'index ne garde que le **nom** de son modèle (`IndexConfig.model`), et la configuration du modèle, qui porte de quoi calculer l'empreinte, se lit sous la racine des modèles que `--models` donne. Sans cette racine, `model_fingerprint_of` rend `None` (`:678-680`) : rien de vrai n'est à hacher.
+> 3. **Une campagne sans mode dense** (par exemple `--modes lexical`) : l'empreinte n'est lue que si au moins un mode utilise la branche dense (`:522-529`). Une campagne purement lexicale n'ouvre aucune configuration d'encodeur, et `--models` reste sans effet sur elle, comme en 1.0 (ADR-0143, compatibilité).
+> 4. **Le mode API** : l'encodeur y est une précondition de l'instance (ADR-0131, décision 9), que la campagne ne lit ni n'impose, et le mode API passe donc `None` à `header` (`:588`). C'est ce que la décision 4 dit déjà.
+>
+> Dans ces quatre cas, le Markdown du rapport dit que l'écart n'est pas attribuable à l'encodeur (`crates/crible/src/eval.rs:2151-2159`), et `attribution.model_fingerprint` vaut `unknown` quand l'un des deux rapports ne porte pas l'empreinte (`fingerprint_state`, `:1754-1762`) : cela couvre les quatre cas et une référence en version 1 ou 2 (décision 6).
 
 ## Contexte
 
@@ -74,7 +86,7 @@ Précisions :
 
 Précisions :
 
-- **`model_fingerprint`** est `ModelConfig::fingerprint` (`crates/crible-core/src/model.rs:370`), en **hexadécimal minuscule nu** (ADR-0028), sans préfixe ni enveloppe. Il est **omis** pour un modèle `kind: "external"`, dont la configuration ne porte ni fichiers ni révision : une empreinte réduite à `dims` et `normalize` ferait croire à une attribution qu'elle ne permet pas. Le Markdown dit alors que l'écart n'est **pas attribuable à l'encodeur** ;
+- **`model_fingerprint`** est `ModelConfig::fingerprint` (`crates/crible-core/src/model.rs:370`), en **hexadécimal minuscule nu** (ADR-0028), sans préfixe ni enveloppe. Il est **omis** dans quatre cas (voir l'erratum du 2026-11-12) : pour un modèle `kind: "external"`, dont la configuration ne porte ni fichiers ni révision, où une empreinte réduite à `dims` et `normalize` ferait croire à une attribution qu'elle ne permet pas ; pour une campagne locale **sans `--models`**, qui n'a lu aucune configuration de modèle ; pour une campagne **sans mode dense**, qui n'a lu aucune configuration d'encodeur ; et en **mode API**, où l'encodeur est une précondition de l'instance (décision 4). Le Markdown dit alors que l'écart n'est **pas attribuable à l'encodeur** ;
 - **`query_precision`** vaut `"fp32"` (ADR-0052) et n'est écrit **que si la campagne a encodé un texte dense** : une campagne entièrement en `vector`, ou une campagne `lexical`, n'a encodé aucune requête, et écrire `"fp32"` y serait faux. Aucune option nouvelle n'est ajoutée : la valeur vient de la configuration de l'encodeur, et la règle 12 interdit une configuration pour une valeur fixe ;
 - **`queries_fingerprint`** est le blake3, en hexadécimal minuscule nu, de la **forme canonique du jeu parsé** : une entrée par ligne, **dans l'ordre du fichier**, clés triées, JSON compact, UTF-8 sans échappement des caractères non ASCII — la forme d'ADR-0028 —, avec les membres `id`, `query` **ou** `vector`, `filter`, `expected`. Les membres facultatifs absents ne sont pas écrits ;
 - le hash porte sur le jeu **parsé**, pas sur les octets bruts : un simple reformatage du fichier, un espace ou un ordre de clés différent changerait le hash des octets sans changer le jeu, et ferait croire à une campagne différente ;

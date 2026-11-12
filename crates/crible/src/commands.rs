@@ -1245,7 +1245,7 @@ pub(crate) fn load_index(data: &Path, name: &str) -> Result<(PathBuf, IndexConfi
 }
 
 /// Reads the resolved model configuration of `model` under the models root.
-fn load_model(models: &Path, model: &str) -> Result<ModelConfig, CribleError> {
+pub(crate) fn load_model(models: &Path, model: &str) -> Result<ModelConfig, CribleError> {
     let path = model_directory(models, model)?.join("model.json");
     let raw = fs::read_to_string(&path).map_err(|error| {
         invalid_request(format!(
