@@ -1273,6 +1273,57 @@ pub struct SearchRequest {
     pub timeout_ms: Option<u32>,
 }
 
+/// Body of `POST /v1/indexes/{index}/facets` (ADR-0154, decision 2).
+///
+/// The body is closed: `query`, `vector`, `mode`, `k` and `return` are unknown
+/// keys of this route, which runs no search.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsRequest {
+    /// Names of the facet fields, from one to ten distinct names, each declared
+    /// `keyword` and `filterable` by the schema of the index.
+    #[schema(min_items = 1, max_items = 10)]
+    pub fields: Vec<String>,
+    /// Filter of the pool; its grammar is the one of a search, and no filter
+    /// when absent (ADR-0154, decision 2).
+    #[schema(nullable = false)]
+    pub filter: Option<Filter>,
+    /// Values rendered per field, 1 to 100; 20 when absent.
+    #[schema(minimum = 1, maximum = 100)]
+    #[schema(nullable = false)]
+    pub limit: Option<u32>,
+    /// Deadline of the request, 1 to 30000 milliseconds.
+    #[schema(minimum = 1, maximum = 30000)]
+    #[schema(nullable = false)]
+    pub timeout_ms: Option<u32>,
+}
+
+/// The two counts of the pool of a facets request (ADR-0154, decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsCount {
+    /// Passages of the pool, the same pool as a search with the same filter.
+    pub passages: u64,
+    /// Distinct documents of the pool, exact.
+    pub documents: u64,
+}
+
+/// Body of the `200` of `POST /v1/indexes/{index}/facets` (ADR-0154,
+/// decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsResponse {
+    /// Generation of the snapshot that served the whole request.
+    pub generation: u64,
+    /// The two counts of the pool.
+    pub count: FacetsCount,
+    /// One entry per requested field: `{ "values": [{ "value", "count" }],
+    /// "other" }`, ordered by count descending then value ascending in UTF-8
+    /// bytes. The keys are the field names of the request.
+    #[schema(value_type = Object)]
+    pub fields: FreeObject,
+}
+
 /// One target of a multi-index search (ADR-0110).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -1939,6 +1990,7 @@ pub fn snapshots_doc() {}
         crate::batches::post_batch,
         crate::search::search,
         crate::search_multi::search,
+        crate::facets::facets,
         compact_doc,
         exports_doc,
         snapshots_doc,
@@ -2010,6 +2062,9 @@ pub fn snapshots_doc() {}
         Filter,
         SearchReturn,
         SearchRequest,
+        FacetsRequest,
+        FacetsCount,
+        FacetsResponse,
         SearchTarget,
         SearchMultiRequest,
         ScoreType,

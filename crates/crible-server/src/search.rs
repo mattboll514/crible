@@ -1862,7 +1862,7 @@ pub(crate) fn optional_string(
 }
 
 /// An optional non-negative integer member.
-fn optional_unsigned(
+pub(crate) fn optional_unsigned(
     object: &Map<String, Value>,
     path: &str,
     name: &str,
@@ -1894,7 +1894,7 @@ fn optional_bool(
 
 /// Converts a JSON unsigned value to `usize`, saturating above the platform
 /// maximum so the range checks of the caller speak last.
-fn as_usize(value: u64) -> usize {
+pub(crate) fn as_usize(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 

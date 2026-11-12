@@ -47,7 +47,7 @@ use crate::error;
 use crate::indexes;
 use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
-use crate::{batches, documents, maintenance, search, search_multi};
+use crate::{batches, documents, facets, maintenance, search, search_multi};
 
 /// Header carrying the request identifier on every response (ADR-0098).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -145,6 +145,9 @@ fn indexes_read_routes() -> Router<Arc<AppState>> {
         // The multi-index search is open to the same role, for the same reason
         // (ADR-0110, ADR-0095).
         .route("/v1/search", post(search_multi::search))
+        // The facets route asks for `read` too, and shares the semaphore of the
+        // searches (ADR-0154, decisions 1 and 8).
+        .route("/v1/indexes/{index}/facets", post(facets::facets))
 }
 
 /// The debug routes of the instance: the journal, `admin` only (ADR-0122,
@@ -442,7 +445,7 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
         ("from" = Option<String>, Query, description = "Lower bound, included, of the window, ISO 8601 with its offset; defaults to the oldest retained row"),
         ("to" = Option<String>, Query, description = "Upper bound, included, of the window, ISO 8601 with its offset; defaults to the newest retained row"),
         ("index" = Option<String>, Query, description = "Only the events of that index, present in the analytics or not"),
-        ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
+        ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `facets`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
         ("group_by" = Option<String>, Query, description = "Width of the buckets: `minute`, `hour` (default) or `day`")
     ),
     responses(

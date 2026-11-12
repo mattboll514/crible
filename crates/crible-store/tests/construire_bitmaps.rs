@@ -18,7 +18,7 @@
 //! |---|---|
 //! | `bitmaps_after_l1_l2_l3_carry_the_state_of_sqlite` | "après L1, L2 et L3, les bitmaps sont égales à une reconstruction complète depuis SQLite" |
 //! | `the_live_bitmap_holds_the_iids_sqlite_keeps_alive` | "la bitmap des vivants" — the set SQLite keeps alive |
-//! | `the_memory_of_the_filters_is_reported_in_four_parts` | "la taille mémoire est rapportée dans `crible inspect`", measured here through `Snapshot::filter_memory` |
+//! | `the_memory_of_the_filters_is_reported_in_five_parts` | "la taille mémoire est rapportée dans `crible inspect`", measured here through `Snapshot::filter_memory` |
 //! | `copy_on_write_after_each_generation_equals_a_full_rebuild` | "la mise à jour en copie sur écriture après une attache" |
 //! | `reopening_an_index_rebuilds_the_same_structures` | "la construction depuis SQLite, intégrée au `Snapshot`" |
 //! | `a_null_value_is_absent_from_the_present_bitmaps` | ADR-0035, the present bitmap |
@@ -75,7 +75,7 @@ use crible_core::config::{IndexConfig, Schema};
 use crible_core::ids::{Generation, Iid};
 use crible_core::model::ModelConfig;
 use crible_store::attach::attach;
-use crible_store::filters_index::FilterIndex;
+use crible_store::filters_index::{FilterIndex, FilterMemory};
 use crible_store::generation::{GenerationChange, GenerationStore, Snapshot};
 use crible_store::patch::{DocumentPatch, PatchSource};
 use crible_store::records::{DocumentRecord, PassageRecord};
@@ -249,14 +249,17 @@ fn the_live_bitmap_holds_the_iids_sqlite_keeps_alive() {
 
 // --- Test 2: the reported memory ---
 
-/// `Snapshot::filter_memory` reports the size of the structures, in four parts
+/// `Snapshot::filter_memory` reports the size of the structures, in five parts
 /// whose sum is the total, and the same size a full rebuild reports.
 ///
-/// `crible inspect` will print that measure (task `CLI-PREMIERES-COMMANDES`);
-/// this task exposes it and tests it, and states no performance figure (MES-13
-/// is measured in P3).
+/// The fifth part is the derived table `iid → ordinal de document`, counted with
+/// the filters by `docs/02-architecture.md` and ADR-0154, decision 5: without it
+/// `state.sizes.filter_memory_bytes` would miss the largest structure of a big
+/// index. `crible inspect` will print that measure (task
+/// `CLI-PREMIERES-COMMANDES`); this task exposes it and tests it, and states no
+/// performance figure (MES-13 is measured in P3, MES-18 in P10).
 #[test]
-fn the_memory_of_the_filters_is_reported_in_four_parts() {
+fn the_memory_of_the_filters_is_reported_in_five_parts() {
     let _serial = common::SerialGuard::acquire();
     let index = dataset_index();
     let model = dataset_model();
@@ -267,7 +270,7 @@ fn the_memory_of_the_filters_is_reported_in_four_parts() {
     let memory = store.snapshot().filter_memory();
     assert_eq!(
         memory.total(),
-        memory.live + memory.keywords + memory.booleans + memory.columns,
+        memory.live + memory.keywords + memory.booleans + memory.columns + memory.documents,
         "the total must be the sum of its parts"
     );
     assert!(memory.live > 0, "L1 leaves 10 000 live passages");
@@ -276,10 +279,21 @@ fn the_memory_of_the_filters_is_reported_in_four_parts() {
         "the schema of synth-small declares a field of every type, so every part is non-empty: \
          {memory:?}"
     );
+    assert!(
+        memory.documents > 0,
+        "L1 leaves live passages, and each one has a document ordinal: {memory:?}"
+    );
+    // `rebuild` reports the filter structures alone: the derived table belongs
+    // to the snapshot, so its part is left out of the comparison. The rebuild of
+    // the ordinals is checked by the document count of the facets route
+    // (`crible-server`, `facets.rs`).
     assert_eq!(
-        memory,
+        FilterMemory {
+            documents: 0,
+            ..memory
+        },
         rebuild(&index_dir, &index.schema).memory(),
-        "the same structures must report the same size, however they were built"
+        "the same filter structures must report the same size, however they were built"
     );
 }
 

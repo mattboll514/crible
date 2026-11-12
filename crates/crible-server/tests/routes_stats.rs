@@ -273,6 +273,7 @@ fn the_closed_operation_list_is_the_server_enum() {
     let server = [
         Operation::Search,
         Operation::SearchMulti,
+        Operation::Facets,
         Operation::GetDocument,
         Operation::OnlineBatch,
         Operation::PatchDocuments,

@@ -128,7 +128,7 @@ Attacher un lot (un seul écrivain par index) :
 3. **Transaction SQLite** : `batches`, `segments`, `documents`, `passages`, les pierres tombales, `meta.generation = G+1`, `next_iid`. Quand la transaction crée au moins un passage ou pose au moins une pierre tombale, elle écrit aussi `meta.passage_change_generation = G+1` ; une transaction qui n'en fait ni l'un ni l'autre la laisse telle quelle (ADR-0088). **COMMIT ← point de commit.**
 4. **tantivy** : ajouter les nouveaux passages, supprimer les iid tombés, faire un commit avec une charge utile égale à **la génération dont le texte est indexé** (`G+1`), puis recharger le lecteur. Un patch de métadonnées ne produit aucun commit tantivy (ADR-0088).
 5. **Écrire** `manifests/<G+1>.json`.
-6. **Construire le nouvel instantané de lecture** (bitmaps en copie sur écriture), **ouvrir les lecteurs manquants** des segments de `G+1` en réutilisant ceux qui restent, **hors** du verrou d'écriture de `Published`, puis **publier ensemble** instantané, configuration et lecteurs (ADR-0126). Une génération servie est une génération publiée avec ses lecteurs : aucune requête ne voit `G+1` sans eux.
+6. **Construire le nouvel instantané de lecture** (bitmaps en copie sur écriture, et table dérivée `iid → ordinal de document` mise à jour à partir du delta du commit), **ouvrir les lecteurs manquants** des segments de `G+1` en réutilisant ceux qui restent, **hors** du verrou d'écriture de `Published`, puis **publier ensemble** instantané, configuration et lecteurs (ADR-0126). Une génération servie est une génération publiée avec ses lecteurs : aucune requête ne voit `G+1` sans eux.
 
 Modifier des métadonnées : étapes 3, 5 et 6. Supprimer seulement : étapes 3, 4 (suppressions), 5 et 6.
 
@@ -172,7 +172,7 @@ Invariants concernés : **INV-03** (une génération est visible entièrement ou
 - **Cohérence de l'époque avant commit.** Avant tout commit — attache, lot en ligne, patch, compaction suivante —, le magasin vérifie que `CURRENT_EPOCH` nomme bien son époque ; s'il en diffère, il refuse en `internal`, sans rien écrire, et la cause est journalisée. Le coût est une lecture de fichier par commit, marginale devant le commit lui-même (ADR-0108, MES-15).
 - **Registre d'index mutable.** Le serveur tient en mémoire la liste des index ouverts. `POST /v1/indexes` y inscrit un index créé à chaud, et le job `delete_index` l'en retire, sans redémarrage. La création est sérialisée par un verrou d'instance — une à la fois —, et ne bloque jamais une lecture. Une requête en vol sur un index retiré finit sur l'instantané qu'elle tient (ADR-0105). Le registre n'est publié qu'à la fin du chargement : jusque-là, les routes qui le lisent rendent `503 overloaded` avec le message fixe « the server is starting », parce que les index sont sur disque mais ne sont pas encore ouverts (ADR-0146).
 - **La portée de cette règle est l'index, pas la racine de données.** `<data>/tmp/` est commun à tous les index d'une racine : deux index distincts y ont chacun un écrivain légitime, et l'ingestion en ligne peut donc s'y dérouler en parallèle. Ce qui arbitre ces rencontres n'est pas la règle « un écrivain par index », mais le **verrou de présence** du lot en ligne (ADR-0056) : l'ingestion prend un verrou exclusif sur `<data>/tmp/online-<batch_id>.lock` avant de créer le dossier du lot et le tient jusqu'après `attach`. Si le verrou est déjà tenu, l'ingestion échoue en `overloaded` sans rien créer ; elle ne détruit ni ne bloque un lot qu'un autre processus tient.
-- **Chaque requête prend un `Arc<Snapshot>` au départ.** L'instantané contient les segments (fp16 en mmap, codes en RAM), les bitmaps, les colonnes de valeurs, le `Searcher` tantivy et la génération.
+- **Chaque requête prend un `Arc<Snapshot>` au départ.** L'instantané contient les segments (fp16 en mmap, codes en RAM), les bitmaps, les colonnes de valeurs, la table dérivée `iid → ordinal de document`, le `Searcher` tantivy et la génération.
 - **Lecteurs denses en cache et publiés.** Les lecteurs de segments et le pool de charges utiles de l'époque sont ouverts au remplissage, publiés avec l'instantané et partagés par les requêtes de la génération (ADR-0126). Une requête n'ouvre aucun lecteur : elle compose son `DenseSearcher` avec ce qui est déjà ouvert. Le cache ne garde que les lecteurs de la génération publiée ; un lecteur lâché à une publication vit tant que la dernière requête qui le tient n'a pas fini, par comptage de références, et ne tient aucune `EpochLease`.
 - **Libération.** Un instantané est libéré quand son dernier lecteur se termine. Les fichiers d'une époque supprimée ne sont effacés qu'après.
 - **Payloads.** Les textes et champs des résultats viennent d'un pool de connexions SQLite en lecture (WAL).
@@ -231,12 +231,15 @@ La **génération reste G** : une restauration ne l'incrémente pas, c'est ce qu
 |---|---|---|
 | Codes binaires | RAM, chargés en mémoire (pas en mmap, pour ne pas être évincés) | 0,82 Go |
 | Bitmaps (keyword, bool, vivants) | RAM | quelques Mo à ~50 Mo |
+| Table dérivée `iid → ordinal de document` | RAM, construite avec l'index de filtres à l'ouverture | 4 octets par passage, au moins 36,6 Mio pour 9 600 105 passages vivants |
 | Colonnes de valeurs (nombres, dates) | RAM | ~34 Mo par champ date (`i32`) |
 | Modèle ONNX fp32 | RAM, chargé au premier usage (une requête suffit) | plus d'1 Go |
 | Modèle ONNX INT8 | RAM, chargé seulement si `query_precision = "int8"` (comparaison, repli, diagnostic) | ~0,3 Go |
 | Vecteurs de référence fp16 | disque, mmap | 13,2 Go |
 | SQLite (texte zstd, champs) | disque | ~4 à 5 Go (estimation) |
 | tantivy | disque, mmap | à mesurer (MES-06) |
+
+La table dérivée `iid → ordinal de document` sert au compte de documents distincts de la route de facettes (ADR-0154). Elle est construite avec l'index de filtres à l'ouverture, tenue à chaque génération qui change des passages ou des documents à partir du delta du commit, et vit dans l'instantané à côté des filtres. Elle n'est **jamais écrite** : aucun fichier, aucun `format_version`, aucune migration, aucune entrée dans un instantané ou un export. Sa mémoire entre dans `filter_memory_bytes` de `state.sizes`, et MES-18 en relève le coût réel.
 
 Le minimum incompressible est d'environ 1,2 Go quand seule la session INT8 est chargée ; une instance qui sert des requêtes charge la session fp32 (plus d'1 Gio) dès la première requête, et son minimum passe donc à environ 2,0 Go (ADR-0052). À cela s'ajoute ~34 Mo par champ date. Toute la RAM restante sert de cache au système. Un même modèle n'est chargé qu'une fois par instance : il est partagé par tous les index qui ont la même empreinte.
 

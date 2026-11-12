@@ -144,6 +144,7 @@ with Client("http://127.0.0.1:8080", api_key) as client:
     client.search_multi([{"index": "articles"},
                          {"index": "decisions", "filter": {"juridiction": "ce"}}],
                         query="responsabilité du fait des choses")
+    client.facets("decisions", ["juridiction"], filter={"annee": {"gte": "2020"}}, limit=20)
     client.get_document("decisions", "LEGIARTI…", text=True)
     job = client.attach_batch("decisions", "legifacile-2026-10-19")
     client.wait(job)                                   # attend la fin du job
@@ -165,6 +166,12 @@ with Client("http://127.0.0.1:8080", api_key) as client:
   `passages_per_document`, `dedup`, `return`, `exact`, `timeout_ms`). Seules les
   options fournies, non `None`, sont envoyées : `k=None` laisse le défaut du
   serveur s'appliquer.
+- `facets(index, fields, *, filter=None, limit=None, timeout_ms=None)` rend les
+  valeurs fréquentes des champs demandés et les comptes de passages et de
+  documents du pool filtré (ADR-0154). `fields` est **obligatoire** (un à dix
+  noms distincts) ; `filter` accepte la grammaire de `docs/05`, et les options
+  laissées à `None` ne sont pas envoyées, donc le serveur applique ses défauts
+  (`limit` 20, `timeout_ms` de la configuration). La méthode ne crée aucun job.
 - `vector` accepte un tableau NumPy ou une séquence de flottants ; le client
   l'encode en **base64 de composantes fp32 little-endian**, la forme de l'API.
   Une chaîne est prise pour un vecteur déjà encodé. La même règle s'applique au

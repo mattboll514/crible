@@ -34,6 +34,9 @@ mod debug;
 pub mod debug_journal;
 mod documents;
 mod error;
+// The facets route of ADR-0154: the frequent values and the two counts of a
+// filtered pool.
+mod facets;
 pub mod http;
 mod indexes;
 pub mod jobs;

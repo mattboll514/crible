@@ -972,6 +972,7 @@ mod tests {
                 keywords: 0,
                 booleans: 0,
                 columns: 0,
+                documents: 0,
             },
             codes_memory: 0,
         }

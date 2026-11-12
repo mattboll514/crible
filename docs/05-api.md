@@ -55,7 +55,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 
 ## Endpoints
 
-**Démarrage : `503 overloaded` jusqu'à la publication.** Le serveur se lie au port avant de charger les index, et c'est décidé (ADR-0099). Tant que le registre n'est pas chargé, toute route qui le lit rend `503 overloaded` avec le message fixe « the server is starting », `details: {}`, `x-request-id` et `Retry-After: 1` ; aucun code d'erreur ni aucune valeur de `details` n'est ajouté (ADR-0146). Ce sont les quatorze routes du registre — `GET /v1/indexes`, `POST /v1/indexes`, `GET`, `PATCH` et `DELETE /v1/indexes/{index}`, `POST` et `PATCH /v1/indexes/{index}/documents`, `GET /v1/indexes/{index}/documents/{doc_id}`, `POST /v1/indexes/{index}/batches`, `POST /v1/indexes/{index}/search`, `POST /v1/search`, `POST /v1/indexes/{index}/compact`, `POST /v1/indexes/{index}/exports`, `POST /v1/indexes/{index}/snapshots` — et les quatre routes de l'état publié : `GET /v1/jobs`, `GET /v1/jobs/{job_id}`, `GET /v1/stats` et `GET /v1/debug/queries`, dont `enabled: false` reste réservé au journal réellement désactivé par la configuration publiée (ADR-0122). `/health` et `/ready` ne changent pas : `/health` rend `200` dès la liaison, `/ready` rend `503` jusqu'à la publication du dernier instantané (ADR-0099). Le refus naît à l'accès au registre ou à l'état publié, dans le gestionnaire de chaque route, jamais dans une couche : il garde donc l'ordre propre à chaque route. En `POST /v1/search`, une faute de forme ou de bornes du corps reste `400 invalid_request` avant le `503`, dans l'ordre d'ADR-0110, qui examine la forme, les bornes, le regroupement et les entrées du mode — étape (a), voir « Recherche multi-index » — avant toute lecture de l'index ; les fautes qui demandent la configuration ou les schémas publiés — les entrées d'un modèle `external`, branche lexicale, `invalid_filter`, `return.fields`, `incompatible_model` — rendent `503` d'abord. `POST /v1/indexes` examine lui aussi son corps avant l'accès au registre, donc une faute de forme y reste `400` ; ailleurs, la route qui lit l'index avant d'examiner le corps rend `503` d'abord, comme `POST /v1/indexes/{index}/search` et `PATCH /v1/indexes/{index}`. Un `401` ou un `403` passe avant ce `503` (ADR-0100). Un registre empoisonné reste `500 internal`, avec son message distinct. Une instance **chargée** qui ne sert aucun index n'est pas concernée : elle est prête, et rend `200 {"indexes":[]}` sur `GET /v1/indexes` et `200 {"jobs":[]}` sur `GET /v1/jobs` ; un `404 unknown_index` rendu après chargement reste celui d'un index réellement inconnu.
+**Démarrage : `503 overloaded` jusqu'à la publication.** Le serveur se lie au port avant de charger les index, et c'est décidé (ADR-0099). Tant que le registre n'est pas chargé, toute route qui le lit rend `503 overloaded` avec le message fixe « the server is starting », `details: {}`, `x-request-id` et `Retry-After: 1` ; aucun code d'erreur ni aucune valeur de `details` n'est ajouté (ADR-0146). Ce sont les quinze routes du registre — `GET /v1/indexes`, `POST /v1/indexes`, `GET`, `PATCH` et `DELETE /v1/indexes/{index}`, `POST` et `PATCH /v1/indexes/{index}/documents`, `GET /v1/indexes/{index}/documents/{doc_id}`, `POST /v1/indexes/{index}/batches`, `POST /v1/indexes/{index}/search`, `POST /v1/search`, `POST /v1/indexes/{index}/facets`, `POST /v1/indexes/{index}/compact`, `POST /v1/indexes/{index}/exports`, `POST /v1/indexes/{index}/snapshots` — et les quatre routes de l'état publié : `GET /v1/jobs`, `GET /v1/jobs/{job_id}`, `GET /v1/stats` et `GET /v1/debug/queries`, dont `enabled: false` reste réservé au journal réellement désactivé par la configuration publiée (ADR-0122). `/health` et `/ready` ne changent pas : `/health` rend `200` dès la liaison, `/ready` rend `503` jusqu'à la publication du dernier instantané (ADR-0099). Le refus naît à l'accès au registre ou à l'état publié, dans le gestionnaire de chaque route, jamais dans une couche : il garde donc l'ordre propre à chaque route. En `POST /v1/search`, une faute de forme ou de bornes du corps reste `400 invalid_request` avant le `503`, dans l'ordre d'ADR-0110, qui examine la forme, les bornes, le regroupement et les entrées du mode — étape (a), voir « Recherche multi-index » — avant toute lecture de l'index ; les fautes qui demandent la configuration ou les schémas publiés — les entrées d'un modèle `external`, branche lexicale, `invalid_filter`, `return.fields`, `incompatible_model` — rendent `503` d'abord. `POST /v1/indexes` examine lui aussi son corps avant l'accès au registre, donc une faute de forme y reste `400` ; ailleurs, la route qui lit l'index avant d'examiner le corps rend `503` d'abord, comme `POST /v1/indexes/{index}/search` et `PATCH /v1/indexes/{index}`. Un `401` ou un `403` passe avant ce `503` (ADR-0100). Un registre empoisonné reste `500 internal`, avec son message distinct. Une instance **chargée** qui ne sert aucun index n'est pas concernée : elle est prête, et rend `200 {"indexes":[]}` sur `GET /v1/indexes` et `200 {"jobs":[]}` sur `GET /v1/jobs` ; un `404 unknown_index` rendu après chargement reste celui d'un index réellement inconnu.
 
 | Méthode et chemin | Rôle | Description |
 |---|---|---|
@@ -71,6 +71,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `GET /v1/jobs/{job_id}` · `GET /v1/jobs` | write | Suivre un job ; lister les jobs (filtres `index`, `state`) ; le membre `durations` d'une attache est gardé en mémoire et vaut `null` quand il n'y a rien à rendre (ADR-0149) |
 | `POST /v1/indexes/{index}/search` | read | Recherche dans un index |
 | `POST /v1/search` | read | Recherche multi-index |
+| `POST /v1/indexes/{index}/facets` | read | Valeurs les plus fréquentes de un à dix champs `keyword` filtrables et comptes de passages et de documents sous filtre (voir « Facettes » ; ADR-0154) |
 | `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction ; sans corps → `202` avec un job `compact` (ADR-0107) |
 | `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` ; sans corps → `202` avec un job `export` (ADR-0107) |
 | `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` ; sans corps → `202` avec un job `snapshot`, qui publie un avancement en octets pendant la copie (ADR-0153) ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065, ADR-0107) |
@@ -295,6 +296,53 @@ Ce premier filtre sélectionne les articles du fonds LEGI en vigueur au 1er janv
 { "juridiction": { "in": ["cass", "ce"] }, "partie": { "nin": ["moyens", "faits"] } }
 ```
 Ce second filtre garde les décisions de la Cour de cassation et du Conseil d'État, sans les passages « moyens » ni « faits ».
+
+## Facettes
+
+`POST /v1/indexes/{index}/facets` rend, en un appel, les valeurs les plus fréquentes de un à dix champs `keyword` filtrables et les comptes de passages et de documents du pool filtré, sur un seul index et sous la grammaire de filtre ci-dessus (ADR-0154). La route ne fait aucune recherche : elle n'encode rien, ne classe rien et n'exécute ni branche dense ni branche lexicale. Le rôle demandé est `read`.
+
+Le corps est un **objet fermé**, à la règle de la recherche : une clé inconnue rend `400 invalid_request` (ADR-0109). Ses membres sont :
+
+| Membre | Règle |
+|---|---|
+| `fields` | **obligatoire**, de 1 à 10 noms **distincts** ; absent, vide, dupliqué, non textuel ou au-delà de dix rend `400 invalid_request`, et le message nomme le champ fautif |
+| `filter` | facultatif ; grammaire, validation et codes existants (`invalid_filter`, `400`) ; absent ou vide vaut « aucun filtre » |
+| `limit` | facultatif, défaut **20**, bornes **1 à 100** ; hors bornes, `400 invalid_request` |
+| `timeout_ms` | facultatif, 1 à 30 000 ms, défaut `[limits].default_timeout_ms` (ADR-0102, décision 3 ; ADR-0147) |
+
+`limit` et ses bornes sont des **constantes du code**, sans clé de configuration. Le corps ne porte ni `query`, ni `vector`, ni `mode`, ni `k`, ni `return` : l'une de ces clés est une clé inconnue, donc `400 invalid_request`.
+
+<!-- openapi: FacetsRequest -->
+```json
+{ "fields": ["fonds", "etat"], "filter": { "fonds": "LEGI" }, "limit": 20 }
+```
+
+Un champ de `fields` est accepté s'il est déclaré par le schéma de l'index, marqué `filterable` et de type `keyword`. Un champ inconnu, non filtrable ou d'un autre type (`integer`, `float`, `date`, `bool`) rend `400 invalid_request`, avec un message qui nomme le champ et, quand son type est connu, son type ; `details` vaut `{}`. `invalid_filter` reste réservé à la grammaire des filtres, avec `details.path = "$.filter.<champ>"`. Les facettes sur les champs numériques et de date sont hors de la 1.1 (ADR-0154, décision 3).
+
+La réponse porte la `generation` de l'instantané publié qui a servi toute la requête, les deux comptes du pool et, pour chaque champ demandé, ses valeurs les plus fréquentes :
+
+<!-- openapi: FacetsResponse -->
+```json
+{ "generation": 1287,
+  "count": { "passages": 1819006, "documents": 152864 },
+  "fields": {
+    "fonds": { "values": [ { "value": "LEGI", "count": 1819006 } ], "other": 0 },
+    "etat":  { "values": [ { "value": "VIGUEUR", "count": 812004 },
+                           { "value": "ABROGE", "count": 1200 } ], "other": 1005802 } } }
+```
+
+- **`generation`** est celle de l'instantané pris au départ et gardé jusqu'au rendu ; tous les comptes et toutes les valeurs en viennent, jamais de deux générations (INV-03).
+- **`count.passages`** est la taille du pool, le **même pool** qu'une recherche de même `filter` (INV-07) ; sans filtre, il égale `live_passages` de `GET /v1/indexes/{index}`.
+- **`count.documents`** est le nombre de `doc_id` distincts des passages du pool, **exact**. Il peut différer de `documents` du détail d'index, qui vient du compte de lignes `documents` de l'instantané. Le coût de ce membre est mesuré par **MES-18**, dont les seuils sont fixés par ADR-0154, décision 11.
+- **`fields`** porte exactement les champs demandés, chacun sous la forme `{ "values": [{ "value", "count" }], "other" }`. Les `count` de valeurs sont des **passages** du pool, pas des documents.
+- **Ordre** : `count` décroissant, puis `value` croissant en octets UTF-8, ce qui rend la réponse reproductible pour deux appels identiques.
+- **`other`** est **toujours présent** : il vaut les passages du pool qui portent une valeur pour ce champ, moins la somme des `count` rendus. Un passage sans valeur n'entre ni dans `values` ni dans `other`, donc `Σ count + other ≤ count.passages` ; `other` vaut `0` quand tout tient dans `limit` (ADR-0154, décision 4).
+- **Niveau du champ** : un champ de document compte les passages vivants de ce document qui sont dans le pool ; un champ de passage compte ses propres passages. Dans les deux cas, les champs de document étant matérialisés au niveau du passage, le compte est l'intersection de la bitmap de valeur avec le pool.
+- **Pool vide** : `200`, `count` à zéro, `documents` à zéro quand il est présent, `values: []` et `other: 0`. Un pool vide n'est jamais une erreur.
+
+Les erreurs sont celles de l'API, sans code nouveau : `invalid_request` (400) pour la forme du corps et les champs refusés, `invalid_filter` (400) pour un filtre invalide, `unknown_index` (404), `unauthorized` (401), `forbidden` (403), `payload_too_large` (413) au-delà de 32 Mio, `overloaded` (503), `timeout` (504) et `internal` (500). La route rend `503 overloaded` avec le message fixe « the server is starting » tant que le registre n'est pas chargé, comme les routes listées au début de « Endpoints » (ADR-0146).
+
+La route prend un **jeton du même sémaphore** que les recherches, `[server].max_concurrent_searches`, sans attente : un jeton indisponible rend `503 overloaded` immédiat avec `Retry-After: 1`, sans avoir rien calculé. L'échéance de `timeout_ms` part de la prise du jeton et est vérifiée entre deux valeurs d'un champ et pendant le compte des documents ; à l'échéance, la réponse est `504 timeout`, jamais un résultat tronqué ni un `other` faux, et le jeton reste tenu jusqu'à la fin réelle du calcul (ADR-0102, décisions 2 et 3 ; ADR-0154, décision 8).
 
 ## Recherche : requête
 
@@ -655,4 +703,4 @@ Un lot **sans passage**, qui ne porte que des `deletions`, n'a ni ajout ni recet
 | `wait_timeout_ms` | 60 000 par défaut : attente au plus de `?wait=true`, puis `202` avec le job dans son état courant (ADR-0067) |
 | Cache des requêtes | 1 024 entrées par instance, jamais persisté (ADR-0051) |
 
-Toute requête dont le corps dépasse **32 Mio (33 554 432 octets)** est refusée en `payload_too_large` (413) : cette borne est une constante du code, non configurable, et les « 32 Mo » des sections « Lot en ligne » et « Patch de métadonnées » s'entendent en Mio (ADR-0102). Les recherches concurrentes sont limitées par un sémaphore pris **sans attente** : au-delà, la réponse est `503 overloaded` immédiate avec `Retry-After: 1` ; la limite ne s'applique qu'aux routes de recherche, jamais à `/health`, `/ready` ni aux écritures (ADR-0102). À l'échéance de `timeout_ms`, la réponse est `504 timeout` ; le calcul n'est pas annulé et garde son jeton de concurrence jusqu'à sa fin réelle. L'échéance part de la prise du jeton et couvre tout le pipeline — encodage de la requête ou lecture dans le cache, planification, branches, fusion, regroupement et lecture des payloads —, l'authentification et le décodage du corps restant hors du chronomètre (ADR-0109). `timeout_ms` ne s'applique pas aux écritures : `?wait=true` rend `202` à l'échéance de `wait_timeout_ms` (ADR-0067, ADR-0102).
+Toute requête dont le corps dépasse **32 Mio (33 554 432 octets)** est refusée en `payload_too_large` (413) : cette borne est une constante du code, non configurable, et les « 32 Mo » des sections « Lot en ligne » et « Patch de métadonnées » s'entendent en Mio (ADR-0102). Les recherches concurrentes sont limitées par un sémaphore pris **sans attente** : au-delà, la réponse est `503 overloaded` immédiate avec `Retry-After: 1` ; la limite ne s'applique qu'aux routes de recherche et à la route de facettes, jamais à `/health`, `/ready` ni aux écritures (ADR-0102 ; ADR-0154, décision 8). À l'échéance de `timeout_ms`, la réponse est `504 timeout` ; le calcul n'est pas annulé et garde son jeton de concurrence jusqu'à sa fin réelle. L'échéance part de la prise du jeton et couvre tout le pipeline — encodage de la requête ou lecture dans le cache, planification, branches, fusion, regroupement et lecture des payloads —, l'authentification et le décodage du corps restant hors du chronomètre (ADR-0109). `timeout_ms` ne s'applique pas aux écritures : `?wait=true` rend `202` à l'échéance de `wait_timeout_ms` (ADR-0067, ADR-0102).

@@ -29,7 +29,9 @@ Une ligne par **minute** × **index** × **opération** × **statut** × **clien
 
 La forme est **canonicalisée** (ADR-0117, décision 6) : un scalaire vaut `eq`, un objet à plusieurs opérateurs donne un couple par opérateur, `$and`, `$or` et `$not` sont traversés et n'apparaissent pas — la forme dit quels champs et quels opérateurs sont exercés, pas la structure booléenne —, les couples sont triés par octets, dédoublonnés et joints par une virgule. Un filtre absent ou vide ne produit aucune ligne.
 
-Opérations comptées : `search`, `search_multi`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `index_admin`. Le statut est `ok` ou un code d'erreur de l'API.
+Opérations comptées : `search`, `search_multi`, `facets`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot`, `index_admin`. Le statut est `ok` ou un code d'erreur de l'API.
+
+Une facette produit un `OpEvent` d'opération `facets`, avec l'index, le statut, le client et la durée totale ; elle n'ajoute **aucun champ** à `OpEvent`, ne porte aucune valeur de champ ni de filtre (INV-13), n'écrit aucune ligne `filter_shapes` — la table est écrite par les seules recherches — et n'alimente pas le journal de debug (ADR-0154, décision 9).
 
 La clé `fetch` ne porte **que la lecture des charges utiles** des `k` résultats. Les lecteurs de segments et le pool de charges utiles sont ouverts au remplissage du cache, avant la publication de la génération, et jamais sur le chemin d'une requête (ADR-0126) : à `k` constant, le p50 de `fetch` ne monte plus avec la taille du corpus, et une croissance en octets de vecteurs signalerait une ouverture restée sur le chemin.
 
