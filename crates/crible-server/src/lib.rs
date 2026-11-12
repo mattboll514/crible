@@ -41,6 +41,9 @@ pub mod lifecycle;
 pub mod limits;
 pub mod logging;
 mod maintenance;
+// The `memory` journal line: the memory of the process and of its cgroup v2,
+// under Linux only (ADR-0151, `docs/06-observabilite.md`).
+mod memory;
 // The warning of the startup when the data root is shared from the host: a
 // memory map there is slow (`docs/07`, "Docker", volumes).
 mod mounts;

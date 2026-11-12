@@ -175,9 +175,10 @@ async fn exports_inner(
     };
     let holder = Arc::clone(&state);
     let destination = exchange.clone();
+    let name = index.clone();
     let work: crate::jobs::JobWork = Box::new(move |store, _progress, writer| {
         let index_config = writer.configuration()?;
-        let model = holder.model(&index_config.model)?;
+        let model = holder.model_for(&name, &index_config.model)?;
         let report = export(store, &index_config, &model.config, &destination)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),

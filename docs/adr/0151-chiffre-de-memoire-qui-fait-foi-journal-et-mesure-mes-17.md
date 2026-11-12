@@ -130,7 +130,8 @@ des précédentes.
   Le jeu est l'**échantillon Legifacile**, `data/legifacile-sample` : six lots réels, **205 261
   documents** et **257 626 passages**, **515 Mo** sur disque, avec le texte, les vecteurs fp16
   recopiés de la production et **300 requêtes** réelles, produit par la tâche
-  `CONSTITUER-ECHANTILLON-LEGIFACILE` et décrit par son `README.md` (`docs/08` le nomme `n`). Trois
+  `CONSTITUER-ECHANTILLON-LEGIFACILE` et décrit par son `README.md` (le tableau des jeux de
+  `docs/08` le nomme `legifacile-sample`). Trois
   raisons le retiennent contre `synth-large`. **Disque** : `synth-large` n'est plus dans `data/` ; le
   régénérer demande environ 13 Go de lots par `tools/gen_synth.py --large`, puis de l'ordre de 15 à
   17 Go d'index — MES-07 de Crible mesure 15,25 Go et 8 segments pour `synth-large` —, plus la copie
@@ -159,8 +160,24 @@ des précédentes.
   fichiers, session ONNX, non ventilé —, à quelle étape elle grandit, et si le `DELETE` ou le
   redémarrage la rend. Il dit aussi ce qu'il ne peut pas conclure, en particulier sur l'OOM
   d'attache du ticket, qui n'est pas archivé et demande sa propre reproduction.
+- **Contrôle des points d'émission** : le rapport **vérifie dans le journal** que les quatre `step`
+  apparaissent aux étapes attendues — `job_end` à la fin de chaque job, `delete_before_rename` et
+  `delete_after_removal` sur le job `delete_index` de l'index jetable, `session_load` au chargement de
+  la session ONNX —, et une ligne manquante est un **défaut à signaler**. Ce contrôle n'est pas porté
+  par un test : la capture d'un abonné global à `tracing` est plus simple dans la mesure qu'en test
+  unitaire, et les tests du module couvrent la lecture des sources, pas les appels d'émission.
 - **Rapport** : `docs/mesures/MES-17-<slug>.md`, écrit par `@mesureur`, au modèle de
   `docs/mesures/README.md`.
+
+**Erratum du 2026-11-11.** La relecture de la tâche a relevé deux points. D'abord, rien ne prouve
+les points d'émission : retirer l'un des trois appels de journal laisserait les tests du module verts,
+puisque seul le module est testé. Le contrôle des quatre `step` entre donc dans le protocole de
+MES-17, tel qu'écrit ci-dessus, plutôt que dans un test. Une ligne manquante au journal d'une
+campagne est un défaut de l'instrumentation, à signaler dans le rapport et à corriger avant de
+conclure sur la mémoire. Ensuite, la ligne `session_load` nomme l'index qui a déclenché le
+chargement, mais le compteur de chargements est **partagé par l'instance** : sous concurrence, la
+ligne peut nommer un index qui n'a pas déclenché le chargement. Le compteur est un **signal**, pas une
+attribution, et `docs/06` le dit désormais à l'endroit où `@mesureur` le lira.
 
 ### 4. Ce que cette tâche ne fait pas
 

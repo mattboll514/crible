@@ -486,7 +486,7 @@ fn ingest(
     deletions: &[String],
     progress: &mut dyn FnMut(crible_store::generation::ProtocolStep, u64),
 ) -> Result<crible_store::attach::AttachReport, CribleError> {
-    let model = state.model(&index_config.model)?;
+    let model = state.model_for(index, &index_config.model)?;
     let token_counter = match model.config.kind {
         ModelKind::Onnx => Some(model.token_counter()?),
         ModelKind::External => None,
