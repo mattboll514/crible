@@ -32,7 +32,6 @@ use crible_core::config::{IndexConfig, IndexPatch, apply_patch};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_store::generation::{GenerationStore, rewrite_index_config};
 use crible_store::jobs::JobKind;
-use crible_store::segment::SegmentMeta;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -531,7 +530,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
     let summary = published.summary;
     let directory = index_directory(state, &handle.name)?;
     let disk_bytes = directory_size(&directory)?;
-    let live_bytes = live_bytes(published.snapshot.segments())?;
+    let live_bytes = crible_store::segment::live_bytes(published.snapshot.segments())?;
     Ok(json!({
         "name": handle.name,
         "config": config.to_value(),
@@ -556,41 +555,6 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
             })),
         },
     }))
-}
-
-/// Bytes of the files of the segments of the published generation: their
-/// `segment.json` and their vector file, summed.
-///
-/// The source is the published state, never the directory: no walk and no
-/// `stat` (ADR-0152, decision 3). A segment the published generation references
-/// therefore counts its declared size even if its directory is gone;
-/// `live_bytes` is not an availability check.
-///
-/// The result is `0` for an index without a segment.
-fn live_bytes(segments: &[SegmentMeta]) -> Result<u64, CribleError> {
-    let mut total = 0_u64;
-    for segment in segments {
-        let bytes = segment
-            .vectors_bytes()?
-            .checked_add(segment.manifest_bytes()?)
-            .ok_or_else(|| {
-                CribleError::new(
-                    ErrorCode::Internal,
-                    format!(
-                        "the segments of the published generation hold more than \
-                         u64::MAX bytes at segment {}",
-                        segment.segment_id
-                    ),
-                )
-            })?;
-        total = total.checked_add(bytes).ok_or_else(|| {
-            CribleError::new(
-                ErrorCode::Internal,
-                "the segments of the published generation hold more than u64::MAX bytes",
-            )
-        })?;
-    }
-    Ok(total)
 }
 
 /// `<data>/indexes/<name>`, the directory of the index.

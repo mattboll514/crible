@@ -591,12 +591,16 @@ pub enum JobKind {
 pub struct JobProgress {
     /// Step the job reached: `validation`, `segment`, `transaction`, `lexical`,
     /// `manifest` or `snapshot` for an attach, `transaction`, `manifest` or
-    /// `snapshot` for a metadata patch (ADR-0134).
+    /// `snapshot` for a metadata patch (ADR-0134), and `copy`, `attest` or
+    /// `rename` for a snapshot (ADR-0153).
     #[schema(example = "snapshot")]
     pub step: String,
-    /// Units already treated.
+    /// Units already treated: passages for an attach, documents for a patch,
+    /// bytes for a snapshot (ADR-0153, decision 2).
     pub done: u64,
-    /// Units to treat.
+    /// Units to treat, in the unit of `done`. For a snapshot, an estimate
+    /// during `copy` and the exact sum of the copied bytes from `attest` on
+    /// (ADR-0153, decision 3).
     pub total: u64,
 }
 

@@ -7,6 +7,12 @@
 - **Remplace** : ADR-0134, **décisions 1, 2 et 4 seulement, et en partie** — pour le seul `kind` `snapshot`. Le reste d'ADR-0134 reste vrai pour les autres types, et ses décisions 3 et 5 ne changent pas.
 - **Décision** : acceptation par anticipation par le propriétaire le 2026-11-12, sa réponse : « si tu as des adr a ecrire considiere qu'il sont accpeté par anticipation on les regarde ensemble apres les 2 tickets ».
 
+> **Erratum du 2026-11-12, sur l'implémentation de la tâche `T11-AVANCEMENT-SNAPSHOT`.** Il précise la décision 6 et **amende sur place sa puce** « une ligne toutes les 10 secondes », pour qu'elle ne contredise pas cet erratum ; l'ADR a été accepté par anticipation et sera relu par le propriétaire, qui peut refuser cette réécriture. Aucun autre point ne change.
+>
+> La ligne d'avancement de `crible snapshot` n'est pas écrite « toutes les 10 secondes » au sens strict. Elle est écrite à la **première publication** de la copie, à **chaque changement d'étape** (`copy`, `attest`, `rename`), et **sinon au plus une fois par période de 10 s**. Un ticker reprend le dernier état connu, de sorte qu'une étape qui ne publie rien — le `VACUUM INTO` — reste visible au lieu de laisser un silence. Une copie courte écrit donc au moins ses trois étapes. La forme de chaque ligne est `crible snapshot: <step>, <done> of <total> bytes copied, <n> s elapsed` (`SNAPSHOT_PROGRESS_PERIOD`, `ProgressLine` et `spawn_progress_ticker`, dans `crates/crible/src/commands.rs`).
+>
+> Le reste de la décision 6 est inchangé : la période reste **fixe**, à 10 s, sans option ni clé de configuration ; `stdout` ne change pas et garde la seule ligne de rapport ; la classe de compatibilité d'ADR-0143 ne change pas, elle reste **ajout compatible** (décision 7).
+
 ## Contexte
 
 ### Le ticket, et ce qu'il constate
@@ -93,7 +99,7 @@ Le résidu `.tmp-*` d'un échec reste sur disque, et ni la reprise ni une comman
 `crible snapshot` ne crée aucun job : le serveur est arrêté (ADR-0065, décision 1), et un job écrit hors ligne serait basculé `failed` au démarrage suivant, sans que personne ne puisse le lire (ADR-0103, décision 5). La commande écrit donc son avancement elle-même :
 
 - sur **`stderr`**, directement et **hors du journal `tracing`**. Une ligne du journal est du JSON filtré à `warn` (`crates/crible/src/main.rs:554-576`) : une ligne `info!` serait invisible, et un objet JSON n'est pas la ligne lisible qu'attend un opérateur devant un terminal ;
-- une ligne **toutes les 10 secondes**, valeur fixe, sans option ni clé de configuration ;
+- une ligne **au plus toutes les 10 secondes** : à la première publication de la copie, à chaque changement d'étape, et sinon au plus une par période de 10 s (voir l'erratum du 2026-11-12), valeur fixe, sans option ni clé de configuration ;
 - chaque ligne porte l'étape, les octets copiés, le total estimé et le temps écoulé ;
 - format **texte lisible, une ligne par tick**, en **anglais** : c'est une sortie du programme, pas un document ;
 - **`stdout` ne change pas** : une seule ligne de rapport, à la fin, celle de `docs/04:361`.

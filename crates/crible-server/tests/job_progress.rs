@@ -16,6 +16,8 @@
 //! | `a_replayed_batch_publishes_no_progress` | a replayed batch runs no step, so its succeeded job keeps `progress: null` |
 //! | `a_patch_counts_documents` | a `patch_documents` counts the documents of its body, not their passages |
 //! | `the_other_kinds_keep_progress_null` | a kind outside the three keeps `progress: null`, member present |
+//! | `a_snapshot_job_publishes_copy_then_attest_then_rename_in_bytes` | a `snapshot` ends on `rename` with `done = total = bytes` and the table carries it (ADR-0153 §1 to §4) |
+//! | `a_snapshot_refused_before_it_copies_keeps_progress_null` | a snapshot refused before its first publication keeps `progress: null` (ADR-0153 §5) |
 //!
 //! The mid-flight test uses the attach barrier of the `failpoints` build
 //! (`src/barriers.rs`), which is a deterministic stop, never a sleep.
@@ -424,5 +426,73 @@ async fn the_other_kinds_keep_progress_null() {
         finished["progress"],
         Value::Null,
         "a kind with no unit keeps progress null: {finished}"
+    );
+}
+
+/// A `snapshot` job publishes its copy in bytes and ends at `rename` with
+/// `done = total = bytes` of its report (ADR-0153, decisions 1 to 4).
+#[tokio::test]
+async fn a_snapshot_job_publishes_copy_then_attest_then_rename_in_bytes() {
+    let _slot = common::lock_barrier_environment().await;
+    let (instance, state, router) = instance_with_alpha().await;
+    let path = format!("/v1/indexes/{INDEX}/snapshots?wait=true");
+    let (status, accepted) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    assert!(
+        status.is_success(),
+        "the snapshot is accepted: {status} {accepted}"
+    );
+    let finished = terminal_job(&router, &state, &accepted).await;
+    assert_eq!(finished["state"], "succeeded", "{finished}");
+
+    let bytes = finished["result"]["report"]["bytes"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the report counts the copied bytes: {finished}"));
+    assert!(bytes > 0, "{finished}");
+    let progress = &finished["progress"];
+    assert_eq!(
+        progress["step"], "rename",
+        "a successful snapshot ends on the rename step: {finished}"
+    );
+    assert_eq!(
+        progress["done"], bytes,
+        "the job counts bytes, never passages: {finished}"
+    );
+    assert_eq!(
+        progress["total"], bytes,
+        "the exact total is the sum of the copied bytes: {finished}"
+    );
+    let id = id_of(&accepted);
+    assert_eq!(
+        stored_progress(&instance, &id),
+        Some(json!({ "step": "rename", "done": bytes, "total": bytes })),
+        "the terminal transition writes the exact progression to the table"
+    );
+}
+
+/// A snapshot refused before it copies anything keeps `progress: null`
+/// (ADR-0153, decision 5): the occupied destination is checked before the first
+/// publication.
+#[tokio::test]
+async fn a_snapshot_refused_before_it_copies_keeps_progress_null() {
+    let _slot = common::lock_barrier_environment().await;
+    let (_instance, state, router) = instance_with_alpha().await;
+    let path = format!("/v1/indexes/{INDEX}/snapshots?wait=true");
+
+    let (_, first) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    let first = terminal_job(&router, &state, &first).await;
+    assert_eq!(first["state"], "succeeded", "{first}");
+
+    let (_, second) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    let second = terminal_job(&router, &state, &second).await;
+    assert_eq!(second["state"], "failed", "{second}");
+    assert_eq!(second["error"]["code"], "invalid_request", "{second}");
+    assert!(
+        second.get("progress").is_some(),
+        "the member is always present: {second}"
+    );
+    assert_eq!(
+        second["progress"],
+        Value::Null,
+        "a failure before the first publication leaves no progression: {second}"
     );
 }
