@@ -62,12 +62,22 @@
 //!
 //! Two files, named `eval-<game>-<AAAA-MM-JJ>`, written into `--out` and never
 //! over an existing file (ADR-0125, decisions 11 and 13): a closed JSON of
-//! `format_version: 2`, and a Markdown that follows the model of
-//! `docs/mesures/README.md`. The version 2 adds `source` (the mode, and the URL
-//! in API mode) and a `latency_basis` per mode, so a local and an API campaign
-//! cannot be confused (ADR-0131, decision 7); `--baseline` reads versions 1 and
-//! 2. Neither report carries the text of a query, the value of a filter or an
-//! internal id: a query is identified by its `id` alone (ADR-0125, decision 16).
+//! `format_version: 3`, and a Markdown that follows the model of
+//! `docs/mesures/README.md`. Version 2 added `source` (the mode, and the URL in
+//! API mode) and a `latency_basis` per mode, so a local and an API campaign
+//! cannot be confused (ADR-0131, decision 7). Version 3 adds the replayable
+//! top-k of ADR-0155: every per-query row of every mode carries `doc_ids`, the
+//! ordered external `doc_id`s of the grouped run, always present and `[]` when
+//! the run rendered nothing; the local header carries `model_fingerprint`
+//! (omitted for an `external` model, and by a campaign given no `--models`),
+//! `query_precision` (`"fp32"`, only when a dense text was encoded) and
+//! `queries_fingerprint`; the API header carries `queries_fingerprint` alone.
+//! `--baseline` reads versions 1, 2 and 3, compares the top-k of two campaigns
+//! and declares what its differences can be attributed to, without ever
+//! changing the exit code. Neither report carries the text of a query, the
+//! value of a filter, an internal id or a `doc_id#ord` key: a query is
+//! identified by its `id` alone (ADR-0125, decision 16), and a result by the
+//! external `doc_id`s of ADR-0155, decision 8.
 //!
 //! ```text
 //! cargo test -p crible --test eval_cli
@@ -83,6 +93,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crible_core::config::IndexConfig;
 use crible_core::error::CribleError;
 use crible_core::filter::Filter;
+use crible_core::model::ModelKind;
 use crible_core::path::path_component;
 use crible_search::api;
 use crible_search::dense::Strategy;
@@ -110,14 +121,17 @@ pub const DEFAULT_REPEAT: usize = 3;
 /// (ADR-0125, decision 12).
 const REGRESSION_THRESHOLD: f64 = 0.005;
 
-/// Version of the report format (ADR-0125, decision 11; ADR-0131, decision 7).
-const FORMAT_VERSION: u64 = 2;
+/// Version of the report format (ADR-0125, decision 11; ADR-0131, decision 7;
+/// ADR-0155, decision 1).
+const FORMAT_VERSION: u64 = 3;
 
-/// Versions of a reference report `--baseline` reads (ADR-0131, decision 7).
+/// Versions of a reference report `--baseline` reads (ADR-0131, decision 7;
+/// ADR-0155, decision 1).
 ///
-/// Version 1 carries no `latency_basis`: its latencies are read, but they are
-/// said non-comparable with the ones of a version 2 report.
-const BASELINE_VERSIONS: [u64; 2] = [1, 2];
+/// Version 1 carries no `latency_basis`, and versions 1 and 2 carry no
+/// `doc_ids` and no fingerprint: their latencies are read, and both the
+/// latency and the top-k comparisons say what they could not compare.
+const BASELINE_VERSIONS: [u64; 3] = [1, 2, 3];
 
 /// How a campaign measured its figures (ADR-0131, decision 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +227,9 @@ struct Run {
 struct QueryOutcome {
     /// Identifier of the query.
     id: String,
+    /// External `doc_id`s of the grouped run, best first, as the run rendered
+    /// them (ADR-0155, decision 2).
+    doc_ids: Vec<String>,
     /// recall@10 at the passage, overlap@10 at the document, and the number of
     /// keys of the exact top-10, which is their denominator (ADR-0125,
     /// complément du 2026-11-01, point C1).
@@ -237,6 +254,22 @@ struct ModeReport {
     strategies: BTreeMap<&'static str, u64>,
     /// Latency samples per stage, in milliseconds.
     latencies: BTreeMap<&'static str, Vec<f64>>,
+}
+
+/// What a local campaign can say about its encoder (ADR-0155, decision 3).
+///
+/// The API mode builds none: the encoder and its precision are preconditions of
+/// the evaluated instance, and the campaign reads no value of them
+/// (ADR-0131, decision 9).
+#[derive(Default)]
+struct EncoderHeader {
+    /// `ModelConfig::fingerprint` of an `onnx` model; `None` for an `external`
+    /// one, whose configuration says nothing about the encoder, for a campaign
+    /// given no models root, which read no configuration at all, and for a
+    /// campaign that ran no dense branch, which read no encoder either.
+    model_fingerprint: Option<String>,
+    /// True when the campaign encoded a dense query text.
+    encoded_text: bool,
 }
 
 /// State of one local campaign: what every run reads.
@@ -485,8 +518,19 @@ fn local_campaign(
         state.live_passages,
         queries,
         modes,
+        Some(&EncoderHeader {
+            model_fingerprint: if modes.iter().any(|mode| mode.uses_dense()) {
+                model_fingerprint_of(request.models, &campaign.config)?
+            } else {
+                // A purely lexical campaign reads no encoder configuration:
+                // `--models` stays without effect there, as before ADR-0155
+                // (ADR-0143).
+                None
+            },
+            encoded_text: campaign.encoder.is_some(),
+        }),
         json!({ "mode": "local" }),
-    );
+    )?;
     report.insert(
         "exact_threshold".to_owned(),
         json!(campaign.config.search.exact_threshold),
@@ -541,8 +585,9 @@ fn api_campaign(
         session.pool_size(),
         queries,
         modes,
+        None,
         json!({ "mode": "api", "url": session.base() }),
-    );
+    )?;
     report.insert(
         "modes".to_owned(),
         modes_value(&reports, modes, Basis::ClientRoundTrip),
@@ -555,6 +600,10 @@ fn api_campaign(
 /// `exact_threshold` and N stay out of it in API mode: decision 9 of ADR-0131
 /// makes them preconditions of the instance, and a report that carried them
 /// would let a reader believe the campaign applied them.
+///
+/// `queries_fingerprint` describes the game alone, so both modes write it; the
+/// two members that describe the encoder come from `encoder`, which the API
+/// mode passes as `None` (ADR-0155, decisions 3 and 4).
 #[allow(clippy::too_many_arguments)]
 fn header(
     request: &EvalRequest<'_>,
@@ -565,8 +614,9 @@ fn header(
     pool_size: u64,
     queries: &[Query],
     modes: &[Mode],
+    encoder: Option<&EncoderHeader>,
     source: Value,
-) -> Map<String, Value> {
+) -> Result<Map<String, Value>, CribleError> {
     let queries_with_expected = queries
         .iter()
         .filter(|query| !query.expected.is_empty())
@@ -591,7 +641,89 @@ fn header(
         "queries_with_expected".to_owned(),
         json!(queries_with_expected),
     );
-    report
+    report.insert(
+        "queries_fingerprint".to_owned(),
+        json!(queries_fingerprint(queries)?),
+    );
+    if let Some(encoder) = encoder {
+        // An `external` model has no encoder to describe, so its configuration
+        // is not hashed: the member is omitted rather than misleading
+        // (ADR-0155, decision 3).
+        if let Some(fingerprint) = &encoder.model_fingerprint {
+            report.insert("model_fingerprint".to_owned(), json!(fingerprint));
+        }
+        // A campaign that encoded no dense text encoded no query, and writing
+        // `"fp32"` there would be false (ADR-0155, decision 3).
+        if encoder.encoded_text {
+            report.insert("query_precision".to_owned(), json!("fp32"));
+        }
+    }
+    Ok(report)
+}
+
+/// `ModelConfig::fingerprint` of the model of `config`, when it has one.
+///
+/// The model configuration is read under the models root `--models` gives, as
+/// the encoder reads it. An `onnx` model carries its identifier, its revision
+/// and the digests of its files, so its fingerprint says which encoder ran; an
+/// `external` model carries neither, so no fingerprint is written
+/// (ADR-0155, decision 3). A campaign given no models root read no
+/// configuration and writes none either. The caller asks only when the campaign
+/// runs a dense branch: a purely lexical campaign reads no encoder
+/// configuration, and `--models` keeps having no effect on it (ADR-0143).
+fn model_fingerprint_of(
+    models: Option<&Path>,
+    config: &IndexConfig,
+) -> Result<Option<String>, CribleError> {
+    let Some(models) = models else {
+        return Ok(None);
+    };
+    let model = commands::load_model(models, &config.model)?;
+    Ok(match model.kind {
+        ModelKind::Onnx => Some(model.fingerprint()),
+        ModelKind::External => None,
+    })
+}
+
+/// blake3 of the canonical form of the parsed game (ADR-0155, decision 3).
+///
+/// One line per query, in the file order; keys sorted, compact JSON, non-ASCII
+/// characters left as UTF-8, which is the form of ADR-0028. The members a query
+/// does not carry are not written, and the hash covers the **parsed** game, not
+/// the bytes: respacing a file or reordering its keys keeps the fingerprint.
+fn queries_fingerprint(queries: &[Query]) -> Result<String, CribleError> {
+    let mut hasher = blake3::Hasher::new();
+    for query in queries {
+        let mut line = Map::new();
+        line.insert("id".to_owned(), json!(query.id));
+        if let Some(text) = &query.text {
+            line.insert("query".to_owned(), json!(text));
+        }
+        if let Some(vector) = &query.vector {
+            line.insert("vector".to_owned(), json!(vector));
+        }
+        if let Some(raw) = &query.filter {
+            // The filter is kept as text for the timed `validate` step; the
+            // canonical form writes the object, whose keys are sorted here as
+            // every level of the form is.
+            // The game is validated before it is run, so this path is not
+            // reachable in practice; it stays an invalid request rather than an
+            // internal fault, because the text comes from the caller's file.
+            let filter: Value = serde_json::from_str(raw).map_err(|error| {
+                commands::invalid_request(format!(
+                    "query '{}': the filter of the game is not JSON: {error}",
+                    query.id
+                ))
+            })?;
+            line.insert("filter".to_owned(), filter);
+        }
+        if !query.expected.is_empty() {
+            line.insert("expected".to_owned(), json!(query.expected));
+        }
+        hasher.update(Value::Object(line).to_string().as_bytes());
+        hasher.update(b"\n");
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 /// The command line of the campaign, as the reader can replay it.
@@ -673,8 +805,7 @@ fn evaluate<R: Runner>(
             }
             let mut outcome = QueryOutcome {
                 id: query.id.clone(),
-                fidelity: None,
-                quality: None,
+                ..QueryOutcome::default()
             };
             if mode.uses_dense() {
                 let exact = runner.run(
@@ -706,6 +837,9 @@ fn evaluate<R: Runner>(
                 report.quality.push((quality.0, quality.1));
                 outcome.quality = Some(quality);
             }
+            // Decision 2: the row keeps the ordered external `doc_id`s of the
+            // grouped run, whether or not the query carries an `expected`.
+            outcome.doc_ids = quality_run.docs;
             report.rows.push(outcome);
         }
     }
@@ -1106,6 +1240,9 @@ fn mode_value(report: &ModeReport, mode: Mode, basis: Basis) -> Value {
         .map(|outcome| {
             let mut row = Map::new();
             row.insert("id".to_owned(), json!(outcome.id));
+            // Decision 2: always present, and `[]` is a measured top-k, not an
+            // absent measurement.
+            row.insert("doc_ids".to_owned(), json!(outcome.doc_ids));
             if let Some((recall, overlap, denominator)) = outcome.fidelity {
                 row.insert("fidelity_recall_at_10".to_owned(), json!(recall));
                 row.insert("fidelity_overlap_at_10".to_owned(), json!(overlap));
@@ -1364,9 +1501,10 @@ fn civil_date(days: i64) -> String {
 
 /// Reads a reference report, refusing a version this command does not know.
 ///
-/// Versions 1 and 2 are read (ADR-0131, decision 7): version 1 carries no
-/// `latency_basis`, so its latencies are said non-comparable rather than
-/// invented.
+/// Versions 1, 2 and 3 are read (ADR-0131, decision 7; ADR-0155, decision 1):
+/// version 1 carries no `latency_basis` and versions 1 and 2 carry no
+/// `doc_ids` and no fingerprint, so their latencies and their top-k are said
+/// non-comparable rather than invented.
 fn read_baseline(path: &Path) -> Result<Value, CribleError> {
     let raw = fs::read_to_string(path).map_err(|error| {
         commands::invalid_request(format!(
@@ -1382,23 +1520,25 @@ fn read_baseline(path: &Path) -> Result<Value, CribleError> {
     })?;
     let version = value.get("format_version").and_then(Value::as_u64);
     if !version.is_some_and(|version| BASELINE_VERSIONS.contains(&version)) {
+        let read: Vec<String> = BASELINE_VERSIONS.iter().map(u64::to_string).collect();
         return Err(commands::invalid_request(format!(
-            "the baseline {} carries format_version {}, and this command reads {} and {} only",
+            "the baseline {} carries format_version {}, and this command reads {} only",
             path.display(),
             version.map_or_else(|| "none".to_owned(), |version| version.to_string()),
-            BASELINE_VERSIONS[0],
-            BASELINE_VERSIONS[1]
+            read.join(", ")
         )));
     }
     Ok(value)
 }
 
-/// Compares the current report to a baseline: means, lost queries, latencies.
+/// Compares the current report to a baseline: means, lost queries, top-k,
+/// latencies, attribution.
 ///
 /// A regression is a mean of quality or fidelity that drops by more than
 /// [`REGRESSION_THRESHOLD`] in absolute value (ADR-0125, decision 12). Latencies
-/// are compared and reported, and never change the verdict. A mode the baseline
-/// does not carry is not compared, and the report says so.
+/// and top-k are compared and reported, and neither ever changes the verdict
+/// (ADR-0131, decision 7; ADR-0155, decision 5). A mode the baseline does not
+/// carry is not compared, and the report says so.
 fn compare(baseline: &Value, current: &Value, k: usize) -> Result<(Value, bool), CribleError> {
     let baseline_k = baseline.get("k").and_then(Value::as_u64);
     if baseline_k != Some(k as u64) {
@@ -1409,6 +1549,7 @@ fn compare(baseline: &Value, current: &Value, k: usize) -> Result<(Value, bool),
             k
         )));
     }
+    let reference_version = baseline.get("format_version").and_then(Value::as_u64);
     let mut regression = false;
     let mut modes = Map::new();
     let mut not_compared: Vec<String> = Vec::new();
@@ -1446,6 +1587,20 @@ fn compare(baseline: &Value, current: &Value, k: usize) -> Result<(Value, bool),
         // The queries that lost an expected document the reference found.
         let lost = lost_queries(mode, reference);
         entry.insert("lost".to_owned(), json!(lost));
+        // The top-k comparison is informative, and a version 1 or 2 reference
+        // has no `doc_ids` to compare (ADR-0155, decisions 1 and 5).
+        match top_k_comparison(mode, reference) {
+            Some(top_k) => {
+                entry.insert("top_k".to_owned(), top_k);
+            }
+            None => {
+                let mut skipped = Map::new();
+                if let Some(version) = reference_version {
+                    skipped.insert("reference_format_version".to_owned(), json!(version));
+                }
+                entry.insert("top_k_not_compared".to_owned(), Value::Object(skipped));
+            }
+        }
         // Latencies: reported, never blocking, and compared only on the same
         // basis (ADR-0131, decision 7).
         match latency_comparison(mode, reference) {
@@ -1471,10 +1626,140 @@ fn compare(baseline: &Value, current: &Value, k: usize) -> Result<(Value, bool),
     let mut comparison = Map::new();
     comparison.insert("regression".to_owned(), json!(regression));
     comparison.insert("modes".to_owned(), Value::Object(modes));
+    comparison.insert("attribution".to_owned(), attribution(baseline, current));
     if !not_compared.is_empty() {
         comparison.insert("modes_not_compared".to_owned(), json!(not_compared));
     }
     Ok((Value::Object(comparison), regression))
+}
+
+/// Top-k overlap of one mode: its mean, its `n`, and the queries that moved.
+///
+/// `overlap_at_k` divides by the size of the **reference** list, so a shorter
+/// reference does not dilute the figure; a query whose reference list is empty
+/// is excluded from the mean and counted apart, with its `id`; a query present
+/// in one report only is counted apart too. The ordered lists are compared, not
+/// their sets, so a rank exchange counts as a change (ADR-0155, decision 5).
+///
+/// Returns `None` when the reference carries no `doc_ids`: a version 1 or 2
+/// report cannot be compared that way.
+fn top_k_comparison(current: &Value, reference: &Value) -> Option<Value> {
+    let before = reference.get("queries")?.as_array()?;
+    if !before
+        .iter()
+        .any(|row| row.get("doc_ids").is_some_and(Value::is_array))
+    {
+        return None;
+    }
+    let after: BTreeMap<&str, &Value> = current
+        .get("queries")?
+        .as_array()?
+        .iter()
+        .filter_map(|row| row.get("id").and_then(Value::as_str).map(|id| (id, row)))
+        .collect();
+    let mut samples: Vec<f64> = Vec::new();
+    let mut changed: Vec<&str> = Vec::new();
+    let mut excluded: Vec<&str> = Vec::new();
+    let mut not_compared: Vec<&str> = Vec::new();
+    let mut before_ids: Vec<&str> = Vec::new();
+    for row in before {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        before_ids.push(id);
+        let Some(reference_ids) = doc_ids_of(row) else {
+            continue;
+        };
+        let Some(current_row) = after.get(id).copied() else {
+            not_compared.push(id);
+            continue;
+        };
+        let Some(current_ids) = doc_ids_of(current_row) else {
+            continue;
+        };
+        if reference_ids.is_empty() {
+            excluded.push(id);
+            continue;
+        }
+        let kept = reference_ids
+            .iter()
+            .filter(|doc_id| current_ids.contains(doc_id))
+            .count();
+        samples.push(kept as f64 / reference_ids.len() as f64);
+        if reference_ids != current_ids {
+            changed.push(id);
+        }
+    }
+    // A query the current campaign carries and the reference does not is
+    // counted apart too: decision 5 says a query present in one report only is,
+    // whichever report it comes from.
+    for id in after.keys() {
+        if !before_ids.contains(id) {
+            not_compared.push(id);
+        }
+    }
+    let mut top_k = Map::new();
+    if !samples.is_empty() {
+        top_k.insert(
+            "overlap_at_k".to_owned(),
+            json!(mean(samples.iter().copied(), samples.len())),
+        );
+    }
+    top_k.insert("n".to_owned(), json!(samples.len()));
+    top_k.insert("changed".to_owned(), json!(changed));
+    top_k.insert("excluded".to_owned(), json!(excluded));
+    if !not_compared.is_empty() {
+        top_k.insert("not_compared".to_owned(), json!(not_compared));
+    }
+    Some(Value::Object(top_k))
+}
+
+/// External `doc_id`s of one per-query row, or `None` when it carries none.
+fn doc_ids_of(row: &Value) -> Option<Vec<&str>> {
+    row.get("doc_ids")?
+        .as_array()
+        .map(|ids| ids.iter().filter_map(Value::as_str).collect())
+}
+
+/// What a comparison can say about the cause of a difference (ADR-0155,
+/// decision 6).
+///
+/// A generation, a model fingerprint or a game fingerprint that differs makes
+/// the cause ambiguous, never the figures false: the block is written, and the
+/// reference is never refused for it.
+fn attribution(baseline: &Value, current: &Value) -> Value {
+    let mut generation = Map::new();
+    if let Some(reference) = baseline.get("generation") {
+        generation.insert("reference".to_owned(), reference.clone());
+    }
+    if let Some(now) = current.get("generation") {
+        generation.insert("current".to_owned(), now.clone());
+    }
+    let mut attribution = Map::new();
+    attribution.insert("generation".to_owned(), Value::Object(generation));
+    for member in ["model_fingerprint", "queries_fingerprint"] {
+        attribution.insert(
+            member.to_owned(),
+            json!(fingerprint_state(baseline, current, member)),
+        );
+    }
+    Value::Object(attribution)
+}
+
+/// `same`, `differs` or `unknown` for one fingerprint member of two reports.
+///
+/// `unknown` covers a reference of version 1 or 2, which carries no
+/// fingerprint, and the API mode, which writes none for the model: neither
+/// side then names what to compare.
+fn fingerprint_state(baseline: &Value, current: &Value, member: &str) -> &'static str {
+    match (
+        baseline.get(member).and_then(Value::as_str),
+        current.get(member).and_then(Value::as_str),
+    ) {
+        (Some(reference), Some(now)) if reference == now => "same",
+        (Some(_), Some(_)) => "differs",
+        _ => "unknown",
+    }
 }
 
 /// One mean of one family of a mode, when the report carries it.
@@ -1844,6 +2129,7 @@ fn markdown(report: &Value, preconditions: Option<&Preconditions>) -> String {
             ));
         }
         out.push('\n');
+        top_k_markdown(&mut out, baseline);
     }
     out.push_str("## Lecture\n\n");
     if preconditions.is_some() {
@@ -1853,9 +2139,23 @@ fn markdown(report: &Value, preconditions: Option<&Preconditions>) -> String {
              compare pas aux étapes du mode local (`server_stages`). Le serveur encode les \
              requêtes du jeu ; son `exact_threshold` et son N sont des préconditions lues au \
              début de la campagne (ADR-0131, décisions 7 et 9).\n\
+             - Le mode API vise la route simple `POST /v1/indexes/{index}/search` : le top-k \
+             servi par la route multi-index `POST /v1/search`, celui de Legifacile, n'est pas \
+             enregistré ici (ADR-0110, décision 1 ; ADR-0131, décision 1 ; ADR-0155, \
+             décision 4).\n\
              - Les requêtes partent l'une après l'autre, sur la génération épinglée au début de \
              la campagne : une génération qui change en cours de route arrête la campagne \
              (ADR-0131, décision 10).\n",
+        );
+    }
+    if report.get("model_fingerprint").is_none() {
+        out.push_str(
+            "- Le rapport ne porte pas `model_fingerprint` : ni un modèle `external`, qui ne \
+             décrit pas son encodeur, ni une campagne sans `--models`, qui n'a lu aucune \
+             configuration, ni une campagne sans mode dense, qui n'a lu aucune configuration \
+             d'encodeur, ni le mode API, qui n'impose pas l'encodeur de l'instance, ne \
+             permettent de l'écrire. Un écart de top-k entre deux campagnes n'est donc pas \
+             attribuable à l'encodeur par ce rapport seul (ADR-0155, décisions 3, 4 et 6).\n",
         );
     }
     out.push_str(
@@ -1899,6 +2199,109 @@ fn markdown(report: &Value, preconditions: Option<&Preconditions>) -> String {
         );
     }
     out
+}
+
+/// The top-k section of the Markdown report (ADR-0155, decision 7).
+///
+/// The full `doc_ids` lists stay in the JSON: a campaign report has to read
+/// without its context, and 97 × 10 identifiers do not. The section gives the
+/// mean and its `n`, the `id`s whose ranking moved, the empty references
+/// counted apart, and the attribution; it says when the comparison was not made
+/// instead of disappearing, because an absent section would read as a zero.
+fn top_k_markdown(out: &mut String, baseline: &Value) {
+    out.push_str("### Recouvrement de top-k\n\n");
+    if let Some(modes) = baseline.get("modes").and_then(Value::as_object) {
+        for (mode, entry) in modes {
+            if let Some(top_k) = entry.get("top_k") {
+                let n = top_k.get("n").and_then(Value::as_u64).unwrap_or(0);
+                match top_k.get("overlap_at_k").and_then(Value::as_f64) {
+                    Some(overlap) => out.push_str(&format!(
+                        "- `{mode}` : recouvrement de top-k {overlap:.4} (n = {n})\n"
+                    )),
+                    None => out.push_str(&format!(
+                        "- `{mode}` : recouvrement de top-k sans échantillon (n = 0)\n"
+                    )),
+                }
+                for (member, label) in [
+                    ("changed", "classement modifié"),
+                    ("excluded", "exclue(s) de la moyenne, référence vide"),
+                    (
+                        "not_compared",
+                        "non comparée(s), absente(s) d'un des deux rapports",
+                    ),
+                ] {
+                    let ids = quoted_ids(top_k.get(member));
+                    if !ids.is_empty() {
+                        out.push_str(&format!(
+                            "- `{mode}` : {} requête(s) {label} — {}\n",
+                            ids.len(),
+                            ids.join(", ")
+                        ));
+                    }
+                }
+            } else if let Some(skipped) = entry.get("top_k_not_compared") {
+                let version = skipped
+                    .get("reference_format_version")
+                    .and_then(Value::as_u64)
+                    .map_or_else(String::new, |version| {
+                        format!("(format_version {version}) ")
+                    });
+                out.push_str(&format!(
+                    "- `{mode}` : recouvrement de top-k non comparé, la référence {version}ne \
+                     porte pas de `doc_ids` (ADR-0155, décision 5)\n"
+                ));
+            }
+        }
+    }
+    // A mode the reference does not carry has no entry in `modes`, so its
+    // top-k gets its own line: decision 7 asks the section to say it rather
+    // than to disappear with the mode.
+    if let Some(skipped) = baseline.get("modes_not_compared").and_then(Value::as_array) {
+        for mode in skipped.iter().filter_map(Value::as_str) {
+            out.push_str(&format!(
+                "- `{mode}` : recouvrement de top-k non comparé, mode absent de la référence \
+                 (ADR-0155, décision 5)\n"
+            ));
+        }
+    }
+    out.push_str(
+        "- La comparaison de top-k est **informative** : elle ne change pas le code de sortie, \
+         qui reste celui des seules moyennes de qualité et de fidélité (ADR-0155, décision 5).\n",
+    );
+    if let Some(attribution) = baseline.get("attribution") {
+        let generation = attribution.get("generation");
+        let reference = generation
+            .and_then(|generation| generation.get("reference"))
+            .map_or_else(|| "?".to_owned(), Value::to_string);
+        let current = generation
+            .and_then(|generation| generation.get("current"))
+            .map_or_else(|| "?".to_owned(), Value::to_string);
+        let state = |member: &str| {
+            attribution
+                .get(member)
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_owned()
+        };
+        out.push_str(&format!(
+            "- Attribution : génération {reference} → {current} ; empreinte du modèle « {} » ; \
+             empreinte du jeu « {} » (ADR-0155, décision 6)\n",
+            state("model_fingerprint"),
+            state("queries_fingerprint"),
+        ));
+    }
+    out.push('\n');
+}
+
+/// The `id`s of one member of a comparison, quoted, in report order.
+fn quoted_ids(member: Option<&Value>) -> Vec<String> {
+    member
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|id| format!("`{id}`"))
+        .collect()
 }
 
 #[cfg(test)]
