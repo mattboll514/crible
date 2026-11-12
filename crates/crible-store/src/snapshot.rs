@@ -10,8 +10,10 @@
 //! destination and the staging directory) and `ADR-0065` (offline snapshot,
 //! epoch E+1 with the generation left at G, target index created or checked, the
 //! replaced epoch kept on disk, the compaction write protocol, the command
-//! shapes). Invariants: INV-14 (nothing that cost GPU is destroyed without a
-//! valid copy) and INV-15 (every on-disk format is explicit and versioned).
+//! shapes) and `ADR-0153` (progress of a snapshot, in bytes, with the steps
+//! `copy`, `attest` and `rename`). Invariants: INV-14 (nothing that cost GPU is
+//! destroyed without a valid copy) and INV-15 (every on-disk format is explicit
+//! and versioned).
 //!
 //! # What a snapshot is
 //!
@@ -33,6 +35,17 @@
 //! `snapshot.json` lists every copied file — path, size, blake3 — and is written
 //! last: its presence is the signal that the copy ran to its end (ADR-0064,
 //! decision 1).
+//!
+//! # Progress
+//!
+//! [`create`] takes a callback that receives a [`SnapshotProgress`] at the three
+//! step boundaries — `copy`, `attest`, `rename` — and after each copied file, in
+//! bytes (ADR-0153, decisions 1 to 4). The total is an estimate during `copy`,
+//! raised to `done` when the copy passes it, then replaced once by the exact sum
+//! of the copied bytes; `done ≤ total` holds at every publication. Nothing is
+//! written finer than a file, and nothing at all during the `VACUUM INTO`, which
+//! is one SQLite call. The callback changes no byte of the snapshot: `snapshot.json`
+//! keeps its `format_version` and its file list (INV-15).
 //!
 //! # Offline, and what "the writer is suspended" means
 //!
@@ -92,11 +105,11 @@ use crate::compact::{next_epoch, remove_directory};
 use crate::generation::{
     CURRENT_EPOCH_FILE_NAME, EPOCHS_DIR_NAME, GenerationStore, INDEX_CONFIG_FILE_NAME,
     INDEXES_DIRECTORY, INITIAL_EPOCH, MANIFESTS_DIR_NAME, RECORDS_FILE_NAME, SEGMENTS_DIR_NAME,
-    TEMPORARY_PREFIX, epoch_directory, epochs_directory, manifests_directory, read_current_epoch,
-    segments_directory, write_current_epoch,
+    Snapshot, TEMPORARY_PREFIX, epoch_directory, epochs_directory, manifests_directory,
+    read_current_epoch, segments_directory, write_current_epoch,
 };
 use crate::records::{self, RecordStore};
-use crate::segment::{io_error, sync_directory, vector_file_name, write_file_synced};
+use crate::segment::{io_error, live_bytes, sync_directory, vector_file_name, write_file_synced};
 
 /// Version of the snapshot attestation (`snapshot.json`), from ADR-0064.
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
@@ -157,6 +170,51 @@ pub struct RestoreReport {
     pub passages: u64,
 }
 
+/// Step of a snapshot, as `progress.step` renders it (ADR-0153, decision 1).
+///
+/// The names are not those of an attach: `snapshot` is already the sixth step
+/// there, and a step named `snapshot` in a `snapshot` job would not say what is
+/// being copied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotStep {
+    /// The copy of `records.sqlite` and of the files of the epoch.
+    Copy,
+    /// The writing of `snapshot.json`, which attests the copy.
+    Attest,
+    /// The fsync of the tree, the rename into place, then the fsync of the
+    /// parent directory.
+    Rename,
+}
+
+impl SnapshotStep {
+    /// Name of the step, as `progress.step` carries it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Attest => "attest",
+            Self::Rename => "rename",
+        }
+    }
+}
+
+/// Progress of a snapshot, in bytes (ADR-0153, decision 2).
+///
+/// `done` never exceeds `total`: during [`SnapshotStep::Copy`] the total is an
+/// estimate that is raised to `done` when the copy passes it, and at
+/// [`SnapshotStep::Attest`] it is replaced once by the exact sum of the copied
+/// bytes (ADR-0153, decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapshotProgress {
+    /// Step the copy reached.
+    pub step: SnapshotStep,
+    /// Bytes copied so far.
+    pub done: u64,
+    /// Bytes expected: an estimate during `copy`, the exact sum from `attest`
+    /// on.
+    pub total: u64,
+}
+
 /// One copied file, as `snapshot.json` attests it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SnapshotFile {
@@ -192,6 +250,10 @@ struct SnapshotAttestation {
 /// copy is taken (ADR-0017, ADR-0065 decision 1). The caller is responsible for
 /// running this offline in the CLI form.
 ///
+/// `progress` is called at the three step boundaries and after each copied
+/// file, in bytes (ADR-0153, decisions 1, 2 and 4). A caller with nothing to do
+/// with it passes a closure that ignores its argument.
+///
 /// # Errors
 ///
 /// - [`ErrorCode::InvalidRequest`] when
@@ -206,6 +268,7 @@ pub fn create(
     store: &mut GenerationStore,
     index_config: &IndexConfig,
     exchange: &Path,
+    progress: &mut dyn FnMut(SnapshotProgress),
 ) -> Result<SnapshotReport, CribleError> {
     let published = store.snapshot();
     let epoch = published.epoch();
@@ -247,6 +310,15 @@ pub fn create(
     let epoch_dir = store.epoch_directory();
     let mut files = BTreeMap::new();
 
+    // The first publication precedes the `VACUUM INTO`, which is one SQLite
+    // call that reports nothing (ADR-0153, decision 4).
+    let mut copy = CopyProgress {
+        progress,
+        done: 0,
+        total: estimate_bytes(&published, &epoch_dir)?,
+    };
+    copy.begin();
+
     // `VACUUM INTO` yields one coherent file, without `-wal` nor `-shm`, so the
     // checksum of the attestation covers a logical state (ADR-0064, decision 4).
     vacuum_into(
@@ -254,42 +326,42 @@ pub fn create(
         &staging.join(RECORDS_FILE_NAME),
     )?;
     check_copied_state(&staging.join(RECORDS_FILE_NAME), name, epoch, generation)?;
-    files.insert(
-        RECORDS_FILE_NAME.to_owned(),
-        attest(&staging, RECORDS_FILE_NAME)?,
-    );
+    let copied = attest(&staging, RECORDS_FILE_NAME)?;
+    let size = copied.size;
+    files.insert(RECORDS_FILE_NAME.to_owned(), copied);
+    copy.copied(size);
 
-    copy_file(
+    copy.copied(copy_and_attest(
         &index_dir.join(INDEX_CONFIG_FILE_NAME),
-        &staging.join(INDEX_CONFIG_FILE_NAME),
-    )?;
-    files.insert(
-        INDEX_CONFIG_FILE_NAME.to_owned(),
-        attest(&staging, INDEX_CONFIG_FILE_NAME)?,
-    );
+        &staging,
+        INDEX_CONFIG_FILE_NAME,
+        &mut files,
+    )?);
     check_copied_index_name(&staging.join(INDEX_CONFIG_FILE_NAME), name)?;
 
     // "The manifest" of the task sheet is `manifests/<G>.json`, and only G is
     // copied: the earlier generations are the history of the index (ADR-0064,
     // decision 2).
     let manifest = format!("{MANIFESTS_DIR_NAME}/{}.json", generation.get());
-    copy_file(
+    copy.copied(copy_and_attest(
         &manifests_directory(&epoch_dir).join(format!("{}.json", generation.get())),
-        &staging.join(&manifest),
-    )?;
-    files.insert(manifest.clone(), attest(&staging, &manifest)?);
+        &staging,
+        &manifest,
+        &mut files,
+    )?);
 
     for meta in published.segments() {
         let relative_dir = format!("{SEGMENTS_DIR_NAME}/{}", meta.segment_id);
         for file_name in ["segment.json", vector_file_name(meta.precision)] {
             let relative = format!("{relative_dir}/{file_name}");
-            copy_file(
+            copy.copied(copy_and_attest(
                 &segments_directory(&epoch_dir)
                     .join(&meta.segment_id)
                     .join(file_name),
-                &staging.join(&relative),
-            )?;
-            files.insert(relative.clone(), attest(&staging, &relative)?);
+                &staging,
+                &relative,
+                &mut files,
+            )?);
         }
     }
 
@@ -300,10 +372,14 @@ pub fn create(
             &staging.join(LEXICAL_DIR_NAME),
             LEXICAL_DIR_NAME,
             &mut files,
+            &mut copy,
         )?;
     }
 
     let bytes = files.values().map(|file| file.size).sum();
+    // From here the total is the exact sum of the copied bytes, once: `done`
+    // already equals it, since both add the size of every file of `files`.
+    copy.attested(bytes);
     let attestation = SnapshotAttestation {
         format_version: SNAPSHOT_FORMAT_VERSION,
         index: name.to_owned(),
@@ -321,6 +397,7 @@ pub fn create(
 
     // Every file of the copy is durable before the directory entry names it, as
     // the export does: a snapshot directory exists only complete.
+    copy.renamed();
     sync_tree(&staging)?;
     drop(published);
     fs::rename(&staging, &destination)
@@ -337,6 +414,111 @@ pub fn create(
         passages: state.live_passages,
         bytes,
     })
+}
+
+/// Progress of one copy, in bytes, and the single place that publishes it
+/// (ADR-0153, decisions 2, 3 and 4).
+///
+/// The total starts at the estimate of [`estimate_bytes`] and never decreases;
+/// it is raised to `done` when the copy passes it, so `done ≤ total` holds at
+/// every publication.
+struct CopyProgress<'a> {
+    /// Sink of the publications.
+    progress: &'a mut dyn FnMut(SnapshotProgress),
+    /// Bytes copied so far.
+    done: u64,
+    /// Bytes expected.
+    total: u64,
+}
+
+impl CopyProgress<'_> {
+    /// Publishes the first step, before the long `VACUUM INTO` runs.
+    fn begin(&mut self) {
+        self.publish(SnapshotStep::Copy);
+    }
+
+    /// Adds the bytes of one copied file and publishes the step.
+    fn copied(&mut self, bytes: u64) {
+        self.done = self.done.saturating_add(bytes);
+        self.total = self.total.max(self.done);
+        self.publish(SnapshotStep::Copy);
+    }
+
+    /// Replaces the estimate by the exact sum of the copied bytes, once, and
+    /// publishes the `attest` boundary.
+    fn attested(&mut self, bytes: u64) {
+        self.total = bytes;
+        self.publish(SnapshotStep::Attest);
+    }
+
+    /// Publishes the `rename` boundary.
+    fn renamed(&mut self) {
+        self.publish(SnapshotStep::Rename);
+    }
+
+    /// Hands the current numbers to the caller's callback.
+    fn publish(&mut self, step: SnapshotStep) {
+        (self.progress)(SnapshotProgress {
+            step,
+            done: self.done,
+            total: self.total,
+        });
+    }
+}
+
+/// Bytes the copy is expected to write, before it starts (ADR-0153, decision
+/// 3).
+///
+/// The segment files come from the published state, never from a walk
+/// (ADR-0152, decision 3); `records.sqlite` is measured by one `stat`, and
+/// `lexical/` by a walk bounded to that directory. The output of `VACUUM INTO`
+/// is the only inexact term: it is compacted, and its size is known once
+/// written. `index.json` and the manifest are left out, negligible before
+/// gigabytes.
+fn estimate_bytes(published: &Snapshot, epoch_dir: &Path) -> Result<u64, CribleError> {
+    let records = epoch_dir.join(RECORDS_FILE_NAME);
+    let records_bytes = fs::metadata(&records)
+        .map_err(|error| io_error("measure the reference database", &records, &error))?
+        .len();
+    let mut total = add_bytes(live_bytes(published.segments())?, records_bytes)?;
+    let lexical = epoch_dir.join(LEXICAL_DIR_NAME);
+    if lexical.is_dir() {
+        total = add_bytes(total, tree_bytes(&lexical)?)?;
+    }
+    Ok(total)
+}
+
+/// Adds two byte counts, refusing an overflow of `u64`.
+fn add_bytes(left: u64, right: u64) -> Result<u64, CribleError> {
+    left.checked_add(right).ok_or_else(|| {
+        CribleError::new(
+            ErrorCode::Internal,
+            "the files a snapshot expects hold more than u64::MAX bytes",
+        )
+    })
+}
+
+/// Bytes of the regular files of `directory`, by a walk bounded to it.
+///
+/// Symbolic links are counted for nothing: following one would measure a file
+/// outside the epoch, and a loop would never end.
+fn tree_bytes(directory: &Path) -> Result<u64, CribleError> {
+    let mut total = 0_u64;
+    let entries = fs::read_dir(directory)
+        .map_err(|error| io_error("list a directory to measure", directory, &error))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| io_error("read an entry to measure", directory, &error))?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| io_error("measure an entry", &path, &error))?;
+        if metadata.is_dir() {
+            total = add_bytes(total, tree_bytes(&path)?)?;
+        } else if metadata.is_file() {
+            total = add_bytes(total, metadata.len())?;
+        }
+    }
+    Ok(total)
 }
 
 /// Refuses a copy whose reference database does not describe the state the
@@ -899,12 +1081,31 @@ fn copy_file(source: &Path, destination: &Path) -> Result<u64, CribleError> {
     Ok(bytes)
 }
 
+/// Copies one file of the epoch into the staging directory, attests it, and
+/// returns the bytes it holds.
+///
+/// The attestation is what `snapshot.json` lists, so the returned size is the
+/// one both the report and the progression add (ADR-0064, ADR-0153).
+fn copy_and_attest(
+    source: &Path,
+    staging: &Path,
+    relative: &str,
+    files: &mut BTreeMap<String, SnapshotFile>,
+) -> Result<u64, CribleError> {
+    copy_file(source, &staging.join(relative))?;
+    let copied = attest(staging, relative)?;
+    let size = copied.size;
+    files.insert(relative.to_owned(), copied);
+    Ok(size)
+}
+
 /// Copies a directory tree of files, attesting each one.
 fn copy_tree(
     source: &Path,
     destination: &Path,
     relative_root: &str,
     files: &mut BTreeMap<String, SnapshotFile>,
+    copy: &mut CopyProgress<'_>,
 ) -> Result<(), CribleError> {
     let entries = fs::read_dir(source)
         .map_err(|error| io_error("list a directory to copy", source, &error))?;
@@ -928,11 +1129,14 @@ fn copy_tree(
             let copied = destination.join(name);
             fs::create_dir_all(&copied)
                 .map_err(|error| io_error("create a directory of the copy", &copied, &error))?;
-            copy_tree(&path, &copied, &relative, files)?;
+            copy_tree(&path, &copied, &relative, files, copy)?;
         } else if metadata.is_file() {
             let copied = destination.join(name);
             copy_file(&path, &copied)?;
-            files.insert(relative.clone(), attest_file(&copied, &relative)?);
+            let attested = attest_file(&copied, &relative)?;
+            let size = attested.size;
+            files.insert(relative, attested);
+            copy.copied(size);
         } else {
             return Err(CribleError::new(
                 ErrorCode::Internal,
@@ -1097,12 +1301,14 @@ mod tests {
     use crible_core::config::IndexConfig;
     use crible_core::error::ErrorCode;
 
-    use super::{create, first_difference, validate_index_name, validate_relative_path};
+    use super::{
+        CopyProgress, SnapshotProgress, SnapshotStep, create, first_difference,
+        validate_index_name, validate_relative_path,
+    };
     use crate::generation::{
         GenerationStore, INDEXES_DIRECTORY, INITIAL_EPOCH, write_index_config,
     };
     use serde_json::json;
-
     #[test]
     fn a_relative_path_inside_the_snapshot_is_accepted() {
         for path in [
@@ -1210,9 +1416,14 @@ mod tests {
             .execute("UPDATE meta SET generation = 2 WHERE id = 1", [])
             .unwrap_or_else(|error| panic!("the database generation must move: {error}"));
 
-        let error = create(&mut store, &config, &temp.path().join("exchange"))
-            .err()
-            .unwrap_or_else(|| panic!("a database at G+1 must be refused"));
+        let error = create(
+            &mut store,
+            &config,
+            &temp.path().join("exchange"),
+            &mut |_| {},
+        )
+        .err()
+        .unwrap_or_else(|| panic!("a database at G+1 must be refused"));
         assert_eq!(
             error.code(),
             ErrorCode::Internal,
@@ -1245,9 +1456,14 @@ mod tests {
             .execute("UPDATE meta SET epoch = 7 WHERE id = 1", [])
             .unwrap_or_else(|error| panic!("the database epoch must move: {error}"));
 
-        let error = create(&mut store, &config, &temp.path().join("exchange"))
-            .err()
-            .unwrap_or_else(|| panic!("a database in epoch 7 must be refused"));
+        let error = create(
+            &mut store,
+            &config,
+            &temp.path().join("exchange"),
+            &mut |_| {},
+        )
+        .err()
+        .unwrap_or_else(|| panic!("a database in epoch 7 must be refused"));
         assert_eq!(error.code(), ErrorCode::Internal, "{error}");
         assert!(
             error.message().contains("epoch 7") && error.message().contains("epoch 1"),
@@ -1265,9 +1481,14 @@ mod tests {
         let other = IndexConfig::from_json_str(&GUARD_CONFIG.replace("\"guard\"", "\"other\""))
             .unwrap_or_else(|error| panic!("the other configuration must be valid: {error}"));
 
-        let error = crate::snapshot::create(&mut store, &other, &temp.path().join("exchange"))
-            .err()
-            .unwrap_or_else(|| panic!("an index.json naming another index must be refused"));
+        let error = crate::snapshot::create(
+            &mut store,
+            &other,
+            &temp.path().join("exchange"),
+            &mut |_| {},
+        )
+        .err()
+        .unwrap_or_else(|| panic!("an index.json naming another index must be refused"));
         assert_eq!(
             error.code(),
             ErrorCode::InvalidRequest,
@@ -1285,6 +1506,105 @@ mod tests {
                 .join("other-e1-g0")
                 .exists(),
             "a refused snapshot must not be renamed into place"
+        );
+    }
+
+    // --- The progression of the copy, in bytes (ADR-0153) ---
+
+    /// The total of a copy never decreases, and it is raised to `done` when the
+    /// copy passes the estimate, so `done ≤ total` holds at every publication
+    /// (ADR-0153, decision 3).
+    #[test]
+    fn the_total_of_a_copy_is_raised_to_the_bytes_copied_and_never_decreases() {
+        let mut published: Vec<SnapshotProgress> = Vec::new();
+        {
+            let mut copy = CopyProgress {
+                progress: &mut |progress| published.push(progress),
+                done: 0,
+                total: 100,
+            };
+            copy.begin();
+            copy.copied(60);
+            // The estimate was 100: the copy passes it, so the total follows.
+            copy.copied(50);
+            copy.attested(110);
+            copy.renamed();
+        }
+
+        let steps: Vec<SnapshotStep> = published.iter().map(|progress| progress.step).collect();
+        assert_eq!(
+            steps,
+            vec![
+                SnapshotStep::Copy,
+                SnapshotStep::Copy,
+                SnapshotStep::Copy,
+                SnapshotStep::Attest,
+                SnapshotStep::Rename,
+            ],
+            "the copy publishes its step before the first file, and every boundary: {published:?}"
+        );
+        assert_eq!(
+            published[2],
+            SnapshotProgress {
+                step: SnapshotStep::Copy,
+                done: 110,
+                total: 110,
+            },
+            "the total is raised to the bytes copied when it passes the estimate"
+        );
+        assert_eq!(
+            published[4],
+            SnapshotProgress {
+                step: SnapshotStep::Rename,
+                done: 110,
+                total: 110,
+            },
+            "the exact total is kept to the end of the copy"
+        );
+        assert!(
+            published
+                .windows(2)
+                .all(|pair| pair[0].total <= pair[1].total || pair[1].step == SnapshotStep::Attest),
+            "the total only decreases at `attest`, where it becomes exact: {published:?}"
+        );
+        assert!(
+            published
+                .iter()
+                .all(|progress| progress.done <= progress.total),
+            "done never exceeds total at a publication: {published:?}"
+        );
+        assert!(
+            published
+                .windows(2)
+                .all(|pair| pair[0].done <= pair[1].done),
+            "done never decreases: {published:?}"
+        );
+    }
+
+    /// At `attest` the estimate is replaced by the exact sum, even when it is
+    /// smaller: a compacted database is often smaller than its source
+    /// (ADR-0153, decision 3).
+    #[test]
+    fn the_exact_total_replaces_a_larger_estimate_at_attest() {
+        let mut published: Vec<SnapshotProgress> = Vec::new();
+        {
+            let mut copy = CopyProgress {
+                progress: &mut |progress| published.push(progress),
+                done: 0,
+                total: 100,
+            };
+            copy.begin();
+            copy.copied(60);
+            copy.attested(60);
+        }
+        assert_eq!(
+            published.last(),
+            Some(&SnapshotProgress {
+                step: SnapshotStep::Attest,
+                done: 60,
+                total: 60,
+            }),
+            "the total is the exact sum once the copy is complete: {published:?}"
         );
     }
 }

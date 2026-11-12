@@ -185,8 +185,9 @@ impl JobProgress {
     ///
     /// The step is a name of the write protocol — `validation`, `segment`,
     /// `transaction`, `lexical`, `manifest`, `snapshot` —; `done` and `total`
-    /// count passages for an attach and documents for a patch
-    /// (`docs/05-api.md`, "Jobs"; ADR-0134).
+    /// count passages for an attach, documents for a patch, and bytes for a
+    /// snapshot, whose steps are `copy`, `attest` and `rename` (`docs/05-api.md`,
+    /// "Jobs"; ADR-0134, ADR-0153).
     ///
     /// The value is published **in memory** at once, so `GET /v1/jobs/{id}` and
     /// `GET /v1/jobs` read it while the job runs; the table is written only at

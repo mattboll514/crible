@@ -188,6 +188,43 @@ impl SegmentMeta {
     }
 }
 
+/// Bytes of the files of `segments`: their `segment.json` and their vector
+/// file, summed.
+///
+/// The source is the metadata of the published generation, never the
+/// directory: no walk and no `stat` (ADR-0152, decision 3). A segment listed
+/// here therefore counts its declared size even if its directory is gone; this
+/// is a size, not an availability check.
+///
+/// # Errors
+///
+/// [`ErrorCode::Internal`] when one segment declares a length that overflows a
+/// `u64`, or when their sum does.
+pub fn live_bytes(segments: &[SegmentMeta]) -> Result<u64, CribleError> {
+    let mut total = 0_u64;
+    for segment in segments {
+        let bytes = segment
+            .vectors_bytes()?
+            .checked_add(segment.manifest_bytes()?)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the published segments hold more than u64::MAX bytes at segment {}",
+                        segment.segment_id
+                    ),
+                )
+            })?;
+        total = total.checked_add(bytes).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the published segments hold more than u64::MAX bytes",
+            )
+        })?;
+    }
+    Ok(total)
+}
+
 /// Writes the vector file and the manifest of one segment.
 ///
 /// Creation builds `segments/tmp-<segment_id>/`; [`SegmentWriter::finish`]

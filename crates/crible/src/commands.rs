@@ -29,9 +29,11 @@
 //! `crible attach` reads.
 
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crible_core::batch::BatchMode;
 use crible_core::config::{FusionConfig, IndexConfig, check_alpha};
@@ -60,6 +62,7 @@ use crible_store::generation::{
 };
 use crible_store::online;
 use crible_store::patch::{self, PatchSource};
+use crible_store::snapshot::{SnapshotProgress, SnapshotStep};
 use serde_json::{Value, json};
 
 use crate::vector;
@@ -419,13 +422,32 @@ pub fn export_index(
 /// another. Inside this process, the write opening holds the single writer, so
 /// no commit can run while the copy is taken.
 ///
+/// The command creates no job: the server is stopped, so nothing could read one.
+/// It writes its own progress on `stderr`, every [`SNAPSHOT_PROGRESS_PERIOD`]
+/// (ADR-0153, decision 6), and keeps `stdout` for the single report line below.
+///
 /// The command encodes nothing and takes no `--models`: neither the copy nor the
 /// restore loads the model (ADR-0065, decision 6).
 pub fn snapshot_index(data: &Path, exchange: &Path, index: &str) -> Result<(), CribleError> {
     let name = path_component(index, "index name")?;
     let (index_dir, config) = load_index(data, name)?;
     let mut store = open_store_for_write(data, &index_dir, &config.schema)?;
-    let report = crible_store::snapshot::create(&mut store, &config, exchange)?;
+
+    let line = Arc::new(Mutex::new(ProgressLine::new(
+        Box::new(io::stderr()),
+        SNAPSHOT_PROGRESS_PERIOD,
+    )));
+    let ticker = spawn_progress_ticker(Arc::clone(&line), SNAPSHOT_PROGRESS_PERIOD);
+    let outcome = crible_store::snapshot::create(&mut store, &config, exchange, &mut |progress| {
+        if let Ok(mut line) = line.lock() {
+            line.record(progress);
+        }
+    });
+    if let Some((stop, handle)) = ticker {
+        let _ = stop.send(());
+        let _ = handle.join();
+    }
+    let report = outcome?;
     println!(
         "index '{}' snapshot to {}: epoch {}, generation {}, {} document(s), {} passage(s), \
          {} bytes",
@@ -438,6 +460,126 @@ pub fn snapshot_index(data: &Path, exchange: &Path, index: &str) -> Result<(), C
         report.bytes,
     );
     Ok(())
+}
+
+/// Period of the progress line of `crible snapshot` (ADR-0153, decision 6).
+const SNAPSHOT_PROGRESS_PERIOD: Duration = Duration::from_secs(10);
+
+/// Prefix of every progress line of `crible snapshot`.
+const SNAPSHOT_PROGRESS_MARK: &str = "crible snapshot: ";
+
+/// State of the progress line `crible snapshot` writes on `stderr` (ADR-0153,
+/// decision 6).
+///
+/// The line is written directly, outside the `tracing` journal: that journal is
+/// JSON and filtered at `warn` by default, so an `info!` record would be
+/// invisible. It carries the step, the bytes copied, the estimated total and the
+/// elapsed time.
+struct ProgressLine {
+    /// Destination of the line, `stderr` in the command.
+    out: Box<dyn Write + Send>,
+    /// Start of the command, the origin of the elapsed time.
+    started: Instant,
+    /// Minimum delay between two lines.
+    period: Duration,
+    /// Last publication of the copy, `None` before the first one.
+    progress: Option<SnapshotProgress>,
+    /// Time and step of the last line written.
+    last: Option<(Instant, SnapshotStep)>,
+}
+
+impl ProgressLine {
+    /// Creates the line of a command that started now.
+    fn new(out: Box<dyn Write + Send>, period: Duration) -> Self {
+        Self {
+            out,
+            started: Instant::now(),
+            period,
+            progress: None,
+            last: None,
+        }
+    }
+
+    /// Records a publication of the copy, and writes the line when it is due.
+    fn record(&mut self, progress: SnapshotProgress) {
+        self.progress = Some(progress);
+        self.flush();
+    }
+
+    /// Writes the line when the period elapsed since the previous one.
+    ///
+    /// Called by the ticker, so a step that reports nothing — the `VACUUM INTO`
+    /// — still shows the last known state instead of silence.
+    fn tick(&mut self) {
+        self.flush();
+    }
+
+    /// Writes the current progress when it is the first one, when the step
+    /// changed, or when the period elapsed.
+    fn flush(&mut self) {
+        let Some(progress) = self.progress else {
+            return;
+        };
+        let now = Instant::now();
+        let due = match self.last {
+            None => true,
+            Some((written, step)) => {
+                step != progress.step || now.saturating_duration_since(written) >= self.period
+            }
+        };
+        if !due {
+            return;
+        }
+        self.last = Some((now, progress.step));
+        let text = format!(
+            "{SNAPSHOT_PROGRESS_MARK}{}, {} of {} bytes copied, {} s elapsed\n",
+            progress.step.as_str(),
+            progress.done,
+            progress.total,
+            now.saturating_duration_since(self.started).as_secs(),
+        );
+        // A failed write on `stderr` must not fail a copy that is going well.
+        let _ = self.out.write_all(text.as_bytes());
+        let _ = self.out.flush();
+    }
+}
+
+/// Starts the thread that calls [`ProgressLine::tick`] every `period`, and
+/// returns its stop channel and its handle.
+///
+/// The thread stops at once when the channel is used or dropped, so the command
+/// does not wait a whole period after its copy. A thread that cannot start is
+/// named in the journal and leaves the first-line publication of [`ProgressLine`]
+/// alone.
+fn spawn_progress_ticker(
+    line: Arc<Mutex<ProgressLine>>,
+    period: Duration,
+) -> Option<(mpsc::Sender<()>, JoinHandle<()>)> {
+    let (stop, stopped) = mpsc::channel::<()>();
+    let worker = thread::Builder::new()
+        .name("snapshot-progress".to_owned())
+        .spawn(move || {
+            loop {
+                match stopped.recv_timeout(period) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if let Ok(mut line) = line.lock() {
+                            line.tick();
+                        }
+                    }
+                }
+            }
+        });
+    match worker {
+        Ok(handle) => Some((stop, handle)),
+        Err(error) => {
+            tracing::warn!(
+                cause = %error,
+                "the progress line of the snapshot cannot start"
+            );
+            None
+        }
+    }
 }
 
 /// `crible restore --data <dir> --snapshot <dir>`.
@@ -1457,8 +1599,130 @@ fn table_line(cells: &[String], widths: &[usize]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{EXCERPT_CHARS, SearchFormat, SearchRequest, excerpt};
+    use super::{
+        EXCERPT_CHARS, ProgressLine, SNAPSHOT_PROGRESS_MARK, SearchFormat, SearchRequest, excerpt,
+        spawn_progress_ticker,
+    };
+    use crible_store::snapshot::{SnapshotProgress, SnapshotStep};
+    use std::io::Write;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// One publication of the copy, as the store hands it to the command.
+    fn published(step: SnapshotStep, done: u64, total: u64) -> SnapshotProgress {
+        SnapshotProgress { step, done, total }
+    }
+
+    /// A buffer the ticker and the command write to, and the test reads.
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl SharedBuffer {
+        /// Text written so far.
+        fn text(&self) -> String {
+            let bytes = self
+                .0
+                .lock()
+                .map(|buffer| buffer.clone())
+                .unwrap_or_default();
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    }
+
+    impl Write for SharedBuffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let mut buffer = self
+                .0
+                .lock()
+                .map_err(|_| std::io::Error::other("the test buffer is poisoned"))?;
+            buffer.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A copy's first line carries the step, the bytes copied, the estimated
+    /// total and the elapsed time, in English (ADR-0153, decision 6).
+    #[test]
+    fn a_progress_line_names_the_step_the_bytes_and_the_elapsed_time() {
+        let out = SharedBuffer::default();
+        let mut line = ProgressLine::new(Box::new(out.clone()), Duration::from_secs(10));
+        line.record(published(SnapshotStep::Copy, 0, 1234));
+        assert_eq!(
+            out.text(),
+            format!("{SNAPSHOT_PROGRESS_MARK}copy, 0 of 1234 bytes copied, 0 s elapsed\n"),
+            "the line is one readable line on stderr, outside the JSON journal"
+        );
+    }
+
+    /// The line is written once per period and at every step boundary: a slow
+    /// file does not flood `stderr`, and the operator still sees the end of the
+    /// copy (ADR-0153, decision 6).
+    #[test]
+    fn the_line_is_written_once_per_period_and_at_every_step_change() {
+        let out = SharedBuffer::default();
+        // An hour: only a step change can write a second line during the test.
+        let mut line = ProgressLine::new(Box::new(out.clone()), Duration::from_secs(3600));
+        line.record(published(SnapshotStep::Copy, 100, 1000));
+        line.record(published(SnapshotStep::Copy, 200, 1000));
+        line.tick();
+        assert_eq!(
+            out.text().lines().count(),
+            1,
+            "a publication within the period is not a line: {:?}",
+            out.text()
+        );
+        line.record(published(SnapshotStep::Attest, 1000, 1000));
+        line.record(published(SnapshotStep::Rename, 1000, 1000));
+        let text = out.text();
+        assert_eq!(text.lines().count(), 3, "{text}");
+        assert!(text.contains("attest, 1000 of 1000 bytes copied"), "{text}");
+        assert!(text.contains("rename, 1000 of 1000 bytes copied"), "{text}");
+    }
+
+    /// The ticker keeps writing lines while a step reports nothing, which is the
+    /// long `VACUUM INTO` (ADR-0153, decisions 4 and 6). The wait is real, so the
+    /// loop runs fifty copies before it concludes.
+    #[test]
+    fn the_ticker_writes_a_line_while_a_step_reports_nothing() {
+        let period = Duration::from_millis(1);
+        let mut ticks = 0;
+        for _ in 0..50 {
+            let out = SharedBuffer::default();
+            let line = Arc::new(Mutex::new(ProgressLine::new(Box::new(out.clone()), period)));
+            if let Ok(mut line) = line.lock() {
+                line.record(published(SnapshotStep::Copy, 10, 100));
+            }
+            let (stop, handle) = spawn_progress_ticker(Arc::clone(&line), period)
+                .unwrap_or_else(|| panic!("the progress ticker must start"));
+            // The wait is real, so it is bounded and polls the buffer: a loaded
+            // machine must not turn a slow tick into a missing one.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while out.text().lines().count() < 2 && Instant::now() < deadline {
+                std::thread::sleep(period);
+            }
+            stop.send(())
+                .unwrap_or_else(|error| panic!("the ticker must listen: {error}"));
+            handle
+                .join()
+                .unwrap_or_else(|_| panic!("the ticker must stop when it is asked"));
+            let lines = out.text().lines().count();
+            assert!(
+                lines > 1,
+                "the ticker writes after the first line, got {lines}: {:?}",
+                out.text()
+            );
+            ticks += lines;
+        }
+        assert!(
+            ticks >= 50,
+            "fifty copies must show at least their first line, got {ticks}"
+        );
+    }
 
     #[test]
     fn debug_never_prints_the_query_text_nor_a_filter_value() {
