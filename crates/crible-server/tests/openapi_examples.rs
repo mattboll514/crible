@@ -454,6 +454,80 @@ fn the_job_schema_describes_durations_as_a_closed_object() {
     }
 }
 
+/// `sizes.live_bytes` is a required unsigned integer of `IndexSizes`, and the
+/// example of `docs/05-api.md` is validated against it by
+/// [`json_examples_conform_to_the_specification`] (ADR-0152, decisions 2 and
+/// 7).
+///
+/// The member is always present and worth `0` for an index without a segment,
+/// so it is required and refuses a negative value; an unknown member is refused
+/// by the closed body of `IndexState` (ADR-0105, decision 3).
+#[test]
+fn the_sizes_component_declares_live_bytes_as_a_required_unsigned_integer() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let sizes = &specification["components"]["schemas"]["IndexSizes"];
+    let required = sizes["required"].as_array().unwrap_or_else(|| {
+        panic!("the component `IndexSizes` declares its required members: {sizes}")
+    });
+    for member in ["disk_bytes", "live_bytes"] {
+        assert!(
+            required.iter().any(|name| name.as_str() == Some(member)),
+            "`{member}` is required: the member is always present (ADR-0152, decision 2): {sizes}"
+        );
+    }
+
+    let live = &sizes["properties"]["live_bytes"];
+    assert_eq!(
+        live["type"], "integer",
+        "`live_bytes` is an integer number of bytes: {live}"
+    );
+    assert_eq!(
+        live["minimum"], 0,
+        "an unsigned number of bytes refuses a negative value: {live}"
+    );
+    let description = live["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`live_bytes` carries a description: {live}"));
+    assert!(
+        description.contains("ADR-0152"),
+        "the description names the decision that defines the member: {description}"
+    );
+
+    let validator = validator("IndexSizes");
+    let documented = serde_json::json!({
+        "disk_bytes": 21_474_836_480_u64,
+        "live_bytes": 0,
+        "filter_memory_bytes": 41_943_040,
+        "codes_memory_bytes": 1_287_000_000,
+    });
+    assert!(
+        validator.validate(&documented).is_ok(),
+        "the documented body is accepted, `live_bytes: 0` included"
+    );
+    let mut missing = documented.clone();
+    missing
+        .as_object_mut()
+        .expect("the documented body is an object")
+        .remove("live_bytes");
+    assert!(
+        validator.validate(&missing).is_err(),
+        "`live_bytes` is required, so its absence is refused"
+    );
+    for (label, value) in [
+        ("a negative number", serde_json::json!(-1)),
+        ("a fraction", serde_json::json!(1.5)),
+        ("a string", serde_json::json!("0")),
+    ] {
+        let mut wrong = documented.clone();
+        wrong["live_bytes"] = value;
+        assert!(
+            validator.validate(&wrong).is_err(),
+            "`live_bytes` is an unsigned integer: `{label}` is refused"
+        );
+    }
+}
+
 /// The error component admits the refusal of ADR-0150 and documents it.
 ///
 /// `details` is a free object: the closed vocabulary of its keys lives in

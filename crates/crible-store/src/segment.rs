@@ -135,7 +135,12 @@ pub struct SegmentMeta {
 
 impl SegmentMeta {
     /// Number of bytes of the vector file of this segment.
-    fn vectors_len(&self) -> Result<u64, CribleError> {
+    ///
+    /// `count × dims` components of two or four bytes each, computed from the
+    /// metadata alone: no file is opened and no path is inspected (ADR-0152,
+    /// decision 3). An error is returned when the product overflows a `u64`,
+    /// which would describe a file no filesystem can hold.
+    pub fn vectors_bytes(&self) -> Result<u64, CribleError> {
         let components = u64::from(self.count)
             .checked_mul(u64::from(self.dims))
             .ok_or_else(|| {
@@ -160,6 +165,26 @@ impl SegmentMeta {
                     ),
                 )
             })
+    }
+
+    /// Number of bytes `segment.json` occupies on disk.
+    ///
+    /// The file is written from the canonical serialisation in this module, so
+    /// serialising the metadata again gives the same bytes and the length of the
+    /// string is the length of the file, to the byte (ADR-0152, decision 3). No
+    /// file is read.
+    pub fn manifest_bytes(&self) -> Result<u64, CribleError> {
+        let bytes = manifest_json(self)?.len();
+        u64::try_from(bytes).map_err(|_| {
+            CribleError::new(
+                ErrorCode::Internal,
+                format!(
+                    "segment {} declares a segment.json of {bytes} bytes, \
+                     which does not fit in a u64",
+                    self.segment_id
+                ),
+            )
+        })
     }
 }
 
@@ -491,7 +516,7 @@ impl SegmentReader {
         if let Some(log) = hook.as_deref() {
             crate::testhooks::record_to(log, crate::testhooks::Kind::Open, &meta.segment_id);
         }
-        let expected_len = meta.vectors_len()?;
+        let expected_len = meta.vectors_bytes()?;
         let actual_len = fs::metadata(&vectors_path)
             .map_err(|error| io_error("inspect the vector file", &vectors_path, &error))?
             .len();
@@ -1276,6 +1301,53 @@ mod tests {
         writer.finish().expect("the segment is committed");
         let path = segments.join("seg-f16");
         (dir, path)
+    }
+
+    /// The two computed sizes are the sizes of the files of the segment, in
+    /// both reference precisions, and the manifest length is the length of the
+    /// canonical `segment.json` the writer produced (ADR-0152, decision 3).
+    #[test]
+    fn computed_sizes_match_the_files_of_both_precisions() {
+        for precision in [ReferencePrecision::Fp16, ReferencePrecision::Fp32] {
+            let (_dir, path) =
+                write_segment(&[vec![0.5; 4], vec![1.0; 4], vec![-0.5; 4]], 4, precision);
+            let meta = SegmentReader::open(&path)
+                .expect("the segment opens")
+                .meta()
+                .clone();
+            let component = match precision {
+                ReferencePrecision::Fp16 => 2,
+                ReferencePrecision::Fp32 => 4,
+            };
+            assert_eq!(
+                meta.vectors_bytes().expect("the byte length is computable"),
+                3 * 4 * component,
+                "three vectors of four components, {component} bytes each"
+            );
+            let vector_file = match precision {
+                ReferencePrecision::Fp16 => "vectors.f16",
+                ReferencePrecision::Fp32 => "vectors.f32",
+            };
+            for (name, computed) in [
+                (
+                    vector_file,
+                    meta.vectors_bytes().expect("the byte length is computable"),
+                ),
+                (
+                    "segment.json",
+                    meta.manifest_bytes()
+                        .expect("the manifest length is computable"),
+                ),
+            ] {
+                let actual = fs::metadata(path.join(name))
+                    .unwrap_or_else(|error| panic!("{name} is statable: {error}"))
+                    .len();
+                assert_eq!(
+                    computed, actual,
+                    "the computed length of {name} must be the length of the file"
+                );
+            }
+        }
     }
 
     /// A segment with no vector still opens: an epoch may attach an empty batch.

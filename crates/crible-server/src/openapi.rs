@@ -482,8 +482,17 @@ pub struct IndexList {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IndexSizes {
-    /// Size of the index directory on disk.
+    /// Size of the index directory on disk, every file included: a walk of the
+    /// tree, so transients (`-wal`, `-shm`, `tmp-*`) and unreferenced segments
+    /// count, and the value is not stable between two calls nor across a
+    /// restart (ADR-0152, decision 1).
     pub disk_bytes: u64,
+    /// Bytes of the files of the segments of the published generation: their
+    /// `segment.json` and their vector file, summed. Computed from the
+    /// published state, without reading the directory, so it is stable between
+    /// two calls and identical after a restart; `0` for an index without a
+    /// segment (ADR-0152, decisions 2 and 3).
+    pub live_bytes: u64,
     /// Estimated heap size of the filter structures.
     pub filter_memory_bytes: u64,
     /// Bytes of RAM the binary codes hold.
