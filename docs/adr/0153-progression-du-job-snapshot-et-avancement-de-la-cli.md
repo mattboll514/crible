@@ -1,11 +1,11 @@
 # ADR-0153 — Progression du job `snapshot` et avancement de la CLI
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12, confirmé par le propriétaire le 2026-11-12)
 - **Date** : 2026-11-12
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T11-AVANCEMENT-SNAPSHOT` (v1.1), sur demande de l'orchestrateur et sur le verdict de `@architecte` du 2026-11-12
 - **Remplace** : ADR-0134, **décisions 1, 2 et 4 seulement, et en partie** — pour le seul `kind` `snapshot`. Le reste d'ADR-0134 reste vrai pour les autres types, et ses décisions 3 et 5 ne changent pas.
-- **Décision** : acceptation par anticipation par le propriétaire le 2026-11-12, sa réponse : « si tu as des adr a ecrire considiere qu'il sont accpeté par anticipation on les regarde ensemble apres les 2 tickets ».
+- **Décision** : confirmée par le propriétaire le 2026-11-12, sa réponse : « les 2 adr sont accepté avec l'eratum », erratum du 2026-11-12 compris.
 
 > **Erratum du 2026-11-12, sur l'implémentation de la tâche `T11-AVANCEMENT-SNAPSHOT`.** Il précise la décision 6 et **amende sur place sa puce** « une ligne toutes les 10 secondes », pour qu'elle ne contredise pas cet erratum ; l'ADR a été accepté par anticipation et sera relu par le propriétaire, qui peut refuser cette réécriture. Aucun autre point ne change.
 >

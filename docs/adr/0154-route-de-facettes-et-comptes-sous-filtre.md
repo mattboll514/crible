@@ -1,11 +1,11 @@
 # ADR-0154 — Route de facettes et comptes de passages et de documents sous filtre
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12, confirmé par le propriétaire le 2026-11-12)
 - **Date** : 2026-11-12
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T12-FACETTES-ET-COMPTES` (v1.1), sur demande de l'orchestrateur et sur le verdict de `@architecte` du 2026-11-12
 - **Remplace** : — (complète ADR-0102 pour le sémaphore et le délai, ADR-0146 pour la liste des routes refusées au démarrage, et la liste fermée des opérations de `docs/06-observabilite.md`)
-- **Décision** : acceptation par anticipation par le propriétaire le 2026-11-12, sa réponse : « si tu as des adr a ecrire considiere qu'il sont accpeté par anticipation on les regarde ensemble apres les 2 tickets ».
+- **Décision** : confirmée par le propriétaire le 2026-11-12, sa réponse : « les 2 adr sont accepté avec l'eratum », erratum du 2026-11-12 après la mesure MES-18 compris.
 
 > **Erratum du 2026-11-12, après la mesure MES-18.** Il corrige un exemple de la décision 8 et rappelle deux lectures que la mesure confirme. **Aucune décision ne change** : ni la route, ni son corps, ni ses comptes, ni le repli de la décision 11. Cet ADR a été accepté par anticipation et sera relu par le propriétaire, qui peut refuser les réécritures faites sur place.
 >
