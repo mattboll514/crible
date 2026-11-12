@@ -1,10 +1,11 @@
 # ADR-0150 — Refus `index_deleting` à la recréation d'un nom en cours de suppression, et ordre des étapes de `delete_index`
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-12)
 - **Date** : 2026-11-11 (proposition et acceptation anticipée)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, à la demande de l'orchestrateur du 2026-11-11, pour la tâche `T03-RECREATION-APRES-SUPPRESSION` de la v1.1, sur le verdict de `@architecte` du 2026-11-11 et sur le ticket 03 du projet Legifacile (`tickets-crible/03-suppression-index-asynchrone.md`, lecture seule)
 - **Remplace** : — (complète ADR-0105, décisions 2 et 6, sans modifier son corps)
+- **Décision** : confirmée par le propriétaire le 2026-11-12, sa réponse : « les adr sont accepté ».
 
 ## Contexte
 

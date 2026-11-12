@@ -1,10 +1,11 @@
 # ADR-0152 — `sizes.disk_bytes` documenté, et un membre `sizes.live_bytes` stable
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-12, confirmé par le propriétaire le 2026-11-12)
 - **Date** : 2026-11-12
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T10-DISK-BYTES-STABLES` (v1.1), sur demande de l'orchestrateur et sur le verdict de `@architecte` du 2026-11-12
 - **Remplace** : — (complète ADR-0105, décision 3, sans modifier son corps ; ne change ni ADR-0117, ni ADR-0124, ni `docs/05`)
+- **Décision** : confirmée par le propriétaire le 2026-11-12, sa réponse : « les adr sont accepté », erratum du 2026-11-12 compris.
 
 > **Erratum du 2026-11-12, sur la relecture de la tâche `T10-DISK-BYTES-STABLES`.** Trois corrections de forme, aucune décision ne change.
 >

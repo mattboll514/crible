@@ -1,10 +1,11 @@
 # ADR-0151 — Chiffre de mémoire qui fait foi, journal de mémoire du serveur et mesure MES-17
 
-- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11)
+- **Statut** : Accepté (accepté par anticipation par le propriétaire le 2026-11-11, confirmé par le propriétaire le 2026-11-12)
 - **Date** : 2026-11-11 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : greffier, sur demande de l'orchestrateur, tâche `T05-MEMOIRE-NON-RENDUE` (v1.1)
 - **Remplace** : —
+- **Décision** : confirmée par le propriétaire le 2026-11-12, sa réponse : « les adr sont accepté », erratum du 2026-11-11 compris.
 
 ## Contexte
 
