@@ -6,6 +6,14 @@
 - **Proposé par** : agent `@greffier`, tâche `T10-DISK-BYTES-STABLES` (v1.1), sur demande de l'orchestrateur et sur le verdict de `@architecte` du 2026-11-12
 - **Remplace** : — (complète ADR-0105, décision 3, sans modifier son corps ; ne change ni ADR-0117, ni ADR-0124, ni `docs/05`)
 
+> **Erratum du 2026-11-12, sur la relecture de la tâche `T10-DISK-BYTES-STABLES`.** Trois corrections de forme, aucune décision ne change.
+>
+> 1. Le Contexte comptait les dossiers `deleted-*` parmi ce que la marche de `disk_bytes` voit. C'est faux : le job `delete_index` renomme le dossier de l'index sous `<data>/tmp/deleted-<nom>-<job_id>`, **hors** de `<data>/indexes/<nom>` (`docs/02-architecture.md:67` et `:150`, ADR-0105, décision 6, ADR-0150), et `directory_size` ne parcourt que le dossier de l'index : il ne peut donc jamais compter un `deleted-*`. La phrase du Contexte est corrigée en conséquence, et `deleted-*` disparaît aussi des listes qui l'avaient recopié : la liste des exclusions de la décision 2 et la ligne d'application de `docs/05`. La décision 1 reste valable telle quelle, et son sens n'est pas modifié.
+>
+> 2. La décision 2 nomme `GET /v1/indexes/{index}` comme seule route portant `live_bytes`, et c'est exact au sens du contrat : le `201` de `POST /v1/indexes` rend le **même corps** que ce `GET` (même composant `IndexDetail`, `detail` partagé, `crates/crible-server/src/indexes.rs:97`), donc le même `state.sizes`, où `live_bytes` vaut `0` sur un index neuf. La décision 5 se lit donc ainsi : l'exposition est limitée aux réponses qui portent `IndexDetail`, c'est-à-dire le `GET` du détail et le `201` de la création. Aucune autre route n'est concernée. Le titre de la décision 5, « Exposition limitée à une route », devient « Exposition limitée au corps du détail », ce que le fond ne change pas.
+>
+> 3. La décision 4 portait une phrase mal construite sur l'effet d'une compaction (« fusionne plusieurs segments en un découpage … en retire ») ; elle est réécrite sans changer la règle : la somme des vecteurs reste invariante, et la compaction retire le `segment.json` de chaque segment supprimé.
+
 ## Contexte
 
 ### Le ticket, et ce qu'il constate
@@ -13,7 +21,7 @@
 Le ticket 10 du projet Legifacile (`../legifacile/tickets-crible/10-disk-bytes-instables.md`) porte sur la version 1.0.0. `sizes.disk_bytes` de `GET /v1/indexes/{index}` est la taille du dossier de l'index, mesurée par une marche du système de fichiers (`crates/crible-server/src/indexes.rs:578`, `directory_size`). Cette marche compte tout ce que le dossier contient :
 
 - les fichiers `records.sqlite-wal` et `-shm`, dont la taille dépend des points de contrôle de SQLite ;
-- les dossiers `tmp-*` d'une attache en cours, et les `deleted-*` d'un `delete_index` interrompu ;
+- les dossiers `tmp-*` d'une attache en cours ;
 - les `codes.bin` et le dossier `cache/`, qui sont **dérivés** et se reconstruisent (`docs/02-architecture.md:80`, `:87`, ADR-0069) ;
 - les dossiers de segment **absents de la table `segments`**, que la reprise supprime à la prochaine ouverture en écriture (`crates/crible-store/src/generation.rs:57`, `docs/02-architecture.md:144-152`).
 
@@ -60,7 +68,7 @@ Membre **`live_bytes`**, **entier d'octets**, **toujours présent**, `0` pour un
 - `manifests/` : vue dérivée d'une génération (ADR-0016) ;
 - `records.sqlite`, son `-wal` et son `-shm` : leur taille dépend des points de contrôle ;
 - `lexical/` : index dérivé, dont la taille dépend des fusions tantivy ;
-- `tmp-*`, `deleted-*`, et tout dossier de segment absent de la table `segments`.
+- `tmp-*`, et tout dossier de segment absent de la table `segments`.
 
 ### 3. La source est l'état publié, et le calcul ne lit aucun fichier
 
@@ -85,9 +93,9 @@ Le coût est négligeable devant la marche mesurée : sérialiser quelques centa
 - **identique avant et après un redémarrage** : la reprise ne change ni la génération ni la table `segments`, et `live_bytes` ne lit pas le disque ;
 - **croissant à l'attache**, de la taille des fichiers du segment ajouté : le nouveau segment entre dans la génération publiée avec son `segment.json` et son `vectors.*` ;
 - **inchangé par un patch** de métadonnées : un patch ne crée aucun segment et republie les mêmes (`docs/02-architecture.md:140`) ;
-- **modifié par une compaction, à un seul terme près.** La compaction garde les passages vivants, la dimension et la précision, donc la **somme des vecteurs est invariante** : mêmes composantes, mêmes 2 ou 4 octets par composante. Le terme `segment.json`, lui, suit le **nombre de segments** : une compaction qui fusionne plusieurs segments en un découpage de 1 000 000 de passages en **retire** le `segment.json`, soit quelques centaines d'octets par segment supprimé. La somme baisse donc légèrement, sans qu'un passage ait disparu. C'est écrit dans `docs/05`.
+- **modifié par une compaction, à un seul terme près.** La compaction garde les passages vivants, la dimension et la précision, donc la **somme des vecteurs est invariante** : mêmes composantes, mêmes 2 ou 4 octets par composante. Le terme `segment.json`, lui, suit le **nombre de segments** : une compaction qui ramène plusieurs segments à un découpage de 1 000 000 de passages **retire** le `segment.json` de chaque segment supprimé, soit quelques centaines d'octets par segment. La somme baisse donc légèrement, sans qu'un passage ait disparu. C'est écrit dans `docs/05`.
 
-### 5. Exposition limitée à une route
+### 5. Exposition limitée au corps du détail
 
 `live_bytes` n'apparaît **ni** dans `GET /v1/indexes` (corps fermé, ADR-0105 ; route servie pendant le démarrage, ADR-0146), **ni** dans `/v1/stats` (membres fixes, `disk_bytes` seule taille stockée, ADR-0124), **ni** dans `analytics.sqlite` (une colonne serait un changement de format, interdit en 1.x par ADR-0143 et INV-15), **ni** dans la CLI.
 
@@ -105,7 +113,7 @@ Un membre de réponse nouveau, sans effet sur les membres existants (ADR-0143, d
 
 | Document ou code | Ce qui change |
 |---|---|
-| `docs/05-api.md` (définition de `disk_bytes`, `:134`) | ce que la marche inclut (WAL, `-shm`, `tmp-*`, `deleted-*`, `cache/`, `codes.bin`, segments non référencés) et l'effet de la reprise : la valeur peut changer entre deux appels et baisser au redémarrage |
+| `docs/05-api.md` (définition de `disk_bytes`, `:134`) | ce que la marche inclut (WAL, `-shm`, `tmp-*`, `cache/`, `codes.bin`, segments non référencés), le fait qu'un `deleted-*` vit sous `<data>/tmp` et n'est jamais compté, et l'effet de la reprise : la valeur peut changer entre deux appels et baisser au redémarrage |
 | `docs/05-api.md` (définition de `live_bytes`) | la définition de la décision 2, sa stabilité (décision 4), et ce qu'il ne mesure pas (décision 6) |
 | `docs/05-api.md` (exemple de corps, `:128`) | `live_bytes` ajouté dans `state.sizes`, à côté de `disk_bytes` |
 | `docs/02-architecture.md` | rien, sauf si le propriétaire veut un renvoi à cet ADR à côté de la marche ; la reprise est déjà décrite (`:144-152`) |

@@ -32,6 +32,7 @@ use crible_core::config::{IndexConfig, IndexPatch, apply_patch};
 use crible_core::error::{CribleError, ErrorCode};
 use crible_store::generation::{GenerationStore, rewrite_index_config};
 use crible_store::jobs::JobKind;
+use crible_store::segment::SegmentMeta;
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -516,6 +517,11 @@ fn list_entry(handle: &IndexHandle) -> Result<Value, CribleError> {
 /// Blocking: it walks the index directory for `sizes.disk_bytes`. The other
 /// numbers come from the published snapshot (ADR-0105, decision 3), and
 /// `last_batch` is the last row of `batches`, `null` when none was attached.
+///
+/// The response has two origins, and they are not interchangeable:
+/// `sizes.disk_bytes` measures the directory on disk, transients included,
+/// while `sizes.live_bytes` is computed from the published segments and reads
+/// no file (ADR-0152, decisions 2 and 3).
 fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> {
     // One read guard for the three parts: the configuration, the snapshot the
     // counts come from and the counts are published together (ADR-0105,
@@ -525,6 +531,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
     let summary = published.summary;
     let directory = index_directory(state, &handle.name)?;
     let disk_bytes = directory_size(&directory)?;
+    let live_bytes = live_bytes(published.snapshot.segments())?;
     Ok(json!({
         "name": handle.name,
         "config": config.to_value(),
@@ -538,6 +545,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
             "segments": summary.segments,
             "sizes": {
                 "disk_bytes": disk_bytes,
+                "live_bytes": live_bytes,
                 "filter_memory_bytes": summary.filter_memory_bytes,
                 "codes_memory_bytes": summary.codes_memory_bytes,
             },
@@ -548,6 +556,41 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
             })),
         },
     }))
+}
+
+/// Bytes of the files of the segments of the published generation: their
+/// `segment.json` and their vector file, summed.
+///
+/// The source is the published state, never the directory: no walk and no
+/// `stat` (ADR-0152, decision 3). A segment the published generation references
+/// therefore counts its declared size even if its directory is gone;
+/// `live_bytes` is not an availability check.
+///
+/// The result is `0` for an index without a segment.
+fn live_bytes(segments: &[SegmentMeta]) -> Result<u64, CribleError> {
+    let mut total = 0_u64;
+    for segment in segments {
+        let bytes = segment
+            .vectors_bytes()?
+            .checked_add(segment.manifest_bytes()?)
+            .ok_or_else(|| {
+                CribleError::new(
+                    ErrorCode::Internal,
+                    format!(
+                        "the segments of the published generation hold more than \
+                         u64::MAX bytes at segment {}",
+                        segment.segment_id
+                    ),
+                )
+            })?;
+        total = total.checked_add(bytes).ok_or_else(|| {
+            CribleError::new(
+                ErrorCode::Internal,
+                "the segments of the published generation hold more than u64::MAX bytes",
+            )
+        })?;
+    }
+    Ok(total)
 }
 
 /// `<data>/indexes/<name>`, the directory of the index.
