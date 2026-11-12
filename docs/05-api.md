@@ -41,7 +41,7 @@ Toute réponse d'erreur du serveur suit ce format et porte `x-request-id` (ADR-0
 | `unauthorized` | 401 | Clé absente, mal formée ou inconnue ; réponse avec `WWW-Authenticate: Bearer` et un corps identique dans les trois cas (ADR-0100) |
 | `forbidden` | 403 | Rôle insuffisant ; sans `WWW-Authenticate` (ADR-0100) |
 | `unknown_index` | 404 | Index inexistant |
-| `not_found` | 404 | Document, job ou lot introuvable ; route inconnue ou méthode non permise sur une route connue (ADR-0101) ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) ou dans `GET /documents/{doc_id}`, et `directory` absent dans `POST /batches` (ADR-0107) |
+| `not_found` | 404 | Document, job ou lot introuvable ; route inconnue ou méthode non permise sur une route connue (ADR-0101) ; `doc_id` inconnu ou retiré dans un patch de métadonnées (ADR-0060) ou dans `GET /documents/{doc_id}`, et dossier de lot absent dans `POST /batches` (ADR-0107) |
 | `immutable_setting` | 409 | Tentative de modifier un réglage figé |
 | `batch_conflict` | 409 | Même `batch_id`, manifeste différent ; rendu par le job d'un lot en ligne ou déposé, jamais par la soumission (ADR-0107) |
 | `payload_too_large` | 413 | Corps au-delà des limites |
@@ -170,12 +170,43 @@ Un index se crée, se règle et se supprime par l'API **sans redémarrer l'insta
 
 <!-- openapi: DepositedBatchRequest -->
 ```json
-{ "directory": "legifacile-decisions-2026-10-19" }
+{ "directory": "decisions-2026-10-19" }
 ```
 
 - `<nom>` est **un seul composant de chemin** : ni vide, ni `.`, ni `..`, ni `/`, ni `\` (`path_component`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox.
 - `<nom>` ne doit pas être un **lien symbolique**, et aucun lien symbolique n'est admis **dans le dossier du lot, à toute profondeur**, y compris vers un autre lot de l'inbox ; toute entrée qui n'est ni un fichier ni un dossier fait aussi refuser le lot. Un refus rend `400 invalid_request`, et le message nomme le champ `directory`, jamais un chemin absolu du serveur (ADR-0101).
 - Un dossier absent rend `404 not_found`. Sinon la réponse est `202` avec un job `attach_batch`. Le job **revalide le dossier du lot juste avant de le lire**, dans l'écrivain, par la même règle que ci-dessus : chemin canonique sous l'inbox, aucun lien symbolique à aucune profondeur, aucune entrée spéciale. Il n'ouvre pas les fichiers avec `O_NOFOLLOW` — la crate `libc` n'est pas dans `docs/07` —, et la fenêtre résiduelle entre cette revalidation et la lecture est assumée : l'inbox est sous le contrôle de l'exploitant, et le serveur seul la lit (ADR-0107).
+
+**Déposer le lot dans l'inbox.** L'attache ne lit qu'un dossier **déjà présent** sous `[paths].exchange`/`inbox`, et le corps ne porte pas un chemin : seulement le nom du dossier sous l'inbox. Le modèle de `docs/07` et `docker/crible.example.toml` donnent `exchange = "/exchange"` — le serveur ne démarre sur aucun défaut implicite, et `docs/07` le dit —, et `docker/README.md` monte le dossier `exchange` de l'hôte sur `/exchange` : côté hôte, l'inbox est donc `<dossier d'échange>/inbox`, et dans le conteneur `/exchange/inbox` (`docs/02`, ADR-0107). Le serveur ne crée pas l'inbox : tant que `<exchange>/inbox` n'existe pas, un appel valide rend `404 not_found`.
+
+Un lot est le dossier complet décrit dans « Format de lot v1 » de `docs/04` : `manifest.json`, les fichiers Parquet et, s'il y en a, `deletions.parquet`. Le déposer revient à **copier ce dossier** sous `<exchange>/inbox/<nom>/`, puis à passer `<nom>` dans le corps de la requête. Ne retirez un dossier de l'inbox que si aucun job d'attache qui le nomme n'est en file ni en cours : le job revalide le dossier juste avant de le lire, et le supprimer alors le fait échouer en `not_found`.
+
+```sh
+mkdir -p "$PWD/exchange/inbox"
+rm -rf "$PWD/exchange/inbox/decisions-2026-10-19"
+cp -R /tmp/lots/decisions-2026-10-19 \
+  "$PWD/exchange/inbox/decisions-2026-10-19"
+
+curl -sS -X POST "$CRIBLE_URL/v1/indexes/decisions/batches?wait=true" \
+  -H "Authorization: Bearer $CRIBLE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"directory":"decisions-2026-10-19"}'
+```
+
+La destination de la copie **ne doit pas exister** : `cp -R source destination` copie **dans** la destination quand elle existe, et un second passage de l'exemple laisserait `inbox/<nom>/<nom>/manifest.json`. Le `rm -rf` retire donc une tentative précédente — **à condition qu'aucun job d'attache de ce nom ne soit en file ni en cours** —, et un nom neuf convient aussi bien.
+
+- **Clé** : la route demande le rôle `write` (`admin` le couvre, ADR-0095) ; une clé `read` reçoit `403`.
+- Le nom du dossier dans l'inbox est **libre** : `docs/04` décrit un lot comme un dossier `<batch_id>/`, une convention de nommage du format, mais l'inbox accepte n'importe quel nom d'un seul composant, qui n'a pas à valoir le `batch_id`. C'est le `batch_id` du `manifest.json` qui identifie le lot, et un rejeu du même `batch_id` avec le même manifeste ne fait rien (INV-10).
+- La copie doit être **terminée** avant l'appel, car le serveur lit le dossier **en place** : il ne le copie ni ne le déplace. Supprimer le dossier pendant que le job attend encore dans la file le fait échouer en `not_found`, puisque le job revalide le dossier juste avant de le lire (ADR-0107, décision 5 et son complément du 2026-10-29).
+- Le serveur ne supprime ni ne déplace le dossier après l'attache : il le lit et le laisse sous `<exchange>/inbox/`. Le nettoyage revient donc à l'exploitant, **après la fin du job** (`succeeded` ou `failed`). Aucune route ne liste l'inbox, donc un lot laissé après une panne se retrouve et se supprime à la main.
+
+Les refus que cet exemple évite :
+
+- un **chemin absolu** (`/tmp/lots/decisions-2026-10-19`) ou un chemin à **plusieurs composants** (`decisions/2026-10-19`) : `<nom>` est un seul composant, et le refus est `400 invalid_request` avec le message « the 'directory' of the batch must be a single path component » ; `<nom>` vide, `.`, `..` ou contenant `\` reçoit le même refus ;
+- un `<nom>` qui est un **lien symbolique**, ou un lien symbolique **à n'importe quelle profondeur** dans le dossier du lot, y compris vers un autre lot : `400 invalid_request`, message nommant le champ `directory` ;
+- une entrée du dossier qui n'est **ni un fichier ni un dossier**, par exemple une socket Unix : même refus ;
+- un **dossier absent** : `404 not_found`, avec le message « the 'directory' of the batch is not found in the inbox » ;
+- un corps qui porte un **champ inconnu** ou pas de `directory` : `400 invalid_request`, avec un message qui commence par « the body of the batch route is invalid ».
 
 ### Patch de métadonnées
 
