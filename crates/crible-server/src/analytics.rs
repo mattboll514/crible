@@ -108,6 +108,8 @@ pub enum Operation {
     Search,
     /// `POST /v1/search`.
     SearchMulti,
+    /// `POST /v1/indexes/{index}/facets` (ADR-0154, decision 9).
+    Facets,
     /// `GET /v1/indexes/{index}/documents/{doc_id}`.
     GetDocument,
     /// `POST` or `PATCH /v1/indexes/{index}/documents`.
@@ -133,6 +135,7 @@ impl Operation {
         match self {
             Self::Search => "search",
             Self::SearchMulti => "search_multi",
+            Self::Facets => "facets",
             Self::GetDocument => "get_document",
             Self::OnlineBatch => "online_batch",
             Self::PatchDocuments => "patch_documents",
@@ -995,12 +998,14 @@ mod tests {
     }
 
     #[test]
-    fn the_closed_operations_are_the_ten_of_the_documentation() {
-        // ADR-0118, decision 6: exactly ten operations, and `index_admin` covers
-        // the administration routes of the indexes.
+    fn the_closed_operations_are_the_eleven_of_the_documentation() {
+        // ADR-0118, decision 6: a closed list, and `index_admin` covers the
+        // administration routes of the indexes; ADR-0154, decision 9, adds
+        // `facets`.
         let names = [
             Operation::Search,
             Operation::SearchMulti,
+            Operation::Facets,
             Operation::GetDocument,
             Operation::OnlineBatch,
             Operation::PatchDocuments,
@@ -1011,8 +1016,9 @@ mod tests {
             Operation::IndexAdmin,
         ]
         .map(Operation::as_str);
-        assert_eq!(names.len(), 10);
-        assert_eq!(names[9], "index_admin");
+        assert_eq!(names.len(), 11);
+        assert_eq!(names[10], "index_admin");
+        assert_eq!(names[2], "facets");
         assert_eq!(names[0], "search");
     }
 

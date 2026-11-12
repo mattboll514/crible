@@ -115,6 +115,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::{Value, json};
 
 use crate::codes;
+use crate::document_ordinals::DocumentOrdinals;
 use crate::filters_index::{CommitDelta, CreatedPassage, FilterIndex, FilterMemory};
 use crate::lexical::{self, LexicalIndex, LexicalObservation, LexicalStatus};
 use crate::records::{self, DocumentRecord, PassageRecord, RecordStore};
@@ -326,6 +327,14 @@ pub struct Snapshot {
     /// Binary codes of `segments`, in the same order.
     codes: Vec<Arc<Vec<u64>>>,
     filters: FilterIndex,
+    /// Derived table `iid → ordinal de document`, built with the filter
+    /// structures and derived at each commit that creates passages (ADR-0154,
+    /// decision 5).
+    ///
+    /// It serves the document count of the facets route. It is never written:
+    /// no file, no `format_version`, and its bytes are counted with the filter
+    /// structures in `filter_memory_bytes`.
+    documents_ordinals: DocumentOrdinals,
     /// Reader of the lexical branch of the epoch, reloaded after the commit that
     /// published this generation (`docs/02`, step 4), or `None` when the index
     /// disables the branch, holds no lexical index yet, or was opened on a
@@ -349,6 +358,10 @@ impl std::fmt::Debug for Snapshot {
             .field("segments", &self.segments)
             .field("codes", &format_args!("{} bytes", self.codes_memory()))
             .field("filters", &self.filters)
+            .field(
+                "documents_ordinals",
+                &format_args!("{} bytes", self.documents_ordinals.memory()),
+            )
             .field("lexical", &self.lexical.is_some())
             .field("lexical_status", &self.lexical_status)
             .field("lease", &self.lease)
@@ -440,6 +453,15 @@ impl Snapshot {
         &self.filters
     }
 
+    /// Derived table `iid → ordinal de document` of the generation.
+    ///
+    /// The facets route counts the distinct documents of its pool with it, and
+    /// never with a query by iid on `records.sqlite` (ADR-0154, decision 5).
+    #[must_use]
+    pub fn documents_ordinals(&self) -> &DocumentOrdinals {
+        &self.documents_ordinals
+    }
+
     /// Reader of the lexical branch of the generation, or `None` when the index
     /// has no consistent lexical index.
     ///
@@ -485,7 +507,12 @@ impl Snapshot {
     /// measure that settles what the report must count.
     #[must_use]
     pub fn filter_memory(&self) -> FilterMemory {
-        self.filters.memory()
+        let mut memory = self.filters.memory();
+        // `docs/02-architecture.md` counts the derived table with the filters:
+        // `filter_memory_bytes` of `state.sizes` covers both (ADR-0154,
+        // decision 5).
+        memory.documents = self.documents_ordinals.memory();
+        memory
     }
 
     /// Bytes of RAM the binary codes of the generation hold: the sum of
@@ -1923,6 +1950,7 @@ fn publish_lexical_reader(
             segments: previous.segments.clone(),
             codes: previous.codes.clone(),
             filters: previous.filters.clone(),
+            documents_ordinals: previous.documents_ordinals.clone(),
             lexical: published.reader,
             lexical_status: published.status,
             lease: Arc::clone(&previous.lease),
@@ -2595,6 +2623,7 @@ fn build_snapshot(
         segments,
         codes,
         filters: FilterIndex::from_records(records.connection(), schema)?,
+        documents_ordinals: DocumentOrdinals::from_records(records.connection())?,
         lexical: lexical.reader,
         lexical_status: lexical.status,
         lease,
@@ -2644,6 +2673,16 @@ fn build_snapshot_after_commit(
     } else {
         FilterIndex::from_records(records.connection(), previous.filters().schema())?
     };
+    // The derived table follows the same two paths as the filters, and for the
+    // same reason: the delta describes the whole difference only when the
+    // previous snapshot is the generation just before this one (INV-04).
+    let documents_ordinals = if consecutive {
+        previous
+            .documents_ordinals()
+            .after_commit(records.connection(), delta)?
+    } else {
+        DocumentOrdinals::from_records(records.connection())?
+    };
     // A segment is immutable: the arrays of the previous snapshot are reused
     // through `Arc`, so a commit reads only the codes of the segments it adds.
     let codes = snapshot_codes(&segments, epoch_dir, lease.epoch, Some(previous))?;
@@ -2665,6 +2704,7 @@ fn build_snapshot_after_commit(
         segments,
         codes,
         filters,
+        documents_ordinals,
         lexical: lexical.reader,
         lexical_status: lexical.status,
         lease,
@@ -4141,6 +4181,7 @@ mod tests {
             segments: vec![meta.clone()],
             codes: vec![std::sync::Arc::new(vec![0_u64])],
             filters: base.filters().clone(),
+            documents_ordinals: base.documents_ordinals().clone(),
             lexical: None,
             lexical_status: super::LexicalStatus::Disabled,
             lease: std::sync::Arc::new(super::EpochLease {

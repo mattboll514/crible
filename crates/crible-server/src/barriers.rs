@@ -29,7 +29,8 @@
 //! - the work step of the search route needs `<dir>/armed-search`, and the one
 //!   of the multi-index route `<dir>/armed-search-multi`, for the same reason:
 //!   every server test sends searches, so a test that arms only another scope
-//!   must not stop them on their token;
+//!   must not stop them on their token; the work step of the facets route needs
+//!   `<dir>/armed-facets`, for the same reason;
 //! - the step of `delete_index` that follows the rename is named by
 //!   `<dir>/delete-after-rename-path`: every server test deletes indexes, so a
 //!   test arms the one directory it quarantines (ADR-0150, decision 4);
@@ -159,6 +160,22 @@ const SEARCH_MULTI_ARMED: &str = "armed-search-multi";
 /// [`SEARCH_MULTI_ARMED`].
 pub(crate) fn wait_search_multi() {
     wait_armed(SEARCH_MULTI_ARMED, "search-multi");
+}
+
+/// Name of the mark a test writes to arm the work step of the facets route.
+///
+/// Every server test sends facets requests once this route exists, so the step
+/// is opt-in like the ones of the searches: without this mark a facets request
+/// of an armed directory runs at full speed.
+const FACETS_ARMED: &str = "armed-facets";
+
+/// Holds the calling facets request inside its blocking task, before its work.
+///
+/// A test proves here that the deadline of `timeout_ms` answers `504` with no
+/// truncated result (ADR-0154, decision 8). The step is opt-in through
+/// [`FACETS_ARMED`].
+pub(crate) fn wait_facets() {
+    wait_armed(FACETS_ARMED, "facets");
 }
 
 /// Name of the file that names the index whose search must fail.

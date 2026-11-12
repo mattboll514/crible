@@ -7,6 +7,14 @@
 - **Remplace** : — (complète ADR-0102 pour le sémaphore et le délai, ADR-0146 pour la liste des routes refusées au démarrage, et la liste fermée des opérations de `docs/06-observabilite.md`)
 - **Décision** : acceptation par anticipation par le propriétaire le 2026-11-12, sa réponse : « si tu as des adr a ecrire considiere qu'il sont accpeté par anticipation on les regarde ensemble apres les 2 tickets ».
 
+> **Erratum du 2026-11-12, après la mesure MES-18.** Il corrige un exemple de la décision 8 et rappelle deux lectures que la mesure confirme. **Aucune décision ne change** : ni la route, ni son corps, ni ses comptes, ni le repli de la décision 11. Cet ADR a été accepté par anticipation et sera relu par le propriétaire, qui peut refuser les réécritures faites sur place.
+>
+> 1. **L'exemple de faible cardinalité de la décision 8 est faux pour `cle_domaine`.** Sur `articles`, le champ `cle_domaine` s'appelle `code`, et il porte **192 876** valeurs distinctes, parce que les conventions collectives `KALI` y mettent un titre long et souvent unique (« ACCORD D'INTERPRETATION Accord du 2 avril 1982 »), là où `LEGI` met un nom de code. Son coût est donc celui d'un champ à forte cardinalité : **146,8 ms** au p95 sans filtre et **120,4 ms** au p95 sous le filtre `textes_vigueur`. Les vocabulaires réellement courts sont `fonds` (2 valeurs), `etat` (15) et `section` (6), dont le p95 vaut environ 27,6 ms sur `articles` et 45,2 ms sur `decisions` : le coût y est celui du pool et du compte de documents, et non du champ. La phrase de la décision 8 est donc **amendée sur place** pour nommer `fonds`, `etat` et `section` comme cas faibles, et `cle_domaine` sur `articles` (192 876 valeurs) comme cas fort, à côté de `numero` sur `decisions` (743 117 valeurs, **306 ms** au p95). La même liste apparaissait au protocole de la décision 11, qui rangeait `cle_domaine` parmi les cas de faible cardinalité ; elle est amendée de la même façon, et MES-18 a effectivement mesuré `code` comme cas de forte cardinalité (B4 et B6 de son tableau).
+>
+> 2. **`limit` ne borne pas le coût.** La route compte toutes les valeurs distinctes du champ, puis trie et coupe : `numero` rend 20 valeurs en 302 ms au p95, et le coût ne décroît pas avec `limit`. C'est ce que la décision 8 écrit déjà — le délai est le seul garde-fou — et MES-18 le confirme. Aucun appel des 1 800 mesurés n'a atteint l'échéance de 2 000 ms : le pire temps observé est 306,60 ms au p99, six fois et demie sous l'échéance.
+>
+> 3. **Le critère de repli de la décision 11 est tenu.** Le p95 du plus grand pool (`decisions` sans filtre, `count.documents` compris) vaut **46,43 ms** pour un seuil de 250 ms, et la table dérivée pèse **36,62 Mio** (38 400 420 octets) sur les six index pour un seuil de 64 Mio. Les deux conditions du repli sont donc remplies dans le bon sens : `count.documents` reste exposé en 1.1 et la table dérivée reste en place. Les détails, les 18 cas et les écarts au protocole sont dans `docs/mesures/MES-18-facettes.md`.
+
 ## Contexte
 
 ### Le ticket, et ce qu'il constate
@@ -143,7 +151,7 @@ La route prend un **jeton du même sémaphore** que les recherches, `[server].ma
 
 L'échéance de `timeout_ms` part de la prise du jeton. Elle est vérifiée **entre deux valeurs** d'un champ et **pendant le compte des documents**, en plus des frontières naturelles du travail. À l'échéance, la réponse est `504 timeout`, **jamais un résultat tronqué ni un `other` faux** : une réponse partielle serait pire qu'une erreur, parce qu'un client la lirait comme complète. Le jeton reste tenu jusqu'à la fin réelle du calcul (ADR-0102, décision 3).
 
-Le coût croît avec le **nombre de valeurs distinctes du champ sous filtre**. Il est faible pour `cle_domaine`, `fonds` ou `etat`, dont les vocabulaires sont courts ; il est fort pour un champ comme `num`, qui peut porter des milliers de valeurs distinctes, puisque chaque valeur demande une intersection de bitmaps. Ce coût n'a pas de critère chiffré : le délai le borne, et MES-18 le **publie** par champ.
+Le coût croît avec le **nombre de valeurs distinctes du champ sous filtre**. Il est faible pour `fonds`, `etat` ou `section`, dont les vocabulaires sont courts (2, 15 et 6 valeurs, MES-18) ; il est fort pour `cle_domaine` sur `articles`, qui porte **192 876** valeurs distinctes du fait des conventions collectives `KALI` (146,8 ms au p95 sans filtre, 120,4 ms sous `textes_vigueur`), pour `num`, et pour `numero` sur `decisions`, qui porte **743 117** valeurs (306 ms au p95) : chaque valeur demande une intersection de bitmaps. Ce coût n'a pas de critère chiffré, et `limit` ne le borne pas — toutes les valeurs sont comptées avant le tri et la coupe : le délai le borne, et MES-18 le **publie** par champ.
 
 ### 9. Observabilité
 
@@ -174,7 +182,7 @@ La règle d'or 7 demande de fixer le critère **avant** la mesure. Une mesure **
 - le **p95** d'un appel `facets` avec `count.documents`, sur le plus grand pool (sans filtre, sur le plus grand index) et sous des filtres de corpus ;
 - la **mémoire anonyme** ajoutée par la table dérivée sur les six index, au sens d'ADR-0151 (`RssAnon` fait foi pour la mémoire possédée, `docs/adr/0151-chiffre-de-memoire-qui-fait-foi-journal-et-mesure-mes-17.md:77-78`) ;
 - la **durée ajoutée à l'ouverture** par la construction de la table ;
-- le **coût par champ**, pour une faible cardinalité (`cle_domaine`, `fonds`, `etat`) et une forte cardinalité (`num`), sous filtre et sans.
+- le **coût par champ**, pour une faible cardinalité (`fonds`, `etat`, `section`) et une forte cardinalité (`cle_domaine` sur `articles`, `num`), sous filtre et sans.
 
 **Critère de repli.** Si le p95 dépasse **250 ms**, ou si la table dérivée ajoute plus de **64 Mio** de mémoire anonyme sur les six index (la marge de l'attache est de 0,58 Gio, ADR-0142), alors la 1.1 **n'expose pas** `count.documents` : le membre est **omis** (convention d'omission d'ADR-0119, décision 3), la table dérivée est **retirée**, et le compte de documents revient par un **nouvel ADR**. Tout le reste de la route est gardé.
 

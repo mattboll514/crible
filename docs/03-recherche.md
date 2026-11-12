@@ -33,6 +33,7 @@ La grammaire est décrite dans `05-api.md`. Côté structures de données :
 - **Nœud OU** : union des enfants. **NON** : vivants privés de l'enfant.
 - **Valeurs nulles** (ADR-0035) : les comparaisons ne sont jamais satisfaites par un null. `ne` et `nin` se calculent en `présent ∩ ¬bitmap(...)`, jamais comme le complément sur les vivants. `exists: true` vaut « présent et non null » ; `exists: false` vaut « absent ou null ». **NON** reste le complément sur les vivants, nulls compris.
 - **Résultat final** : on fait l'intersection avec les vivants, et on obtient la taille exacte du pool.
+- **Route de facettes** : `POST /v1/indexes/{index}/facets` réutilise ce même pool, sans branche dense ni lexicale, et ses comptes sont exacts : `count.passages` est la taille du pool, et le compte de chaque valeur d'un champ est l'intersection de sa bitmap avec ce pool. Le compte de documents distincts parcourt les iid du pool et marque leurs ordinaux de document dans une bitmap, sans lecture SQLite par iid (ADR-0154, décisions 5 et 6).
 - **Niveau des champs** : tous les champs sont matérialisés au niveau du passage ; un passage hérite des champs de son document.
 - **Coût** : une clause d'intervalle sans autre clause parcourt toute la colonne (MES-14).
 

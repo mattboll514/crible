@@ -162,13 +162,21 @@ pub struct FilterMemory {
     pub booleans: usize,
     /// The value columns and their present bitmaps.
     pub columns: usize,
+    /// The derived table `iid → ordinal de document` of the snapshot
+    /// (ADR-0154, decision 5).
+    ///
+    /// It is not a filter structure, but `docs/02-architecture.md` counts its
+    /// memory with the filters: `filter_memory_bytes` of `state.sizes` includes
+    /// it, so an operator reads one figure for the whole RAM a generation keeps
+    /// for its filters and its derived table.
+    pub documents: usize,
 }
 
 impl FilterMemory {
-    /// Sum of the four parts, in bytes.
+    /// Sum of the five parts, in bytes.
     #[must_use]
     pub fn total(&self) -> usize {
-        self.live + self.keywords + self.booleans + self.columns
+        self.live + self.keywords + self.booleans + self.columns + self.documents
     }
 }
 
@@ -423,6 +431,17 @@ impl KeywordField {
     #[must_use]
     pub fn present(&self) -> &RoaringBitmap {
         &self.present
+    }
+
+    /// Number of passages of `pool` that carry this value.
+    ///
+    /// The facets route counts a value under a filter by intersecting its
+    /// bitmap with the pool, never by reading a payload (ADR-0154,
+    /// decisions 4 and 5).
+    #[must_use]
+    pub fn count_in(&self, value: &str, pool: &RoaringBitmap) -> u64 {
+        self.bitmap(value)
+            .map_or(0, |bitmap| bitmap.intersection_len(pool))
     }
 
     /// Every distinct value, in ascending order, with its bitmap.
@@ -1035,6 +1054,9 @@ impl FilterIndex {
             keywords,
             booleans,
             columns,
+            // The derived table belongs to the snapshot, not to these
+            // structures: its bytes are added by `Snapshot::filter_memory`.
+            documents: 0,
         }
     }
 

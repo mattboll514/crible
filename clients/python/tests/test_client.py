@@ -543,3 +543,90 @@ def test_the_asynchronous_wait_returns_a_terminal_job() -> None:
             return await client.wait({"id": "job_1", "state": "succeeded"})
 
     assert asyncio.run(scenario())["id"] == "job_1"
+
+
+# --- facets (ADR-0154) ----------------------------------------------------
+
+
+def test_facets_posts_the_fields_and_only_the_options_given() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "generation": 7,
+                "count": {"passages": 3, "documents": 2},
+                "fields": {"fonds": {"values": [{"value": "LEGI", "count": 3}], "other": 0}},
+            },
+        )
+
+    with mock_client(handler) as client:
+        answer = client.facets(
+            "decisions",
+            ["fonds"],
+            filter={"fonds": "LEGI"},
+            limit=20,
+            timeout_ms=1500,
+        )
+
+    request = seen[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/indexes/decisions/facets"
+    assert json.loads(request.content) == {
+        "fields": ["fonds"],
+        "filter": {"fonds": "LEGI"},
+        "limit": 20,
+        "timeout_ms": 1500,
+    }, "the body carries `fields` and the options given (ADR-0154, decision 2)"
+    assert answer["generation"] == 7, "the client returns the JSON body as a dict"
+    assert answer["count"]["documents"] == 2
+
+
+def test_facets_sends_no_option_left_as_none() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"generation": 0, "count": {"passages": 0}, "fields": {}})
+
+    with mock_client(handler) as client:
+        client.facets("decisions", ["fonds"])
+        client.facets("decisions", ["fonds"], filter=None, limit=None, timeout_ms=None)
+
+    for request in seen:
+        assert json.loads(request.content) == {"fields": ["fonds"]}, (
+            "an option left as None is not sent: the server applies its default "
+            "(ADR-0154, decision 2)"
+        )
+    assert [request.url.raw_path for request in seen] == [b"/v1/indexes/decisions/facets"] * 2
+
+
+def test_facets_encodes_the_index_as_one_path_component() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"generation": 0, "count": {"passages": 0}, "fields": {}})
+
+    with mock_client(handler) as client:
+        client.facets("a/b", ["fonds"])
+
+    assert seen[0].url.raw_path == b"/v1/indexes/a%2Fb/facets"
+
+
+def test_the_asynchronous_client_facets_the_same_way() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"generation": 7, "count": {"passages": 3}, "fields": {}})
+
+    async def scenario() -> dict:
+        async with mock_async_client(handler) as client:
+            return await client.facets("decisions", ["fonds", "etat"], limit=100)
+
+    assert asyncio.run(scenario())["generation"] == 7
+    assert (seen[0].method, seen[0].url.path) == ("POST", "/v1/indexes/decisions/facets")
+    assert json.loads(seen[0].content) == {"fields": ["fonds", "etat"], "limit": 100}

@@ -1114,14 +1114,16 @@ fn count_u64(value: i64, column: &str) -> Result<u64, CribleError> {
 /// Number of entries of the two rankings (ADR-0124, decisions 6 and 7).
 pub const TOP_ENTRIES: usize = 10;
 
-/// The ten operations of `docs/06-observabilite.md` (ADR-0118, decision 6).
+/// The eleven operations of `docs/06-observabilite.md` (ADR-0118, decision 6;
+/// ADR-0154, decision 9, adds `facets`).
 ///
 /// The list is closed: a request that names another operation is refused
 /// (ADR-0124, decision 2). The names are the ones [`MinuteEvent::operation`]
 /// stores.
-pub const OPERATIONS: [&str; 10] = [
+pub const OPERATIONS: [&str; 11] = [
     "search",
     "search_multi",
+    "facets",
     "get_document",
     "online_batch",
     "attach_batch",

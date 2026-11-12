@@ -74,6 +74,14 @@ class _Core:
         body["targets"] = [_target(target) for target in targets]
         return _Call("POST", "/v1/search", body)
 
+    def facets(
+        self, index: str, fields: Sequence[str], options: Mapping[str, Any]
+    ) -> _Call:
+        """``POST /v1/indexes/{index}/facets``; ``fields`` is mandatory (ADR-0154)."""
+        body: dict[str, Any] = {"fields": list(fields)}
+        body.update({key: value for key, value in options.items() if value is not None})
+        return _Call("POST", f"/v1/indexes/{_component(index)}/facets", body)
+
     def get_document(self, index: str, doc_id: str, text: bool) -> _Call:
         """``GET /v1/indexes/{index}/documents/{doc_id}``."""
         params = {"text": "true"} if text else {}
@@ -235,6 +243,23 @@ class Client:
         """Searches several indexes in one request (``docs/05``, ADR-0110)."""
         return self._send(self._core.search_multi(targets, options))
 
+    def facets(
+        self,
+        index: str,
+        fields: Sequence[str],
+        *,
+        filter: Mapping[str, Any] | None = None,
+        limit: int | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Returns the frequent values and the counts of a filtered pool (ADR-0154).
+
+        Only the options that are given are sent: an absent ``limit`` or
+        ``timeout_ms`` lets the server apply its default.
+        """
+        options = {"filter": filter, "limit": limit, "timeout_ms": timeout_ms}
+        return self._send(self._core.facets(index, fields, options))
+
     def get_document(self, index: str, doc_id: str, *, text: bool = False) -> dict[str, Any]:
         """Reads a document and its live passages, with their text if ``text``."""
         return self._send(self._core.get_document(index, doc_id, text))
@@ -355,6 +380,19 @@ class AsyncClient:
     ) -> dict[str, Any]:
         """Searches several indexes in one request (``docs/05``, ADR-0110)."""
         return await self._send(self._core.search_multi(targets, options))
+
+    async def facets(
+        self,
+        index: str,
+        fields: Sequence[str],
+        *,
+        filter: Mapping[str, Any] | None = None,
+        limit: int | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Returns the frequent values and the counts of a filtered pool (ADR-0154)."""
+        options = {"filter": filter, "limit": limit, "timeout_ms": timeout_ms}
+        return await self._send(self._core.facets(index, fields, options))
 
     async def get_document(
         self, index: str, doc_id: str, *, text: bool = False

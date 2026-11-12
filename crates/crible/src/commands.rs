@@ -1191,12 +1191,13 @@ fn print_state(name: &str, state: &IndexState) {
     }
     let memory = state.filter_memory;
     println!(
-        "  bitmaps: {} bytes (live {}, keywords {}, booleans {}, columns {})",
+        "  bitmaps: {} bytes (live {}, keywords {}, booleans {}, columns {}, documents {})",
         memory.total(),
         memory.live,
         memory.keywords,
         memory.booleans,
-        memory.columns
+        memory.columns,
+        memory.documents
     );
     println!("  codes: {} bytes", state.codes_memory);
 }
