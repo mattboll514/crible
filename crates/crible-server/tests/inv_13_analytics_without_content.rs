@@ -31,6 +31,7 @@
 //! |---|---|
 //! | `inv_13_the_analytics_and_the_journal_hold_no_query_text_no_filter_value_and_no_result_id` | 100 searches, simple, multi-index and refused: no marker anywhere |
 //! | `inv_13_a_refused_search_leaks_neither_its_query_text_nor_its_filter_value` | the `400` path alone leaks nothing, and still counts |
+//! | `inv_13_stats_mode_filter_carries_no_query_text_or_filter_value` | the answer of `GET /v1/stats?mode=…` and the file it reads hold no content (ADR-0156, decision 6, point 4) |
 //! | `the_marker_of_a_line_written_by_the_test_is_found_in_the_captured_journal` | positive control: the journal capture is not empty, so the absence is real |
 //!
 //! ```text
@@ -225,6 +226,19 @@ fn single_body(query: &str, filter: &str, doc_id: &str) -> Value {
         "k": 5,
         "filter": { "numero": { "eq": filter } },
         "explain_ids": [doc_id],
+    })
+}
+
+/// Body of a `lexical` search of one index, without `explain_ids`.
+///
+/// The `mode` test of INV-13 needs the traffic only: its marks are the query
+/// text and the value of the filter.
+fn lexical_body(query: &str, filter: &str) -> Value {
+    json!({
+        "query": query,
+        "mode": "lexical",
+        "k": 5,
+        "filter": { "numero": { "eq": filter } },
     })
 }
 
@@ -767,4 +781,102 @@ async fn the_marker_of_a_line_written_by_the_test_is_found_in_the_captured_journ
         journal.contents().contains(marker),
         "the journal of the test captures the lines it writes"
     );
+}
+
+/// Number of searches of the `mode` test of INV-13.
+const MODE_SEARCHES: usize = 6;
+
+/// The answer of `GET /v1/stats?mode=…` holds no query text and no filter
+/// value, and neither does the file it reads.
+///
+/// INV-13 on the read added by ADR-0156, decision 1, and the fourth test of its
+/// decision 6: the response is closed and has no member for a value, and the
+/// filter it accepts is a closed enumeration of modes, never a content. The
+/// searches are `lexical`, so no encoder and no ONNX Runtime is loaded, and the
+/// answer is not vacuous: it counts them and renders the canonical shape of
+/// their filters.
+#[tokio::test]
+async fn inv_13_stats_mode_filter_carries_no_query_text_or_filter_value() {
+    let journal = journal();
+    let instance = Instance::new();
+    let state = instance.state();
+    let router = build_router(Arc::clone(&state));
+    create(&router, ALPHA).await;
+
+    let mut markers = Markers::new();
+    let requests: Vec<(String, String)> = (0..MODE_SEARCHES)
+        .map(|_| (markers.next(), markers.next()))
+        .collect();
+
+    for (query, filter) in &requests {
+        let (status, answer) = send(
+            &router,
+            Method::POST,
+            SEARCH_ALPHA,
+            READ_SECRET,
+            Some(lexical_body(query, filter)),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the lexical search answers: {answer}"
+        );
+    }
+
+    state
+        .flush_analytics()
+        .await
+        .expect("the events of the searches are flushed");
+
+    let (status, answer) = send(
+        &router,
+        Method::GET,
+        "/v1/stats?mode=lexical",
+        ADMIN_SECRET,
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the statistics filtered on a mode answer: {answer}"
+    );
+    // The answer is not vacuous: it counts the searches of the mode, so the
+    // absence below is a real absence.
+    assert_eq!(
+        answer["totals"]["count"], MODE_SEARCHES as u64,
+        "the answers of the mode are counted: {answer}"
+    );
+    // The ranking renders the canonical shape of the filters, which is fields
+    // and operators only (ADR-0117, decision 6).
+    assert_eq!(
+        answer["top_filter_shapes"][0]["shape"], "numero:eq",
+        "the shape of the filters is rendered without a value: {answer}"
+    );
+
+    let rendered = answer.to_string();
+    for (query, filter) in &requests {
+        assert!(
+            !rendered.contains(query.as_str()),
+            "the answer holds the query text {query:?} (INV-13): {answer}"
+        );
+        assert!(
+            !rendered.contains(filter.as_str()),
+            "the answer holds the filter value {filter:?} (INV-13): {answer}"
+        );
+    }
+
+    let path = analytics_path(&instance);
+    let files = analytics_bytes(&path);
+    assert!(
+        !files.is_empty(),
+        "the analytics file is readable at {}",
+        path.display()
+    );
+    let journal_text = journal.contents();
+    for (query, filter) in &requests {
+        assert_absent(&files, &journal_text, query, "query text");
+        assert_absent(&files, &journal_text, filter, "filter value");
+    }
 }

@@ -97,6 +97,51 @@ async fn the_specification_is_served_without_a_key() {
     );
 }
 
+/// The served specification declares the optional `mode` of `GET /v1/stats`,
+/// with its closed domain in the description (ADR-0156, decision 1; ADR-0111,
+/// the route, the specification and the example in the same change).
+#[tokio::test]
+async fn the_statistics_route_declares_the_optional_mode_parameter() {
+    let instance = common::Instance::new();
+    let router = build_router(instance.state());
+    let (status, _headers, bytes) = get(&router, "/openapi.json").await;
+    assert_eq!(status, StatusCode::OK, "`GET /openapi.json` answers 200");
+    let specification: Value =
+        serde_json::from_slice(&bytes).expect("the served specification is JSON");
+
+    let parameters = specification["paths"]["/v1/stats"]["get"]["parameters"]
+        .as_array()
+        .unwrap_or_else(|| panic!("`GET /v1/stats` declares its parameters"));
+    let names: Vec<&str> = parameters
+        .iter()
+        .filter_map(|parameter| parameter["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["from", "to", "index", "operation", "mode", "group_by"],
+        "the closed list of the route, `mode` among them"
+    );
+
+    let mode = parameters
+        .iter()
+        .find(|parameter| parameter["name"] == "mode")
+        .unwrap_or_else(|| panic!("the specification declares `mode`: {parameters:?}"));
+    assert_eq!(mode["in"], "query", "`mode` is a query parameter");
+    assert_eq!(
+        mode["required"], false,
+        "an absent `mode` keeps the answer of before the parameter"
+    );
+    let description = mode["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`mode` carries a description: {mode:?}"));
+    for value in ["dense", "lexical", "hybrid"] {
+        assert!(
+            description.contains(value),
+            "the description names the value `{value}`: {description}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn swagger_ui_is_served_without_a_key() {
     let instance = common::Instance::new();

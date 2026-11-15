@@ -1134,6 +1134,14 @@ pub const OPERATIONS: [&str; 11] = [
     "index_admin",
 ];
 
+/// The three search modes, the closed domain of the `mode` filter
+/// (ADR-0156, decision 1).
+///
+/// The names are the ones [`MinuteEvent::mode`] stores, the three the mode of a
+/// search takes (`crible_search::pipeline::Mode`). The list is closed: a filter
+/// that names another mode is refused.
+pub const MODES: [&str; 3] = ["dense", "lexical", "hybrid"];
+
 /// The two search operations, the denominator of `zero_results_rate`
 /// (ADR-0124, decision 5).
 const SEARCH_OPERATIONS: [&str; 2] = ["search", "search_multi"];
@@ -1183,8 +1191,8 @@ impl StatsGroupBy {
     }
 }
 
-/// The five parameters of the statistics read, checked and normalised
-/// (ADR-0124, decision 2).
+/// The six parameters of the statistics read, checked and normalised
+/// (ADR-0124, decision 2; ADR-0156, decision 1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatsFilter {
     /// Lower bound, included, in the `minute` form SQLite stores.
@@ -1195,12 +1203,16 @@ pub struct StatsFilter {
     pub index: Option<String>,
     /// Operation whose events are kept, from [`OPERATIONS`].
     pub operation: Option<String>,
+    /// Mode whose events are kept, from [`MODES`]; absent keeps every mode,
+    /// the rows written before the mode was resolved included (ADR-0156,
+    /// decision 1).
+    pub mode: Option<String>,
     /// Width of the buckets.
     pub group_by: StatsGroupBy,
 }
 
 impl StatsFilter {
-    /// Reads the five parameters of `GET /v1/stats` and of `crible stats`.
+    /// Reads the six parameters of `GET /v1/stats` and of `crible stats`.
     ///
     /// A date is an ISO 8601 date with its offset, read at the resolution of a
     /// minute because a row counts a whole minute; both bounds are included. The
@@ -1208,16 +1220,22 @@ impl StatsFilter {
     /// from the file. Every refusal is [`ErrorCode::InvalidRequest`] and names
     /// the parameter (ADR-0122, decision 9; ADR-0124, decision 2).
     ///
+    /// `mode` is the filter ADR-0156, decision 1, adds: an absent value keeps
+    /// every mode, so the answer is the one of before the parameter, and a
+    /// present value is an equality on `minute_events.mode`.
+    ///
     /// # Errors
     ///
     /// [`ErrorCode::InvalidRequest`] for a date outside ISO 8601, a `from` after
     /// the `to`, an `index` outside the naming rules, an `operation` outside
-    /// [`OPERATIONS`] and a `group_by` outside its closed domain.
+    /// [`OPERATIONS`], a `mode` outside [`MODES`] and a `group_by` outside its
+    /// closed domain.
     pub fn parse(
         from: Option<&str>,
         to: Option<&str>,
         index: Option<&str>,
         operation: Option<&str>,
+        mode: Option<&str>,
         group_by: Option<&str>,
     ) -> Result<Self, CribleError> {
         let from = from.map(|raw| minute_bound(raw, "from")).transpose()?;
@@ -1250,6 +1268,16 @@ impl StatsFilter {
             }
             None => None,
         };
+        let mode = match mode {
+            Some(raw) if MODES.contains(&raw) => Some(raw.to_owned()),
+            Some(raw) => {
+                return Err(CribleError::new(
+                    ErrorCode::InvalidRequest,
+                    format!("'mode' must be 'dense', 'lexical' or 'hybrid': '{raw}'"),
+                ));
+            }
+            None => None,
+        };
         let group_by = match group_by {
             Some(raw) => StatsGroupBy::parse(raw).ok_or_else(|| {
                 CribleError::new(
@@ -1264,6 +1292,7 @@ impl StatsFilter {
             to,
             index,
             operation,
+            mode,
             group_by,
         })
     }
@@ -1838,13 +1867,15 @@ fn read_index_states(
 
 /// The conditions of the `minute_events` and `filter_shapes` reads.
 ///
-/// `with_operation` adds the `operation` filter; `filter_shapes` has no such
-/// column, and ADR-0124, decision 2, gives `operation` only to the events.
+/// `events` adds the `operation` and `mode` filters, the two columns only
+/// `minute_events` carries: ADR-0124, decision 2, gives `operation` only to the
+/// events, and `filter_shapes` has no `mode` column, so ADR-0156, decision 2,
+/// leaves the filter forms outside the mode filter.
 fn minute_conditions(
     filter: &StatsFilter,
     from: Option<&str>,
     to: Option<&str>,
-    with_operation: bool,
+    events: bool,
 ) -> (String, Vec<Value>) {
     let mut conditions = Vec::new();
     let mut values = Vec::new();
@@ -1860,9 +1891,13 @@ fn minute_conditions(
         conditions.push("\"index\" = ?".to_owned());
         values.push(Value::Text(index.clone()));
     }
-    if with_operation && let Some(operation) = &filter.operation {
+    if events && let Some(operation) = &filter.operation {
         conditions.push("operation = ?".to_owned());
         values.push(Value::Text(operation.clone()));
+    }
+    if events && let Some(mode) = &filter.mode {
+        conditions.push("mode = ?".to_owned());
+        values.push(Value::Text(mode.clone()));
     }
     (clause(conditions), values)
 }

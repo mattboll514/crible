@@ -75,7 +75,7 @@ Ces codes servent aussi de catégories d'erreurs dans les analytics.
 | `POST /v1/indexes/{index}/compact` | admin | Lancer une compaction ; sans corps → `202` avec un job `compact` (ADR-0107) |
 | `POST /v1/indexes/{index}/exports` | admin | Exporter vers `exchange/outbox` ; sans corps → `202` avec un job `export` (ADR-0107) |
 | `POST /v1/indexes/{index}/snapshots` | admin | Instantané vers `exchange/snapshots` ; sans corps → `202` avec un job `snapshot`, qui publie un avancement en octets pendant la copie (ADR-0153) ; l'écrivain est suspendu pendant la copie, les lectures continuent (ADR-0017, ADR-0065, ADR-0107) |
-| `GET /v1/stats` | admin | Analytics agrégées ; paramètres `from`, `to`, `index`, `operation`, `group_by`, réponse fermée (voir « Statistiques » ; ADR-0124) |
+| `GET /v1/stats` | admin | Analytics agrégées ; paramètres `from`, `to`, `index`, `operation`, `mode`, `group_by`, réponse fermée (voir « Statistiques » ; ADR-0124 ; ADR-0156, décision 1) |
 | `GET /v1/debug/queries` | admin | Journal de debug, s'il est activé ; `200` avec `enabled: false` et `queries: []` quand il est désactivé (ADR-0121, ADR-0122) |
 | `GET /health` · `GET /ready` | — | En vie · prêt (modèles chargés, chaque index a publié son instantané, aucune reprise en cours). `/health` rend `200` dès la liaison au port ; `/ready` rend `503` jusqu'à la publication du dernier instantané, puis `200` ; une instance sans index est prête (ADR-0099) |
 | `GET /openapi.json` · `GET /docs` | — | Spécification OpenAPI · Swagger UI |
@@ -620,6 +620,7 @@ Un lot **sans passage**, qui ne porte que des `deletions`, n'a ni ajout ni recet
 | `to` | chaîne ISO 8601 | plus récente ligne conservée | borne haute **incluse**, normalisée en UTC |
 | `index` | chaîne | — | filtre d'égalité sur le nom d'index ; porte sur les noms présents dans les analytics, jamais sur les index vivants |
 | `operation` | chaîne | — | filtre d'égalité sur une opération de la liste fermée de `06-observabilite.md` |
+| `mode` | `dense` · `lexical` · `hybrid` | — | filtre d'égalité sur le mode de la recherche ; absent, tous modes agrégés (ADR-0156, décision 1) |
 | `group_by` | `minute` · `hour` · `day` | `hour` | largeur des seaux |
 
 <!-- openapi: StatsResponse -->
@@ -684,10 +685,77 @@ Un lot **sans passage**, qui ne porte que des `deletions`, n'a ni ajout ni recet
 - `top_filter_shapes` rend **au plus 10** formes `{ "shape", "count" }` sur la fenêtre, par `count` décroissant, l'égalité étant départagée par l'ordre lexicographique croissant de la forme. La forme ne contient que des noms de champs et d'opérateurs, jamais une valeur (INV-13 ; ADR-0117, décision 6 ; ADR-0124, décision 6). Le classement porte sur les **recherches** de la fenêtre **quel que soit `operation`** demandé : la table `filter_shapes` ne porte pas de colonne d'opération, seules les recherches y écrivent une forme, et `?operation=compact` ne restreint donc pas ce classement (ADR-0124, note du 2026-11-01). `top_indexes` rend **au plus 10** `{ "index", "count" }`, par `count` décroissant, départagé par le nom croissant (ADR-0124, décision 7). Les deux bornes sont des constantes, sans clé de configuration.
 - `indexes` porte **une entrée par index**, avec la **dernière** ligne de `day_indexes` de la fenêtre : `day`, `index`, `documents`, `live_passages`, `dead_passages`, `dead_ratio` (dérivé, jamais stocké), `disk_bytes`, `generation`, `batches`. Les jours absents ne sont **pas comblés** : un trou dit la vérité (ADR-0118, décision 5 ; ADR-0124, décision 8).
 - `analytics_dropped` est le compteur de pertes de file **du processus serveur depuis son démarrage**, par processus et jamais persisté (ADR-0118, décision 2 ; ADR-0124, décision 9). `debug_journal_dropped` n'est pas ici : il reste rendu par `GET /v1/debug/queries`.
-- Un paramètre **inconnu ou invalide** rend `400 invalid_request` avec un message qui **nomme le paramètre** : `group_by` hors de `minute`, `hour` et `day`, `operation` hors de la liste fermée, date qui n'est pas ISO 8601, `from` postérieur à `to`. Aucune borne de fenêtre ne s'ajoute à la rétention (ADR-0124, décision 2).
+- Un paramètre **inconnu ou invalide** rend `400 invalid_request` avec un message qui **nomme le paramètre** : `group_by` hors de `minute`, `hour` et `day`, `operation` hors de la liste fermée, `mode` hors de `dense`, `lexical` et `hybrid`, date qui n'est pas ISO 8601, `from` postérieur à `to`. Aucune borne de fenêtre ne s'ajoute à la rétention (ADR-0124, décision 2 ; ADR-0156, décision 1).
+- `mode` est un filtre d'égalité **facultatif** sur `minute_events.mode`, de domaine fermé `dense`, `lexical` et `hybrid`, les trois valeurs que le mode d'une recherche prend (ADR-0156, décision 1). **Absent**, il n'ajoute aucune condition : la réponse est identique à celle d'avant le paramètre, tous modes agrégés, lignes à `mode` vide comprises. **Présent**, il restreint `buckets`, `totals` — donc `count`, `errors`, `zero_results_rate` et tous les `latency_ms` — et `top_indexes` ; les lignes à `mode` vide, écrites par une requête refusée avant la résolution du mode, sont alors **exclues**, comme toute ligne d'un autre mode. `top_filter_shapes`, `indexes`, `analytics_dropped`, `from`, `to` et `group_by` ne sont **pas** touchés : `filter_shapes` et `day_indexes` n'ont pas de colonne `mode`, et le reste décrit la fenêtre ou le processus (ADR-0156, décision 2). Une valeur inconnue rend `400 invalid_request` avec le message `'mode' must be 'dense', 'lexical' or 'hybrid': '<valeur>'`.
+- Une recherche servie par `POST /v1/search`, donc multi-index, s'écrit sous l'opération **`search_multi`**, un événement par cible, jamais sous `search` : `GET /v1/stats?operation=search&mode=hybrid` rend une réponse vide sur une instance qui ne sert que cette route, et la lecture de la forme servie se fait par `operation=search_multi` (ADR-0156, décision 1). Le `total` d'une cible est la durée de son **propre** pipeline, **encodage exclu** : l'encodage est mesuré une fois pour la requête et porté par l'événement de la **première** cible, si bien que la latence servie se lit `total` + `encode` (ADR-0156, décision 4). Avec `?index=<deuxième cible>`, aucun percentile d'encodage n'apparaît pour cette cible, qui n'est jamais la première ; l'encodage se lit sur la première cible ou sans filtre `index`.
+- Les percentiles ont une résolution de **25 % relatifs** à la borne haute du seau : ils nomment une **étape dominante** quand l'écart entre étapes dépasse un seau, et ne séparent pas deux étapes proches. La lecture fine reste `debug: true` hors production ou `crible eval` (ADR-0156, décision 5).
 - Le filtre `index` porte sur les noms **présents dans `analytics.sqlite`**, sans contrôle contre les index vivants : l'historique d'un index supprimé reste lisible, et un nom sans aucun événement rend `200` avec une réponse vide, membres omis et listes vides, jamais `404`. Un nom invalide au sens des règles de nommage des index rend `400 invalid_request` nommant le paramètre (ADR-0124, décision 2).
-- Aucun autre filtre ni aucune répartition n'est offert : ni `status`, ni `client`, ni `mode` (ADR-0124, décision 3).
+- Aucun autre filtre ni aucune répartition n'est offert : ni `status`, ni `client`, ni `dense_strategy` (ADR-0124, décision 3). Le filtre `mode`, ajouté par ADR-0156, décision 1, est le seul de plus, et il remplace en partie cette décision.
 - La route est déclarée dans la spécification OpenAPI, avec des composants fermés, et son exception nommée est retirée du test des routes dans le même changement (ADR-0111, complément du 2026-10-30 ; ADR-0124, décision 16).
+
+**Lire un mode à part.** Sur une instance qui sert le dense et l'hybride, `mode` restreint la réponse à un mode : les seaux, les totaux et `top_indexes` ne comptent plus que ses événements. La forme servie par `POST /v1/search` s'écrit sous `search_multi`, c'est donc cette opération qu'un lecteur de la route multi-index filtre (ADR-0156, décisions 1 et 2).
+
+```sh
+curl -sS "$CRIBLE_URL/v1/stats?operation=search_multi&mode=hybrid&group_by=hour" \
+  -H "Authorization: Bearer $CRIBLE_API_KEY"
+```
+
+<!-- openapi: StatsResponse -->
+```json
+{
+  "from": "2026-10-31T00:00:00Z",
+  "to": "2026-10-31T23:59:00Z",
+  "group_by": "hour",
+  "buckets": [
+    { "start": "2026-10-31T08:00:00Z",
+      "count": 3880,
+      "errors": { "invalid_filter": 2 },
+      "zero_results_rate": 0.0812,
+      "latency_ms": {
+        "validate": { "p50": 0.1, "p95": 0.14, "p99": 0.17 },
+        "encode":   { "p50": 0.05, "p95": 0.07, "p99": 0.09 },
+        "filter":   { "p50": 0.6, "p95": 1.0, "p99": 1.25 },
+        "dense":    { "p50": 15.3, "p95": 23.8, "p99": 29.8 },
+        "lexical":  { "p50": 48.0, "p95": 95.7, "p99": 119.6 },
+        "fusion":   { "p50": 0.0625, "p95": 0.0625, "p99": 0.0781 },
+        "group":    { "p50": 0.0625, "p95": 0.0625, "p99": 0.0781 },
+        "fetch":    { "p50": 1.2, "p95": 1.5, "p99": 1.9 },
+        "total":    { "p50": 50.2, "p95": 102.5, "p99": 128.1 }
+      } }
+  ],
+  "totals": {
+    "count": 3880,
+    "errors": { "invalid_filter": 2 },
+    "zero_results_rate": 0.0812,
+    "latency_ms": {
+      "validate": { "p50": 0.1, "p95": 0.14, "p99": 0.17 },
+      "encode":   { "p50": 0.05, "p95": 0.07, "p99": 0.09 },
+      "filter":   { "p50": 0.6, "p95": 1.0, "p99": 1.25 },
+      "dense":    { "p50": 15.3, "p95": 23.8, "p99": 29.8 },
+      "lexical":  { "p50": 48.0, "p95": 95.7, "p99": 119.6 },
+      "fusion":   { "p50": 0.0625, "p95": 0.0625, "p99": 0.0781 },
+      "group":    { "p50": 0.0625, "p95": 0.0625, "p99": 0.0781 },
+      "fetch":    { "p50": 1.2, "p95": 1.5, "p99": 1.9 },
+      "total":    { "p50": 50.2, "p95": 102.5, "p99": 128.1 }
+    }
+  },
+  "top_indexes": [
+    { "index": "articles", "count": 3520 },
+    { "index": "decisions", "count": 360 }
+  ],
+  "top_filter_shapes": [
+    { "shape": "date_debut:lte,fonds:eq", "count": 2140 }
+  ],
+  "indexes": [
+    { "day": "2026-10-31", "index": "articles", "documents": 412000,
+      "live_passages": 8580000, "dead_passages": 12400, "dead_ratio": 0.00144,
+      "disk_bytes": 21474836480, "generation": 1288, "batches": 932 }
+  ],
+  "analytics_dropped": 0
+}
+```
+
+`top_filter_shapes`, `indexes` et `analytics_dropped` ne suivent pas le filtre : la réponse ci-dessus les rend tels quels, et seule la portée des seaux, des totaux et de `top_indexes` change (ADR-0156, décision 2). Le `p95` de `total`, 102,5 ms, se lit avec celui d'`encode` : l'encodage d'une requête multi-index est mesuré une fois et porté par la première cible, si bien que la latence servie vaut `total` + `encode` (ADR-0156, décision 4).
 
 ## Limites par défaut (configurables)
 

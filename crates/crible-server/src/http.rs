@@ -428,6 +428,11 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
 
 /// `GET /v1/stats`: the aggregated analytics of the instance (ADR-0124).
 ///
+/// The window, `index`, `operation`, `mode` and `group_by` are the closed list
+/// of [`stats_filter`]; `mode` restricts the buckets, the totals and
+/// `top_indexes` to one mode, and its absence keeps the answer of before the
+/// parameter (ADR-0156, decisions 1 and 2).
+///
 /// The read opens `analytics.sqlite` **read-only** on its own connection, off the
 /// async threads: it never waits for a flush, never blocks the writer and writes
 /// nothing (ADR-0116, decision 1; ADR-0124, decision 12). `analytics_dropped` is
@@ -446,6 +451,7 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
         ("to" = Option<String>, Query, description = "Upper bound, included, of the window, ISO 8601 with its offset; defaults to the newest retained row"),
         ("index" = Option<String>, Query, description = "Only the events of that index, present in the analytics or not"),
         ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `facets`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
+        ("mode" = Option<String>, Query, description = "Only the events of that mode: `dense`, `lexical` or `hybrid`; absent, every mode is aggregated, the rows written before the mode was resolved included (ADR-0156, decision 1)"),
         ("group_by" = Option<String>, Query, description = "Width of the buckets: `minute`, `hour` (default) or `day`")
     ),
     responses(
@@ -490,17 +496,18 @@ async fn stats(
 }
 
 /// The parameters of `GET /v1/stats`, checked and normalised
-/// (ADR-0124, decision 2).
+/// (ADR-0124, decision 2; ADR-0156, decision 1).
 ///
-/// The list is closed and a refusal names the parameter. Nothing is read from
-/// the file here: a `400` is decided on the query string alone.
+/// The list is closed — `from`, `to`, `index`, `operation`, `mode` and
+/// `group_by` — and a refusal names the parameter. Nothing is read from the
+/// file here: a `400` is decided on the query string alone.
 fn stats_filter(query: &HashMap<String, String>) -> Result<StatsFilter, CribleError> {
-    const ALLOWED: [&str; 5] = ["from", "to", "index", "operation", "group_by"];
+    const ALLOWED: [&str; 6] = ["from", "to", "index", "operation", "mode", "group_by"];
     for parameter in query.keys() {
         if !ALLOWED.contains(&parameter.as_str()) {
             return Err(error::invalid(format!(
                 "'{parameter}' is not a parameter of this route; the parameters are `from`, \
-                 `to`, `index`, `operation` and `group_by`"
+                 `to`, `index`, `operation`, `mode` and `group_by`"
             )));
         }
     }
@@ -509,6 +516,7 @@ fn stats_filter(query: &HashMap<String, String>) -> Result<StatsFilter, CribleEr
         query.get("to").map(String::as_str),
         query.get("index").map(String::as_str),
         query.get("operation").map(String::as_str),
+        query.get("mode").map(String::as_str),
         query.get("group_by").map(String::as_str),
     )
 }

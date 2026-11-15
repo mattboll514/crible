@@ -1347,6 +1347,9 @@ pub struct StatsRequest<'a> {
     pub index: Option<&'a str>,
     /// Only the events of that operation.
     pub operation: Option<&'a str>,
+    /// Only the events of that mode: `dense`, `lexical` or `hybrid`
+    /// (ADR-0156, decision 1).
+    pub mode: Option<&'a str>,
     /// Width of the buckets: `minute`, `hour` or `day`.
     pub group_by: Option<&'a str>,
     /// Output format.
@@ -1354,7 +1357,7 @@ pub struct StatsRequest<'a> {
 }
 
 /// `crible stats --data <dir> [--from …] [--to …] [--index …] [--operation …]
-/// [--group-by …] [--format table|json]`.
+/// [--mode …] [--group-by …] [--format table|json]`.
 ///
 /// The command reads `<data>/analytics.sqlite` **read-only**, on its own
 /// connection: it never waits for a flush, never blocks a running server and
@@ -1380,6 +1383,7 @@ pub fn stats(request: &StatsRequest<'_>) -> Result<(), CribleError> {
         request.to,
         request.index,
         request.operation,
+        request.mode,
         request.group_by,
     )?;
     let path = request.data.join(ANALYTICS_FILE_NAME);
