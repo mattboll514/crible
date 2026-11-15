@@ -148,7 +148,7 @@ fn sample(event: &mut MinuteEvent, stage: usize, bucket: usize, times: u64) {
 
 /// The filter of a test, with every parameter absent.
 fn filter() -> StatsFilter {
-    StatsFilter::parse(None, None, None, None, None).expect("the default filter")
+    StatsFilter::parse(None, None, None, None, None, None).expect("the default filter")
 }
 
 /// The five rows of the traffic of the known-numbers test.
@@ -324,8 +324,8 @@ fn a_minute_bucket_aggregates_every_key_of_its_minute() {
     // ADR-0124, decision 2: `minute` is the width of the stored rows, and a
     // bucket sums the keys of the same minute.
     let fixture = traffic();
-    let filter =
-        StatsFilter::parse(None, None, None, None, Some("minute")).expect("the filter is valid");
+    let filter = StatsFilter::parse(None, None, None, None, None, Some("minute"))
+        .expect("the filter is valid");
     let stats = fixture.read(&filter);
     assert_eq!(stats.group_by, StatsGroupBy::Minute);
     let starts: Vec<&str> = stats
@@ -351,7 +351,7 @@ fn a_day_bucket_starts_at_midnight() {
     // ADR-0124, decision 2: a day bucket starts at `00:00:00` UTC.
     let fixture = traffic();
     let filter =
-        StatsFilter::parse(None, None, None, None, Some("day")).expect("the filter is valid");
+        StatsFilter::parse(None, None, None, None, None, Some("day")).expect("the filter is valid");
     let stats = fixture.read(&filter);
     assert_eq!(stats.buckets.len(), 1, "one day holds the whole traffic");
     assert_eq!(stats.buckets[0].start, "2026-10-31T00:00:00Z");
@@ -367,6 +367,7 @@ fn the_two_bounds_are_included_and_floored_to_their_minute() {
     let filter = StatsFilter::parse(
         Some("2026-10-31T10:07:30+02:00"),
         Some("2026-10-31T08:40:00Z"),
+        None,
         None,
         None,
         Some("minute"),
@@ -400,7 +401,7 @@ fn the_two_filters_select_their_events() {
     // ADR-0124, decision 2: `index` and `operation` are equality filters, and
     // `operation` reaches only the events, never the daily state.
     let fixture = traffic();
-    let filter = StatsFilter::parse(None, None, Some("beta"), Some("search_multi"), None)
+    let filter = StatsFilter::parse(None, None, Some("beta"), Some("search_multi"), None, None)
         .expect("the filter is valid");
     let stats = fixture.read(&filter);
     let totals = stats.totals.as_ref().expect("beta has events");
@@ -422,8 +423,8 @@ fn an_index_without_an_event_renders_empty_lists() {
     // ADR-0124, decision 2: a valid name with no row is a filter, not a
     // resource: the lists are empty and no member is invented.
     let fixture = traffic();
-    let filter =
-        StatsFilter::parse(None, None, Some("nowhere"), None, None).expect("the filter is valid");
+    let filter = StatsFilter::parse(None, None, Some("nowhere"), None, None, None)
+        .expect("the filter is valid");
     let stats = fixture.read(&filter);
     assert!(stats.buckets.is_empty());
     assert!(stats.totals.is_none(), "no event, so no total");
@@ -445,6 +446,7 @@ fn a_window_beyond_the_retention_renders_no_value() {
     let filter = StatsFilter::parse(
         Some("2030-01-01T00:00:00Z"),
         Some("2030-01-02T00:00:00Z"),
+        None,
         None,
         None,
         None,
@@ -580,6 +582,7 @@ fn the_daily_state_is_the_last_row_of_the_window() {
         None,
         None,
         None,
+        None,
     )
     .expect("the filter is valid");
     let stats = fixture.read(&filter);
@@ -604,9 +607,10 @@ fn the_daily_state_is_the_last_row_of_the_window() {
 fn the_parameters_are_refused_by_name() {
     // ADR-0124, decision 2: each refusal is `invalid_request` and names the
     // parameter, exactly as the route and the CLI report it.
-    // The five parameters of `StatsFilter::parse`, then the name the message
+    // The six parameters of `StatsFilter::parse`, then the name the message
     // must hold.
     type Case<'a> = (
+        Option<&'a str>,
         Option<&'a str>,
         Option<&'a str>,
         Option<&'a str>,
@@ -615,24 +619,32 @@ fn the_parameters_are_refused_by_name() {
         &'a str,
     );
     let cases: Vec<Case<'_>> = vec![
-        (Some("2026-10-31"), None, None, None, None, "'from'"),
-        (None, Some("not a date"), None, None, None, "'to'"),
+        (Some("2026-10-31"), None, None, None, None, None, "'from'"),
+        (None, Some("not a date"), None, None, None, None, "'to'"),
         (
             Some("2026-10-31T10:00:00Z"),
             Some("2026-10-31T09:00:00Z"),
             None,
             None,
             None,
+            None,
             "'from'",
         ),
-        (None, None, Some("a/b"), None, None, "'index'"),
-        (None, None, Some(".."), None, None, "'index'"),
-        (None, None, None, Some("purge"), None, "'operation'"),
-        (None, None, None, None, Some("week"), "'group_by'"),
+        (None, None, Some("a/b"), None, None, None, "'index'"),
+        (None, None, Some(".."), None, None, None, "'index'"),
+        (None, None, None, Some("purge"), None, None, "'operation'"),
+        (None, None, None, None, Some("semantic"), None, "'mode'"),
+        (None, None, None, None, Some("Dense"), None, "'mode'"),
+        (None, None, None, None, None, Some("week"), "'group_by'"),
     ];
-    for (from, to, index, operation, group_by, named) in cases {
-        let failure = StatsFilter::parse(from, to, index, operation, group_by)
-            .expect_err("{from:?} {to:?} {index:?} {operation:?} {group_by:?} is refused");
+    for (from, to, index, operation, mode, group_by, named) in cases {
+        let failure = match StatsFilter::parse(from, to, index, operation, mode, group_by) {
+            Ok(filter) => panic!(
+                "{from:?} {to:?} {index:?} {operation:?} {mode:?} {group_by:?} is refused, \
+                 and the filter is {filter:?}"
+            ),
+            Err(failure) => failure,
+        };
         assert_eq!(failure.code(), ErrorCode::InvalidRequest);
         assert!(
             failure.message().contains(named),
@@ -716,6 +728,7 @@ fn the_answer_serialises_the_members_of_the_contract() {
     let filter = StatsFilter::parse(
         Some("2030-01-01T00:00:00Z"),
         Some("2030-01-02T00:00:00Z"),
+        None,
         None,
         None,
         None,

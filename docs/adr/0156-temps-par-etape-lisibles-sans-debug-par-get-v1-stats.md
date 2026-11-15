@@ -1,10 +1,11 @@
 # ADR-0156 — Temps par étape d'un mode lisibles sans debug par `GET /v1/stats`
 
-- **Statut** : Proposé
-- **Date** : 2026-11-12
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-15, sa réponse : « ADR-0156 accepté, tu peux continuer T17 »)
+- **Date** : 2026-11-12 (proposition) ; acceptation le 2026-11-15
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T17-TEMPS-PAR-ETAPE-SANS-DEBUG` (v1.1), sur le verdict de `@architecte` du 2026-11-12 et le point 2 du ticket 17 de Legifacile
 - **Remplace** : — (remplace en partie ADR-0124, **décision 3 seulement** : le filtre `mode` s'ajoute à `index` et `operation`. Les autres décisions d'ADR-0124 ne changent pas.)
+- **Décision** : accepté par le propriétaire le 2026-11-15, sa réponse : « ADR-0156 accepté, tu peux continuer T17 », **dans sa version complétée de la campagne du 2026-11-15** (`docs/mesures/latence-hybride-servie-2026-11-15.md`) ; le tableau d'application de la décision 7 est appliqué aux documents de conception le 2026-11-15, la note de version restant à `PUBLIER-V1.1.0` et l'OpenAPI et l'exemple de `docs/05` restant à la tâche.
 
 ## Contexte
 
@@ -30,6 +31,14 @@ Le verdict de `@architecte` du 2026-11-12, vérifié par lui dans le code, est *
 
 Dans une recherche multi-index, l'encodage est mesuré **une fois** pour la requête (`crates/crible-server/src/search_multi.rs:767-781`), et son échantillon est porté par l'événement de la **première cible** (`:800-819`) ; le commentaire de `crates/crible-server/src/search.rs:541-545` énonce la règle, et `crates/crible-server/src/search_multi.rs:1108-1123` laisse `encode` absent des durées d'une cible. Cette règle n'est écrite ni dans `docs/06` ni dans ADR-0117.
 
+### Ce que la campagne de mesure du 2026-11-15 constate
+
+`@mesureur` a mesuré la latence hybride servie sur six index le 2026-11-15 (`docs/mesures/latence-hybride-servie-2026-11-15.md`, section « Contre-lecture par `GET /v1/stats` », `:166-190`). Sa contre-lecture par la route apporte trois faits mesurés, et le présent ADR a été **complété le 2026-11-15** pour les porter **avant la décision du propriétaire**, sans changement de statut :
+
+- une recherche multi-index s'enregistre sous l'opération **`search_multi`**, jamais sous `search` : une lecture `operation=search` a rendu zéro événement alors que la campagne venait de tourner sur `POST /v1/search` (`:188`) ;
+- le `total` de l'événement d'une cible **exclut l'encodage**, porté par l'événement de la première cible (`:189`), si bien que la latence servie se lit `total` + `encode` ;
+- sur **491 événements**, le p95 de la route divisé par celui calculé depuis `debug` vaut **0,83 à 0,99** pour toutes les étapes au-dessus du seau 0 ; `fusion` et `group` tombent dans le seau 0 (`:172-184`). La résolution de 25 % suffit donc à nommer l'étape dominante.
+
 ### Ce qui n'est pas mesuré ici
 
 Le coût de lecture ajouté par un filtre d'égalité sur une colonne déjà présente dans la clé primaire de `minute_events` n'est pas mesuré. La table est indexée par `(minute, index, operation, status, client, mode, dense_strategy)` (`crates/crible-store/src/analytics.rs:867-892`), et le filtre reste une condition SQL sur une colonne indexée. Aucun chiffre n'est avancé.
@@ -45,6 +54,7 @@ Le coût de lecture ajouté par un filtre d'égalité sur une colonne déjà pr�
 - **Présence** : une condition d'égalité sur `minute_events.mode`. Les lignes dont `mode` est vide — une requête refusée avant la résolution du mode (ADR-0124, décision 10) — sont alors **exclues**, comme toute ligne d'un autre mode. C'est le sens d'un filtre d'égalité, et la réponse ne invente pas de mode pour ces lignes.
 - **Valeur inconnue** : `400 invalid_request`, avec un message qui **nomme le paramètre**, sur la forme qu'ADR-0124, décision 2, fixe pour `group_by` et `operation` (`'group_by' must be 'minute', 'hour' or 'day': '<valeur>'`, et `'operation' is not one of …: '<valeur>'`). Le message retenu est `'mode' must be 'dense', 'lexical' or 'hybrid': '<valeur>'`. Le message du paramètre inconnu énumère désormais les six noms (`crates/crible-server/src/http.rs:497-514`).
 - **Portée** : ce filtre **remplace en partie ADR-0124, décision 3**. `status`, `client` et `dense_strategy` restent **non filtrables** : ils ne sont pas demandés, et les rendre filtrables serait un autre besoin.
+- **La forme servie par la route multi-index se lit avec `operation=search_multi`.** `POST /v1/search` écrit **un événement par cible** sous l'opération `search_multi` (`crates/crible-server/src/analytics.rs:137` ; `crates/crible-server/src/search_multi.rs:706-712`), jamais sous `search` ; la liste fermée des opérations de `docs/06-observabilite.md:32` et la description du paramètre (`crates/crible-server/src/http.rs:448`) la nomment déjà. `GET /v1/stats?operation=search&mode=hybrid` rend donc une réponse vide sur une instance qui ne sert que la route multi-index, et la campagne du 2026-11-15 l'a constaté (`docs/mesures/latence-hybride-servie-2026-11-15.md:188`). Le filtre `mode` s'emploie avec `operation=search_multi` pour lire la forme servie ; `docs/05` (section « Statistiques ») et `docs/06` (sections « Analytics » et « Lecture ») doivent le dire.
 
 ### 2. Les membres que le filtre restreint, et ceux qu'il ne touche pas
 
@@ -65,15 +75,17 @@ Restreindre `top_filter_shapes` ou `indexes` par `mode` demanderait une colonne 
 
 ### 4. Règle d'attribution de l'encodage en multi-index, écrite
 
-Dans une recherche multi-index, l'encodage est mesuré **une fois** pour la requête, et son temps est porté par l'événement de la **première cible**. Les autres cibles n'ont **aucun échantillon** d'encodage ; leur `total` reste celui de leur propre travail, du filtre à la lecture de leurs payloads.
+Dans une recherche multi-index, l'encodage est mesuré **une fois** pour la requête, et son temps est porté par l'événement de la **première cible**. Les autres cibles n'ont **aucun échantillon** d'encodage. Le `total` de **chaque** cible, y compris la première, est la durée de son **propre** pipeline, du filtre à la lecture de ses payloads, **encodage exclu** : le chronomètre de la cible part à son entrée (`crates/crible-server/src/search_multi.rs:835`) et son total est lu à sa fin (`:882-888`), donc après l'encodage de la requête (`:767-781`).
 
-C'est le comportement actuel du code (`crates/crible-server/src/search_multi.rs:767-781`, `:800-819` ; commentaire de `crates/crible-server/src/search.rs:541-545`), et il est cohérent avec ADR-0119, décision 9, qui met `encode` dans le `timings_ms` global et non dans celui d'une cible. **Aucun changement de code** : l'ADR constate la règle, et l'application l'écrit dans `docs/06`, section « Analytics ».
+C'est le comportement actuel du code (`crates/crible-server/src/search_multi.rs:767-781`, `:800-819`, `:1108-1123` ; commentaire de `crates/crible-server/src/search.rs:539-543`, qui cite ADR-0117, décision 5), et il est cohérent avec ADR-0119, décision 9, qui met `encode` dans le `timings_ms` global et non dans celui d'une cible. **Aucun changement de code** : l'ADR constate la règle, et l'application l'écrit dans `docs/06`, section « Analytics », et dans `docs/05`, section « Statistiques ».
 
-Conséquence de lecture : avec `?index=<deuxième cible>`, l'échantillon d'encodage de cette requête n'apparaît pas ; si cette cible n'est jamais la première, aucun percentile d'encodage n'apparaît pour elle. L'encodage se lit sur la première cible ou sans filtre `index`. Ce n'est pas une perte : c'est la vérité de la mesure, et sommer l'encodage par cible le compterait plusieurs fois.
+Conséquence de lecture : **la latence servie d'une requête multi-index se lit `total` + `encode`**, et non `total` seul. L'écart est **nul à cache chaud**, où `encode` vaut 0,039 ms, et d'environ 25 ms au premier appel d'un processus neuf ; la campagne du 2026-11-15 le chiffre sur `sarde`, minute 14:19 : `total` p50 16,5 ms par la route contre 41,9 ms mesurés par `debug` avec `encode` 25,8 ms, et l'écart vaut exactement l'encodage (`docs/mesures/latence-hybride-servie-2026-11-15.md:189`). Un lecteur qui compare `total` à `took_ms` sur cette route se trompe donc de quelques dizaines de millisecondes à froid, et de rien à chaud. Avec `?index=<deuxième cible>`, l'échantillon d'encodage de cette requête n'apparaît pas ; si cette cible n'est jamais la première, aucun percentile d'encodage n'apparaît pour elle. L'encodage se lit sur la première cible ou sans filtre `index`. Ce n'est pas une perte : c'est la vérité de la mesure, et sommer l'encodage par cible le compterait plusieurs fois.
 
 ### 5. Résolution des percentiles, et lecture fine
 
 Les percentiles de `/v1/stats` ont une résolution de **25 % relatifs** à la borne haute du seau (facteur 1,25 ; `docs/06-observabilite.md:51-54`). Ils nomment une **étape dominante** quand l'écart entre étapes dépasse un seau ; ils ne séparent pas deux étapes proches. La lecture fine reste `debug: true` **hors production**, ou `crible eval` (ADR-0125), qui mesure par requête.
+
+La campagne du 2026-11-15 appuie cette résolution sur des événements réels : sur **491 événements**, le p95 lu par `/v1/stats` divisé par celui calculé depuis `debug` vaut **0,83 à 0,99** pour `validate`, `encode`, `filter`, `dense`, `lexical`, `fetch` et `total` ; `fusion` et `group`, à 0,011 à 0,031 ms, tombent dans le **seau 0** et rendent 0,0625 ms, soit des rapports de 0,53 et 0,21 qui sont la résolution du seau et non un désaccord. La route **sur-estime** donc toujours, et reste sous les 25 % relatifs attendus (`docs/mesures/latence-hybride-servie-2026-11-15.md:172-184`).
 
 ### 6. Tests attendus
 
@@ -85,17 +97,20 @@ Les percentiles de `/v1/stats` ont une résolution de **25 % relatifs** à la bo
 4. `INV-13` : aucun texte de requête ni valeur de filtre dans la réponse, ni dans `analytics.sqlite` (test nommé `inv_13_…`) ;
 5. aucun changement de résultat de recherche : mêmes résultats, même ordre, même `took_ms` (précédent d'ADR-0119, décision 10) ;
 6. la route et `crible stats --mode` rendent le même corps, moins `analytics_dropped` (ADR-0124, décision 13) ;
-7. en multi-index, l'encodage ne produit **qu'un** échantillon, sur la première cible.
+7. en multi-index, l'encodage ne produit **qu'un** échantillon, et il est porté par l'événement de la **première cible** seulement ; le `total` de chaque cible reste la durée de son propre pipeline, donc inférieur à la durée de la requête d'environ l'encodage quand le cache est froid ;
+8. **cas multi-index de la route** : après une campagne sur `POST /v1/search`, `GET /v1/stats?operation=search_multi&mode=hybrid` rend les événements des cibles, tandis que `GET /v1/stats?operation=search&mode=hybrid` sur la même fenêtre n'en rend **aucun** — aucun événement `search` n'est écrit par cette route.
 
 ### 7. Ce que l'acceptation appliquera
 
 | Document | Modification |
 |---|---|
 | `docs/05-api.md:617-623` | ligne du paramètre `mode` dans le tableau de la section « Statistiques », domaine fermé et absence = tous modes |
+| `docs/05-api.md`, section « Statistiques » | opération de la route multi-index : un appel `POST /v1/search` s'écrit sous `search_multi`, et `operation=search` ne rend rien sur une instance qui ne sert que cette route ; latence servie lue `total` + `encode`, l'encodage étant porté par la première cible |
 | `docs/05-api.md:689` | la phrase « ni `status`, ni `client`, ni `mode` » nomme `mode` comme filtre offert, les deux autres restant refusés |
 | `docs/05-api.md`, section « Statistiques » | exemple d'appel `?mode=hybrid` et sa réponse |
+| `docs/06-observabilite.md:32` | la liste fermée des opérations reste celle du code, `search_multi` compris, et l'opération d'une recherche multi-index est rappelée comme celle à filtrer |
 | `docs/06-observabilite.md:72-80` | la liste des paramètres de la route porte `mode`, et la section « Lecture » dit ce que le filtre restreint et ce qu'il ne touche pas |
-| `docs/06-observabilite.md`, section « Analytics » | règle d'attribution de l'encodage en multi-index : mesuré une fois, porté par l'événement de la première cible |
+| `docs/06-observabilite.md`, section « Analytics » | règle d'attribution de l'encodage en multi-index : mesuré une fois, porté par l'événement de la première cible, et `total` d'une cible hors encodage |
 | `docs/06-observabilite.md:51-54` | rappel que la résolution de 25 % nomme une étape dominante et ne sépare pas deux étapes proches |
 | `docs/adr/README.md:179` | ligne d'ADR-0124 : « décision 3 remplacée en partie par ADR-0156 le 2026-11-12 », sous la forme que l'index emploie déjà |
 | `docs/versions/1.1.0.md` | note de version laissée à `PUBLIER-V1.1.0` : paramètre `mode`, ajout compatible, aucun `format_version` |
@@ -125,7 +140,7 @@ Aucun de ces documents n'est modifié avant l'acceptation. La spécification Ope
   - si une lecture par mode des formes de filtre devient nécessaire, il faut une colonne `mode` dans `filter_shapes`, donc un changement de schéma et un ADR distinct ;
   - si `status`, `client` ou `dense_strategy` deviennent nécessaires, c'est un autre ADR, et la cardinalité de `minute_events` reste la contrainte ;
   - si la campagne montre que le p95 vient du cache d'encodage, l'exposition permanente de `CacheStats` demandera un ADR, la réponse d'ADR-0124 étant fermée ;
-  - si un lecteur interprète l'absence d'`encode` sur une cible comme une mesure nulle, la règle de la décision 3 doit être rappelée dans `docs/05`.
+  - si un lecteur interprète l'absence d'`encode` sur une cible comme une mesure nulle, la règle de la décision 4 doit être rappelée dans `docs/05`.
 
 ## Alternatives écartées
 
@@ -140,6 +155,7 @@ Aucun de ces documents n'est modifié avant l'acceptation. La spécification Ope
 ## Références
 
 - Ticket 17 de Legifacile, point 2 et point 3 : `../legifacile/tickets-crible/17-latence-hybride-et-temps-par-etape.md`.
+- Campagne de mesure du 2026-11-15 : `docs/mesures/latence-hybride-servie-2026-11-15.md`, section « Contre-lecture par `GET /v1/stats` » (`:166-190`) et section « Lecture » (`:192-211`), agrégats dans `docs/mesures/latence-hybride-servie-2026-11-15.json`.
 - ADR-0117 (analytics : schéma, histogrammes, percentile, formes de filtre), décisions 1, 2, 4 et 5.
 - ADR-0124 (route `GET /v1/stats`), décisions 1, 2, 3, 4, 10 et 13, et sa note du 2026-11-01 sur `top_filter_shapes`.
 - ADR-0118, décision 2 (`analytics_dropped` par processus).

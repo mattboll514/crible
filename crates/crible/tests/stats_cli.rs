@@ -13,6 +13,8 @@
 //! | `an_absent_file_is_a_message_and_not_a_failure` | absent `analytics.sqlite`: clear message, exit code 0 |
 //! | `a_parameter_outside_its_domain_is_refused_as_the_route_does` | same parameters, same refusal |
 //! | `the_command_writes_nothing_in_the_analytics` | read-only: the bytes and the row count do not change |
+//! | `the_mode_option_of_the_cli_filters_like_the_route` | `--mode` is the `mode` of the route, on the same traffic (ADR-0156, decision 3, and decision 6, point 6) |
+//! | `a_value_outside_the_mode_domain_is_refused_with_the_words_of_the_route` | the CLI and the route refuse an unknown mode with the same words (ADR-0156, decisions 1 and 3) |
 //!
 //! The traffic is written straight into `analytics.sqlite` before the state
 //! starts: the route only reads the file, so a known set of rows reaches both
@@ -112,6 +114,54 @@ impl Fixture {
             .expect("the analytics of the fixture are written");
     }
 
+    /// Writes two modes in one window: four `dense` events, one of them a
+    /// refusal, and five `hybrid` successes sampled in another histogram
+    /// bucket, so the two modes render distinct percentiles (ADR-0156,
+    /// decision 6, point 1).
+    fn seed_both_modes(&self) {
+        let store = AnalyticsStore::open_or_create(&self.analytics())
+            .expect("the analytics file is creatable");
+        let row = |mode: &str, status: &str, count: u64, zero: u64, bucket: usize| {
+            let mut event = MinuteEvent::empty("alpha", "search", status);
+            event.client = "reader".to_owned();
+            event.mode = mode.to_owned();
+            event.dense_strategy = if mode == "lexical" {
+                String::new()
+            } else {
+                "exact".to_owned()
+            };
+            event.count = count;
+            event.zero_results = zero;
+            for stage in 0..9 {
+                event.add_latency(stage, bucket);
+            }
+            event
+        };
+        let minute = vec![
+            row("dense", "ok", 3, 1, 3),
+            row("dense", "invalid_filter", 1, 0, 3),
+            row("hybrid", "ok", 5, 0, 10),
+        ];
+        let shapes = vec![ShapeCount {
+            index: "alpha".to_owned(),
+            shape: "fonds:eq".to_owned(),
+            count: 2,
+        }];
+        let day = DayIndex {
+            index: "alpha".to_owned(),
+            documents: 7,
+            live_passages: 21,
+            dead_passages: 2,
+            disk_bytes: 4096,
+            generation: 5,
+            batches: 9,
+            ..DayIndex::default()
+        };
+        store
+            .write(&minute, &shapes, &[day])
+            .expect("the analytics of the two modes are written");
+    }
+
     /// The state of the instance, its writers started.
     fn state(&self) -> Arc<AppState> {
         let config = Config::load_with_env(&self.directory.path().join("crible.toml"), Vec::new())
@@ -183,7 +233,7 @@ query_cache_entries = 1024
 }
 
 /// Sends the statistics request `query` through the router.
-async fn route(router: &Router, query: &str) -> Value {
+async fn route_status(router: &Router, query: &str) -> (axum::http::StatusCode, Value) {
     let request = axum::http::Request::builder()
         .method(Method::GET)
         .uri(format!("/v1/stats{query}"))
@@ -195,20 +245,29 @@ async fn route(router: &Router, query: &str) -> Value {
         .oneshot(request)
         .await
         .expect("the router answers");
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::OK,
-        "the route answers the statistics"
-    );
+    let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .expect("the body is readable");
-    serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+    let answer = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
         panic!(
             "the route answer must be JSON: {error}\n{}",
             String::from_utf8_lossy(&bytes)
         )
-    })
+    });
+    (status, answer)
+}
+
+/// Sends the statistics request `query` through the router and returns the
+/// body it answers with `200`.
+async fn route(router: &Router, query: &str) -> Value {
+    let (status, answer) = route_status(router, query).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "the route answers the statistics"
+    );
+    answer
 }
 
 /// Runs `crible stats` and asserts it succeeded, returning its stdout.
@@ -411,6 +470,104 @@ async fn a_parameter_outside_its_domain_is_refused_as_the_route_does() {
 
     let data = path(&fixture.data);
     let output = crible(&["stats", "--data", data, "--group-by", "week"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a refused parameter is a failure"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("the error is UTF-8");
+    assert_eq!(
+        stderr,
+        format!("invalid_request: {expected}\n"),
+        "the CLI refuses with the words of the route"
+    );
+}
+
+/// `--mode` is the `mode` of the route: the same traffic, the same body, less
+/// `analytics_dropped`, and the filter is not a no-op
+/// (ADR-0156, decision 3, and decision 6, point 6).
+#[tokio::test]
+async fn the_mode_option_of_the_cli_filters_like_the_route() {
+    let fixture = Fixture::new();
+    fixture.seed_both_modes();
+    let state = fixture.state();
+    let router = build_router(Arc::clone(&state));
+
+    // The window holds nine events, so a mode with fewer is a filtered answer.
+    let all = route(&router, "").await;
+    assert_eq!(all["totals"]["count"], 9, "{all}");
+
+    for (query, arguments, count) in [
+        (
+            "?mode=hybrid",
+            &["--format", "json", "--mode", "hybrid"][..],
+            5,
+        ),
+        (
+            "?mode=dense",
+            &["--format", "json", "--mode", "dense"][..],
+            4,
+        ),
+        (
+            "?mode=lexical",
+            &["--format", "json", "--mode", "lexical"][..],
+            0,
+        ),
+    ] {
+        let mut expected = route(&router, query).await;
+        let dropped = expected
+            .as_object_mut()
+            .and_then(|body| body.remove("analytics_dropped"));
+        assert!(
+            dropped.is_some(),
+            "the route renders analytics_dropped: {expected}"
+        );
+        assert_eq!(
+            expected["totals"]
+                .get("count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            count,
+            "the route restricts the count to the mode ({query}): {expected}"
+        );
+        let raw = cli(&fixture, arguments);
+        let printed: Value = serde_json::from_str(&raw).unwrap_or_else(|error| {
+            panic!("the CLI answer must be JSON: {error}\n{raw}");
+        });
+        assert_eq!(
+            printed, expected,
+            "the CLI renders the body of the route, less analytics_dropped ({query})"
+        );
+    }
+}
+
+/// An unknown `--mode` is refused with the code and the message of the route
+/// (ADR-0156, decisions 1 and 3; ADR-0124, decision 14).
+#[tokio::test]
+async fn a_value_outside_the_mode_domain_is_refused_with_the_words_of_the_route() {
+    let fixture = Fixture::new();
+    fixture.seed_both_modes();
+    let state = fixture.state();
+    let router = build_router(Arc::clone(&state));
+
+    let (status, answer) = route_status(&router, "?mode=semantic").await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "the route refuses the mode: {answer}"
+    );
+    assert_eq!(answer["error"]["code"], "invalid_request", "{answer}");
+    let expected = answer["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the refusal carries a message: {answer}"))
+        .to_owned();
+    assert_eq!(
+        expected, "'mode' must be 'dense', 'lexical' or 'hybrid': 'semantic'",
+        "the route names the parameter and the value it refused: {answer}"
+    );
+
+    let data = path(&fixture.data);
+    let output = crible(&["stats", "--data", data, "--mode", "semantic"]);
     assert_eq!(
         output.status.code(),
         Some(1),

@@ -27,6 +27,7 @@
 //! | `a_hybrid_search_on_an_external_model_needs_a_vector` | ADR-0109, decision 4 |
 //! | `k_is_bounded_by_the_documented_domain` | `docs/05:242` |
 //! | `the_fusion_domain_is_checked` | ADR-0090 |
+//! | `a_statistics_read_does_not_change_the_results_of_a_search` | same results, same order, same generation, before and after `GET /v1/stats` (ADR-0156, decision 6, point 5) |
 //!
 //! ```text
 //! cargo test -p crible-server --test routes_search
@@ -645,4 +646,46 @@ async fn a_return_field_declared_not_returned_is_refused() {
 #[test]
 fn the_route_path_names_the_fixture_index() {
     assert_eq!(SEARCH, format!("/v1/indexes/{INDEX}/search"));
+}
+
+/// A statistics read does not change the answer of a search: same results, same
+/// order, same generation and same pool, whether `GET /v1/stats` ran before or
+/// not (ADR-0156, decision 6, point 5, on the precedent of ADR-0119,
+/// decision 10).
+///
+/// `took_ms` is a duration of one run and is not compared: the decision names it
+/// with the results, but no test pins a duration without a measure. The member is
+/// asserted present on both answers.
+#[tokio::test]
+async fn a_statistics_read_does_not_change_the_results_of_a_search() {
+    let (_instance, state, router) = instance_with_alpha().await;
+    fill(&router, &state).await;
+
+    let (status, before) = search(&router, READ_SECRET, dense_body()).await;
+    assert_eq!(status, StatusCode::OK, "{before}");
+    assert_eq!(
+        before["results"].as_array().map(Vec::len),
+        Some(2),
+        "the fixture answers two passages, so the comparison is not vacuous: {before}"
+    );
+
+    let (status, stats) = send(&router, Method::GET, "/v1/stats", ADMIN_SECRET, None).await;
+    assert_eq!(status, StatusCode::OK, "{stats}");
+
+    let (status, after) = search(&router, READ_SECRET, dense_body()).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+
+    assert_eq!(
+        after["results"], before["results"],
+        "the statistics read leaves the results and their order unchanged: {after}"
+    );
+    assert_eq!(after["generation"], before["generation"], "{after}");
+    assert_eq!(after["pool_size"], before["pool_size"], "{after}");
+    assert_eq!(
+        after["truncated_query"], before["truncated_query"],
+        "{after}"
+    );
+    for answer in [&before, &after] {
+        assert!(answer["took_ms"].is_number(), "{answer}");
+    }
 }
