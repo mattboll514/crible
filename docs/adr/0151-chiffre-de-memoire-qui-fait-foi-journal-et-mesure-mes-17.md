@@ -180,6 +180,12 @@ chargement, mais le compteur de chargements est **partagé par l'instance** : so
 ligne peut nommer un index qui n'a pas déclenché le chargement. Le compteur est un **signal**, pas une
 attribution, et `docs/06` le dit désormais à l'endroit où `@mesureur` le lira.
 
+**Renvoi du 2026-11-21.** La seconde campagne de MES-17 suit les **sept états** d'ADR-0157, décision 2 :
+la décision 3 ci-dessus reste la règle écrite, et ADR-0157 la complète pour cette seule campagne, la
+passe de requêtes passant après l'attache et un septième état « redémarrage avec l'index présent »
+s'ajoutant. Ce renvoi est celui qu'annonce la décision 11 d'ADR-0157. Le propriétaire a accepté ADR-0157
+le 2026-11-21, sa réponse : « ADR-0157 accepté ».
+
 ### 4. Ce que cette tâche ne fait pas
 
 - **Elle ne touche pas à ADR-0105, décision 2.** Les sessions de modèle restent chargées jusqu'au

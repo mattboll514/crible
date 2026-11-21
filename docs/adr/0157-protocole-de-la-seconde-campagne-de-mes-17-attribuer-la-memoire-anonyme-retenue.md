@@ -1,10 +1,11 @@
 # ADR-0157 — Protocole de la seconde campagne de MES-17 : attribuer la mémoire anonyme retenue
 
-- **Statut** : Proposé
-- **Date** : 2026-11-21
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-21, sa réponse : « ADR-0157 accepté », tel que proposé)
+- **Date** : 2026-11-21 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, sur demande du propriétaire du 2026-11-21, tâche `T05-SUITE-ATTRIBUER-ANONYME` (v1.1), suite du ticket 05 de Legifacile
 - **Remplace** : — (complète ADR-0151, **décision 3 seulement**, pour cette campagne ; le corps d'ADR-0151 n'est pas modifié)
+- **Décision** : confirmée par le propriétaire le 2026-11-21, sa réponse : « ADR-0157 accepté », sans réserve et sans modification du corps.
 
 ## Contexte
 
