@@ -229,11 +229,15 @@ relatif, chaque chemin et son contenu entrant dans le calcul (voir
 change pas la somme.
 
 ```
-synth-small : blake3:08940fa04fd038290d179ee41fc0ff57d7a81e6a778b61bc8b7e766039aa9c40
+synth-small : blake3:691f62011912deeccaf5e717c5b593d6b35ada15457e600688691d2388bfe780
 ```
 
 Elle couvre `index.json`, les trois lots, `queries.jsonl` et `expected.jsonl`.
 `reference_topk.py` la réaffiche après avoir écrit `expected.jsonl`.
+
+Cette somme a changé le **2026-11-22** : `producer.version` du manifeste suit la
+version du paquet, passée à `1.1.0` (PUBLIER-V1.1.0) ; aucun contenu du jeu ne
+change.
 
 Cette somme a changé le **2026-11-08** : `producer.version` du manifeste suit la
 version du paquet, passée à `1.0.0` (ACTUALISER-DEPOT-APRES-V1) ; aucun contenu

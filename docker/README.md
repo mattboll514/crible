@@ -301,22 +301,28 @@ rien n'est détruit, mais le disque croît jusqu'à ce qu'elle soit supprimée �
 main. `crible restore` ne prend pas d'option `--index` : le nom de l'index cible
 vient de `snapshot.json` (ADR-0065, décisions 3 et 6).
 
-Deux précisions d'ADR-0143 (décision 2) commandent ce retour :
+Deux précisions d'ADR-0143 (décision 2), éclairées par ADR-0148 (décisions 6
+et 8), commandent ce retour :
 
 - **L'`index.json` de la cible doit être identique à celui de l'instantané**
   (ADR-0065, décision 3 ; `docs/04-donnees-et-ingestion.md`, règles de la
-  restauration). Sous 1.1, le premier `PATCH` d'un index **matérialise** les clés
-  nouvelles même si personne ne les a réglées : l'`index.json` diverge alors de
-  tout instantané pris avant la montée, et une 1.0 ne le relit plus. Un index que
-  l'on veut pouvoir ramener en 1.0 ne reçoit donc aucun `PATCH` sous 1.1, ou bien
-  le retour arrière repasse par l'instantané. La note de version dit lequel.
+  restauration). Sous 1.1, le seul réglage nouveau d'`index.json` est
+  `lexical.identifiers`, et il **n'est pas matérialisé** quand il vaut `"none"`
+  (ADR-0148, décision 6) : un index qui ne l'active jamais garde donc un
+  `index.json` relisible par une 1.0, quel que soit le nombre de `PATCH` reçus.
+  Un index passé à `"v1"` écrit la clé, et une 1.0 refuse alors de démarrer
+  (ADR-0148, décision 8). Le retour arrière repasse par l'instantané pris avant
+  l'activation, recréé depuis son `index.json` (ADR-0148, décision 8), ou par un
+  `PATCH` à `"none"` sous 1.1, qui retire la clé. La note de version
+  `docs/versions/1.1.0.md` donne ces conditions.
 - **Le moyen de remettre en place l'`index.json` d'avant montée n'est pas
   tranché** (ADR-0143, décision 2, point « à trancher ») : aucune commande
   documentée ne réécrit l'`index.json` d'un index existant, et le chemin éprouvé
   est celui d'un index **absent**, créé depuis l'`index.json` de l'instantané
   (ADR-0065, décision 3). La note de version énonce la condition retenue pour
   l'index concerné ; aucune procédure n'est écrite ici tant que ce point n'est pas
-  décidé.
+  décidé. Pour la 1.1.0, le cas ne se présente que pour un index passé à
+  `"v1"` : un index qui n'active pas le réglage n'écrit aucune clé nouvelle.
 
 Serveur arrêté, restaurer chaque index depuis son instantané :
 
