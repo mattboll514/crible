@@ -1,7 +1,7 @@
 # ADR-0159 — Essai de `malloc_trim(0)` dans une troisième campagne de MES-17
 
-- **Statut** : Proposé
-- **Date** : 2026-11-22
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-22, sa réponse : « ADR-0159 accepté », tel que proposé)
+- **Date** : 2026-11-22 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, sur la demande du propriétaire du 2026-11-22, tâche `T05-ESSAI-MALLOC-TRIM` (v1.1), suite du ticket 05 de Legifacile
 - **Remplace** : — (lève, **pour cette campagne seule**, l'exclusion de `malloc_trim` par `gdb -p` posée par ADR-0157, décision 6 ; le corps d'ADR-0157 n'est pas modifié)
