@@ -1,7 +1,7 @@
 # ADR-0160 — Rendre la mémoire libre de l'allocateur par `malloc_trim(0)` à la fin de chaque job
 
-- **Statut** : Proposé
-- **Date** : 2026-11-22
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-22, sa réponse : « ADR-0160 accepté », tel que proposé)
+- **Date** : 2026-11-22 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, sur la demande du propriétaire du 2026-11-22 (« Oui, lance l'ADR »), tâche `T05-CORRIGER-MALLOC-TRIM` (v1.1), et sur le verdict de `@architecte` du 2026-11-22 (session `ses_dfcf75276ffeO3gTxS79CN5x2E`)
 - **Remplace** : —
