@@ -873,6 +873,25 @@ impl<'a> MakeWriter<'a> for Sink {
     }
 }
 
+/// The fields of the `trim` lines of `job_id` in `journal_text`, if any
+/// (ADR-0160, decision 4).
+///
+/// A `trim` line is silent under the default `info` filter, so a caller reads a
+/// journal installed at `debug` through [`journal_at_level`].
+pub fn trim_lines(journal_text: &str, job_id: &str) -> Vec<Value> {
+    let mut found = Vec::new();
+    for line in journal_text.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let fields = &entry["fields"];
+        if fields["message"] == "trim" && fields["job_id"] == job_id {
+            found.push(fields.clone());
+        }
+    }
+    found
+}
+
 /// Journal of the test binary, installed once at `info` (ADR-0096).
 ///
 /// The server journalises from its runtime, so the subscriber is global to the

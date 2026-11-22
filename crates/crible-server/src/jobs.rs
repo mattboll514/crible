@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
@@ -321,6 +321,17 @@ pub struct JobBoard {
     store: JobStore,
     jobs: RwLock<HashMap<String, watch::Sender<JobView>>>,
     pending: AtomicUsize,
+    /// Guard of the trim of the allocator: `true` while a call runs, so a
+    /// second end of job skips its own and writes no line (ADR-0160,
+    /// decision 3).
+    trimming: AtomicBool,
+    /// Counter of the trims admitted, read by the unit test of decision 5.
+    #[cfg(test)]
+    trim_calls: crate::trim::seam::Calls,
+    /// Pause armed by the unit test of decision 5, so the admitted trim holds
+    /// the guard while the other attempt reaches it.
+    #[cfg(test)]
+    trim_pause: Mutex<Option<crate::trim::seam::Pause>>,
     finished: Notify,
     /// Resume point of the drain wait, armed by a unit test only: it stops
     /// [`JobBoard::drained`] between its second count and its `await`, so the
@@ -369,6 +380,11 @@ impl JobBoard {
             store,
             jobs: RwLock::new(jobs),
             pending: AtomicUsize::new(pending),
+            trimming: AtomicBool::new(false),
+            #[cfg(test)]
+            trim_calls: crate::trim::seam::Calls::default(),
+            #[cfg(test)]
+            trim_pause: Mutex::new(None),
             finished: Notify::new(),
             #[cfg(test)]
             resume: Mutex::new(None),
@@ -455,7 +471,9 @@ impl JobBoard {
     ///
     /// The job end is also where the `memory` line of ADR-0151 is emitted, for
     /// every kind and every outcome: the job has done its work, and the line
-    /// names it.
+    /// names it. The trim of the allocator runs last, after the terminal state
+    /// is published, and emits its own `trim` line (ADR-0160, decisions 2 and
+    /// 4).
     fn mark_finished(
         &self,
         id: &str,
@@ -510,6 +528,71 @@ impl JobBoard {
                     Err(failure) => self.fail_transition(id, failure),
                 }
             }
+        }
+        // The terminal state is published in both branches above, so every
+        // waiter of the job is awake before the trim runs: a `?wait=true` does
+        // not wait for it (ADR-0160, decision 2).
+        self.trim_after_job(id, kind.as_str(), index);
+    }
+
+    /// Takes the trim guard of the instance, or reports that a trim already
+    /// runs (ADR-0160, decision 3).
+    fn try_begin_trim(&self) -> bool {
+        self.trimming
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Releases the trim guard, once the call it protected is over.
+    fn end_trim(&self) {
+        self.trimming.store(false, Ordering::Release);
+    }
+
+    /// Gives the free pages of the allocator back, once per job end.
+    ///
+    /// A trim already in progress makes this one skip, and a skipped trim calls
+    /// nothing and writes no line: `trimmed = 0` then keeps a single sense, that
+    /// of a call which released nothing (ADR-0160, decisions 3 and 4). The
+    /// duration measures the call alone, so the guard is released before the
+    /// caller renders the line.
+    ///
+    /// The call runs on the thread that ends the job, which is not a
+    /// `spawn_blocking` thread. Two precedents sit at the same point: the
+    /// `memory` line of `job_end` reads `/proc` and its cgroup, and the purge
+    /// that follows talks to SQLite. The cost in service is not known yet: the
+    /// control measure of ADR-0160, decision 6, reads it against INV-02, and a
+    /// p99 that crossed 3× its reference would move this call to
+    /// `spawn_blocking` through an amendment of the ADR.
+    fn trim_after_job(&self, job_id: &str, kind: &str, index: &str) {
+        if !self.try_begin_trim() {
+            return;
+        }
+        #[cfg(test)]
+        self.hold_trim_pause();
+        let started = Instant::now();
+        let trimmed = crate::trim::trim_allocator(0);
+        #[cfg(test)]
+        self.trim_calls.record();
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.end_trim();
+        crate::trim::log_call(job_id, kind, index, trimmed, duration_us);
+    }
+
+    /// Holds an armed pause of the unit tests, while the trim guard is taken
+    /// (ADR-0160, decision 5); a test build only.
+    #[cfg(test)]
+    fn hold_trim_pause(&self) {
+        let pause = self.trim_pause.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(pause) = pause {
+            pause.hold();
+        }
+    }
+
+    /// Arms the pause of the next trim, for the unit test of decision 5.
+    #[cfg(test)]
+    fn arm_trim_pause(&self, pause: crate::trim::seam::Pause) {
+        if let Ok(mut slot) = self.trim_pause.lock() {
+            *slot = Some(pause);
         }
     }
 
@@ -1540,13 +1623,38 @@ fn poisoned(what: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::Duration;
 
     use tokio::sync::mpsc;
 
     use super::{DrainResume, JobBoard};
+    use crate::test_sink::Sink;
+
+    /// The fields of the `trim` lines of a journal text.
+    fn trim_lines(journal_text: &str) -> Vec<serde_json::Value> {
+        let mut lines = Vec::new();
+        for line in journal_text.lines() {
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let fields = &entry["fields"];
+            if fields["message"] == "trim" {
+                lines.push(fields.clone());
+            }
+        }
+        lines
+    }
+
+    /// A job board on a temporary table.
+    fn board() -> (tempfile::TempDir, JobBoard) {
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let board = JobBoard::open(&directory.path().join("jobs.sqlite"))
+            .expect("the job table is creatable");
+        (directory, board)
+    }
 
     /// A notification sent after the last count of `pending` is not lost.
     ///
@@ -1593,5 +1701,164 @@ mod tests {
             .await
             .expect("the armed wait is woken by the notification of the last job")
             .expect("the wait task joins");
+    }
+
+    /// The trim guard of ADR-0160, decision 3, admits one call at a time: a
+    /// second take while the first is held fails, and the guard is free again
+    /// once the first released it.
+    ///
+    /// The test reads the guard itself and never depends on timing: no job runs,
+    /// no thread races, and the two takes are ordered by the test.
+    #[test]
+    fn the_trim_guard_admits_one_call_at_a_time() {
+        let (_directory, board) = board();
+        assert!(board.try_begin_trim(), "the guard is free at rest");
+        assert!(
+            !board.try_begin_trim(),
+            "a trim already in progress makes the next one skip"
+        );
+        assert!(
+            !board.try_begin_trim(),
+            "a skipped trim changes nothing, so the guard stays taken"
+        );
+        board.end_trim();
+        assert!(
+            board.try_begin_trim(),
+            "the guard is free again once the running trim released it"
+        );
+        board.end_trim();
+    }
+
+    /// A skipped trim writes no `trim` line: there was no call, so there is
+    /// nothing to measure, and `trimmed = 0` keeps a single sense, that of a call
+    /// which released nothing (ADR-0160, decision 4).
+    ///
+    /// A made call, by contrast, writes exactly one line: that second half keeps
+    /// the empty journal of the skipped call from being vacuous, and it holds on
+    /// glibc only, where a call is actually made.
+    #[test]
+    fn a_skipped_trim_writes_no_trim_line() {
+        let (_directory, board) = board();
+        let sink = Sink::default();
+        assert!(board.try_begin_trim(), "the guard is taken by this test");
+        let subscriber = crate::logging::log_subscriber(sink.clone(), "debug")
+            .expect("the fixed filter of the test is valid");
+        tracing::subscriber::with_default(subscriber, || {
+            board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+        });
+        assert!(
+            trim_lines(&sink.contents()).is_empty(),
+            "a trim the guard skipped writes no line: {}",
+            sink.contents()
+        );
+        board.end_trim();
+
+        // The call that the guard now admits: one line on glibc, none off glibc,
+        // where no allocator is called.
+        let subscriber = crate::logging::log_subscriber(sink.clone(), "debug")
+            .expect("the fixed filter of the test is valid");
+        tracing::subscriber::with_default(subscriber, || {
+            board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+        });
+        let expected = usize::from(cfg!(all(target_os = "linux", target_env = "gnu")));
+        assert_eq!(
+            trim_lines(&sink.contents()).len(),
+            expected,
+            "one line for a made call, none where no call is made: {}",
+            sink.contents()
+        );
+    }
+
+    /// Under contention, two trim attempts reach the guard together and exactly
+    /// one is admitted (ADR-0160, decision 3).
+    ///
+    /// The barrier of the attempts sits **before** the release of the winner, so
+    /// no thread can attempt after a release: the count is deterministic, and the
+    /// test holds when it is looped.
+    #[test]
+    fn exactly_one_of_two_concurrent_trim_attempts_is_admitted() {
+        let (_directory, board) = board();
+        let board = Arc::new(board);
+        let start = Arc::new(Barrier::new(2));
+        let attempted = Arc::new(Barrier::new(2));
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let board = Arc::clone(&board);
+                let start = Arc::clone(&start);
+                let attempted = Arc::clone(&attempted);
+                thread::spawn(move || {
+                    start.wait();
+                    let admitted = board.try_begin_trim();
+                    attempted.wait();
+                    if admitted {
+                        board.end_trim();
+                    }
+                    admitted
+                })
+            })
+            .collect();
+        let admitted = threads
+            .into_iter()
+            .map(|handle| handle.join().expect("the attempt thread joins"))
+            .filter(|admitted| *admitted)
+            .count();
+        assert_eq!(
+            admitted, 1,
+            "one trim at a time: one of the two attempts is admitted, the other is skipped"
+        );
+        assert!(
+            board.try_begin_trim(),
+            "the winner released the guard, so the next trim is admitted"
+        );
+        board.end_trim();
+    }
+
+    /// Two ends of job that reach the trim together produce **one** real call,
+    /// and the skipped one writes no line (ADR-0160, decisions 3, 4 and 5,
+    /// test 4).
+    ///
+    /// The admitted trim is held at an armed pause while it owns the guard, and
+    /// a `Barrier` releases both attempts together: whichever thread wins holds
+    /// the guard when the other reaches it, so exactly one call is counted
+    /// whatever the scheduling, and the test holds when it is looped. The
+    /// journal half of decision 5, test 4, is
+    /// `a_skipped_trim_writes_no_trim_line`.
+    #[test]
+    fn two_concurrent_ends_of_job_make_one_trim_call() {
+        let (_directory, board) = board();
+        let board = Arc::new(board);
+        let (reached, in_trim) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        board.arm_trim_pause(crate::trim::seam::Pause::new(reached, released));
+        let start = Arc::new(Barrier::new(2));
+        let (done, ended) = std::sync::mpsc::channel();
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let board = Arc::clone(&board);
+                let start = Arc::clone(&start);
+                let done = done.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+                    done.send(()).expect("the test receives every end of job");
+                })
+            })
+            .collect();
+        drop(done);
+
+        // The winner sits in the trim and owns the guard; the other returned.
+        in_trim.recv().expect("the admitted trim reaches the pause");
+        ended.recv().expect("the skipped trim returns");
+        release.send(()).expect("the admitted trim resumes");
+        ended.recv().expect("the admitted trim returns");
+
+        for handle in threads {
+            handle.join().expect("the attempt thread joins");
+        }
+        assert_eq!(
+            board.trim_calls.count(),
+            1,
+            "two concurrent ends of job make one trim call, never two"
+        );
     }
 }
