@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""MES-17 second campaign harness: attribute the retained anonymous memory.
+"""MES-17 harness: attribute the retained anonymous memory.
 
-Protocol: ADR-0157 (accepted 2026-11-21), decisions 2, 3, 4, 8 and 9, with the
-reading rule of ADR-0158 (accepted 2026-11-22): an effect is a *drop* of the
-retained anonymous memory by at least the dispersion between the two V0 runs.
+Second campaign protocol: ADR-0157 (accepted 2026-11-21), decisions 2, 3, 4, 8
+and 9, with the reading rule of ADR-0158 (accepted 2026-11-22): an effect is a
+*drop* of the retained anonymous memory by at least the dispersion between the
+two V0 runs.
 Seven states on one container and one volume:
 
   (a) fresh process, no index
@@ -26,6 +27,27 @@ container environment and written to the run's `run.json`.
 
 Standard library only. Paths are relative to the repository root. The admin key
 is read at run time from `data/mes17/raw/key.txt` (gitignored).
+
+Third campaign (ADR-0159, accepted 2026-11-22): the same harness runs one
+trimmed walk per process, in this order, with no variant:
+
+  (a) fresh process, no index
+  (b) index created (and its `session_load` line)
+  (c) six lots attached
+  trim   `gdb -p 1 -batch -ex 'call (int) malloc_trim(0)'`, value recorded
+  (c1) reading after the first trim
+  trim   second call, idempotence check
+  (c2) reading after the second call
+  (f)  `DELETE` of the throwaway index
+  trim   `malloc_trim(0)` after the `DELETE`, value recorded
+  (f1) reading after that trim
+
+States (d) and (e) of ADR-0157 are not replayed. The trim runs in a throwaway
+annex container built from `gdb.Dockerfile` (`--pid=container:<measured>`,
+`--cap-add SYS_PTRACE`, `--rm`), only when the server is at rest (no queued and
+no running job), and under a bounded timeout. A blocked or failed `gdb` fails
+the run: no reading is ever replaced by a zero. Nothing here enters the image,
+`crible.toml` or the server code.
 """
 
 from __future__ import annotations
@@ -60,6 +82,12 @@ PROBE_IMAGE = "postgres:17"
 LOADER = "/lib/ld-linux-aarch64.so.1"
 PAGE = 1048576.0  # bytes per MiB
 
+# Annex image of the third campaign (ADR-0159, decision 2), built from
+# `gdb.Dockerfile` and never pulled: it exists locally only.
+GDB_IMAGE = "crible-mes17-gdb:2026-11-22"
+GDB_BASE_DIGEST = "sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc"
+TRIM_TIMEOUT = 120  # seconds, bounded delay of one `gdb call`
+
 LOTS = [
     "mes17-legifacile-sample-articles-v1",
     "mes17-legifacile-sample-jorf-v1",
@@ -88,6 +116,29 @@ STATES = [
     ("g-after-restart", "restart without index"),
 ]
 STATE_KEYS = [key for key, _ in STATES]
+
+# Third campaign (ADR-0159, decision 4): (d) and (e) are not replayed, and the
+# three trims sit between the states they are read against.
+TRIM_STATES = [
+    ("a-fresh", "fresh process, no index"),
+    ("b-index-open", "index created"),
+    ("c-after-attach", "six lots attached"),
+    ("c1-after-trim", "after the first malloc_trim(0)"),
+    ("c2-after-trim2", "after the second call, idempotence"),
+    ("f-after-delete", "index deleted"),
+    ("f1-after-trim3", "after malloc_trim(0) on the deleted index"),
+]
+TRIM_STATE_KEYS = [key for key, _ in TRIM_STATES]
+ALL_STATE_KEYS = STATE_KEYS + [key for key in TRIM_STATE_KEYS if key not in STATE_KEYS]
+
+TRIM_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+    ("c->c1", "c-after-attach", "c1-after-trim", "first malloc_trim(0)"),
+    ("c1->c2", "c1-after-trim", "c2-after-trim2", "second malloc_trim(0)"),
+    ("c2->f", "c2-after-trim2", "f-after-delete", "DELETE"),
+    ("f->f1", "f-after-delete", "f1-after-trim3", "malloc_trim(0) after the DELETE"),
+]
 
 STATUS_FIELDS = [
     "VmRSS", "RssAnon", "RssFile", "RssShmem", "VmHWM", "VmSwap", "VmData",
@@ -162,10 +213,10 @@ def run_dir(value: str) -> pathlib.Path:
     return path
 
 
-def container_id() -> str:
-    out = sh("docker", "inspect", "-f", "{{.Id}}", CONTAINER).stdout.strip()
+def container_id(name: str = CONTAINER) -> str:
+    out = sh("docker", "inspect", "-f", "{{.Id}}", name).stdout.strip()
     if not out:
-        fail(f"container {CONTAINER} is not running")
+        fail(f"container {name} is not running")
     return out
 
 
@@ -194,6 +245,89 @@ def wait_ready(timeout=300) -> float:
             return time.time() - started
         time.sleep(2)
     fail("server never ready")
+
+
+# --------------------------------------------------------------------------
+# trim (third campaign, ADR-0159)
+
+
+def require_rest() -> dict:
+    """Refuse to trim unless no job is queued and none is running.
+
+    `gdb call` freezes the process and takes the arena locks: it is only called
+    at rest, with no job in flight and no query on its way (ADR-0159, decision
+    6). The check is `GET /v1/jobs`, filtered by state.
+    """
+    counts = {}
+    for state in ("queued", "running"):
+        code, body = api("GET", f"/v1/jobs?state={state}", timeout=60)
+        if code != 200:
+            fail(f"cannot check jobs in state {state}: {code}")
+        counts[state] = len((body or {}).get("jobs") or [])
+    print(f"  at rest: queued={counts['queued']} running={counts['running']}",
+          flush=True)
+    if counts["queued"] or counts["running"]:
+        fail("not at rest: a job is queued or running, trim refused")
+    return counts
+
+
+def call_trim(target: str, label: str) -> dict:
+    """One `malloc_trim(0)` in `target`'s PID 1, from a throwaway annex.
+
+    The annex image is local and never pulled; the PID namespace of the annex
+    is the measured container's, and `SYS_PTRACE` is the only added capability.
+    The call is bounded by `TRIM_TIMEOUT`; a block or a failure kills the annex
+    and fails the run, and no value is ever substituted (ADR-0159, decisions 3
+    and 6).
+    """
+    annex = f"{target}-gdb"
+    sh("docker", "rm", "-f", annex, timeout=120)
+    # `set sysroot` and `file` are needed for the call to resolve at all: with
+    # the annex's own rootfs, gdb refuses `target:/usr/bin/...`
+    # ("Operation not permitted") and knows no `malloc_trim` symbol. Both make
+    # gdb read the symbols from the measured container's own rootfs through
+    # `/proc/1/root`, which needs no capability beyond `SYS_PTRACE` and no
+    # Docker option beyond `--pid` and `--cap-add`.
+    command = [
+        "docker", "run", "--rm", "--pull=never", "--name", annex,
+        "--pid", f"container:{target}", "--cap-add", "SYS_PTRACE",
+        "--entrypoint", "gdb", GDB_IMAGE,
+        "-p", "1", "-batch",
+        "-ex", "set sysroot /proc/1/root",
+        "-ex", "file /proc/1/root/proc/1/exe",
+        "-ex", "call (int) malloc_trim(0)",
+    ]
+    print(f"  trim {label}: " + " ".join(command), flush=True)
+    started = time.time()
+    try:
+        result = sh(*command, timeout=TRIM_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        sh("docker", "rm", "-f", annex, timeout=120)
+        fail(f"trim {label}: gdb still running after {TRIM_TIMEOUT} s; annex "
+             f"killed and removed. Restart the container: this run is failed "
+             f"and no value is substituted (ADR-0159, decision 6)")
+    elapsed = round(time.time() - started, 1)
+    output = result.stdout + result.stderr
+    found = re.search(r"\$\d+\s*=\s*(-?\d+)", result.stdout)
+    if result.returncode != 0 or not found:
+        fail(f"trim {label}: gdb failed ({result.returncode}) or returned no "
+             f"value: {output[-1200:]}")
+    value = int(found.group(1))
+    print(f"  trim {label}: malloc_trim(0) returned {value} in {elapsed} s",
+          flush=True)
+    return {
+        "label": label,
+        "target": target,
+        "command": command,
+        "annex_image": GDB_IMAGE,
+        "timeout_s": TRIM_TIMEOUT,
+        "returncode": result.returncode,
+        "value": value,
+        "seconds": elapsed,
+        "stdout": result.stdout[-2000:],
+        "stderr": result.stderr[-2000:],
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -226,7 +360,7 @@ def sections_of(text: str) -> dict[str, list[str]]:
     return sections
 
 
-def read_once(cgroup: str) -> dict:
+def read_once(cgroup: str, target: str = CONTAINER) -> dict:
     script = probe_script(cgroup)
     # Three attempts: the first smaps_rollup of a freshly attached pid
     # namespace was once refused, and a missing reading must never become a
@@ -235,7 +369,7 @@ def read_once(cgroup: str) -> dict:
     for attempt in range(3):
         result = sh(
             "docker", "run", "--rm", "--pull=never",
-            "--pid", f"container:{CONTAINER}", "--cgroupns=host",
+            "--pid", f"container:{target}", "--cgroupns=host",
             "--cap-add", "SYS_PTRACE", PROBE_IMAGE, "sh", "-c", script,
             timeout=300,
         )
@@ -473,12 +607,19 @@ def cmd_init(args) -> None:
     commit = sh("git", "-C", str(REPO), "rev-parse", "HEAD").stdout.strip()
     branch = sh("git", "-C", str(REPO), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     page = reading["page_size_bytes"]
+    third = getattr(args, "campaign", "second") == "trim"
     document = {
-        "campaign": "MES-17 second campaign (ADR-0157)",
+        "campaign": ("MES-17 third campaign (ADR-0159)" if third
+                     else "MES-17 second campaign (ADR-0157)"),
         "variant": args.variant or args.tunables or "custom",
         "glibc_tunables": container_env(),
         "image": args.image,
         "image_id": image_id(),
+        "annex_image": GDB_IMAGE if third else None,
+        "annex_image_id": sh("docker", "image", "inspect", "-f", "{{.Id}}",
+                             GDB_IMAGE, timeout=120).stdout.strip() if third else None,
+        "annex_base_digest": GDB_BASE_DIGEST if third else None,
+        "trim_timeout_s": TRIM_TIMEOUT if third else None,
         "container_id": cgroup,
         "container_created": sh(
             "docker", "inspect", "-f", "{{.Created}}", CONTAINER).stdout.strip(),
@@ -524,7 +665,7 @@ def guard(out: pathlib.Path, reading: dict) -> None:
 
 def cmd_state(args) -> None:
     out = run_dir(args.run)
-    if args.name not in STATE_KEYS:
+    if args.name not in ALL_STATE_KEYS:
         fail(f"unknown state {args.name}")
     cgroup = container_id()
     readings = []
@@ -551,6 +692,92 @@ def cmd_state(args) -> None:
     (out / "states" / f"{args.name}.json").write_text(
         json.dumps(readings, indent=2) + "\n")
     print(f"  state {args.name} written", flush=True)
+
+
+def cmd_trim(args) -> None:
+    out = run_dir(args.run)
+    at_rest = require_rest()
+    record = call_trim(CONTAINER, args.label)
+    # Proof of the at-rest check: `require_rest` fails before the call, so a
+    # recorded non-zero counter can only come from an older format.
+    record["at_rest"] = at_rest
+    history = out / "trims.json"
+    previous = json.loads(history.read_text()) if history.exists() else []
+    previous.append(record)
+    history.write_text(json.dumps(previous, indent=2) + "\n")
+    print(f"  trim {args.label} recorded in {(history).relative_to(REPO)}", flush=True)
+
+
+def cmd_trim_selftest(args) -> None:
+    """Auto-test of the annex on a disposable process, without Crible.
+
+    A container of the annex image itself allocates 40 000 chunks of 4 KiB in
+    one `awk` array (about 156 MiB of heap), frees them, then sleeps. The probe
+    reads the anonymous memory before and after one `malloc_trim(0)`: the test
+    shows that the annex reaches the target process, that `gdb` returns a
+    value, that the call is bounded in time, and that the anonymous reading
+    follows (ADR-0159, decision 3).
+    """
+    out = run_dir(args.out)
+    target = f"{CONTAINER}-selftest"
+    sh("docker", "rm", "-f", target, timeout=120)
+    program = (
+        'BEGIN { for (i = 0; i < 40000; i++) a[i] = sprintf("%4096s", "x"); '
+        'print "allocated"; fflush(); system("sleep 3"); '
+        'for (i = 0; i < 40000; i++) delete a[i]; '
+        'print "freed"; fflush(); system("sleep 600") }'
+    )
+    command = ["docker", "run", "-d", "--name", target, "--pull=never",
+               "--entrypoint", "awk", GDB_IMAGE, program]
+    print("  selftest: " + " ".join(command), flush=True)
+    result = sh(*command, timeout=180)
+    if result.returncode != 0:
+        fail(f"selftest container refused: {result.stdout}{result.stderr}")
+    started = time.time()
+    deadline = started + 180
+    freed = False
+    while time.time() < deadline:
+        logs = sh("docker", "logs", target, timeout=120)
+        print(f"  selftest: waiting for allocation and release, "
+              f"{time.time() - started:.0f} s", flush=True)
+        if "freed" in logs.stdout:
+            freed = True
+            break
+        if "allocated" not in logs.stdout and time.time() - started > 60:
+            fail(f"selftest: the target never allocated: "
+                 f"{logs.stdout[-500:]}{logs.stderr[-500:]}")
+        time.sleep(10)
+    if not freed:
+        sh("docker", "rm", "-f", target, timeout=120)
+        fail("selftest: the target never released its memory within 180 s")
+    cgroup = container_id(target)
+    before = read_once(cgroup, target)
+    record = call_trim(target, "selftest")
+    after = read_once(cgroup, target)
+    before_anon = before["memory_stat"]["anon"]
+    after_anon = after["memory_stat"]["anon"]
+    document = {
+        "target": target,
+        "annex_image": GDB_IMAGE,
+        "annex_base_digest": GDB_BASE_DIGEST,
+        "trim": record,
+        "anon_before_bytes": before_anon,
+        "anon_after_bytes": after_anon,
+        "anon_delta_bytes": after_anon - before_anon,
+        "anon_before_mib": round(before_anon / PAGE, 1),
+        "anon_after_mib": round(after_anon / PAGE, 1),
+        "seconds": round(time.time() - started, 1),
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "selftest.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(f"  selftest: value={record['value']} "
+          f"anon {document['anon_before_mib']} -> {document['anon_after_mib']} MiB "
+          f"(delta {document['anon_delta_bytes']} bytes)", flush=True)
+    sh("docker", "rm", "-f", target, timeout=120)
+    if document["anon_delta_bytes"] > 0:
+        fail("selftest: the anonymous memory did not follow the trim")
+    print("  selftest passed: process reached, value returned, call bounded, "
+          "anonymous memory followed", flush=True)
 
 
 def poll(job_id: str, label: str, timeout=1800) -> dict:
@@ -707,8 +934,11 @@ def cmd_restart(args) -> None:
 
 def cmd_summary(args) -> None:
     out = run_dir(args.run)
+    third = getattr(args, "campaign", "second") == "trim"
+    states = TRIM_STATES if third else STATES
+    keys = TRIM_STATE_KEYS if third else STATE_KEYS
     readings = {}
-    for key_name in STATE_KEYS:
+    for key_name in keys:
         path = out / "states" / f"{key_name}.json"
         if not path.exists():
             fail(f"missing state {key_name}")
@@ -748,7 +978,7 @@ def cmd_summary(args) -> None:
         }
 
     table = []
-    for key_name, label in STATES:
+    for key_name, label in states:
         rows = [values(reading) for reading in readings[key_name]]
         medians = {}
         spreads = {}
@@ -770,7 +1000,7 @@ def cmd_summary(args) -> None:
         })
 
     transitions = []
-    pairs = [
+    pairs = TRIM_TRANSITIONS if third else [
         ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
         ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
         ("c->d", "c-after-attach", "d-after-queries", "300 queries, full index"),
@@ -810,12 +1040,18 @@ def cmd_summary(args) -> None:
         }
 
     summary = {
+        "campaign": "MES-17 third campaign (ADR-0159)" if third
+                    else "MES-17 second campaign (ADR-0157)",
         "run": json.loads((out / "run.json").read_text()),
         "states": table,
         "transitions": transitions,
         "queries": queries,
         "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
+    if third:
+        # Only the third campaign records the closing `df`: the output of the
+        # second campaign stays the one written on 2026-11-22.
+        summary["df_end"] = sh("df", "-h", str(REPO)).stdout.splitlines()
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
     print(f"{'state':22} {'current':>9} {'anon':>9} {'file':>9} {'rss_anon':>9} "
@@ -838,9 +1074,11 @@ def cmd_summary(args) -> None:
 
 def cmd_journal_check(args) -> None:
     out = run_dir(args.run)
+    third = getattr(args, "campaign", "second") == "trim"
+    keys = TRIM_STATE_KEYS if third else STATE_KEYS
     cumulative = {}
     final = []
-    for key_name in STATE_KEYS:
+    for key_name in keys:
         path = out / "logs" / f"{key_name}.jsonl"
         if not path.exists():
             fail(f"missing journal {key_name}")
@@ -867,6 +1105,20 @@ def cmd_journal_check(args) -> None:
     if delete_file.exists():
         delete_job = json.loads(delete_file.read_text())["job"]["id"]
 
+    verdict = {
+        "four_steps": not (required - steps),
+        "one_job_end_per_lot": bool(attach_jobs)
+        and sum(1 for job in attach_jobs
+                if any(line["job_id"] == job for line in job_ends)) == len(attach_jobs),
+    }
+    if third:
+        # One `session_load`, at (b): no restart is replayed.
+        verdict["session_load_expected"] = 1
+        verdict["session_load_conforme"] = len(sessions) == 1
+    else:
+        # The second campaign's verdict keeps the key written on 2026-11-22.
+        verdict["two_session_load"] = len(sessions) == 2
+
     report = {
         "states": cumulative,
         "steps_present": sorted(steps),
@@ -889,16 +1141,10 @@ def cmd_journal_check(args) -> None:
             "count": len(sessions),
             "indexes": [line["index"] for line in sessions],
             "at_b": cumulative["b-index-open"].get("session_load", 0),
-            "at_e": cumulative["e-after-restart-index"].get("session_load", 0),
-            "at_g": cumulative["g-after-restart"].get("session_load", 0),
+            "at_e": cumulative.get("e-after-restart-index", {}).get("session_load", 0),
+            "at_g": cumulative.get("g-after-restart", {}).get("session_load", 0),
         },
-        "verdict": {
-            "four_steps": not (required - steps),
-            "one_job_end_per_lot": bool(attach_jobs)
-            and sum(1 for job in attach_jobs
-                    if any(line["job_id"] == job for line in job_ends)) == len(attach_jobs),
-            "two_session_load": len(sessions) == 2,
-        },
+        "verdict": verdict,
     }
     (out / "journal-check.json").write_text(json.dumps(report, indent=2) + "\n")
     (out / "memory-lines.json").write_text(json.dumps(final, indent=2) + "\n")
@@ -963,6 +1209,8 @@ def main() -> None:
     init.add_argument("--run", required=True)
     init.add_argument("--variant", default=None)
     init.add_argument("--tunables", default=None)
+    init.add_argument("--campaign", choices=["second", "trim"], default="second",
+                      help="trim: third campaign (ADR-0159), records the annex image")
     init.add_argument("--image", default="crible:t05-suite-mes17")
     init.set_defaults(func=cmd_init)
 
@@ -999,11 +1247,24 @@ def main() -> None:
 
     summary = sub.add_parser("summary", help="medians, spreads, transitions")
     summary.add_argument("--run", required=True)
+    summary.add_argument("--campaign", choices=["second", "trim"], default="second")
     summary.set_defaults(func=cmd_summary)
 
     check = sub.add_parser("journal-check", help="four steps, six job_end, two session_load")
     check.add_argument("--run", required=True)
+    check.add_argument("--campaign", choices=["second", "trim"], default="second")
     check.set_defaults(func=cmd_journal_check)
+
+    trim = sub.add_parser(
+        "trim", help="one malloc_trim(0) by gdb in the measured PID 1, at rest")
+    trim.add_argument("--run", required=True)
+    trim.add_argument("--label", required=True, help="e.g. after-c, idempotence, after-delete")
+    trim.set_defaults(func=cmd_trim)
+
+    selftest = sub.add_parser(
+        "trim-selftest", help="auto-test of the annex on a disposable process, no Crible")
+    selftest.add_argument("--out", required=True, help="directory under data/mes17/raw")
+    selftest.set_defaults(func=cmd_trim_selftest)
 
     tun = sub.add_parser("tunables", help="prove glibc read the tunables (loader only)")
     tun.add_argument("--out", required=True, help="directory under data/mes17/raw")

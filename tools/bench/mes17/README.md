@@ -1,4 +1,4 @@
-# MES-17, seconde campagne : attribuer la mémoire anonyme retenue
+# MES-17, seconde et troisième campagnes : la mémoire anonyme retenue
 
 Harnais de la seconde campagne de MES-17, décidée par
 [ADR-0157](../../../docs/adr/0157-protocole-de-la-seconde-campagne-de-mes-17-attribuer-la-memoire-anonyme-retenue.md)
@@ -15,6 +15,14 @@ puis V1, V2 et V3. Aucune variante n'a fait baisser l'anonyme retenu d'au moins
 45,3 MiB (la dispersion de V0), donc **V4 n'a pas tourné** (ADR-0158, décision 2).
 Le protocole prévu reste décrit ci-dessous, V4 compris.
 
+La troisième campagne, du 2026-11-22 également, applique
+[ADR-0159](../../../docs/adr/0159-essai-de-malloc-trim-0-dans-une-troisieme-campagne-de-mes-17.md)
+(accepté le 2026-11-22) : elle appelle `malloc_trim(0)` dans le processus du
+serveur, par `gdb -p`, depuis un conteneur annexe jetable, pour mesurer la part
+d'une fragmentation que les variantes de la seconde campagne ne rendaient pas.
+Elle garde l'identifiant MES-17, tourne sur deux processus, et ne corrige rien
+(voir « Troisième campagne » plus bas).
+
 La première campagne et sa méthode sont dans
 [`docs/mesures/MES-17-classes-de-memoire.md`](../../../docs/mesures/MES-17-classes-de-memoire.md).
 
@@ -26,6 +34,9 @@ La première campagne et sa méthode sont dans
   commit de la branche de tâche — **ne pas la reconstruire** ;
 - l'image `postgres:17` présente localement, utilisée comme sonde jetable
   (`--pull=never`), l'image mesurée n'ayant pas de shell ;
+- pour la troisième campagne seulement, l'image annexe
+  `crible-mes17-gdb:2026-11-22`, construite localement depuis
+  `tools/bench/mes17/gdb.Dockerfile` (voir « Troisième campagne ») ;
 - l'échantillon `data/legifacile-sample` (six lots, 300 requêtes) et le modèle
   `data/models/mdenseon` ;
 - `data/mes17/crible.toml` (configuration de l'instance jetable) et
@@ -157,3 +168,111 @@ Sous `data/mes17/raw/<date>/<parcours>/` (gitignoré) : `run.json`, `states/`,
 (plus `tunables-proof.txt` pour V2). Le contrôle du journal vérifie les
 quatre `step` d'ADR-0151, un `job_end` par lot attaché (six) et deux
 `session_load` (états b et e).
+
+## Troisième campagne : `malloc_trim(0)` (ADR-0159)
+
+Un parcours par processus, **sans variante**, dans cet ordre : (a) processus
+neuf, aucun index ; (b) index créé ; (c) six lots attachés ; **trim** ; (c′)
+relevé ; **trim** ; (c″) relevé ; `DELETE` ; (f) relevé ; **trim** ; (f′) relevé.
+Les états (d) et (e) d'ADR-0157 ne sont pas rejoués, et **aucun trim n'est fait
+entre (b) et (c)** : il détruirait la référence (c)−(b).
+
+### Image annexe
+
+`gdb.Dockerfile` construit l'image annexe : base `debian:bookworm-slim` épinglée
+par digest (même Debian que l'étage `runtime` de `docker/Dockerfile`, donc même
+glibc que le processus mesuré), paquet `gdb` seulement. Construite une fois :
+
+```sh
+docker build -f tools/bench/mes17/gdb.Dockerfile -t crible-mes17-gdb:2026-11-22 \
+  tools/bench/mes17
+```
+
+Elle est ensuite utilisée en `--pull=never`. Digest de la base :
+`sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc` ; image
+construite le 2026-11-22 : `sha256:dcc33b255269a3929a03d0885e3a6b28ed51d4cd1c19326218f453fe364825b7`.
+`gdb` n'entre ni dans l'image de Crible, ni dans `docs/07`, ni dans
+`crible.toml` : c'est un outil de mesure, pas une dépendance.
+
+### Auto-test, avant la campagne
+
+```sh
+python3 tools/bench/mes17/measure.py trim-selftest \
+  --out data/mes17/raw/<date>/trim-selftest
+```
+
+Il lance un processus jetable **sans Crible** (un `awk` qui alloue 40 000 blocs
+de 4 KiB, les libère, puis dort), lit son anonyme, appelle `malloc_trim(0)` et
+relit. Le 2026-11-22 : valeur `1`, anonyme 160,1 → 6,9 MiB, appel en 0,3 s. Un
+auto-test raté arrête la campagne avant le parcours (ADR-0159, décision 3).
+
+### Parcours
+
+```sh
+python3 tools/bench/mes17/measure.py up --variant V0        # GLIBC_TUNABLES absent
+RUN=data/mes17/raw/<date>/trim-p1
+python3 tools/bench/mes17/measure.py init --run "$RUN" --variant V0 --campaign trim
+python3 tools/bench/mes17/measure.py state a-fresh --run "$RUN"
+python3 tools/bench/mes17/measure.py create --run "$RUN"
+python3 tools/bench/mes17/measure.py state b-index-open --run "$RUN"
+for lot in mes17-legifacile-sample-articles-v1 mes17-legifacile-sample-jorf-v1 \
+           mes17-legifacile-sample-decisions-v1 mes17-legifacile-sample-titres-v1 \
+           mes17-legifacile-sample-sarde-v1 mes17-legifacile-sample-dole-v1; do
+  python3 tools/bench/mes17/measure.py attach --run "$RUN" --lot "$lot"
+done
+python3 tools/bench/mes17/measure.py state c-after-attach --run "$RUN"
+python3 tools/bench/mes17/measure.py trim --run "$RUN" --label after-c
+python3 tools/bench/mes17/measure.py state c1-after-trim --run "$RUN"
+python3 tools/bench/mes17/measure.py trim --run "$RUN" --label idempotence
+python3 tools/bench/mes17/measure.py state c2-after-trim2 --run "$RUN"
+python3 tools/bench/mes17/measure.py delete --run "$RUN"
+python3 tools/bench/mes17/measure.py state f-after-delete --run "$RUN"
+python3 tools/bench/mes17/measure.py trim --run "$RUN" --label after-delete
+python3 tools/bench/mes17/measure.py state f1-after-trim3 --run "$RUN"
+python3 tools/bench/mes17/measure.py summary --run "$RUN" --campaign trim
+python3 tools/bench/mes17/measure.py journal-check --run "$RUN" --campaign trim
+python3 tools/bench/mes17/measure.py down
+```
+
+`--campaign trim` fait choisir au résumé les sept états ci-dessus (et non les
+sept d'ADR-0157) et attend **un seul** `session_load`, à l'état (b) : aucun
+redémarrage n'est rejoué.
+
+### L'appel `gdb`
+
+`measure.py trim` vérifie d'abord que le serveur est **au repos**
+(`GET /v1/jobs?state=queued` et `state=running` vides), puis lance :
+
+```sh
+docker run --rm --pull=never --name crible-mes17-gdb \
+  --pid container:crible-mes17 --cap-add SYS_PTRACE \
+  --entrypoint gdb crible-mes17-gdb:2026-11-22 \
+  -p 1 -batch \
+  -ex 'set sysroot /proc/1/root' \
+  -ex 'file /proc/1/root/proc/1/exe' \
+  -ex 'call (int) malloc_trim(0)'
+```
+
+Deux `-ex` s'ajoutent à la forme schématique d'ADR-0159, décision 1, et c'est
+une **déviation déclarée** : sans eux, `gdb` refuse de lire les fichiers du
+conteneur mesuré (`target:/usr/bin/... : Operation not permitted`) et ne connaît
+aucun symbole `malloc_trim`. `set sysroot` lui fait lire les symboles depuis la
+racine du conteneur mesuré (`/proc/1/root`, accessible avec `SYS_PTRACE`), et
+`file` lui nomme l'exécutable du processus visé. Les deux `-ex` sont des
+**arguments `gdb`, non des options Docker** : **aucune option n'élargit les
+privilèges au-delà de `--pid=container:` et `--cap-add SYS_PTRACE`** ;
+`--pull=never` relève de la décision 2, et `--rm`, `--name` et `--entrypoint`
+sont mécaniques (conteneur jetable nommé, entrée `gdb`). Aucun ADR n'est requis
+pour ces deux `-ex`, la déviation étant déclarée ici et dans la mesure.
+
+L'appel est borné (`TRIM_TIMEOUT`, 120 s). S'il bloque ou échoue, le conteneur
+annexe est détruit, le parcours est **déclaré en échec** et **aucune valeur n'est
+substituée** : on redémarre le conteneur mesuré et on rejoue. La valeur de retour
+de chaque appel (`1` : des pages ont été rendues ; `0` : rien) est écrite dans
+`trims.json` avec la commande exacte, la durée et la sortie de `gdb`.
+
+### Données brutes de la troisième campagne
+
+Sous `data/mes17/raw/<date>/trim-p1/` et `trim-p2/` (gitignoré) : les fichiers
+d'un parcours, plus `trims.json` (les trois appels : commande, valeur, durée) et
+`selftest.json` dans `trim-selftest/`.

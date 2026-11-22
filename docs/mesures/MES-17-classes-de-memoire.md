@@ -566,3 +566,295 @@ nouvelle demande un **nouvel ADR** (ADR-0158, décision 4 ; ADR-0157, décisions
 - `data/mes17/raw/2026-11-22/` occupe 6,9 Mio ; l'image `crible:t05-suite-mes17` est conservée, le
   volume `crible-mes17-data` a été supprimé après la campagne, et aucun conteneur `crible-mes17` ni
   aucune sonde ne subsiste.
+
+## Troisième campagne, 2026-11-22 : essai de `malloc_trim(0)` (ADR-0159)
+
+- **Tâche** : `T05-ESSAI-MALLOC-TRIM` (v1.1), suite du ticket 05 de Legifacile. Troisième campagne de
+  MES-17, décidée par ADR-0159 (accepté le 2026-11-22). L'appel se fait dans le processus du serveur,
+  par `gdb -p`, depuis un conteneur annexe jetable. **La campagne ne corrige rien** : `malloc_trim`
+  n'entre ni dans le code, ni dans l'image, ni dans `crible.toml` (ADR-0159, décision 7).
+- **Commit** : `d266d633fe9997016eb76139d0b512ca021d24bb`, branche `tache/T05-ESSAI-MALLOC-TRIM`.
+  Aucun code de production n'a été modifié : les seuls fichiers écrits sont cette section, le harnais
+  `tools/bench/mes17/` (dont `gdb.Dockerfile`) et les données brutes sous
+  `data/mes17/raw/2026-11-22/trim-p1/`, `trim-p2/` et `trim-selftest/` (gitignorées).
+- **Machine** : MacBook Air M3 (`Mac15,12`, 8 cœurs, 24 Go), macOS 15.7.7. **En conteneur** : Docker
+  Desktop 28.5.1 (build `e180ab8`), VM `aarch64` de **10 420 109 312 octets (9,71 Gio)**, 8 vCPU,
+  **aucune limite `--memory`** (ADR-0135, décision 5), noyau `6.10.14-linuxkit`, taille de page
+  **4 096 octets** lue par `getconf PAGESIZE` dans la sonde. Même machine et même VM que les deux
+  campagnes précédentes.
+- **Disque** : relevé par parcours (`df -h .`, `df_start` de `run.json` et `df_end` de `summary.json`) :
+  **93 Gio** libres au début de `trim-p1` et **98 Gio** à sa fin, **98 Gio** au début de `trim-p2` et
+  **99 Gio** à sa fin. Toutes ces valeurs sont au-dessus du plancher de 15 Gio d'ADR-0159, décision 6.
+- **Image mesurée** : `crible:t05-suite-mes17`,
+  `sha256:dc800f534ff50589038b0ca5d7a4fd9336a3259c45b70fdb00408b84366a8080`, **non reconstruite**
+  (ADR-0159, contexte) ; elle n'a pas de shell, comme lors de la seconde campagne.
+- **Image annexe** : `crible-mes17-gdb:2026-11-22`,
+  `sha256:dcc33b255269a3929a03d0885e3a6b28ed51d4cd1c19326218f453fe364825b7`, construite depuis
+  `tools/bench/mes17/gdb.Dockerfile` : base `debian:bookworm-slim` épinglée par digest
+  (`sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc`, même Debian que l'étage
+  `runtime` de `docker/Dockerfile`), paquet `gdb` **13.1-3** et rien d'autre, glibc
+  `2.36-9+deb12u14`. Le téléchargement de la base et du paquet est celui qu'autorise ADR-0159,
+  décision 2 ; l'image est ensuite utilisée en `--pull=never`.
+- **Jeu de données** : l'échantillon Legifacile de la première campagne, `data/legifacile-sample`,
+  six lots réels, 205 261 documents et 257 626 passages ; `queries.jsonl` présent mais **aucune
+  requête n'est lancée** (les états (d) et (e) ne sont pas rejoués).
+- **Configuration** : `data/mes17/crible.toml`, identique à la seconde campagne ; volume nommé
+  jetable `crible-mes17-data`, recréé pour cette campagne et supprimé après. Aucune variable
+  `GLIBC_TUNABLES` : les deux parcours sont sans variante (`--variant V0`, variable absente, vérifié
+  par `docker inspect` et `null` dans `run.json`).
+- **Exploitation** : `legifacile-dev-crible-1` était **arrêté** (`Exited (0)`) avant le premier
+  parcours et l'est resté après le dernier, vérifié au début et à la fin ; il n'a jamais été touché.
+  Les deux conteneurs de base de données au repos (`poc-presidio-db-1`, `legifacile-dev-postgres-1`)
+  n'ont pas été touchés : 13,4 puis 13,8 MiB et 226,2 puis 226,3 MiB de mémoire, relevés par
+  `docker stats --no-stream` au début et à la fin. Seuls `crible-mes17`, `crible-mes17-gdb`,
+  `crible-mes17-selftest`, le volume `crible-mes17-data`, les sondes `postgres:17 --rm` et le port
+  18017 ont servi. La production n'a été ni lue ni approchée (ADR-0032).
+
+### Protocole
+
+**Deux processus, un parcours chacun** (ADR-0159, décision 4), sans variante, sur le même volume et
+un conteneur neuf par processus :
+
+| Étape | Description |
+|---|---|
+| (a) | processus neuf, aucun index |
+| (b) | index créé, avec la ligne `session_load` |
+| (c) | six lots attachés |
+| trim | premier `malloc_trim(0)`, valeur de retour notée |
+| (c′) | relevé après le premier trim |
+| trim | second appel, contrôle d'idempotence |
+| (c″) | relevé après le second appel |
+| `DELETE` | suppression de l'index |
+| (f) | relevé après le `DELETE` |
+| trim | `malloc_trim(0)` après le `DELETE` |
+| (f′) | relevé après ce trim |
+
+**Aucun trim entre (b) et (c)** : il perturberait le tas avant l'attache et détruirait la référence
+(c)−(b). Les états (d) et (e) d'ADR-0157 ne sont pas rejoués.
+
+**Relevés** : trois lectures à 3 secondes d'intervalle par état, mêmes sources et même sonde que la
+seconde campagne ; le chiffre qui fait foi reste l'anonyme du cgroup (`anon` de `memory.stat`) lu par
+`read_once`, et les écarts sont calculés sur les octets avant arrondi. Le harnais `measure.py` a reçu
+trois états de plus (`c1-after-trim`, `c2-after-trim2`, `f1-after-trim3`), les sous-commandes `trim` et
+`trim-selftest`, et l'option `--campaign trim` pour `init`, `summary` et `journal-check`. Les deux
+ajouts de sortie (`df_end` dans `summary.json`, clés `session_load_expected` et
+`session_load_conforme` de `journal-check.json`) sont **conditionnés à `--campaign trim`**. Cinq
+champs, eux, restent **inconditionnels** : `campaign` dans tout `summary.json`, et `annex_image`,
+`annex_image_id`, `annex_base_digest`, `trim_timeout_s` dans tout `run.json` (`null` hors troisième
+campagne). Aucun relevé, aucun état et aucune transition ne change : la seconde campagne se rejoue
+avec les mêmes chiffres, et ses fichiers de sortie gagnent seulement ces cinq champs.
+
+**Appel au repos seulement** : chaque `trim` commence par `GET /v1/jobs?state=queued` et
+`?state=running`, exige deux listes vides, et l'affiche (`at rest: queued=0 running=0`) avant
+d'appeler. Le contrôle porte sur la **file de jobs** : cette campagne ne lance aucune requête cliente,
+donc aucune requête n'était en vol de ce côté. Aucun job n'était en cours aux six appels.
+`trims.json` écrira désormais les compteurs (`at_rest`) ; les fichiers de **cette** campagne ne les
+portent pas, le champ ayant été ajouté après coup, et la preuve du contrôle y est le code : un
+compteur non nul aurait arrêté le parcours par `fail()`, jamais laissé passer un trim.
+
+**Appel borné et échouant franchement** : `docker run --rm --pull=never --name crible-mes17-gdb
+--pid container:crible-mes17 --cap-add SYS_PTRACE --entrypoint gdb crible-mes17-gdb:2026-11-22 -p 1
+-batch -ex 'set sysroot /proc/1/root' -ex 'file /proc/1/root/proc/1/exe' -ex 'call (int)
+malloc_trim(0)'`, sous un délai borné de **120 s** (`TRIM_TIMEOUT`). Un blocage détruit l'annexe et
+**déclare le parcours en échec** ; aucune valeur n'est substituée. Aucun appel n'a bloqué : 0,3 à
+0,6 s chacun. **Aucune option n'élargit les privilèges au-delà de `--pid=container:` et
+`--cap-add SYS_PTRACE`**, comme ADR-0159, décision 1 l'autorise : `--rm`, `--name` et `--entrypoint`
+sont mécaniques (conteneur jetable nommé, entrée `gdb`), `--pull=never` relève de la décision 2, et
+les deux `-ex` sont des **arguments `gdb`**, non des options Docker.
+
+**Auto-test du harnais, avant la campagne** (ADR-0159, décision 3) : un conteneur de l'image annexe
+lui-même, **sans Crible**, un `awk` qui alloue 40 000 blocs de 4 KiB (environ 156 MiB de tas), les
+libère, puis dort. La sonde lit l'anonyme avant et après l'appel. Résultat :
+`malloc_trim(0)` rend **1**, l'anonyme passe de **160,1 à 6,9 MiB** (−160 616 448 octets), l'appel
+dure **0,3 s** et le délai borné s'applique. L'auto-test a donc montré les trois points exigés :
+l'annexe atteint le processus visé, `gdb` rend la valeur de retour, la mesure d'anonyme suit
+(`data/mes17/raw/2026-11-22/trim-selftest/selftest.json`).
+
+### Résultats
+
+MiB = 1 048 576 octets. Chaque valeur est la **médiane des trois lectures** ; « disp. » est la plus
+grande dispersion des trois lectures sur `current`, `anon`, `file`, `RssAnon` et `Rss` des arènes.
+Les écarts sont calculés sur les octets, avant arrondi. Les comparaisons sont internes à cette
+campagne (ADR-0157, `:101-102`) : le chiffre de 45,3 MiB du 2026-11-22 n'est pas réutilisé.
+
+**Processus 1 (`trim-p1`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,1 | 7,8 | 0,1 | 7,4 | 0,0 | 16 | 0,4 | 0,1 |
+| (b) index créé | 2 711,0 | 1 499,6 | 1 204,1 | 1 499,4 | 0,0 | 34 | 741,5 | 0,1 |
+| (c) six lots | 5 141,0 | 2 714,4 | 2 393,1 | 2 714,0 | 0,0 | 57 | 1 601,8 | 0,0 |
+| (c′) après 1er trim | 4 612,8 | 2 066,9 | 2 393,1 | 2 066,4 | 0,0 | 57 | 990,8 | 0,0 |
+| (c″) après 2e appel | 4 595,3 | 2 042,4 | 2 393,1 | 2 042,1 | 0,0 | 57 | 966,3 | 0,0 |
+| (f) `DELETE` | 3 801,7 | 2 025,4 | 1 639,1 | 2 025,1 | 0,0 | 56 | 949,1 | 0,0 |
+| (f′) après 3e trim | 3 683,9 | 1 925,2 | 1 639,1 | 1 925,0 | 0,0 | 56 | 849,0 | 0,0 |
+
+**Processus 2 (`trim-p2`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,0 | 7,8 | 0,1 | 7,4 | 0,0 | 16 | 0,4 | 0,5 |
+| (b) index créé | 2 711,1 | 1 499,8 | 1 204,0 | 1 499,3 | 0,0 | 35 | 741,5 | 0,1 |
+| (c) six lots | 4 870,3 | 2 441,7 | 2 393,0 | 2 441,4 | 0,0 | 53 | 1 362,3 | 0,0 |
+| (c′) après 1er trim | 4 562,4 | 2 063,1 | 2 393,0 | 2 062,8 | 0,0 | 53 | 987,3 | 0,0 |
+| (c″) après 2e appel | 4 560,3 | 2 055,7 | 2 393,0 | 2 055,4 | 0,0 | 53 | 979,9 | 0,0 |
+| (f) `DELETE` | 3 784,0 | 2 055,8 | 1 639,1 | 2 055,4 | 0,0 | 53 | 980,0 | 0,0 |
+| (f′) après 3e trim | 3 692,6 | 1 960,7 | 1 639,1 | 1 960,4 | 0,0 | 53 | 884,9 | 0,0 |
+
+**Transitions en anonyme, par processus (MiB)**
+
+| Processus | (a)→(b) | **(b)→(c)** | **(c)→(c′)** | (c′)→(c″) | (c″)→(f) | **(f)→(f′)** |
+|---|---:|---:|---:|---:|---:|---:|
+| `trim-p1` | +1 491,8 | **+1 214,8** | **−647,5** | −24,5 | −17,0 | **−100,2** |
+| `trim-p2` | +1 492,0 | **+941,9** | **−378,6** | −7,4 | +0,1 | **−95,1** |
+
+Octets exacts : `trim-p1` +1 273 872 384 sur (c)−(b), −679 026 688 sur (c)−(c′),
+−25 612 288 sur (c′)−(c″), −105 041 920 sur (f)−(f′) ; `trim-p2` +987 648 000, −397 021 184,
+−7 737 344, −99 737 600.
+
+**Valeurs de retour de `gdb`** — trois appels par processus, dans l'ordre :
+
+| Appel | `trim-p1` | `trim-p2` | Durée |
+|---|---:|---:|---|
+| après (c) | **1** | **1** | 0,6 s / 0,3 s |
+| second appel (idempotence) | **1** | **1** | 0,3 s / 0,3 s |
+| après le `DELETE` | **1** | **1** | 0,3 s / 0,3 s |
+
+**Dispersion intra-état** : la plus grande dispersion des trois lectures vaut **0,46 MiB**
+(processus 2, état (a), sur `current`) ; sur l'anonyme, elle vaut **0,39 MiB** à ce même état (a) et
+**0,04 MiB ou moins** dans tous les autres états. Les trois lectures sont donc stables.
+
+**Garde mémoire** : jamais déclenchée. Le minimum de `MemAvailable` de la VM est **6 517 864 kB**
+(`trim-p1`, état (c)), très au-dessus de 1 Gio. Aucun échange : `VmSwap` vaut 0 à tous les états des
+deux processus, et `SwapFree` reste à **4 178 772 kB** du début à la fin.
+
+**Contrôle du journal** : les deux parcours sont conformes. Les quatre `step` d'ADR-0151
+apparaissent ; chaque parcours porte 7 lignes `job_end` (six `attach_batch`, un `delete_index`), soit
+**un `job_end` par lot attaché** (6/6) ; `delete_before_rename` et `delete_after_removal` partagent le
+`job_id` du `DELETE` ; `session_load` apparaît **une seule fois**, à l'état (b) : aucun redémarrage
+n'a été rejoué, comme le prévoit ADR-0159, décision 4.
+
+**Durées** (aucune conclusion de latence n'en est tirée) : le parcours 1 va de 11:32:17 à 11:42:28
+(10 min 11 s) et le parcours 2 de 11:42:31 à 11:52:27 (9 min 56 s). Attache des six lots :
+**533,9 s** et **533,8 s** (articles 75,5 / 75,4 s ; jorf 111,6 / 99,5 s ; decisions 123,7 / 132,7 s ;
+titres 15,1 / 18,1 s ; sarde 39,2 / 36,2 s ; dole 168,8 / 171,9 s). Création de l'index : 11,7 s puis
+2,2 s ; `DELETE` : 3,0 s dans les deux cas ; un relevé d'état dure environ 7 secondes.
+
+### Lecture (ADR-0159, décision 5)
+
+**Le seuil est la dispersion entre les deux processus de cette campagne sur (c)−(b)**, calculée sur
+les octets : moyenne **1 078,38 MiB**, dispersion **286 224 384 octets, soit 272,96 MiB** (1 214,86
+contre 941,89). C'est un seuil large : la référence (c)−(b) diffère de 273 MiB entre deux processus
+de la même image, du même jeu et de la même machine.
+
+**L'effet se lit comme une baisse.** Les deux processus donnent une baisse (c)−(c′) **au-dessus du
+seuil** :
+
+| Processus | (c)−(b) | (c)−(c′) | Baisse ≥ seuil (272,96) ? | Part de la rétention rendue |
+|---|---:|---:|---|---:|
+| `trim-p1` | +1 214,86 | −647,57 | **oui** | 53,3 % |
+| `trim-p2` | +941,89 | −378,63 | **oui** | 40,2 % |
+
+Par la première ligne de lecture d'ADR-0159, décision 5, **cette part de l'anonyme retenu est
+attribuée à une fragmentation que `malloc_trim(0)` rend** : des pages libres à l'intérieur des arènes,
+que `trim_threshold=0` ne rend pas (réserve technique d'ADR-0158, `:60-66`). Le premier appel rend
+`1` dans les deux processus, ce qui confirme que des pages ont effectivement été rendues.
+
+**Ce que la rétention n'est pas, et ce qui reste.** L'observation de la seconde campagne est
+reprise : les arènes ne portent pas la rétention. À l'état (c), les 57 et 53 arènes des deux
+processus portent 1 601,8 et 1 362,3 MiB de `Rss`, alors que l'anonyme atteint 2 714,4 et 2 441,7
+MiB ; au premier trim, le `Rss` des arènes baisse de 611,0 et 375,0 MiB, du même ordre que la baisse
+de l'anonyme. Après les trois appels, il **reste** 542,9 MiB (`trim-p1`) et 555,9 MiB (`trim-p2`)
+d'anonyme au-dessus de l'état (b) en (c″), et 425,6 et 460,9 MiB en (f′).
+
+**Ce reste n'est classable par aucune ligne d'ADR-0159, décision 5.** La dernière ligne de cette
+décision — « après un premier appel rendant `1` et un second rendant `0`, ce qui reste est une
+structure vivante ou une fragmentation non rendable » — suppose un second appel rendant `0` ; son
+antécédent est **faux ici** : le second appel rend `1` sur les deux processus, et la baisse associée
+(24,43 et 7,38 MiB) est sous le seuil. La lecture est donc **restreinte** : les 542,9 et 555,9 MiB
+restants en (c″), et 425,6 et 460,9 MiB en (f′), sont une **observation** que la décision 5 ne classe
+pas. La campagne ne dit pas s'ils relèvent d'une structure vivante ou d'une fragmentation non
+rendable.
+
+**Le second appel n'a pas rendu `0`.** Le contrôle d'idempotence d'ADR-0159, décision 3, attendait
+`0` et aucune baisse supplémentaire ; les deux processus rendent **`1`**, avec une baisse de 24,43 et
+7,38 MiB. Cette baisse est **sous le seuil** : c'est une **observation**, pas un effet. La campagne
+consigne le fait sans l'interpréter.
+
+**(f)−(f′)** : le trim après le `DELETE` rend `1` et fait baisser l'anonyme de 100,18 et 95,12 MiB,
+alors que le `DELETE` lui-même n'en rend que −17,0 et +0,1 MiB. ADR-0159 ne donne pas de ligne de
+lecture pour (f)−(f′) — la règle porte sur (c)−(c′) — : c'est une **observation**, pas un effet.
+
+**Ce que cette campagne ne conclut pas.** Ni « fuite », ni « pas de fuite » : une part est rendue par
+`malloc_trim(0)` et une autre reste, sans que la campagne dise laquelle est une structure vivante.
+Rien sur l'échelle de production — l'échantillon fait 257 626 passages, là où Legifacile en compte
+9,6 M —, rien sur la latence, rien sur le coût d'un `malloc_trim` périodique, rien sur l'OOM
+d'attache du ticket 05.
+
+### Réserves
+
+1. **Deux `-ex` s'ajoutent à la commande d'ADR-0159, décision 1.** Sans `set sysroot /proc/1/root` et
+   `file /proc/1/root/proc/1/exe`, `gdb` 13.1 refuse de lire les fichiers du conteneur mesuré
+   (`target:/usr/bin/... : Operation not permitted`) et ne connaît aucun symbole `malloc_trim` :
+   la forme schématique de l'ADR ne rend alors aucune valeur. Les deux `-ex` font lire les symboles
+   depuis la racine du conteneur mesuré, à travers `/proc/1/root`, ce qui ne demande aucune capacité
+   au-delà de `SYS_PTRACE`, et **aucune option n'élargit les privilèges au-delà de `--pid=container:`
+   et `--cap-add SYS_PTRACE`** : `--rm`, `--name` et `--entrypoint` sont mécaniques, `--pull=never`
+   relève de la décision 2, et les deux `-ex` sont des arguments `gdb` (voir « Protocole »). La
+   déviation est déclarée ici et dans `tools/bench/mes17/README.md` ; la
+   commande exacte de chaque appel est conservée dans `trims.json`.
+2. **Le seuil de cette campagne est large.** La dispersion entre processus sur (c)−(b) vaut
+   272,96 MiB, contre 45,3 MiB pour V0 le 2026-11-22 : la référence de l'attache est bien moins
+   reproductible d'un processus à l'autre que lors de la seconde campagne. Les deux baisses (c)−(c′)
+   dépassent ce seuil, mais la marge du processus 2 n'est que de 105,7 MiB.
+3. **La rétention (c)−(b) est plus haute que celle de la seconde campagne** : 1 214,86 et 941,89 MiB
+   ici, contre 951,1 et 996,4 MiB pour V0 alors. C'est une **observation** : les comparaisons sont
+   internes à la campagne (ADR-0157, `:101-102`), et aucun chiffre de la seconde campagne n'est
+   réutilisé, ni comme valeur, ni comme seuil.
+4. **Le contrôle d'idempotence n'a pas reproduit la valeur attendue** (deux `1` au lieu de `0`). La
+   baisse associée est sous le seuil et reste une observation ; la campagne ne dit pas pourquoi le
+   second appel rend encore des pages.
+5. **Deux processus seulement.** Deux parcours ne donnent pas de distribution : la dispersion est un
+   écart entre deux valeurs, pas un écart type, comme dans les deux campagnes précédentes.
+6. **Écarts d'exécution déjà consignés** et reconduits : attache en six commandes (borne de 30 min
+   par commande), volume réutilisé entre les deux parcours (l'index est supprimé à l'état (f)), lots
+   dérivés de la première campagne non re-dérivés, `smaps` non conservé, taille de page lue par
+   `getconf`, `df -h` brut conservé dans les données brutes — `df_start` dans `run.json` et `df_end`
+   dans `summary.json`, tous deux gitignorés — et aucun chemin absolu de la machine dans les fichiers
+   versionnés.
+7. **Harnais étendu pendant la campagne** : états `c1-after-trim`, `c2-after-trim2` et
+   `f1-after-trim3` ; sous-commandes `trim` et `trim-selftest` ; option `--campaign trim` ; clés
+   `session_load_expected` et `session_load_conforme` de `journal-check.json` et `df_end` de
+   `summary.json`, conditionnées à cette option ; et cinq champs inconditionnels — `campaign` dans
+   `summary.json`, `annex_image`, `annex_image_id`, `annex_base_digest` et `trim_timeout_s` dans
+   `run.json` — qui ne changent aucun chiffre. Aucune autre modification : ni le code de production,
+   ni l'image, ni `crible.toml`.
+
+### Recommandations, sans décision
+
+Le propriétaire choisit la suite, et **toute correction demande un ADR distinct** (ADR-0159,
+décision 7). Aucune n'est décidée ici.
+
+1. **Si une correction est envisagée** — un `malloc_trim(0)` appelé depuis le code demande `libc`,
+   absente de `docs/07` (ADR-0080, décision 3) —, elle demande un ADR de contrat et de dépendance,
+   **et sa propre mesure de latence et de coût**. La campagne actuelle ne mesure ni l'un ni l'autre :
+   les 0,3 à 0,6 s d'un appel par `gdb` mesurent l'outil, pas une correction en service.
+2. **Si la part restante doit être attribuée** — 542,9 et 555,9 MiB au-dessus de (b) en (c″) —, le
+   moyen suivant est un compteur d'allocateur (`mallinfo2`) ou un profil de tas. L'un et l'autre
+   restent exclus par ADR-0157, décision 6, et demandent un ADR propre et une dépendance ou un outil
+   externe.
+3. **Rien n'est proposé sur la production** : l'échelle, la latence et l'OOM du ticket 05 demandent
+   leurs propres reproductions.
+
+### Données brutes
+
+- `data/mes17/raw/2026-11-22/trim-p1/` et `trim-p2/` — un processus chacun, avec `run.json` (image
+  mesurée et son identifiant, image annexe et son identifiant, digest de la base, VM, garde, `df`),
+  `states/*.json` (trois lectures par état), `logs/*.jsonl`, `attach/campaign.json`, `create.json`,
+  `delete.json`, `trims.json` (les trois appels : commande exacte, valeur de retour, durée, sortie de
+  `gdb`), `summary.json`, `journal-check.json`, `memory-lines.json`.
+- `data/mes17/raw/2026-11-22/trim-selftest/selftest.json` — l'auto-test de l'annexe, avant la
+  campagne.
+- Les images `crible:t05-suite-mes17` et `crible-mes17-gdb:2026-11-22` sont conservées ; le volume
+  `crible-mes17-data` a été supprimé après la campagne, et aucun conteneur `crible-mes17*` ne
+  subsiste.
