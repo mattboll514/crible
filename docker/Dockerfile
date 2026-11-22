@@ -17,11 +17,17 @@ ARG DEBIAN_VERSION=bookworm
 ARG CARGO_CHEF_VERSION=0.1.78
 # ONNX Runtime 1.31.0, the version of the `ci` group of docs/07: the library
 # that `ORT_DYLIB_PATH` names must stay aligned with the `onnxruntime` wheel the
-# tests use. Both tarballs are the official Linux CPU releases of the
-# `microsoft/onnxruntime` repository, pinned by SHA-256 below.
+# tests use. The library comes from the pinned PyPI wheel (ADR-0161), not from
+# the release archives of `microsoft/onnxruntime`; the URL and the SHA-256 below
+# are the ones of `tools/uv.lock` for `onnxruntime-1.31.0` `cp311`
+# `manylinux_2_28`, one per target architecture. The wheel names, the sums and
+# `tools/uv.lock` move together (ADR-0161, decision 3): the image and the CI
+# load the same pinned file.
 ARG ORT_VERSION=1.31.0
-ARG ORT_SHA256_AMD64=cc5c72baf5ae5c8238a6841f0897227be2d02826b9cf98eaf02fdefaeeb03a57
-ARG ORT_SHA256_ARM64=c5b8b3cca31f3d643a3b313b8f42e2d0f16a4fcefd02cda343d97bd5306afaab
+ARG ORT_WHEEL_URL_AMD64=https://files.pythonhosted.org/packages/a6/72/6c57163b63b5343853d7f0619c4f424a6e53ee762d7263667ff004bfede1/onnxruntime-1.31.0-cp311-cp311-manylinux_2_28_x86_64.whl
+ARG ORT_WHEEL_SHA256_AMD64=d4092b78fc5bab77ce6522393098cdb2535423045ecdcff15cc0d022162d6b66
+ARG ORT_WHEEL_URL_ARM64=https://files.pythonhosted.org/packages/44/86/e57025ab9c1eb83b6e686c92507fa6b7156d9d375e197a6c3a2afc05a1e2/onnxruntime-1.31.0-cp311-cp311-manylinux_2_28_aarch64.whl
+ARG ORT_WHEEL_SHA256_ARM64=37c7dfe398550afdf9670a29315dbb88e49d8afc473ffaf1f410376efbb9c80a
 
 # =============================================================================
 # Chef stage: Rust toolchain, build dependencies and `cargo-chef`.
@@ -68,14 +74,46 @@ COPY crates ./crates
 RUN cargo build --release --locked -p crible
 
 # =============================================================================
+# ONNX Runtime stage: the library of the pinned wheel (ADR-0161).
+#
+# A wheel is a ZIP archive, so `unzip` is needed here and only here: the runtime
+# stage receives the library by `COPY --from` and no extraction tool. The wheel
+# is checked against the SHA-256 of `tools/uv.lock` before anything is
+# extracted; a different archive fails the build.
+# =============================================================================
+FROM debian:${DEBIAN_VERSION}-slim AS onnxruntime
+
+ARG TARGETARCH
+ARG ORT_VERSION
+ARG ORT_WHEEL_URL_AMD64
+ARG ORT_WHEEL_SHA256_AMD64
+ARG ORT_WHEEL_URL_ARM64
+ARG ORT_WHEEL_SHA256_ARM64
+
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) ort_url="${ORT_WHEEL_URL_AMD64}"; ort_sha="${ORT_WHEEL_SHA256_AMD64}" ;; \
+        arm64) ort_url="${ORT_WHEEL_URL_ARM64}"; ort_sha="${ORT_WHEEL_SHA256_ARM64}" ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates curl unzip; \
+    rm -rf /var/lib/apt/lists/*; \
+    ort_whl=/tmp/onnxruntime.whl; \
+    curl -fsSL -o "${ort_whl}" "${ort_url}"; \
+    echo "${ort_sha}  ${ort_whl}" | sha256sum -c -; \
+    mkdir -p /opt/ort; \
+    unzip -j "${ort_whl}" \
+        "onnxruntime/capi/libonnxruntime.so.${ORT_VERSION}" \
+        -d /opt/ort; \
+    rm -f "${ort_whl}"
+
+# =============================================================================
 # Runtime stage: `debian:bookworm-slim`, non-root user, ONNX Runtime CPU.
 # =============================================================================
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
-ARG TARGETARCH
 ARG ORT_VERSION
-ARG ORT_SHA256_AMD64
-ARG ORT_SHA256_ARM64
 
 # `ca-certificates` ships the trust store; `curl` serves the health check.
 RUN apt-get update \
@@ -84,25 +122,12 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# ONNX Runtime CPU library of the target architecture, from the official
-# release, checked against the pinned SHA-256. Only `libonnxruntime.so*` is
-# kept: the headers, the CMake files and the providers library are build-time
-# artefacts the image does not need.
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-        amd64) ort_arch=x64; ort_sha="${ORT_SHA256_AMD64}" ;; \
-        arm64) ort_arch=aarch64; ort_sha="${ORT_SHA256_ARM64}" ;; \
-        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    ort_tgz="/tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz"; \
-    curl -fsSL -o "${ort_tgz}" \
-        "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-${ort_arch}-${ORT_VERSION}.tgz"; \
-    echo "${ort_sha}  ${ort_tgz}" | sha256sum -c -; \
-    mkdir -p /opt/ort; \
-    tar -xzf "${ort_tgz}" -C /tmp; \
-    cp -a "/tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}/lib/libonnxruntime.so"* /opt/ort/; \
-    chown -R root:root /opt/ort; \
-    rm -rf "${ort_tgz}" "/tmp/onnxruntime-linux-${ort_arch}-${ORT_VERSION}"
+# ONNX Runtime CPU library of the target architecture, extracted from the
+# pinned PyPI wheel in the `onnxruntime` stage above (ADR-0161). Only
+# `libonnxruntime.so.1.31.0` is copied, and only that file is named by
+# `ORT_DYLIB_PATH`: the `capi/` directory of the wheel carries other files, and
+# the ones the library does not need stay out of the image.
+COPY --from=onnxruntime /opt/ort/libonnxruntime.so.${ORT_VERSION} /opt/ort/
 
 # ONNX Runtime is loaded dynamically (`ort` with `load-dynamic`): the library is
 # named by `ORT_DYLIB_PATH`, never linked at build time.
