@@ -82,6 +82,8 @@ La feature `download-binaries` d'`ort` n'est pas utilisée : elle est contraire 
 
 Le groupe `ci` peut aussi recevoir `tokenizers` si c'est la seule dépendance qui manque aux tests de `tools/bench/mes04/` (voir point 7). Il ne reçoit jamais `torch`.
 
+**Renvoi du 2026-11-22 (ADR-0161, décisions 1 et 3).** L'image prend désormais sa bibliothèque ONNX Runtime dans **la même roue PyPI épinglée** que la CI : `onnxruntime==1.31.0` `manylinux_2_28` de l'architecture visée, vérifiée par la somme SHA-256 de `tools/uv.lock`. Cette décision 1 reste vraie pour la CI et s'étend à l'image ; son corps n'est pas réécrit, et le présent ADR n'est pas remplacé. Une montée d'ONNX Runtime fait bouger **ensemble** les noms et les sommes des roues de l'image et ceux de `tools/uv.lock`, par un ADR.
+
 ### 2. Le vrai modèle vient d'un dépôt de modèle Hugging Face, épinglé par sha et vérifié par hash
 
 Un artefact **déjà exporté** est publié dans un dépôt de modèle Hugging Face **dédié et public**, `mattboll/mdenseon-onnx`, sous le compte du propriétaire (`mattboll`). L'adresse qui fait foi est celle du manifeste versionné, pas celle de cet ADR : le dépôt est désigné ici par son rôle, « dépôt de l'artefact de CI », et c'est le manifeste qui en donne l'adresse exacte et le sha épinglé. Ce compte est un fait connu au 2026-10-24 ; changer de dépôt ou de compte demande la mise à jour du manifeste, et un autre hébergement demande un nouvel ADR.

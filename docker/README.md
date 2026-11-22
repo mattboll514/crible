@@ -21,10 +21,18 @@ se fait en release, et l'image d'exécution est `debian:bookworm-slim`
 | Tableau de bord | aucun dans l'image : la phase P9 est reportée après J10 (ADR-0136), et le binaire n'embarque aucune interface |
 
 La version d'ONNX Runtime est la même que celle du groupe `ci` de `docs/07`. Le
-`Dockerfile` l'épingle (`ORT_VERSION`) et vérifie chaque archive par son
-SHA-256, par architecture, avant de l'extraire : le téléchargement vient des
-versions officielles du dépôt `microsoft/onnxruntime`, jamais d'un binaire non
-contrôlé.
+`Dockerfile` l'épingle (`ORT_VERSION`) et vérifie la roue par son SHA-256, par
+architecture, avant de l'extraire.
+
+**Provenance de la bibliothèque (2026-11-22, ADR-0161).** La bibliothèque ne vient
+plus des publications GitHub : Microsoft a rendu le dépôt `microsoft/onnxruntime`
+privé le 17 ou le 18 novembre 2026, et ses archives répondaient `404`. Elle vient
+désormais de la roue PyPI `onnxruntime==1.31.0` `manylinux_2_28` de l'architecture
+visée, à l'adresse que `tools/uv.lock` donne, vérifiée par la même somme SHA-256 que
+ce fichier de verrouillage et extraite dans un étage de construction dédié. C'est la
+seule source de la bibliothèque dans l'image. La roue est aussi celle de la CI
+(ADR-0057, décision 1) : l'image et la CI chargent le même fichier épinglé, et un
+changement de source demanderait un nouvel ADR.
 
 ## Construire
 

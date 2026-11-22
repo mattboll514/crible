@@ -1,7 +1,7 @@
 # ADR-0161 — ONNX Runtime de l'image tiré de la roue PyPI épinglée
 
-- **Statut** : Proposé
-- **Date** : 2026-11-22
+- **Statut** : Accepté (décision du propriétaire le 2026-11-22, option A de la décision 7 retenue)
+- **Date** : 2026-11-22 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, sur la demande de l'orchestrateur, à partir du verdict
   `NON-COUVERT` de `@architecte` du 2026-11-22 sur la source d'ONNX Runtime dans l'image
@@ -168,6 +168,11 @@ contrat d'API et de `format_version`.
 
 ### 7. La livraison du correctif : deux options
 
+**Décision du propriétaire le 2026-11-22, sur sa réponse « Accepté, déplacer v1.1.0 » : l'option (A)
+est retenue, l'option (B) est écartée.** Le tag `v1.1.0` est reposé par le propriétaire sur le commit
+qui porte le correctif, et aucune `1.1.1` n'est publiée. Le détail des deux options ci-dessous garde
+la trace de ce qui a été envisagé. Le texte de la proposition suit, sans réécriture.
+
 Le correctif se livre par une des deux voies suivantes. **La recommandation de l'orchestrateur est
 (A).** Le choix revient au propriétaire.
 
@@ -210,7 +215,8 @@ multi-architecture réussie** (ADR-0133, décisions 4 et 5). Un run en échec ne
   produit, et la décision 1 la suit.
 - **Le sort du run `45039326345`** : le relancer est inutile tant que les archives GitHub rendent
   404, et cette ADR ne prescrit aucune relance.
-- **Le choix entre (A) et (B)**, et le geste sur le tag : propriétaire.
+- **Le choix entre (A) et (B)**, et le geste sur le tag : propriétaire, tranché le 2026-11-22 en
+  faveur de l'option (A) (voir la décision 7).
 - **Une couverture `aarch64` en CI** : aucun job ne la donne aujourd'hui, et l'ajouter serait une
   décision de CI à part entière (ADR-0133 pour la publication, ADR-0132 pour les essais en
   conteneur). L'essai de la décision 5 est local.
