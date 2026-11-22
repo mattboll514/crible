@@ -1,7 +1,7 @@
 # ADR-0158 — Sens de l'effet dans la règle de lecture de la seconde campagne de MES-17
 
-- **Statut** : Proposé
-- **Date** : 2026-11-22
+- **Statut** : Accepté (décidé par le propriétaire le 2026-11-22, sa réponse : « ADR-0158 accepté », tel que proposé)
+- **Date** : 2026-11-22 (proposition et acceptation le même jour)
 - **Décideurs** : propriétaire
 - **Proposé par** : agent `@greffier`, tâche `T05-SUITE-ATTRIBUER-ANONYME` (v1.1), sur la demande du propriétaire du 2026-11-22 et sur le verdict de `@architecte` du 2026-11-22
 - **Remplace** : — (complète ADR-0157, **décision 5 seulement** ; le corps d'ADR-0157 n'est pas modifié)
