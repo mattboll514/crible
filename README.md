@@ -15,7 +15,7 @@ Premier cas réel : **Legifacile**, une recherche juridique sur l'open data de l
 
 ## État
 
-**Version 1.0.0, livrée le 2026-11-08.** Le plan compte 11 phases, dans l'ordre P0 → … → P8 → P10 → P9 ; chacune des phases livrées est fermée par un jalon validé par le propriétaire, et la phase P9 (tableau de bord) est reportée après J10 (ADR-0136), reprise non planifiée (décision du propriétaire du 2026-11-08). Voir [`docs/suivi.md`](docs/suivi.md).
+**Version 1.1.0 (2026-11-22).** La version 1.0.0 est livrée le 2026-11-08. Le plan compte 11 phases, dans l'ordre P0 → … → P8 → P10 → P9 ; chacune des phases livrées est fermée par un jalon validé par le propriétaire, et la phase P9 (tableau de bord) est reportée après J10 (ADR-0136), reprise non planifiée (décision du propriétaire du 2026-11-08). Voir [`docs/suivi.md`](docs/suivi.md).
 
 ## Documentation et décisions
 
