@@ -78,6 +78,8 @@ Ce qui n'est **pas** décidé ici : aucun seuil chiffré ne sépare un « grand 
   - **le rejeu de la reconstruction après la parallélisation de la v2** : un gain très inférieur au rapport des threads indiquerait que le coût vient de l'analyse et du disque, et non de l'écriture tantivy ;
   - **la mémoire anonyme après un `replace_all` complet** : elle ne retombe qu'au redémarrage (10,55 Gio après l'attache, 3,57 Gio après redémarrage, `docs/suivi.md:787`). Un changement d'allocateur serait une dépendance nouvelle, donc un ADR.
 
+**Renvoi du 2026-11-22.** La limite ci-dessus reste vraie pour la 1.0, et le présent ADR n'est pas remplacé. La 1.1.0 y répond en partie : ADR-0160, accepté par le propriétaire le 2026-11-22, sa réponse « ADR-0160 accepté », fait appeler `malloc_trim(0)` par le serveur à la fin de chaque job, après la publication de l'état terminal. Sur l'échantillon, cet appel rend 40 à 53 % de la mémoire anonyme retenue par l'attache (troisième campagne de MES-17), et environ 550 MiB restent non classés et non rendus. Le changement d'allocateur reste une dépendance nouvelle, donc un ADR, et une mesure à l'échelle réelle sur `decisions` reste un choix du propriétaire.
+
 ## Alternatives écartées
 
 | Alternative | Pourquoi écartée |

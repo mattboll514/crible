@@ -63,7 +63,8 @@ use crate::state::IndexHandle;
         (status = 400, description = "Refused configuration, name already taken or absent model", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn create_index(
@@ -117,7 +118,8 @@ async fn create_index_inner(
         (status = 200, description = "The served indexes, sorted by name", body = crate::openapi::IndexList),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn list_indexes(
@@ -174,7 +176,8 @@ async fn list_indexes_inner(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn get_index(
@@ -248,7 +251,7 @@ async fn get_index_inner(
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 409, description = "Frozen setting", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn patch_index(
@@ -333,6 +336,7 @@ async fn patch_index_inner(
             writer.publish(candidate, snapshot, summary)?;
             Ok(JobOutcome {
                 generation: Some(store.generation().get()),
+                durations: None,
                 result: None,
             })
         },
@@ -373,7 +377,7 @@ async fn patch_index_inner(
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn delete_index(
@@ -443,7 +447,21 @@ async fn delete_index_inner(
             // the removal of the registry entry, a search that already holds its
             // snapshot finishes on it (the files it mapped stay valid), and a
             // read of the detail answers `404` because the directory is gone.
+            // ADR-0151, decision 2: the memory of the instance just before the
+            // directory leaves its name, then after the quarantined files are
+            // gone, so the memory a deletion gives back can be read.
+            crate::memory::log(crate::memory::Point::delete(
+                crate::memory::Step::DeleteBeforeRename,
+                progress.job_id(),
+                JobKind::DeleteIndex.as_str(),
+                &name,
+            ));
             rename_to_quarantine(&source, &target)?;
+            // ADR-0150, decision 4: a test of the `failpoints` build holds the
+            // job here to send a creation of the same name in the window where
+            // the directory is gone and the registry still holds the name.
+            #[cfg(feature = "failpoints")]
+            crate::barriers::wait_delete_after_rename(&source);
             // ADR-0116, decision 2: the server releases the writer lock of an
             // index once it deleted it. The release comes **after** the rename,
             // so a rename that fails keeps the index locked while it stays
@@ -460,8 +478,15 @@ async fn delete_index_inner(
             }
             writer.mark_deleted();
             remove_quarantined(&target);
+            crate::memory::log(crate::memory::Point::delete(
+                crate::memory::Step::DeleteAfterRemoval,
+                progress.job_id(),
+                JobKind::DeleteIndex.as_str(),
+                &name,
+            ));
             Ok(JobOutcome {
                 generation: None,
+                durations: None,
                 result: None,
             })
         },
@@ -491,6 +516,11 @@ fn list_entry(handle: &IndexHandle) -> Result<Value, CribleError> {
 /// Blocking: it walks the index directory for `sizes.disk_bytes`. The other
 /// numbers come from the published snapshot (ADR-0105, decision 3), and
 /// `last_batch` is the last row of `batches`, `null` when none was attached.
+///
+/// The response has two origins, and they are not interchangeable:
+/// `sizes.disk_bytes` measures the directory on disk, transients included,
+/// while `sizes.live_bytes` is computed from the published segments and reads
+/// no file (ADR-0152, decisions 2 and 3).
 fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> {
     // One read guard for the three parts: the configuration, the snapshot the
     // counts come from and the counts are published together (ADR-0105,
@@ -500,6 +530,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
     let summary = published.summary;
     let directory = index_directory(state, &handle.name)?;
     let disk_bytes = directory_size(&directory)?;
+    let live_bytes = crible_store::segment::live_bytes(published.snapshot.segments())?;
     Ok(json!({
         "name": handle.name,
         "config": config.to_value(),
@@ -513,6 +544,7 @@ fn detail(state: &AppState, handle: &IndexHandle) -> Result<Value, CribleError> 
             "segments": summary.segments,
             "sizes": {
                 "disk_bytes": disk_bytes,
+                "live_bytes": live_bytes,
                 "filter_memory_bytes": summary.filter_memory_bytes,
                 "codes_memory_bytes": summary.codes_memory_bytes,
             },

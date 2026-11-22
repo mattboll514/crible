@@ -1,0 +1,1013 @@
+{
+ "campaign": "MES-11 rejeu T14-IDENTIFIANTS-NUS-LEXICAL",
+ "date": "2026-11-11",
+ "commit": "ca3072c5a6596d485f2260cf44e22cc84bc71a3f",
+ "branch": "tache/T14-IDENTIFIANTS-NUS-LEXICAL",
+ "machine": {
+  "model": "MacBook Air Mac15,12 (Apple M3)",
+  "cores": 8,
+  "memory": "24 GB",
+  "os": "macOS 15.7.7 (24G720)",
+  "native": true
+ },
+ "data": {
+  "root": "data/t14-mes11/data",
+  "batches": "data/legifacile-full",
+  "model": "data/models/mdenseon"
+ },
+ "indexes": {
+  "dole": {
+   "attach_duration_s": 158.16,
+   "rebuild_none_s": 0.83,
+   "rebuild_v1_s": 1.96,
+   "adr_0142_reference_s": 1,
+   "ratio_v1_over_reference": 1.96,
+   "lexical_bytes_none": 1883918,
+   "lexical_bytes_v1": 1992074,
+   "lexical_growth": 0.0574,
+   "retokenized": {
+    "passages": 7653,
+    "changed": 1718,
+    "share": 0.22448712923036718
+   },
+   "attach_note": "relevé à l'écran du premier appel, non conservé dans un fichier",
+   "ratio_none_over_reference": 0.83
+  },
+  "sarde": {
+   "attach_duration_s": null,
+   "rebuild_none_s": 6.67,
+   "rebuild_v1_s": 12.15,
+   "adr_0142_reference_s": 5,
+   "ratio_v1_over_reference": 2.43,
+   "lexical_bytes_none": 16398964,
+   "lexical_bytes_v1": 19185243,
+   "lexical_growth": 0.1699,
+   "retokenized": {
+    "passages": 214578,
+    "changed": 12840,
+    "share": 0.059838380449067474
+   },
+   "attach_note": "durée non relevée : le harnais a tronqué la sortie de /usr/bin/time (erreur de mesure, déclarée)",
+   "ratio_none_over_reference": 1.334
+  },
+  "titres": {
+   "attach_duration_s": 97.24,
+   "rebuild_none_s": 20.93,
+   "rebuild_v1_s": 31.07,
+   "adr_0142_reference_s": 13,
+   "ratio_v1_over_reference": 2.39,
+   "lexical_bytes_none": 46616644,
+   "lexical_bytes_v1": 50071369,
+   "lexical_growth": 0.0741,
+   "retokenized": {
+    "passages": 1477883,
+    "changed": 61636,
+    "share": 0.04170560186428831
+   },
+   "ratio_none_over_reference": 1.61
+  },
+  "jorf": {
+   "attach_duration_s": 304.6,
+   "rebuild_none_s": 92.1,
+   "rebuild_v1_s": 161.27,
+   "adr_0142_reference_s": 71,
+   "ratio_v1_over_reference": 2.271,
+   "lexical_bytes_none": 207609117,
+   "lexical_bytes_v1": 216462435,
+   "lexical_growth": 0.0426,
+   "retokenized": {
+    "passages": 1833500,
+    "changed": 154670,
+    "share": 0.08435778565584946
+   },
+   "ratio_none_over_reference": 1.297
+  },
+  "articles": {
+   "attach_duration_s": 495.94,
+   "rebuild_none_s": 156.98,
+   "rebuild_v1_s": 306.76,
+   "adr_0142_reference_s": 127,
+   "ratio_v1_over_reference": 2.415,
+   "lexical_bytes_none": 320446636,
+   "lexical_bytes_v1": 340882492,
+   "lexical_growth": 0.0638,
+   "retokenized": {
+    "passages": 2476715,
+    "changed": 263181,
+    "share": 0.10626212543631383
+   },
+   "ratio_none_over_reference": 1.236
+  },
+  "decisions": {
+   "attach_duration_s": 913.97,
+   "rebuild_none_s": 234.86,
+   "rebuild_v1_s": 467.48,
+   "adr_0142_reference_s": 185,
+   "ratio_v1_over_reference": 2.527,
+   "lexical_bytes_none": 466513253,
+   "lexical_bytes_v1": 481385358,
+   "lexical_growth": 0.0319,
+   "retokenized": {
+    "passages": 3589776,
+    "changed": 734139,
+    "share": 0.20450830358217337
+   },
+   "ratio_none_over_reference": 1.27
+  }
+ },
+ "rebuild_extra": {
+  "decisions_second_run_none_s": 250.67
+ },
+ "ranks": {
+  "none": {
+   "pass": "none",
+   "k": 1000,
+   "probes": [
+    {
+     "id": "T14-DEC-10-13-625",
+     "index": "decisions",
+     "query": "10-13.625",
+     "expected": "JURITEXT000023607955",
+     "role": "criterion",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 234,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 23626.058,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007276145",
+       "JURITEXT000029909749",
+       "JURITEXT000024674778"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 222,
+      "n_results": 951,
+      "pool_size": 3589776,
+      "took_ms": 23201.387334,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007276145",
+       "JURITEXT000029909749",
+       "JURITEXT000024674778"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 468,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 25766.8145,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000050384286",
+       "JURITEXT000030079826",
+       "JURITEXT000007276145"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 452,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 27395.785958,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000050384286",
+       "JURITEXT000030079826",
+       "JURITEXT000007276145"
+      ]
+     }
+    },
+    {
+     "id": "T14-DEC-81-70-489",
+     "index": "decisions",
+     "query": "81-70.489",
+     "expected": "JURITEXT000007009951",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 9,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 23654.845833,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007554651",
+       "JURITEXT000007566294",
+       "JURITEXT000007583244"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 9,
+      "n_results": 918,
+      "pool_size": 3589776,
+      "took_ms": 22903.654666000002,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007554651",
+       "JURITEXT000007566294",
+       "JURITEXT000007583244"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 18,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 25429.274125,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007554651",
+       "JURITEXT000022489258",
+       "CONSTEXT000017667864"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 18,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 27569.032166,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007554651",
+       "JURITEXT000022489258",
+       "CONSTEXT000017667864"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-L1132-1",
+     "index": "articles",
+     "query": "L1132-1",
+     "expected": "LEGIARTI000045391841",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 79,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 24485.696083,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000045389548",
+       "LEGIARTI000038497816"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 79,
+      "n_results": 560,
+      "pool_size": 2476715,
+      "took_ms": 23848.174667,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000045389548",
+       "LEGIARTI000038497816"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 3,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 26347.176041000002,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000052676176",
+       "LEGIARTI000021503590",
+       "LEGIARTI000045391841"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 3,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 27154.626791,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000052676176",
+       "LEGIARTI000021503590",
+       "LEGIARTI000045391841"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-L-1132-1-CITE",
+     "index": "articles",
+     "query": "L. 1132-1",
+     "expected": "LEGIARTI000045391841",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": null,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 25840.913458,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000038802812",
+       "LEGIARTI000038802863",
+       "LEGIARTI000038802987"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": null,
+      "n_results": 998,
+      "pool_size": 2476715,
+      "took_ms": 26760.313875,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000038802812",
+       "LEGIARTI000038802863",
+       "LEGIARTI000038802987"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 12,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 27152.105667,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000044253775",
+       "KALIARTI000027300537",
+       "LEGIARTI000020953342"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 12,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 27277.949625,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000044253775",
+       "KALIARTI000027300537",
+       "LEGIARTI000020953342"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-NEGATIF-l1132-11",
+     "index": "articles",
+     "query": "l1132-11",
+     "expected": "LEGIARTI000045391841",
+     "role": "negative_control",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 79,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 26966.325875,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000033894564",
+       "LEGIARTI000033894562"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 79,
+      "n_results": 474,
+      "pool_size": 2476715,
+      "took_ms": 24140.783667,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000033894564",
+       "LEGIARTI000033894562"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 27951.721374999997,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045391813",
+       "LEGIARTI000045391841",
+       "LEGIARTI000021503600"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 28907.983291,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045391813",
+       "LEGIARTI000045391841",
+       "LEGIARTI000021503600"
+      ]
+     }
+    },
+    {
+     "id": "T14-SARDE-NOR",
+     "index": "sarde",
+     "query": "SANP0422530D",
+     "expected": "SARDBLOC000007251655",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 2,
+      "n_results": 36,
+      "pool_size": 214578,
+      "took_ms": 1010.5309579999999,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007251655",
+       "SARDBLOC000007251979"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 2,
+      "n_results": 35,
+      "pool_size": 214578,
+      "took_ms": 495.75341699999996,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007251655",
+       "SARDBLOC000007251979"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 15,
+      "n_results": 1000,
+      "pool_size": 214578,
+      "took_ms": 3029.093833,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007250312",
+       "SARDBLOC000007256772"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 15,
+      "n_results": 1000,
+      "pool_size": 214578,
+      "took_ms": 2615.984459,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007250312",
+       "SARDBLOC000007256772"
+      ]
+     }
+    }
+   ]
+  },
+  "v1": {
+   "pass": "v1",
+   "k": 1000,
+   "probes": [
+    {
+     "id": "T14-DEC-10-13-625",
+     "index": "decisions",
+     "query": "10-13.625",
+     "expected": "JURITEXT000023607955",
+     "role": "criterion",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 1,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 25434.957042000002,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000023607955",
+       "JURITEXT000007276145",
+       "JURITEXT000029909749"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 1,
+      "n_results": 949,
+      "pool_size": 3589776,
+      "took_ms": 25364.08525,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000023607955",
+       "JURITEXT000007276145",
+       "JURITEXT000029909749"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 3,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 29356.682708,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000030079826",
+       "JURITEXT000050384286",
+       "JURITEXT000023607955"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 3,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 26947.432500000003,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000030079826",
+       "JURITEXT000050384286",
+       "JURITEXT000023607955"
+      ]
+     }
+    },
+    {
+     "id": "T14-DEC-81-70-489",
+     "index": "decisions",
+     "query": "81-70.489",
+     "expected": "JURITEXT000007009951",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 1,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 29074.754917,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007009951",
+       "JURITEXT000007554651",
+       "JURITEXT000007566294"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 1,
+      "n_results": 916,
+      "pool_size": 3589776,
+      "took_ms": 24359.541166,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007009951",
+       "JURITEXT000007554651",
+       "JURITEXT000007566294"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 1,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 25063.570291,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007009951",
+       "JURITEXT000022489258",
+       "CONSTEXT000017667864"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 1,
+      "n_results": 1000,
+      "pool_size": 3589776,
+      "took_ms": 24990.442542,
+      "truncated_query": false,
+      "top3": [
+       "JURITEXT000007009951",
+       "JURITEXT000022489258",
+       "CONSTEXT000017667864"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-L1132-1",
+     "index": "articles",
+     "query": "L1132-1",
+     "expected": "LEGIARTI000045391841",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 38,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 24773.072584,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045389548",
+       "LEGIARTI000038497816",
+       "LEGIARTI000034105509"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 38,
+      "n_results": 846,
+      "pool_size": 2476715,
+      "took_ms": 22335.087583,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045389548",
+       "LEGIARTI000038497816",
+       "LEGIARTI000034105509"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 26697.939583,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000052676176",
+       "LEGIARTI000045391841",
+       "KALIARTI000044253775"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 27315.773083,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000052676176",
+       "LEGIARTI000045391841",
+       "KALIARTI000044253775"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-L-1132-1-CITE",
+     "index": "articles",
+     "query": "L. 1132-1",
+     "expected": "LEGIARTI000045391841",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": null,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 26168.5035,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000049812199",
+       "KALIARTI000044253775",
+       "KALIARTI000029466507"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": null,
+      "n_results": 992,
+      "pool_size": 2476715,
+      "took_ms": 23952.553792,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000049812199",
+       "KALIARTI000044253775",
+       "KALIARTI000029466507"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 12,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 28365.761292,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000044253775",
+       "KALIARTI000027300537",
+       "LEGIARTI000006900790"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 12,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 29001.06225,
+      "truncated_query": false,
+      "top3": [
+       "KALIARTI000044253775",
+       "KALIARTI000027300537",
+       "LEGIARTI000006900790"
+      ]
+     }
+    },
+    {
+     "id": "T14-ART-NEGATIF-l1132-11",
+     "index": "articles",
+     "query": "l1132-11",
+     "expected": "LEGIARTI000045391841",
+     "role": "negative_control",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 80,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 26410.207584,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000027416486",
+       "LEGIARTI000033894564"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 80,
+      "n_results": 485,
+      "pool_size": 2476715,
+      "took_ms": 27152.098250000003,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000021497662",
+       "LEGIARTI000027416486",
+       "LEGIARTI000033894564"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 30015.368082999998,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045391813",
+       "LEGIARTI000045391841",
+       "LEGIARTI000021503600"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 2,
+      "n_results": 1000,
+      "pool_size": 2476715,
+      "took_ms": 34008.124832999994,
+      "truncated_query": false,
+      "top3": [
+       "LEGIARTI000045391813",
+       "LEGIARTI000045391841",
+       "LEGIARTI000021503600"
+      ]
+     }
+    },
+    {
+     "id": "T14-SARDE-NOR",
+     "index": "sarde",
+     "query": "SANP0422530D",
+     "expected": "SARDBLOC000007251655",
+     "role": "complement",
+     "k": 1000,
+     "lexical_flat": {
+      "rank": 2,
+      "n_results": 36,
+      "pool_size": 214578,
+      "took_ms": 1446.697334,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007251655",
+       "SARDBLOC000007251979"
+      ]
+     },
+     "lexical_grouped": {
+      "rank": 2,
+      "n_results": 35,
+      "pool_size": 214578,
+      "took_ms": 501.43475000000007,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007251655",
+       "SARDBLOC000007251979"
+      ]
+     },
+     "hybrid_flat": {
+      "rank": 15,
+      "n_results": 1000,
+      "pool_size": 214578,
+      "took_ms": 2929.235125,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007250312",
+       "SARDBLOC000007256772"
+      ]
+     },
+     "hybrid_grouped": {
+      "rank": 15,
+      "n_results": 1000,
+      "pool_size": 214578,
+      "took_ms": 3204.7494580000002,
+      "truncated_query": false,
+      "top3": [
+       "SARDBLOC000007250332",
+       "SARDBLOC000007250312",
+       "SARDBLOC000007256772"
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "eval_97": {
+  "n": 97,
+  "branches": {
+   "lexical": {
+    "none": {
+     "recall_at_10": 0.6391752577319587,
+     "mrr_at_10": 0.4180657830142366
+    },
+    "v1": {
+     "recall_at_10": 0.6494845360824743,
+     "mrr_at_10": 0.4345115365733922
+    },
+    "delta_recall_at_10": {
+     "resamples": 10000,
+     "seed": 20261111,
+     "point": 0.010309278350515464,
+     "ci95": [
+      0.0,
+      0.030927835051546393
+     ],
+     "negative": 0.0,
+     "positive": 0.641,
+     "zero": 0.359
+    },
+    "delta_mrr_at_10": {
+     "point": 0.01644575355915562
+    },
+    "queries_with_a_different_recall": [
+     "MES00-q0007"
+    ],
+    "queries_with_a_different_mrr": [
+     {
+      "index": "jorf",
+      "id": "Q21",
+      "delta_mrr_at_10": 0.0179,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "jorf",
+      "id": "Q21-NATURE",
+      "delta_mrr_at_10": 0.0179,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "jorf",
+      "id": "Q21-ANNEE",
+      "delta_mrr_at_10": 0.0179,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "jorf",
+      "id": "Q21-FONDS",
+      "delta_mrr_at_10": 0.0179,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "articles",
+      "id": "MES00-q0004",
+      "delta_mrr_at_10": 0.8571,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "articles",
+      "id": "MES00-q0007",
+      "delta_mrr_at_10": 0.5,
+      "recall_before": 0.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "decisions",
+      "id": "Q56",
+      "delta_mrr_at_10": 0.1667,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     }
+    ]
+   },
+   "hybrid": {
+    "none": {
+     "recall_at_10": 0.6288659793814433,
+     "mrr_at_10": 0.3871952217313042
+    },
+    "v1": {
+     "recall_at_10": 0.6288659793814433,
+     "mrr_at_10": 0.38763704794632625
+    },
+    "delta_recall_at_10": {
+     "resamples": 10000,
+     "seed": 20261111,
+     "point": 0.0,
+     "ci95": [
+      0.0,
+      0.0
+     ],
+     "negative": 0.0,
+     "positive": 0.0,
+     "zero": 1.0
+    },
+    "delta_mrr_at_10": {
+     "point": 0.00044182621502209115
+    },
+    "queries_with_a_different_recall": [],
+    "queries_with_a_different_mrr": [
+     {
+      "index": "articles",
+      "id": "Q02",
+      "delta_mrr_at_10": 0.0139,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "articles",
+      "id": "MES00-q0009",
+      "delta_mrr_at_10": 0.0179,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     },
+     {
+      "index": "decisions",
+      "id": "Q49",
+      "delta_mrr_at_10": 0.0111,
+      "recall_before": 1.0,
+      "recall_after": 1.0
+     }
+    ]
+   }
+  },
+  "per_index": {
+   "dole": {
+    "lexical": {
+     "none": 1.0,
+     "v1": 1.0
+    },
+    "hybrid": {
+     "none": 1.0,
+     "v1": 1.0
+    }
+   },
+   "sarde": {
+    "lexical": {
+     "none": 1.0,
+     "v1": 1.0
+    },
+    "hybrid": {
+     "none": 1.0,
+     "v1": 1.0
+    }
+   },
+   "titres": {
+    "lexical": {
+     "none": 1.0,
+     "v1": 1.0
+    },
+    "hybrid": {
+     "none": 1.0,
+     "v1": 1.0
+    }
+   },
+   "jorf": {
+    "lexical": {
+     "none": 0.8,
+     "v1": 0.8
+    },
+    "hybrid": {
+     "none": 0.7,
+     "v1": 0.7
+    }
+   },
+   "articles": {
+    "lexical": {
+     "none": 0.44,
+     "v1": 0.48
+    },
+    "hybrid": {
+     "none": 0.56,
+     "v1": 0.56
+    }
+   },
+   "decisions": {
+    "lexical": {
+     "none": 0.5777777777777777,
+     "v1": 0.5777777777777777
+    },
+    "hybrid": {
+     "none": 0.5111111111111111,
+     "v1": 0.5111111111111111
+    }
+   }
+  }
+ },
+ "retokenized_total": {
+  "passages": 9600105,
+  "changed": 1228184,
+  "share": 0.1279344340504609
+ },
+ "protocol": {
+  "search_convention": "crible search --k 1000, flat (passage) and --group-by document; absent = null with present_in_top 1000",
+  "eval": "crible eval --modes lexical,hybrid --k 10, report format 2, repeat 3, game of docs/legifacile/reference unchanged",
+  "bootstrap": "ADR-0092 decision 6: 10000 resamples, seed 20261111, difference v1 - none, percentile 95%",
+  "identifier_setting": "no CLI writes lexical.identifiers; the six index.json of the measure copy were edited by hand to the to_value form (key added inside lexical), then rebuilt"
+ }
+}

@@ -570,6 +570,38 @@ fn serve_refuses_a_crible_variable_that_the_key_refuses_naming_it() {
     );
 }
 
+#[test]
+fn serve_refuses_a_default_timeout_out_of_range() {
+    // ADR-0147: a `[limits].default_timeout_ms` outside 1..=30000 fails the
+    // startup with a non-zero code, and the message names the key and the
+    // received value.
+    let instance = Instance::with_timeout(0);
+    let output = Command::new(env!("CARGO_BIN_EXE_crible"))
+        .arg("serve")
+        .arg("--config")
+        .arg(instance.config_path())
+        .env_clear()
+        .output()
+        .expect("crible serve must run");
+    assert!(
+        !output.status.success(),
+        "a default timeout out of range must fail the startup"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid_request"),
+        "the failure carries its code, got {stderr}"
+    );
+    assert!(
+        stderr.contains("limits.default_timeout_ms"),
+        "the failure names the key, got {stderr}"
+    );
+    assert!(
+        stderr.contains("got 0"),
+        "the failure names the received value, got {stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn serve_stops_on_sigterm_while_the_loader_waits() {
@@ -596,9 +628,10 @@ fn serve_stops_on_sigterm_while_the_loader_waits() {
 #[test]
 fn serve_exits_at_once_on_a_second_signal_during_the_drain() {
     // ADR-0099: the second signal exits with a non-zero code at once. A client
-    // that sends half a request holds the drainage open; the bound is 61 s, so
-    // only the second signal can end the process within the test.
-    let instance = Instance::with_timeout(60_000);
+    // that sends half a request holds the drainage open; the drain is bounded
+    // to 31 s (ADR-0147), far beyond what this test measures, so only the
+    // second signal can end the process within the test.
+    let instance = Instance::with_timeout(30_000);
     let mut server = Server::start(&instance);
     wait_for(server.address(), "/ready", 200);
 

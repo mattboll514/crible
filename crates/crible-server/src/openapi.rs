@@ -75,8 +75,14 @@ pub struct ErrorBody {
     pub message: String,
     /// Keyed explanation; empty, except the documented keys of a code.
     ///
-    /// Only `path` is documented today, for `invalid_filter` (ADR-0101,
-    /// decision 3). A message never carries an internal id (INV-01) nor an
+    /// `docs/05-api.md` documents `path` alone for `invalid_filter`, `path`
+    /// with `reason` for an `invalid_request` that carries one — so far
+    /// `{"path": "$.mode", "reason": "lexical_branch_disabled"}` for a disabled
+    /// lexical branch (ADR-0101, decision 3; ADR-0145) — and `reason` with
+    /// `job_id` for the refusal of a name held by a `delete_index` job that is
+    /// not terminal: `{"reason": "index_deleting", "job_id": "job_…"}`, without
+    /// a `path`, because no field of the request is faulty (ADR-0150,
+    /// decision 1). A message never carries an internal id (INV-01) nor an
     /// absolute path of the server.
     #[schema(value_type = Object)]
     pub details: FreeObject,
@@ -241,6 +247,23 @@ pub struct LexicalConfig {
     pub language: String,
     /// Whether term positions are stored.
     pub positions: bool,
+    /// Version of the identifier forms the chain adds a canonical token for
+    /// (ADR-0148). Absent, it is `none`, and the creation does not write it.
+    #[schema(nullable = false)]
+    pub identifiers: Option<LexicalIdentifiers>,
+}
+
+/// Version of the identifier forms of the analysis chain (ADR-0148, decision 3).
+///
+/// The domain is closed: `none` is the 1.0 chain, `v1` adds the canonical token
+/// of an article or of a number. Extending it is a new value, hence a new ADR.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LexicalIdentifiers {
+    /// The 1.0 chain: no identifier is recognised.
+    None,
+    /// The 1.0 tokens, plus the canonical token of a recognised identifier.
+    V1,
 }
 
 /// Dense search settings of an index.
@@ -347,6 +370,10 @@ pub struct LexicalPatch {
     /// New state of the positions.
     #[schema(nullable = false)]
     pub positions: Option<bool>,
+    /// New version of the identifier forms (ADR-0148); a change rebuilds the
+    /// lexical branch.
+    #[schema(nullable = false)]
+    pub identifiers: Option<LexicalIdentifiers>,
 }
 
 /// Dense part of a `PATCH` of configuration.
@@ -455,8 +482,17 @@ pub struct IndexList {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IndexSizes {
-    /// Size of the index directory on disk.
+    /// Size of the index directory on disk, every file included: a walk of the
+    /// tree, so transients (`-wal`, `-shm`, `tmp-*`) and unreferenced segments
+    /// count, and the value is not stable between two calls nor across a
+    /// restart (ADR-0152, decision 1).
     pub disk_bytes: u64,
+    /// Bytes of the files of the segments of the published generation: their
+    /// `segment.json` and their vector file, summed. Computed from the
+    /// published state, without reading the directory, so it is stable between
+    /// two calls and identical after a restart; `0` for an index without a
+    /// segment (ADR-0152, decisions 2 and 3).
+    pub live_bytes: u64,
     /// Estimated heap size of the filter structures.
     pub filter_memory_bytes: u64,
     /// Bytes of RAM the binary codes hold.
@@ -555,12 +591,16 @@ pub enum JobKind {
 pub struct JobProgress {
     /// Step the job reached: `validation`, `segment`, `transaction`, `lexical`,
     /// `manifest` or `snapshot` for an attach, `transaction`, `manifest` or
-    /// `snapshot` for a metadata patch (ADR-0134).
+    /// `snapshot` for a metadata patch (ADR-0134), and `copy`, `attest` or
+    /// `rename` for a snapshot (ADR-0153).
     #[schema(example = "snapshot")]
     pub step: String,
-    /// Units already treated.
+    /// Units already treated: passages for an attach, documents for a patch,
+    /// bytes for a snapshot (ADR-0153, decision 2).
     pub done: u64,
-    /// Units to treat.
+    /// Units to treat, in the unit of `done`. For a snapshot, an estimate
+    /// during `copy` and the exact sum of the copied bytes from `attest` on
+    /// (ADR-0153, decision 3).
     pub total: u64,
 }
 
@@ -576,6 +616,36 @@ pub struct JobError {
     /// Keyed explanation, empty unless a code documents a key.
     #[schema(value_type = Object)]
     pub details: FreeObject,
+}
+
+/// Durations of an attach, as the member `durations` of a job renders them
+/// (ADR-0149).
+///
+/// The object is **closed** and has exactly six keys, the names of the
+/// `attach durations` journal line, each a whole number of milliseconds. A step
+/// the protocol did not play is `0`, never absent: the member is `null` only
+/// when there is nothing to render.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct JobDurations {
+    /// Time of the `validation` step.
+    #[schema(minimum = 0)]
+    pub validation_ms: u64,
+    /// Time of the `segment` step.
+    #[schema(minimum = 0)]
+    pub segment_ms: u64,
+    /// Time of the `transaction` step.
+    #[schema(minimum = 0)]
+    pub transaction_ms: u64,
+    /// Time of the `lexical` step, `0` when it does not run.
+    #[schema(minimum = 0)]
+    pub lexical_ms: u64,
+    /// Time of the `manifest` step.
+    #[schema(minimum = 0)]
+    pub manifest_ms: u64,
+    /// Time of the `snapshot` step.
+    #[schema(minimum = 0)]
+    pub snapshot_ms: u64,
 }
 
 /// One job as the API renders it (`docs/05-api.md`, "Jobs").
@@ -602,6 +672,15 @@ pub struct Job {
     pub generation: Option<u64>,
     /// Fine progression.
     pub progress: Option<JobProgress>,
+    /// Durations of an attach, kept in memory and never persisted; the member
+    /// is always present and `null` when there is nothing to render (ADR-0149).
+    ///
+    /// It carries exactly the numbers of the `attach durations` line for the
+    /// same job. It is `null` for a job that is not `succeeded` yet, for a
+    /// failed attach, for the replay of an applied batch, for another kind, and
+    /// for a job read back after a restart.
+    #[schema(required = true)]
+    pub durations: Option<JobDurations>,
     /// Report of the job, when its kind carries one. Its form depends on the
     /// kind: `{ "report": … }` for an attach, a metadata patch or an online
     /// batch.
@@ -1194,6 +1273,57 @@ pub struct SearchRequest {
     pub timeout_ms: Option<u32>,
 }
 
+/// Body of `POST /v1/indexes/{index}/facets` (ADR-0154, decision 2).
+///
+/// The body is closed: `query`, `vector`, `mode`, `k` and `return` are unknown
+/// keys of this route, which runs no search.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsRequest {
+    /// Names of the facet fields, from one to ten distinct names, each declared
+    /// `keyword` and `filterable` by the schema of the index.
+    #[schema(min_items = 1, max_items = 10)]
+    pub fields: Vec<String>,
+    /// Filter of the pool; its grammar is the one of a search, and no filter
+    /// when absent (ADR-0154, decision 2).
+    #[schema(nullable = false)]
+    pub filter: Option<Filter>,
+    /// Values rendered per field, 1 to 100; 20 when absent.
+    #[schema(minimum = 1, maximum = 100)]
+    #[schema(nullable = false)]
+    pub limit: Option<u32>,
+    /// Deadline of the request, 1 to 30000 milliseconds.
+    #[schema(minimum = 1, maximum = 30000)]
+    #[schema(nullable = false)]
+    pub timeout_ms: Option<u32>,
+}
+
+/// The two counts of the pool of a facets request (ADR-0154, decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsCount {
+    /// Passages of the pool, the same pool as a search with the same filter.
+    pub passages: u64,
+    /// Distinct documents of the pool, exact.
+    pub documents: u64,
+}
+
+/// Body of the `200` of `POST /v1/indexes/{index}/facets` (ADR-0154,
+/// decision 4).
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FacetsResponse {
+    /// Generation of the snapshot that served the whole request.
+    pub generation: u64,
+    /// The two counts of the pool.
+    pub count: FacetsCount,
+    /// One entry per requested field: `{ "values": [{ "value", "count" }],
+    /// "other" }`, ordered by count descending then value ascending in UTF-8
+    /// bytes. The keys are the field names of the request.
+    #[schema(value_type = Object)]
+    pub fields: FreeObject,
+}
+
 /// One target of a multi-index search (ADR-0110).
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -1776,7 +1906,7 @@ impl Modify for BearerAuth {
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full, server draining or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn compact_doc() {}
@@ -1798,7 +1928,7 @@ pub fn compact_doc() {}
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full, generation race or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full, generation race or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn exports_doc() {}
@@ -1820,7 +1950,7 @@ pub fn exports_doc() {}
         (status = 403, description = "Insufficient role", body = Error),
         (status = 404, description = "Unknown index", body = Error),
         (status = 500, description = "Unexpected failure", body = Error),
-        (status = 503, description = "Write queue full or SQLite lock", body = Error)
+        (status = 503, description = "Write queue full or SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = Error)
     )
 )]
 pub fn snapshots_doc() {}
@@ -1860,6 +1990,7 @@ pub fn snapshots_doc() {}
         crate::batches::post_batch,
         crate::search::search,
         crate::search_multi::search,
+        crate::facets::facets,
         compact_doc,
         exports_doc,
         snapshots_doc,
@@ -1902,6 +2033,7 @@ pub fn snapshots_doc() {}
         JobKind,
         JobProgress,
         JobError,
+        JobDurations,
         Job,
         JobList,
         DebugQuery,
@@ -1930,6 +2062,9 @@ pub fn snapshots_doc() {}
         Filter,
         SearchReturn,
         SearchRequest,
+        FacetsRequest,
+        FacetsCount,
+        FacetsResponse,
         SearchTarget,
         SearchMultiRequest,
         ScoreType,

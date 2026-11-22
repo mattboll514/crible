@@ -46,7 +46,7 @@ use crate::analytics::{self, Operation};
 use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
-use crate::jobs::{JobOutcome, log_attach_durations};
+use crate::jobs::{DurationsMillis, JobOutcome, log_attach_durations};
 
 /// Body of `POST /v1/indexes/{index}/documents`.
 ///
@@ -105,7 +105,7 @@ struct PatchBody {
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn post_documents(
@@ -191,14 +191,11 @@ async fn post_documents_inner(
             &deletions,
             &mut |step, total| progress.set(step.as_str(), 0, total),
         )?;
-        log_attach_durations(
-            progress.job_id(),
-            JobKind::OnlineBatch,
-            &name,
-            report.durations,
-        );
+        let durations = report.durations.map(DurationsMillis::of);
+        log_attach_durations(progress.job_id(), JobKind::OnlineBatch, &name, durations);
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: durations.map(DurationsMillis::to_json),
             result: Some(json!({ "report": report.to_json() })),
         })
     });
@@ -240,7 +237,7 @@ async fn post_documents_inner(
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn patch_documents(
@@ -317,6 +314,7 @@ async fn patch_documents_inner(
         )?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "updated": report.updated,
@@ -361,7 +359,8 @@ async fn patch_documents_inner(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index, or unknown or removed document", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The index registry is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn get_document(
@@ -487,7 +486,7 @@ fn ingest(
     deletions: &[String],
     progress: &mut dyn FnMut(crible_store::generation::ProtocolStep, u64),
 ) -> Result<crible_store::attach::AttachReport, CribleError> {
-    let model = state.model(&index_config.model)?;
+    let model = state.model_for(index, &index_config.model)?;
     let token_counter = match model.config.kind {
         ModelKind::Onnx => Some(model.token_counter()?),
         ModelKind::External => None,

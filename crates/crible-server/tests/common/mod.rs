@@ -678,6 +678,142 @@ pub async fn lock_barrier_environment() -> tokio::sync::MutexGuard<'static, ()> 
         .await
 }
 
+/// Environment variable naming the barrier directory of `src/barriers.rs`.
+#[cfg(feature = "failpoints")]
+const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
+
+/// Attach barrier just before the SQLite `COMMIT`.
+#[cfg(feature = "failpoints")]
+const ATTACH_BEFORE_COMMIT: &str = "attach-before-commit";
+
+/// Attach barrier just after the SQLite `COMMIT`.
+#[cfg(feature = "failpoints")]
+const ATTACH_AFTER_SQLITE_COMMIT: &str = "attach-after-sqlite-commit";
+
+/// Temporary directory that arms the two attach barriers of `src/barriers.rs`
+/// (the `failpoints` build only).
+///
+/// [`arm`](AttachBarrier::arm) sets `CRIBLE_TEST_BARRIER`, writes the
+/// `armed-attach` mark, and releases `attach-after-sqlite-commit` up front, so
+/// that barrier never holds the release of the one a test observes. The value
+/// removes the variable when it drops, so the caller keeps
+/// [`lock_barrier_environment`] until after that drop, which the declaration
+/// order of a test gives when the slot comes first.
+#[cfg(feature = "failpoints")]
+pub struct AttachBarrier {
+    /// Directory holding the marks; removed when the value drops.
+    directory: TempDir,
+}
+
+#[cfg(feature = "failpoints")]
+impl AttachBarrier {
+    /// Arms the attach steps in a fresh temporary directory.
+    #[must_use]
+    pub fn arm() -> Self {
+        let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
+        // SAFETY: the caller holds `lock_barrier_environment` for the whole
+        // test, so no other test of the binary reads the variable meanwhile,
+        // and `Drop` removes it before the caller releases the slot.
+        unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
+        std::fs::write(directory.path().join("armed-attach"), b"")
+            .expect("the attach steps are armable");
+        std::fs::write(
+            directory
+                .path()
+                .join(format!("go-{ATTACH_AFTER_SQLITE_COMMIT}")),
+            b"",
+        )
+        .expect("the later barrier is releasable");
+        Self { directory }
+    }
+
+    /// Waits until the attach reaches `attach-before-commit`.
+    pub async fn wait_before_commit(&self) {
+        let path = self
+            .directory
+            .path()
+            .join(format!("ready-{ATTACH_BEFORE_COMMIT}"));
+        wait_for(ATTACH_BEFORE_COMMIT, &path).await;
+    }
+
+    /// Releases the attach held at `attach-before-commit`.
+    pub fn release_before_commit(&self) {
+        std::fs::write(
+            self.directory
+                .path()
+                .join(format!("go-{ATTACH_BEFORE_COMMIT}")),
+            b"",
+        )
+        .expect("the held attach is releasable");
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl Drop for AttachBarrier {
+    fn drop(&mut self) {
+        // SAFETY: the caller still holds `lock_barrier_environment`, so no
+        // other test of the binary armed the variable meanwhile.
+        unsafe { std::env::remove_var(BARRIER_ENV) };
+    }
+}
+
+/// Barrier of the `delete_index` step that follows the rename of the index
+/// directory (ADR-0150, decision 4).
+///
+/// [`arm`](DeleteRenameBarrier::arm) sets `CRIBLE_TEST_BARRIER` and writes the
+/// `delete-after-rename-path` file holding `source`, the directory the deletion
+/// quarantines: only that deletion reaches the step, so the deletions of the
+/// other tests of the binary — some of them of an index of the same name in
+/// another data root — run at full speed. The value removes the variable when it
+/// drops, so the caller keeps [`lock_barrier_environment`] until after that
+/// drop, which the declaration order of a test gives when the slot comes first.
+#[cfg(feature = "failpoints")]
+pub struct DeleteRenameBarrier {
+    /// Directory holding the marks; removed when the value drops.
+    directory: TempDir,
+}
+
+#[cfg(feature = "failpoints")]
+impl DeleteRenameBarrier {
+    /// Arms the step for the directory `source` in a fresh temporary directory.
+    #[must_use]
+    pub fn arm(source: &Path) -> Self {
+        let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
+        // SAFETY: the caller holds `lock_barrier_environment` for the whole
+        // test, so no other test of the binary reads the variable meanwhile,
+        // and `Drop` removes it before the caller releases the slot.
+        unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
+        std::fs::write(
+            directory.path().join("delete-after-rename-path"),
+            source.display().to_string(),
+        )
+        .expect("the step is armable");
+        Self { directory }
+    }
+
+    /// Waits until the deletion has renamed its directory and not yet left the
+    /// registry.
+    pub async fn wait_after_rename(&self) {
+        let path = self.directory.path().join("ready-delete-after-rename");
+        wait_for("delete-after-rename", &path).await;
+    }
+
+    /// Releases the deletion held between the rename and the deregistration.
+    pub fn release_after_rename(&self) {
+        std::fs::write(self.directory.path().join("go-delete-after-rename"), b"")
+            .expect("the held deletion is releasable");
+    }
+}
+
+#[cfg(feature = "failpoints")]
+impl Drop for DeleteRenameBarrier {
+    fn drop(&mut self) {
+        // SAFETY: the caller still holds `lock_barrier_environment`, so no
+        // other test of the binary armed the variable meanwhile.
+        unsafe { std::env::remove_var(BARRIER_ENV) };
+    }
+}
+
 /// Asserts that no key of `value` at any depth contains `iid` (INV-01).
 pub fn assert_no_iid_key(label: &str, value: &Value) {
     match value {
@@ -735,6 +871,25 @@ impl<'a> MakeWriter<'a> for Sink {
     fn make_writer(&'a self) -> Self::Writer {
         SinkWriter(self.clone())
     }
+}
+
+/// The fields of the `trim` lines of `job_id` in `journal_text`, if any
+/// (ADR-0160, decision 4).
+///
+/// A `trim` line is silent under the default `info` filter, so a caller reads a
+/// journal installed at `debug` through [`journal_at_level`].
+pub fn trim_lines(journal_text: &str, job_id: &str) -> Vec<Value> {
+    let mut found = Vec::new();
+    for line in journal_text.lines() {
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let fields = &entry["fields"];
+        if fields["message"] == "trim" && fields["job_id"] == job_id {
+            found.push(fields.clone());
+        }
+    }
+    found
 }
 
 /// Journal of the test binary, installed once at `info` (ADR-0096).

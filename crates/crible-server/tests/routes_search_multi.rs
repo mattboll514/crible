@@ -20,7 +20,7 @@
 //! | `the_targets_list_is_checked_before_any_search_runs` | ADR-0110, decision 5 |
 //! | `a_filter_is_checked_against_the_schema_of_its_target` | ADR-0110, decisions 2 and 7 |
 //! | `return_fields_serve_heterogeneous_schemas` | ADR-0110, decision 6 |
-//! | `a_target_without_lexical_is_refused_but_does_not_change_the_default` | ADR-0089, decision 4 |
+//! | `a_target_without_lexical_is_refused_but_does_not_change_the_default` | ADR-0089, decision 4; ADR-0145, decision 1 |
 //! | `the_answer_carries_the_index_of_each_result_and_one_summary_per_target` | ADR-0110, decision 10 |
 //! | `a_refusal_before_the_targets_are_resolved_counts_one_event_without_index` | ADR-0124, decision 10 |
 //!
@@ -1352,6 +1352,11 @@ async fn a_target_without_lexical_is_refused_but_does_not_change_the_default() {
         assert!(
             message.contains("lexical branch is disabled") && message.contains("beta"),
             "the message names the target without lexical: {message}"
+        );
+        assert_eq!(
+            answer["error"]["details"],
+            json!({ "path": "$.mode", "reason": "lexical_branch_disabled" }),
+            "the refusal carries the documented details, without `index`: {answer}"
         );
     }
     // The default is `dense` as soon as one target lacks the branch, and that

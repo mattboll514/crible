@@ -144,6 +144,7 @@ with Client("http://127.0.0.1:8080", api_key) as client:
     client.search_multi([{"index": "articles"},
                          {"index": "decisions", "filter": {"juridiction": "ce"}}],
                         query="responsabilité du fait des choses")
+    client.facets("decisions", ["juridiction"], filter={"annee": {"gte": "2020"}}, limit=20)
     client.get_document("decisions", "LEGIARTI…", text=True)
     job = client.attach_batch("decisions", "legifacile-2026-10-19")
     client.wait(job)                                   # attend la fin du job
@@ -152,6 +153,10 @@ with Client("http://127.0.0.1:8080", api_key) as client:
     client.job(job["id"])
     client.compact("decisions")
     client.export("decisions")
+    job = client.snapshot("decisions")                 # → exchange/snapshots
+    client.wait(job)
+    job = client.delete_index("scratch", confirm="scratch")  # confirm doit répéter le nom
+    client.wait(job)                                   # l'index disparaît à la fin du job
 ```
 
 - Les méthodes rendent le **JSON de la réponse en `dict`** : `docs/05-api.md` en
@@ -161,16 +166,32 @@ with Client("http://127.0.0.1:8080", api_key) as client:
   `passages_per_document`, `dedup`, `return`, `exact`, `timeout_ms`). Seules les
   options fournies, non `None`, sont envoyées : `k=None` laisse le défaut du
   serveur s'appliquer.
+- `facets(index, fields, *, filter=None, limit=None, timeout_ms=None)` rend les
+  valeurs fréquentes des champs demandés et les comptes de passages et de
+  documents du pool filtré (ADR-0154). `fields` est **obligatoire** (un à dix
+  noms distincts) ; `filter` accepte la grammaire de `docs/05`, et les options
+  laissées à `None` ne sont pas envoyées, donc le serveur applique ses défauts
+  (`limit` 20, `timeout_ms` de la configuration). La méthode ne crée aucun job.
 - `vector` accepte un tableau NumPy ou une séquence de flottants ; le client
   l'encode en **base64 de composantes fp32 little-endian**, la forme de l'API.
   Une chaîne est prise pour un vecteur déjà encodé. La même règle s'applique au
   `vector` de chaque passage d'un lot en ligne.
 - Les méthodes qui créent un job (`attach_batch`, `upsert_documents`,
-  `patch_documents`, `compact`, `export`) le rendent sans attendre. `wait(job)`
-  interroge `GET /v1/jobs/{id}` toutes les `poll_interval` secondes (0,5 s par
-  défaut) et rend le job terminé ; un job `failed` lève l'exception typée de son
-  `error.code`, et l'échéance de `wait` (600 s par défaut) lève l'exception
-  standard `TimeoutError`, sans annuler le job.
+  `patch_documents`, `compact`, `export`, `snapshot`, `delete_index`) le rendent
+  sans attendre. `wait(job)` interroge `GET /v1/jobs/{id}` toutes les
+  `poll_interval` secondes (0,5 s par défaut) et rend le job terminé ; un job
+  `failed` lève l'exception typée de son `error.code`, et l'échéance de `wait`
+  (600 s par défaut) lève l'exception standard `TimeoutError`, sans annuler le
+  job.
+- `snapshot(index)` demande un instantané de l'index vers `exchange/snapshots`
+  et rend le job `snapshot` ; la route n'accepte aucun corps.
+- `delete_index(index, *, confirm)` rend le job `delete_index`. `confirm` est un
+  argument nommé **obligatoire** : le client l'envoie **tel quel** et ne le
+  vérifie ni ne le remplit. Son absence est refusée localement par `TypeError`,
+  avant toute requête ; c'est le serveur qui exige qu'un `confirm` **reçu**
+  répète le nom de l'index (ADR-0105), et un `confirm` différent rend
+  `InvalidRequestError` (`400 invalid_request`). La suppression est effective à
+  la fin du job, pas à la réponse `202`.
 - Le client **ne réessaie jamais**, même sur `503 overloaded` : l'appelant lit
   `retry_after`.
 

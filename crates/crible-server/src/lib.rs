@@ -34,6 +34,9 @@ mod debug;
 pub mod debug_journal;
 mod documents;
 mod error;
+// The facets route of ADR-0154: the frequent values and the two counts of a
+// filtered pool.
+mod facets;
 pub mod http;
 mod indexes;
 pub mod jobs;
@@ -41,6 +44,9 @@ pub mod lifecycle;
 pub mod limits;
 pub mod logging;
 mod maintenance;
+// The `memory` journal line: the memory of the process and of its cgroup v2,
+// under Linux only (ADR-0151, `docs/06-observabilite.md`).
+mod memory;
 // The warning of the startup when the data root is shared from the host: a
 // memory map there is slow (`docs/07`, "Docker", volumes).
 mod mounts;
@@ -50,6 +56,13 @@ pub mod openapi;
 mod search;
 mod search_multi;
 pub mod state;
+// The in-memory journal sink of the unit tests, shared by the test modules of
+// `trim` and of `jobs`; a test build only.
+#[cfg(test)]
+mod test_sink;
+// The trim of the allocator at the end of a job and its `trim` line, under
+// Linux glibc only (ADR-0160).
+mod trim;
 // Test double of the query encoder, `failpoints` build only: it proves that a
 // multi-index request encodes once (ADR-0110, decision 11).
 #[cfg(feature = "failpoints")]

@@ -47,7 +47,7 @@ use crate::error;
 use crate::indexes;
 use crate::jobs::JobView;
 use crate::limits::MAX_BODY_BYTES;
-use crate::{batches, documents, maintenance, search, search_multi};
+use crate::{batches, documents, facets, maintenance, search, search_multi};
 
 /// Header carrying the request identifier on every response (ADR-0098).
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -145,6 +145,9 @@ fn indexes_read_routes() -> Router<Arc<AppState>> {
         // The multi-index search is open to the same role, for the same reason
         // (ADR-0110, ADR-0095).
         .route("/v1/search", post(search_multi::search))
+        // The facets route asks for `read` too, and shares the semaphore of the
+        // searches (ADR-0154, decisions 1 and 8).
+        .route("/v1/indexes/{index}/facets", post(facets::facets))
 }
 
 /// The debug routes of the instance: the journal, `admin` only (ADR-0122,
@@ -189,7 +192,8 @@ fn jobs_routes() -> Router<Arc<AppState>> {
         (status = 400, description = "`state` outside the four states", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The job table is not open yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn list_jobs(
@@ -208,7 +212,10 @@ async fn list_jobs(
         },
         None => None,
     };
-    let jobs = state.list_jobs(query.get("index").map(String::as_str), wanted);
+    let jobs = match state.list_jobs(query.get("index").map(String::as_str), wanted) {
+        Ok(jobs) => jobs,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
     Json(json!({
         "jobs": jobs.iter().map(JobView::to_json).collect::<Vec<_>>()
     }))
@@ -228,7 +235,8 @@ async fn list_jobs(
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown or purged job", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
+        (status = 503, description = "The job table is not open yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn get_job(
@@ -237,11 +245,12 @@ async fn get_job(
     Path(job_id): Path<String>,
 ) -> Response {
     match state.job(&job_id) {
-        Some(job) => (StatusCode::OK, Json(job.to_json())).into_response(),
-        None => {
+        Ok(Some(job)) => (StatusCode::OK, Json(job.to_json())).into_response(),
+        Ok(None) => {
             let failure = CribleError::new(ErrorCode::NotFound, "job not found");
             error::rendered(&failure, &identifier.0)
         }
+        Err(failure) => error::rendered(&failure, &identifier.0),
     }
 }
 
@@ -274,7 +283,8 @@ async fn get_job(
         (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure, or a payload the route cannot render", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure, or a payload the route cannot render", body = crate::openapi::Error),
+        (status = 503, description = "The published configuration is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn debug_queries(
@@ -286,9 +296,11 @@ async fn debug_queries(
         Ok(filter) => filter,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let enabled = state
-        .loaded()
-        .is_some_and(|loaded| loaded.debug_journal_config().enabled);
+    let loaded = match state.published() {
+        Ok(loaded) => loaded,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
+    };
+    let enabled = loaded.debug_journal_config().enabled;
     let cap = state
         .debug_journal()
         .map_or(crate::debug_journal::CapCounters::default(), |journal| {
@@ -306,11 +318,7 @@ async fn debug_queries(
         };
         return Json(list).into_response();
     }
-    let Some(root) = state.data_root() else {
-        let failure = error::internal("the instance has not loaded its configuration");
-        return error::rendered(&failure, &identifier.0);
-    };
-    let rows = match crate::debug_journal::page(root, filter).await {
+    let rows = match crate::debug_journal::page(loaded.data_root(), filter).await {
         Ok(rows) => rows,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
@@ -420,6 +428,11 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
 
 /// `GET /v1/stats`: the aggregated analytics of the instance (ADR-0124).
 ///
+/// The window, `index`, `operation`, `mode` and `group_by` are the closed list
+/// of [`stats_filter`]; `mode` restricts the buckets, the totals and
+/// `top_indexes` to one mode, and its absence keeps the answer of before the
+/// parameter (ADR-0156, decisions 1 and 2).
+///
 /// The read opens `analytics.sqlite` **read-only** on its own connection, off the
 /// async threads: it never waits for a flush, never blocks the writer and writes
 /// nothing (ADR-0116, decision 1; ADR-0124, decision 12). `analytics_dropped` is
@@ -437,7 +450,8 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
         ("from" = Option<String>, Query, description = "Lower bound, included, of the window, ISO 8601 with its offset; defaults to the oldest retained row"),
         ("to" = Option<String>, Query, description = "Upper bound, included, of the window, ISO 8601 with its offset; defaults to the newest retained row"),
         ("index" = Option<String>, Query, description = "Only the events of that index, present in the analytics or not"),
-        ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
+        ("operation" = Option<String>, Query, description = "Only the events of that operation: `search`, `search_multi`, `facets`, `get_document`, `online_batch`, `attach_batch`, `patch_documents`, `compact`, `export`, `snapshot` or `index_admin`"),
+        ("mode" = Option<String>, Query, description = "Only the events of that mode: `dense`, `lexical` or `hybrid`; absent, every mode is aggregated, the rows written before the mode was resolved included (ADR-0156, decision 1)"),
         ("group_by" = Option<String>, Query, description = "Width of the buckets: `minute`, `hour` (default) or `day`")
     ),
     responses(
@@ -445,7 +459,8 @@ fn journal_filter(query: &HashMap<String, String>) -> Result<JournalFilter, Crib
         (status = 400, description = "Unknown parameter, or a value outside its domain, naming the parameter", body = crate::openapi::Error),
         (status = 401, description = "Missing, malformed or unknown API key", body = crate::openapi::Error),
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
-        (status = 500, description = "Unexpected failure, or an analytics file this build cannot read", body = crate::openapi::Error)
+        (status = 500, description = "Unexpected failure, or an analytics file this build cannot read", body = crate::openapi::Error),
+        (status = 503, description = "The published configuration is not loaded yet: `overloaded` with the fixed message \"the server is starting\" (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 async fn stats(
@@ -457,11 +472,13 @@ async fn stats(
         Ok(filter) => filter,
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let Some(root) = state.data_root().map(std::path::Path::to_path_buf) else {
-        let failure = error::internal("the instance has not loaded its configuration");
-        return error::rendered(&failure, &identifier.0);
+    let loaded = match state.published() {
+        Ok(loaded) => loaded,
+        Err(failure) => return error::rendered(&failure, &identifier.0),
     };
-    let path = root.join(crible_store::analytics::ANALYTICS_FILE_NAME);
+    let path = loaded
+        .data_root()
+        .join(crible_store::analytics::ANALYTICS_FILE_NAME);
     let read =
         tokio::task::spawn_blocking(move || crible_store::analytics::read_stats(&path, &filter))
             .await;
@@ -479,17 +496,18 @@ async fn stats(
 }
 
 /// The parameters of `GET /v1/stats`, checked and normalised
-/// (ADR-0124, decision 2).
+/// (ADR-0124, decision 2; ADR-0156, decision 1).
 ///
-/// The list is closed and a refusal names the parameter. Nothing is read from
-/// the file here: a `400` is decided on the query string alone.
+/// The list is closed — `from`, `to`, `index`, `operation`, `mode` and
+/// `group_by` — and a refusal names the parameter. Nothing is read from the
+/// file here: a `400` is decided on the query string alone.
 fn stats_filter(query: &HashMap<String, String>) -> Result<StatsFilter, CribleError> {
-    const ALLOWED: [&str; 5] = ["from", "to", "index", "operation", "group_by"];
+    const ALLOWED: [&str; 6] = ["from", "to", "index", "operation", "mode", "group_by"];
     for parameter in query.keys() {
         if !ALLOWED.contains(&parameter.as_str()) {
             return Err(error::invalid(format!(
                 "'{parameter}' is not a parameter of this route; the parameters are `from`, \
-                 `to`, `index`, `operation` and `group_by`"
+                 `to`, `index`, `operation`, `mode` and `group_by`"
             )));
         }
     }
@@ -498,6 +516,7 @@ fn stats_filter(query: &HashMap<String, String>) -> Result<StatsFilter, CribleEr
         query.get("to").map(String::as_str),
         query.get("index").map(String::as_str),
         query.get("operation").map(String::as_str),
+        query.get("mode").map(String::as_str),
         query.get("group_by").map(String::as_str),
     )
 }

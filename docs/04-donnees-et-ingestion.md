@@ -46,7 +46,7 @@ Exemple : l'index `decisions` de Legifacile. Les champs sont indicatifs ; le sch
 | Figé à la création (changer = recréer l'index et ré-encoder) | Réglable ensuite (`PATCH`) |
 |---|---|
 | `name` | `search.*` |
-| `model` (son empreinte est copiée dans `index.json`) | `lexical.enabled`, `lexical.language` (domaine d'ADR-0086), `lexical.positions` : déclenchent un job de reconstruction du lexical |
+| `model` (son empreinte est copiée dans `index.json`) | `lexical.enabled`, `lexical.language` (domaine d'ADR-0086), `lexical.positions`, `lexical.identifiers` (domaine `"none"` / `"v1"`, ADR-0148) : déclenchent un job de reconstruction du lexical |
 | `reference_precision` | `cluster_by` : pris en compte à la prochaine compaction |
 | Type et niveau des champs existants | `filterable` et `returned` : les bitmaps sont reconstruites |
 | | Ajout d'un champ (nullable) |
@@ -70,6 +70,14 @@ Une valeur hors de ces bornes est refusée avec `invalid_request` (400) : la con
 | `lexical.language` | dix-huit codes ISO 639-1 en minuscules : `ar`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hu`, `it`, `nl`, `no`, `pt`, `ro`, `ru`, `sv`, `ta`, `tr` | `"fr"` (exemple plus haut) |
 
 Aucune autre valeur n'est acceptée, et aucune normalisation n'est faite en silence : `"FR"`, `"Fr"`, `" fr"`, `"français"`, `"French"` et `""` sont refusés avec `invalid_request` (400). La valeur stockée dans `index.json` est donc toujours la forme canonique. La table d'ADR-0086 nomme pour chaque code la variante tantivy, la présence du stemmer et celle d'une liste de mots vides : `ar`, `el`, `ro`, `ta` et `tr` n'en ont pas, et leur chaîne d'analyse omet `StopWordFilter`. Un `PATCH` accepté sur ce réglage déclenche un job de reconstruction du lexical, comme les autres réglages de `lexical.*`.
+
+`lexical.identifiers` a lui aussi un **domaine**, contrôlé à la création de l'index comme à tout `PATCH` (ADR-0148), sous forme de valeurs nommées :
+
+| Réglage | Domaine | Défaut |
+|---|---|---|
+| `lexical.identifiers` | `"none"` ou `"v1"` : version des formes d'identifiant reconnues par la chaîne d'analyse | `"none"`, c'est-à-dire le comportement 1.0, par **absence** de la clé |
+
+Toute autre valeur est refusée avec `invalid_request` (400), à la création de l'index comme au `PATCH`, et l'absence de la clé vaut `"none"`. La **forme stockée** suit ADR-0148, décision 6 : `IndexConfig::to_value` n'écrit pas `identifiers` quand il vaut `"none"` et l'écrit quand il vaut `"v1"`, et `from_value` lit l'absence **et** `"none"` comme la même valeur. Un index créé ou patché sans le réglage ne porte donc aucune clé 1.1 et reste lisible par une instance 1.0 (ADR-0143, décision 2) ; et comme la comparaison d'un instantané porte sur l'arbre JSON d'`index.json` (ADR-0065, décision 3), un `index.json` qui nommerait `"none"` explicitement ne correspondrait plus à un instantané qui l'omet. Un `PATCH` accepté sur ce réglage déclenche un job `rebuild_lexical`, comme les autres réglages de `lexical.*` (ADR-0105), et la valeur en vigueur ne change qu'à la fin du job.
 
 Parmi les réglages de `search`, `fusion` a lui aussi un **domaine** depuis ADR-0090 :
 
@@ -141,7 +149,7 @@ passages.parquet       (ou passages-0001.parquet, …)
 deletions.parquet      (optionnel)
 ```
 
-Un lot **déposé** est lu dans `<exchange>/inbox/<nom>/`, et non à un chemin quelconque. `<nom>` est un seul composant de chemin (`path_component` : ni vide, ni `.`, ni `..`, ni `/`, ni `\`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox ; `<nom>` n'est pas un lien symbolique, et aucun lien symbolique n'est admis dans le dossier du lot, à quelque profondeur, pas plus qu'une entrée qui n'est ni un fichier ni un dossier. Un refus rend `400 invalid_request`, avec un message qui nomme le champ `directory` et jamais un chemin absolu du serveur ; un dossier absent rend `404 not_found`. Le job relit le lot dans le même dossier : la course entre la validation et la lecture est assumée, l'inbox étant sous le contrôle de l'exploitant et le serveur seul à la lire (ADR-0101, ADR-0107).
+Un lot **déposé** est lu dans `<exchange>/inbox/<nom>/`, et non à un chemin quelconque. `<nom>` est un seul composant de chemin (`path_component` : ni vide, ni `.`, ni `..`, ni `/`, ni `\`). Le chemin `inbox/<nom>` est canonicalisé et doit rester sous la racine canonique de l'inbox ; `<nom>` n'est pas un lien symbolique, et aucun lien symbolique n'est admis dans le dossier du lot, à quelque profondeur, pas plus qu'une entrée qui n'est ni un fichier ni un dossier. Un refus rend `400 invalid_request`, avec un message qui nomme le champ `directory` et jamais un chemin absolu du serveur ; un dossier absent rend `404 not_found`. Le job relit le lot dans le même dossier : la course entre la validation et la lecture est assumée, l'inbox étant sous le contrôle de l'exploitant et le serveur seul à la lire (ADR-0101, ADR-0107). Le dépôt du dossier dans l'inbox, la requête d'attache et le nettoyage du dossier sont décrits dans `docs/05-api.md`, section « Lot déposé ».
 
 `manifest.json` :
 
@@ -236,7 +244,7 @@ Le rapport **persisté** donne aussi :
 - les statistiques de la recette ;
 - la génération obtenue.
 
-Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` — est mesurée, mais ces durées sont de la **télémétrie d'appel** : elles sont rendues au seul appelant d'origine de l'attache et restent disponibles pour la journalisation et les mesures. Aucune n'entre dans `batches.report`, et aucune écriture SQLite n'a lieu après le point de commit (ADR-0016).
+Les durées par étape ne sont pas persistées (ADR-0042). Chaque étape de l'attache — `validation`, `segment`, `transaction`, `lexical`, `manifest`, `snapshot` — est mesurée, et ces durées sont de la **télémétrie d'appel** : le serveur les rend dans le membre `durations` de l'objet `Job`, à six clés de millisecondes entières (`validation_ms`, `segment_ms`, `transaction_ms`, `lexical_ms`, `manifest_ms`, `snapshot_ms`), gardé **en mémoire** et **jamais persisté**, lisible par toute clé qui peut lire le job ; il les journalise aussi une fois, à la fin du job, dans la ligne `attach durations` (ADR-0149). Aucune n'entre dans `batches.report` ni dans `jobs.sqlite`, et aucune écriture SQLite n'a lieu après le point de commit (ADR-0016).
 
 ## Mode en ligne (sans producteur)
 
@@ -351,6 +359,7 @@ Le manifeste d'un lot exporté suit le format public (`docs/format-lot-v1.md`, s
 - **Transit** : l'instantané s'écrit sous `exchange/snapshots/.tmp-<index>-e<E>-g<G>-<pid>-<n>-<nanos>/`, puis le dossier est renommé ; le nom temporaire garantit que deux prises simultanées n'écrivent jamais au même endroit. Une panne laisse un résidu `.tmp-*` que ni la reprise ni une commande ne supprime : il se nettoie à la main, comme celui de l'export.
 - **Hors ligne en P3** : l'opérateur arrête le serveur, comme pour `crible restore`. Le cœur de la commande prend `&mut GenerationStore`, ce qui suspend l'écrivain au sens d'ADR-0017 — les écritures sont retenues, les lectures continuent — quand il tourne dans le serveur ; un processus ne peut pas suspendre l'écrivain d'un autre : c'est la règle d'exploitation déjà écrite pour `crible patch`, que le verrou d'écrivain par index d'ADR-0116 fait désormais respecter, `crible snapshot` et `crible restore` étant refusés en `503 overloaded` tant qu'un serveur tient l'index (`busy_timeout` n'assure que la vivacité, ADR-0038). La future route `POST /v1/indexes/{index}/snapshots` (P6) réutilisera le même cœur.
 - **Rapport** : destination, époque E, génération G, nombre de documents, nombre de passages, octets copiés.
+- **Avancement** : le job `snapshot` de la route `POST /v1/indexes/{index}/snapshots` publie `progress` en **octets**, avec trois étapes, `copy`, `attest` et `rename` (ADR-0153). Pendant `copy`, `total` est une estimation, tirée de `live_bytes`, de la taille de `records.sqlite` et de celle de `lexical/`, et il ne baisse jamais ; à `attest`, il est remplacé une seule fois par la somme exacte des octets copiés, celle du rapport, dans un sens ou dans l'autre ; un job réussi finit à `done = total = bytes`. La forme de l'objet, la règle `done ≤ total` et l'absence d'avancement pendant le `VACUUM INTO` sont décrites dans `docs/05`, section « Jobs » (ADR-0153, décisions 3 et 4). Côté CLI, `crible snapshot` écrit sur `stderr` une ligne d'avancement à la première publication de la copie, à chaque changement d'étape (`copy`, `attest`, `rename`) et sinon au plus une par période de 10 s, sous la forme `crible snapshot: <step>, <done> of <total> bytes copied, <n> s elapsed` ; cette ligne est écrite directement, **hors du journal `tracing`**, donc ni en JSON ni filtrée par `RUST_LOG`. `stdout` ne change pas : il garde la seule ligne de rapport ci-dessus (ADR-0153, décision 6).
 
 ### Règles de la restauration (ADR-0065)
 

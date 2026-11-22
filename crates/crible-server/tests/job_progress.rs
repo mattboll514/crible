@@ -16,6 +16,8 @@
 //! | `a_replayed_batch_publishes_no_progress` | a replayed batch runs no step, so its succeeded job keeps `progress: null` |
 //! | `a_patch_counts_documents` | a `patch_documents` counts the documents of its body, not their passages |
 //! | `the_other_kinds_keep_progress_null` | a kind outside the three keeps `progress: null`, member present |
+//! | `a_snapshot_job_publishes_copy_then_attest_then_rename_in_bytes` | a `snapshot` ends on `rename` with `done = total = bytes` and the table carries it (ADR-0153 §1 to §4) |
+//! | `a_snapshot_refused_before_it_copies_keeps_progress_null` | a snapshot refused before its first publication keeps `progress: null` (ADR-0153 §5) |
 //!
 //! The mid-flight test uses the attach barrier of the `failpoints` build
 //! (`src/barriers.rs`), which is a deterministic stop, never a sleep.
@@ -28,8 +30,6 @@ mod common;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-#[cfg(feature = "failpoints")]
-use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::http::{Method, StatusCode};
@@ -37,6 +37,8 @@ use crible_server::jobs::JobOutcome;
 use crible_store::jobs::{JOBS_FILE_NAME, JobKind, JobStore};
 use serde_json::{Value, json};
 
+#[cfg(feature = "failpoints")]
+use common::AttachBarrier;
 use common::{
     ADMIN_SECRET, DOC_ID, INDEX, Instance, WRITE_SECRET, base64_vector, export_index, index_config,
     instance_with_alpha, online_batch, post_documents, send, terminal_job,
@@ -44,26 +46,6 @@ use common::{
 
 /// Vector of the document every fixture of this file writes.
 const VECTOR: [f32; 4] = [0.6, 0.8, 0.0, 0.0];
-
-/// Environment variable of the test barrier (`src/barriers.rs`).
-#[cfg(feature = "failpoints")]
-const BARRIER_ENV: &str = "CRIBLE_TEST_BARRIER";
-
-/// Attach barrier just before the SQLite `COMMIT`.
-#[cfg(feature = "failpoints")]
-const ATTACH_BEFORE_COMMIT: &str = "attach-before-commit";
-
-/// Attach barrier just after the SQLite `COMMIT`.
-#[cfg(feature = "failpoints")]
-const ATTACH_AFTER_SQLITE_COMMIT: &str = "attach-after-sqlite-commit";
-
-/// Longest wait of a test for a barrier to be reached.
-#[cfg(feature = "failpoints")]
-const TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Granularity of the polling loop, in milliseconds.
-#[cfg(feature = "failpoints")]
-const POLL: Duration = Duration::from_millis(5);
 
 /// `GET /v1/jobs/{id}`.
 async fn job(router: &Router, id: &str) -> Value {
@@ -141,23 +123,7 @@ async fn patch_documents(router: &Router, body: Value) -> (StatusCode, Value) {
 async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
     let _slot = common::lock_barrier_environment().await;
     let (_instance, state, router) = instance_with_alpha().await;
-    let directory = tempfile::tempdir().expect("a temporary barrier directory is creatable");
-    // SAFETY: the slot is held for the whole test, and no other test of this
-    // binary reads `CRIBLE_TEST_BARRIER` meanwhile; the variable is removed
-    // before the slot is released.
-    unsafe { std::env::set_var(BARRIER_ENV, directory.path()) };
-    std::fs::write(directory.path().join("armed-attach"), b"")
-        .expect("the attach steps are armable");
-    // This test observes the step before the commit; the barrier after the
-    // commit would hold the release of the first one, so it is released up
-    // front.
-    std::fs::write(
-        directory
-            .path()
-            .join(format!("go-{ATTACH_AFTER_SQLITE_COMMIT}")),
-        b"",
-    )
-    .expect("the later barrier is releasable");
+    let barrier = AttachBarrier::arm();
 
     let path = format!("/v1/indexes/{INDEX}/documents?wait=false");
     let (status, accepted) = send(
@@ -179,18 +145,7 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
     );
     let id = id_of(&accepted);
 
-    let ready = directory
-        .path()
-        .join(format!("ready-{ATTACH_BEFORE_COMMIT}"));
-    let deadline = Instant::now() + TIMEOUT;
-    while !ready.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the attach never reached {}",
-            ready.display()
-        );
-        tokio::time::sleep(POLL).await;
-    }
+    barrier.wait_before_commit().await;
 
     let running = job(&router, &id).await;
     assert_eq!(running["state"], "running", "the job is held: {running}");
@@ -210,11 +165,7 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
         "done advances at the end of a successful job, not per passage: {running}"
     );
 
-    std::fs::write(
-        directory.path().join(format!("go-{ATTACH_BEFORE_COMMIT}")),
-        b"",
-    )
-    .expect("the held attach is releasable");
+    barrier.release_before_commit();
     let finished = terminal_job(&router, &state, &accepted).await;
     assert_eq!(
         finished["state"], "succeeded",
@@ -225,9 +176,6 @@ async fn an_attach_job_shows_its_step_and_total_while_it_runs() {
         json!({ "step": "snapshot", "done": 1, "total": 1 }),
         "a successful job ends at its last step and at `total`: {finished}"
     );
-
-    // SAFETY: see above; the job is terminal, so no write reads the variable.
-    unsafe { std::env::remove_var(BARRIER_ENV) };
 }
 
 /// A successful `attach_batch` ends at `snapshot` with `done == total`, and the
@@ -478,5 +426,73 @@ async fn the_other_kinds_keep_progress_null() {
         finished["progress"],
         Value::Null,
         "a kind with no unit keeps progress null: {finished}"
+    );
+}
+
+/// A `snapshot` job publishes its copy in bytes and ends at `rename` with
+/// `done = total = bytes` of its report (ADR-0153, decisions 1 to 4).
+#[tokio::test]
+async fn a_snapshot_job_publishes_copy_then_attest_then_rename_in_bytes() {
+    let _slot = common::lock_barrier_environment().await;
+    let (instance, state, router) = instance_with_alpha().await;
+    let path = format!("/v1/indexes/{INDEX}/snapshots?wait=true");
+    let (status, accepted) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    assert!(
+        status.is_success(),
+        "the snapshot is accepted: {status} {accepted}"
+    );
+    let finished = terminal_job(&router, &state, &accepted).await;
+    assert_eq!(finished["state"], "succeeded", "{finished}");
+
+    let bytes = finished["result"]["report"]["bytes"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the report counts the copied bytes: {finished}"));
+    assert!(bytes > 0, "{finished}");
+    let progress = &finished["progress"];
+    assert_eq!(
+        progress["step"], "rename",
+        "a successful snapshot ends on the rename step: {finished}"
+    );
+    assert_eq!(
+        progress["done"], bytes,
+        "the job counts bytes, never passages: {finished}"
+    );
+    assert_eq!(
+        progress["total"], bytes,
+        "the exact total is the sum of the copied bytes: {finished}"
+    );
+    let id = id_of(&accepted);
+    assert_eq!(
+        stored_progress(&instance, &id),
+        Some(json!({ "step": "rename", "done": bytes, "total": bytes })),
+        "the terminal transition writes the exact progression to the table"
+    );
+}
+
+/// A snapshot refused before it copies anything keeps `progress: null`
+/// (ADR-0153, decision 5): the occupied destination is checked before the first
+/// publication.
+#[tokio::test]
+async fn a_snapshot_refused_before_it_copies_keeps_progress_null() {
+    let _slot = common::lock_barrier_environment().await;
+    let (_instance, state, router) = instance_with_alpha().await;
+    let path = format!("/v1/indexes/{INDEX}/snapshots?wait=true");
+
+    let (_, first) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    let first = terminal_job(&router, &state, &first).await;
+    assert_eq!(first["state"], "succeeded", "{first}");
+
+    let (_, second) = send(&router, Method::POST, &path, ADMIN_SECRET, None).await;
+    let second = terminal_job(&router, &state, &second).await;
+    assert_eq!(second["state"], "failed", "{second}");
+    assert_eq!(second["error"]["code"], "invalid_request", "{second}");
+    assert!(
+        second.get("progress").is_some(),
+        "the member is always present: {second}"
+    );
+    assert_eq!(
+        second["progress"],
+        Value::Null,
+        "a failure before the first publication leaves no progression: {second}"
     );
 }

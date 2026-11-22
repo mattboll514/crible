@@ -73,6 +73,8 @@ Le job écrit `index.json` de façon atomique, reconstruit ce qui en dérive —
 3. les jobs restés **derrière** lui dans la file échouent en `unknown_index` ;
 4. l'historique des jobs de l'index **reste** dans `jobs.sqlite` (ADR-0103, `docs/02:82`).
 
+> **Ordre des étapes 1 et 2 précisé par ADR-0150 le 2026-11-11 :** l'ordre qui fait foi est le renommage, puis le retrait du registre. Le corps de cet ADR n'est pas réécrit.
+
 Une panne **avant** le renommage laisse l'index intact : le job passe à `failed` au redémarrage (ADR-0103). Une panne **après** le renommage laisse l'index supprimé, et le démarrage purge les `deleted-*` de `<data>/tmp`, comme les `online-*` (ADR-0056). Un `POST` du même nom est refusé tant que l'index est au registre, et accepté après le renommage.
 
 **Décision 7 — rôles.** `POST`, `PATCH` et `DELETE` sont réservés à `admin` ; les deux `GET` sont ouverts à `read` (ADR-0095). Rien de nouveau : ces rôles sont ceux de `docs/05:11-13`.

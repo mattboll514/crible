@@ -10,8 +10,8 @@
 //! and ADR-0054 (bounds of the acceptance settings).
 
 use crible_core::config::{
-    FieldLevel, FieldType, FusionConfig, IndexConfig, IndexPatch, ReferencePrecision, Schema,
-    apply_patch,
+    FieldLevel, FieldType, FusionConfig, IndexConfig, IndexPatch, LexicalIdentifiers,
+    ReferencePrecision, Schema, apply_patch,
 };
 use crible_core::error::ErrorCode;
 
@@ -346,4 +346,156 @@ fn fusion_rejects_an_unknown_method() {
         message.contains("rrf") && message.contains("relative_score"),
         "the message names the accepted methods: {message}"
     );
+}
+
+// ADR-0148 — `lexical.identifiers`, the optional setting of the canonical
+// identifier token. Its domain is `"none" | "v1"`, its absence is `"none"`, and
+// `to_value` writes the key only when it is not `"none"` (decisions 5 and 6).
+
+/// The lexical object of [`DECISIONS_CONFIG`], with `identifiers` added.
+fn lexical_with_identifiers(identifiers: &str) -> String {
+    config_with(
+        "lexical",
+        &format!(
+            r#"{{ "enabled": true, "language": "fr", "positions": false,
+                 "identifiers": "{identifiers}" }}"#
+        ),
+    )
+}
+
+#[test]
+fn lexical_identifiers_absent_and_none_are_the_same_configuration() {
+    // ADR-0148, decision 6: `from_value` reads the absence and `"none"` as the
+    // same value, so an `index.json` written by hand with `"none"` stays
+    // readable and identical to one that omits it.
+    let absent = parse(DECISIONS_CONFIG);
+    let named = parse(&lexical_with_identifiers("none"));
+    assert_eq!(
+        absent, named,
+        "an absent identifiers and \"none\" must give the same configuration"
+    );
+    assert_eq!(
+        absent.lexical.identifiers,
+        LexicalIdentifiers::None,
+        "the 1.0 behaviour is the absent setting"
+    );
+    assert_eq!(
+        parse(&lexical_with_identifiers("v1")).lexical.identifiers,
+        LexicalIdentifiers::V1,
+        "\"v1\" selects the canonical identifier token"
+    );
+}
+
+#[test]
+fn a_lexical_identifiers_outside_the_domain_is_refused_at_creation() {
+    // ADR-0148, decision 5: the domain is closed, and a value outside it is
+    // `invalid_request` (400), as for `lexical.language`.
+    for value in ["v2", "V1", "v1 ", "", "true"] {
+        let error = IndexConfig::from_json_str(&lexical_with_identifiers(value))
+            .expect_err("only \"none\" and \"v1\" are accepted");
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidRequest,
+            "the value {value:?} must be refused in invalid_request: {}",
+            error.message()
+        );
+        assert!(
+            error.message().contains("$.lexical.identifiers"),
+            "the message must name the setting for {value:?}: {}",
+            error.message()
+        );
+    }
+}
+
+#[test]
+fn to_value_omits_identifiers_when_none() {
+    // ADR-0148, decision 6: materialising "none" would put a 1.1 key in every
+    // `index.json`, and an instance 1.0 would then refuse to start (ADR-0143,
+    // decision 2). The value is a constant default, so it is not written.
+    let config = parse(DECISIONS_CONFIG);
+    let value = config.to_value();
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "\"none\" must not be materialised: {value}"
+    );
+    assert_eq!(
+        value["lexical"].as_object().map(serde_json::Map::len),
+        Some(3),
+        "the lexical object keeps its three 1.0 members: {value}"
+    );
+}
+
+#[test]
+fn to_value_writes_identifiers_when_v1() {
+    // ADR-0148, decision 6: `"v1"` is not a default, so it is written, and the
+    // stored form round-trips.
+    let mut config = parse(DECISIONS_CONFIG);
+    config.lexical.identifiers = LexicalIdentifiers::V1;
+    let value = config.to_value();
+    assert_eq!(
+        value["lexical"]["identifiers"], "v1",
+        "the non-default value must be stored: {value}"
+    );
+    assert_eq!(
+        IndexConfig::from_value(&value)
+            .unwrap_or_else(|error| panic!("the stored form must parse: {error}")),
+        config,
+        "the stored form must round-trip"
+    );
+}
+
+#[test]
+fn a_patch_of_identifiers_changes_it_and_is_not_frozen() {
+    // ADR-0148, decision 5: `identifiers` is modifiable by `PATCH` (INV-16 is
+    // not in play), and a patch changes nothing else.
+    let mut config = parse(DECISIONS_CONFIG);
+    let patch = IndexPatch::from_json_str(r#"{ "lexical": { "identifiers": "v1" } }"#)
+        .unwrap_or_else(|error| panic!("the patch must parse: {error}"));
+    apply_patch(&mut config, &patch)
+        .unwrap_or_else(|error| panic!("identifiers must not be a frozen setting: {error}"));
+
+    assert_eq!(config.lexical.identifiers, LexicalIdentifiers::V1);
+    assert!(config.lexical.enabled, "enabled must keep its value");
+    assert_eq!(
+        config.lexical.language, "fr",
+        "language must keep its value"
+    );
+    assert!(!config.lexical.positions, "positions must keep its value");
+
+    let patch = IndexPatch::from_json_str(r#"{ "lexical": { "identifiers": "none" } }"#)
+        .unwrap_or_else(|error| panic!("the patch must parse: {error}"));
+    apply_patch(&mut config, &patch)
+        .unwrap_or_else(|error| panic!("going back to \"none\" must be accepted: {error}"));
+    assert_eq!(config.lexical.identifiers, LexicalIdentifiers::None);
+}
+
+#[test]
+fn a_patch_outside_the_lexical_identifiers_domain_is_refused() {
+    // ADR-0148, decision 5: the `PATCH` applies the same closed domain as the
+    // creation, and reports the same path.
+    let error = IndexPatch::from_json_str(r#"{ "lexical": { "identifiers": "v2" } }"#)
+        .expect_err("v2 is not in the domain");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("$.lexical.identifiers"),
+        "the message must name the setting: {}",
+        error.message()
+    );
+
+    let mut config = parse(DECISIONS_CONFIG);
+    let error = IndexPatch::from_json_str(r#"{ "lexical": { "identifiers": "V1" } }"#)
+        .expect_err("the values are lowercase only");
+    assert_eq!(error.code(), ErrorCode::InvalidRequest);
+    assert!(
+        error.message().contains("$.lexical.identifiers"),
+        "the message must name the setting: {}",
+        error.message()
+    );
+    apply_patch(
+        &mut config,
+        &IndexPatch::from_json_str(r#"{ "lexical": { "identifiers": "v1" } }"#)
+            .unwrap_or_else(|error| panic!("the lowercase value must parse: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("a valid value must be accepted: {error}"));
+    assert_eq!(config.lexical.identifiers, LexicalIdentifiers::V1);
 }

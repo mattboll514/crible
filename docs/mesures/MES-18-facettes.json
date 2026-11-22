@@ -1,0 +1,1526 @@
+{
+  "mesure": "MES-18",
+  "tache": "T12-FACETTES-ET-COMPTES",
+  "version": "1.1",
+  "date": "2026-11-12",
+  "commit": "bebf39a0242d27dbf6c83fe6b99fac883e44fe16",
+  "working_tree": "T12-FACETTES-ET-COMPTES uncommitted changes in the tree (facets.rs, document_ordinals.rs and the files it changes)",
+  "binary_sha256": "eb3a4a585728db8af68ff2476db10660b30f48091b189e0fe2a4b38ef452afbf",
+  "machine": {
+    "model": "Mac15,12",
+    "cpu": "Apple M3",
+    "cores": 8,
+    "memory_bytes": 25769803776,
+    "os": "macOS 15.7.7 (24G720)",
+    "mode": "native, cargo build --release, no Docker",
+    "load_average_end": "1.62 2.46 3.95"
+  },
+  "dataset": {
+    "root": "data/legifacile-full",
+    "indexes_root": "data/mes18/data",
+    "documents": 6660239,
+    "passages": 9600105,
+    "dead_passages": 0,
+    "lots": {
+      "articles": {
+        "lot": "articles-full-v1",
+        "manifest_sha256": "550f164e96bc0a16907e7eecc0e3fabca28e3336f193f9db31784308f0a7c327"
+      },
+      "decisions": {
+        "lot": "decisions-full-v1",
+        "manifest_sha256": "d2432f6cca0ec2b40432614cde588de87059a381d8db11919c3023164498309d"
+      },
+      "dole": {
+        "lot": "dole-full-v1",
+        "manifest_sha256": "606e8c028431573e738f72971169d46ede6b77ab873a155c9ce0d8357def3a5f"
+      },
+      "jorf": {
+        "lot": "jorf-full-v1",
+        "manifest_sha256": "5ac78c1c44959628a161b8f9755a38c0eb42f58f894cb0a59cc8821b04913ce2"
+      },
+      "sarde": {
+        "lot": "sarde-full-v1",
+        "manifest_sha256": "f4eb42a07520907e1b5323eba501eb2390a90975e7571c8b3a34a1120edccac6"
+      },
+      "titres": {
+        "lot": "titres-full-v2",
+        "manifest_sha256": "57b4586efa161750acd9fe361f3ede4a7663bc3224aa3c65a12e5cbd15dab539"
+      }
+    }
+  },
+  "protocol": {
+    "cases": 18,
+    "calls_per_case": 100,
+    "warmup_per_case": 10,
+    "client": "one, sequential",
+    "clock": "wall clock around each HTTP call",
+    "percentile": "nearest rank (ADR-0077)",
+    "cache": "warm (page cache of the import); cold cache not obtained, see limits",
+    "server": {
+      "bind": "127.0.0.1:18018",
+      "search_threads": 0,
+      "max_concurrent_searches": 0,
+      "default_timeout_ms": 2000,
+      "encoder_query_precision": "fp32"
+    },
+    "server_startup_seconds": [
+      62.6,
+      67.7
+    ]
+  },
+  "cases": [
+    {
+      "id": "A1",
+      "index": "decisions",
+      "fields": [
+        "juridiction",
+        "section"
+      ],
+      "filter": null,
+      "note": "plus grand pool, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 45.97,
+      "p95_ms": 46.432,
+      "p99_ms": 47.135,
+      "min_ms": 45.731,
+      "max_ms": 53.94,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      }
+    },
+    {
+      "id": "A2",
+      "index": "articles",
+      "fields": [
+        "code",
+        "fonds"
+      ],
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "note": "corpus textes_vigueur",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 119.721,
+      "p95_ms": 124.852,
+      "p99_ms": 133.737,
+      "min_ms": 118.089,
+      "max_ms": 133.767,
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      }
+    },
+    {
+      "id": "A3",
+      "index": "articles",
+      "fields": [
+        "code",
+        "fonds"
+      ],
+      "filter": {
+        "$or": [
+          {
+            "etat": {
+              "nin": [
+                "VIGUEUR",
+                "VIGUEUR_DIFF",
+                "VIGUEUR_ETEN",
+                "VIGUEUR_NON_ETEN"
+              ]
+            }
+          },
+          {
+            "etat": {
+              "exists": false
+            }
+          }
+        ]
+      },
+      "note": "corpus textes_hors_vigueur",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 124.628,
+      "p95_ms": 126.088,
+      "p99_ms": 127.122,
+      "min_ms": 119.522,
+      "max_ms": 127.273,
+      "count": {
+        "documents": 1249823,
+        "passages": 1490671
+      }
+    },
+    {
+      "id": "A4",
+      "index": "decisions",
+      "fields": [
+        "juridiction",
+        "section"
+      ],
+      "filter": {
+        "partie": {
+          "exists": false
+        }
+      },
+      "note": "corpus juri_sommaires",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 8.86,
+      "p95_ms": 8.948,
+      "p99_ms": 9.036,
+      "min_ms": 8.788,
+      "max_ms": 9.294,
+      "count": {
+        "documents": 578250,
+        "passages": 590196
+      }
+    },
+    {
+      "id": "A5",
+      "index": "decisions",
+      "fields": [
+        "juridiction",
+        "section"
+      ],
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "note": "corpus juri_texte_integral",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 37.036,
+      "p95_ms": 37.332,
+      "p99_ms": 37.719,
+      "min_ms": 36.862,
+      "max_ms": 38.241,
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      }
+    },
+    {
+      "id": "B1",
+      "index": "articles",
+      "fields": [
+        "etat"
+      ],
+      "filter": null,
+      "note": "faible cardinalite, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 27.785,
+      "p95_ms": 28.081,
+      "p99_ms": 28.297,
+      "min_ms": 27.649,
+      "max_ms": 28.697,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      }
+    },
+    {
+      "id": "B2",
+      "index": "articles",
+      "fields": [
+        "fonds"
+      ],
+      "filter": null,
+      "note": "faible cardinalite, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 27.596,
+      "p95_ms": 27.744,
+      "p99_ms": 27.857,
+      "min_ms": 27.495,
+      "max_ms": 27.889,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      }
+    },
+    {
+      "id": "B3",
+      "index": "articles",
+      "fields": [
+        "num"
+      ],
+      "filter": null,
+      "note": "forte cardinalite, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 102.848,
+      "p95_ms": 107.839,
+      "p99_ms": 111.061,
+      "min_ms": 101.567,
+      "max_ms": 117.036,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      }
+    },
+    {
+      "id": "B4",
+      "index": "articles",
+      "fields": [
+        "code"
+      ],
+      "filter": null,
+      "note": "cle_domaine, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 140.7,
+      "p95_ms": 146.76,
+      "p99_ms": 160.307,
+      "min_ms": 138.845,
+      "max_ms": 162.774,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      }
+    },
+    {
+      "id": "B5",
+      "index": "articles",
+      "fields": [
+        "num"
+      ],
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "note": "forte cardinalite, textes_vigueur",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 86.33,
+      "p95_ms": 87.958,
+      "p99_ms": 90.624,
+      "min_ms": 83.975,
+      "max_ms": 117.712,
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      }
+    },
+    {
+      "id": "B6",
+      "index": "articles",
+      "fields": [
+        "code"
+      ],
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "note": "cle_domaine, textes_vigueur",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 119.077,
+      "p95_ms": 120.399,
+      "p99_ms": 124.235,
+      "min_ms": 117.597,
+      "max_ms": 124.264,
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      }
+    },
+    {
+      "id": "B7",
+      "index": "decisions",
+      "fields": [
+        "section"
+      ],
+      "filter": null,
+      "note": "faible cardinalite, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 45.206,
+      "p95_ms": 45.95,
+      "p99_ms": 46.743,
+      "min_ms": 44.999,
+      "max_ms": 47.069,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      }
+    },
+    {
+      "id": "B8",
+      "index": "decisions",
+      "fields": [
+        "juridiction"
+      ],
+      "filter": null,
+      "note": "cle_domaine, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 45.792,
+      "p95_ms": 46.253,
+      "p99_ms": 46.41,
+      "min_ms": 45.561,
+      "max_ms": 46.935,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      }
+    },
+    {
+      "id": "B9",
+      "index": "decisions",
+      "fields": [
+        "numero"
+      ],
+      "filter": null,
+      "note": "forte cardinalite, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 301.945,
+      "p95_ms": 306.19,
+      "p99_ms": 306.604,
+      "min_ms": 298.047,
+      "max_ms": 307.522,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      }
+    },
+    {
+      "id": "B10",
+      "index": "decisions",
+      "fields": [
+        "numero"
+      ],
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "note": "forte cardinalite, juri_texte_integral",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 255.111,
+      "p95_ms": 256.95,
+      "p99_ms": 257.27,
+      "min_ms": 250.952,
+      "max_ms": 267.505,
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      }
+    },
+    {
+      "id": "B11",
+      "index": "decisions",
+      "fields": [
+        "juridiction"
+      ],
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "note": "cle_domaine, juri_texte_integral",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 36.854,
+      "p95_ms": 37.26,
+      "p99_ms": 37.742,
+      "min_ms": 36.706,
+      "max_ms": 37.985,
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      }
+    },
+    {
+      "id": "C1",
+      "index": "articles",
+      "fields": [
+        "texte_cid"
+      ],
+      "filter": null,
+      "note": "plus forte cardinalite d'articles, sans filtre",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 111.13,
+      "p95_ms": 117.982,
+      "p99_ms": 137.015,
+      "min_ms": 110.005,
+      "max_ms": 141.213,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      }
+    },
+    {
+      "id": "C2",
+      "index": "articles",
+      "fields": [
+        "texte_cid"
+      ],
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "note": "plus forte cardinalite d'articles, textes_vigueur",
+      "n": 100,
+      "statuses": {
+        "200": 100
+      },
+      "p50_ms": 93.286,
+      "p95_ms": 95.34,
+      "p99_ms": 96.217,
+      "min_ms": 92.652,
+      "max_ms": 99.35,
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      }
+    }
+  ],
+  "memory": {
+    "per_index": [
+      {
+        "index": "articles",
+        "filter_memory_bytes": 134771561,
+        "documents_bytes": 9906860,
+        "documents_share": 7.35,
+        "live_passages": 2476715,
+        "documents": 2135023,
+        "array_slots": 2476715
+      },
+      {
+        "index": "decisions",
+        "filter_memory_bytes": 98473439,
+        "documents_bytes": 14359104,
+        "documents_share": 14.58,
+        "live_passages": 3589776,
+        "documents": 1196623,
+        "array_slots": 3589776
+      },
+      {
+        "index": "dole",
+        "filter_memory_bytes": 170045,
+        "documents_bytes": 30612,
+        "documents_share": 18.0,
+        "live_passages": 7653,
+        "documents": 3600,
+        "array_slots": 7653
+      },
+      {
+        "index": "jorf",
+        "filter_memory_bytes": 59174085,
+        "documents_bytes": 7334000,
+        "documents_share": 12.39,
+        "live_passages": 1833500,
+        "documents": 1636145,
+        "array_slots": 1833500
+      },
+      {
+        "index": "sarde",
+        "filter_memory_bytes": 2832801,
+        "documents_bytes": 858312,
+        "documents_share": 30.3,
+        "live_passages": 214578,
+        "documents": 210965,
+        "array_slots": 214578
+      },
+      {
+        "index": "titres",
+        "filter_memory_bytes": 82891975,
+        "documents_bytes": 5911532,
+        "documents_share": 7.13,
+        "live_passages": 1477883,
+        "documents": 1477883,
+        "array_slots": 1477883
+      }
+    ],
+    "total_filter_memory_bytes": 378313906,
+    "total_filter_memory_mib": 360.788,
+    "total_documents_bytes": 38400420,
+    "total_documents_mib": 36.621
+  },
+  "open_duration": {
+    "dole": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 2.503,
+          "total_ms": 1.897,
+          "construction_ms": -0.606,
+          "bytes": 30612
+        },
+        {
+          "rep": 1,
+          "sql_ms": 1.762,
+          "total_ms": 1.763,
+          "construction_ms": 0.001,
+          "bytes": 30612
+        },
+        {
+          "rep": 2,
+          "sql_ms": 1.525,
+          "total_ms": 1.627,
+          "construction_ms": 0.102,
+          "bytes": 30612
+        }
+      ],
+      "warm_median_total_ms": 1.695,
+      "warm_median_sql_ms": 1.643
+    },
+    "sarde": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 122.932,
+          "total_ms": 26.461,
+          "construction_ms": -96.471,
+          "bytes": 858312
+        },
+        {
+          "rep": 1,
+          "sql_ms": 25.438,
+          "total_ms": 26.474,
+          "construction_ms": 1.037,
+          "bytes": 858312
+        },
+        {
+          "rep": 2,
+          "sql_ms": 25.166,
+          "total_ms": 26.404,
+          "construction_ms": 1.239,
+          "bytes": 858312
+        }
+      ],
+      "warm_median_total_ms": 26.439,
+      "warm_median_sql_ms": 25.302
+    },
+    "titres": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 869.967,
+          "total_ms": 181.284,
+          "construction_ms": -688.684,
+          "bytes": 5911532
+        },
+        {
+          "rep": 1,
+          "sql_ms": 176.763,
+          "total_ms": 184.453,
+          "construction_ms": 7.69,
+          "bytes": 5911532
+        },
+        {
+          "rep": 2,
+          "sql_ms": 177.917,
+          "total_ms": 185.356,
+          "construction_ms": 7.439,
+          "bytes": 5911532
+        }
+      ],
+      "warm_median_total_ms": 184.904,
+      "warm_median_sql_ms": 177.34
+    },
+    "jorf": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 860.373,
+          "total_ms": 225.82,
+          "construction_ms": -634.553,
+          "bytes": 7334000
+        },
+        {
+          "rep": 1,
+          "sql_ms": 218.885,
+          "total_ms": 225.759,
+          "construction_ms": 6.874,
+          "bytes": 7334000
+        },
+        {
+          "rep": 2,
+          "sql_ms": 218.156,
+          "total_ms": 226.937,
+          "construction_ms": 8.781,
+          "bytes": 7334000
+        }
+      ],
+      "warm_median_total_ms": 226.348,
+      "warm_median_sql_ms": 218.52
+    },
+    "decisions": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 1586.667,
+          "total_ms": 478.778,
+          "construction_ms": -1107.889,
+          "bytes": 14359104
+        },
+        {
+          "rep": 1,
+          "sql_ms": 427.332,
+          "total_ms": 452.251,
+          "construction_ms": 24.919,
+          "bytes": 14359104
+        },
+        {
+          "rep": 2,
+          "sql_ms": 425.439,
+          "total_ms": 453.007,
+          "construction_ms": 27.568,
+          "bytes": 14359104
+        }
+      ],
+      "warm_median_total_ms": 452.629,
+      "warm_median_sql_ms": 426.385
+    },
+    "articles": {
+      "reps": [
+        {
+          "rep": 0,
+          "sql_ms": 442.645,
+          "total_ms": 325.756,
+          "construction_ms": -116.889,
+          "bytes": 9906860
+        },
+        {
+          "rep": 1,
+          "sql_ms": 293.237,
+          "total_ms": 322.9,
+          "construction_ms": 29.663,
+          "bytes": 9906860
+        },
+        {
+          "rep": 2,
+          "sql_ms": 296.071,
+          "total_ms": 304.563,
+          "construction_ms": 8.492,
+          "bytes": 9906860
+        }
+      ],
+      "warm_median_total_ms": 313.731,
+      "warm_median_sql_ms": 294.654
+    }
+  },
+  "cardinalities": {
+    "articles": {
+      "code": 192876,
+      "fonds": 2,
+      "etat": 15,
+      "num": 180797,
+      "texte_cid": 195535
+    },
+    "decisions": {
+      "juridiction": 399,
+      "section": 6,
+      "numero": 743117,
+      "formation": 1955,
+      "nature": 25,
+      "partie": 5
+    }
+  },
+  "checks": [
+    {
+      "id": "A1",
+      "index": "decisions",
+      "filter": null,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      },
+      "per_field": {
+        "juridiction": {
+          "rendered": 3133911,
+          "other": 423243,
+          "sum": 3557154,
+          "top": [
+            {
+              "count": 1930636,
+              "value": "Cour de cassation"
+            },
+            {
+              "count": 202425,
+              "value": "Conseil d'État"
+            },
+            {
+              "count": 146574,
+              "value": "Conseil d'Etat"
+            }
+          ]
+        },
+        "section": {
+          "rendered": 3589776,
+          "other": 0,
+          "sum": 3589776,
+          "top": [
+            {
+              "count": 1780548,
+              "value": "INCA"
+            },
+            {
+              "count": 1346667,
+              "value": "JADE"
+            },
+            {
+              "count": 253888,
+              "value": "CAPP"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "A2",
+      "index": "articles",
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      },
+      "per_field": {
+        "code": {
+          "rendered": 126718,
+          "other": 859326,
+          "sum": 986044,
+          "top": [
+            {
+              "count": 14069,
+              "value": "Code de la santé publique"
+            },
+            {
+              "count": 11727,
+              "value": "Code du travail"
+            },
+            {
+              "count": 10086,
+              "value": "Code rural et de la pêche maritime"
+            }
+          ]
+        },
+        "fonds": {
+          "rendered": 986044,
+          "other": 0,
+          "sum": 986044,
+          "top": [
+            {
+              "count": 769697,
+              "value": "LEGI"
+            },
+            {
+              "count": 216347,
+              "value": "KALI"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "A3",
+      "index": "articles",
+      "filter": {
+        "$or": [
+          {
+            "etat": {
+              "nin": [
+                "VIGUEUR",
+                "VIGUEUR_DIFF",
+                "VIGUEUR_ETEN",
+                "VIGUEUR_NON_ETEN"
+              ]
+            }
+          },
+          {
+            "etat": {
+              "exists": false
+            }
+          }
+        ]
+      },
+      "count": {
+        "documents": 1249823,
+        "passages": 1490671
+      },
+      "per_field": {
+        "code": {
+          "rendered": 310594,
+          "other": 1180077,
+          "sum": 1490671,
+          "top": [
+            {
+              "count": 35924,
+              "value": "Code de la santé publique"
+            },
+            {
+              "count": 34827,
+              "value": "Code général des impôts"
+            },
+            {
+              "count": 31583,
+              "value": "Code du travail"
+            }
+          ]
+        },
+        "fonds": {
+          "rendered": 1490671,
+          "other": 0,
+          "sum": 1490671,
+          "top": [
+            {
+              "count": 1348720,
+              "value": "LEGI"
+            },
+            {
+              "count": 141951,
+              "value": "KALI"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "A4",
+      "index": "decisions",
+      "filter": {
+        "partie": {
+          "exists": false
+        }
+      },
+      "count": {
+        "documents": 578250,
+        "passages": 590196
+      },
+      "per_field": {
+        "juridiction": {
+          "rendered": 550557,
+          "other": 39639,
+          "sum": 590196,
+          "top": [
+            {
+              "count": 224186,
+              "value": "Cour de cassation"
+            },
+            {
+              "count": 102408,
+              "value": "Conseil d'Etat"
+            },
+            {
+              "count": 24511,
+              "value": "CAA de MARSEILLE"
+            }
+          ]
+        },
+        "section": {
+          "rendered": 590196,
+          "other": 0,
+          "sum": 590196,
+          "top": [
+            {
+              "count": 346636,
+              "value": "JADE"
+            },
+            {
+              "count": 145393,
+              "value": "CASS"
+            },
+            {
+              "count": 79504,
+              "value": "INCA"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "A5",
+      "index": "decisions",
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      },
+      "per_field": {
+        "juridiction": {
+          "rendered": 2654375,
+          "other": 312583,
+          "sum": 2966958,
+          "top": [
+            {
+              "count": 1706450,
+              "value": "Cour de cassation"
+            },
+            {
+              "count": 181092,
+              "value": "Conseil d'État"
+            },
+            {
+              "count": 106703,
+              "value": "CAA de NANTES"
+            }
+          ]
+        },
+        "section": {
+          "rendered": 2999580,
+          "other": 0,
+          "sum": 2999580,
+          "top": [
+            {
+              "count": 1701044,
+              "value": "INCA"
+            },
+            {
+              "count": 1000031,
+              "value": "JADE"
+            },
+            {
+              "count": 235225,
+              "value": "CAPP"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "B1",
+      "index": "articles",
+      "filter": null,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      },
+      "per_field": {
+        "etat": {
+          "rendered": 2232201,
+          "other": 0,
+          "sum": 2232201,
+          "top": [
+            {
+              "count": 767725,
+              "value": "VIGUEUR"
+            },
+            {
+              "count": 642081,
+              "value": "MODIFIE"
+            },
+            {
+              "count": 470530,
+              "value": "ABROGE"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B2",
+      "index": "articles",
+      "filter": null,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      },
+      "per_field": {
+        "fonds": {
+          "rendered": 2476715,
+          "other": 0,
+          "sum": 2476715,
+          "top": [
+            {
+              "count": 2118417,
+              "value": "LEGI"
+            },
+            {
+              "count": 358298,
+              "value": "KALI"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B3",
+      "index": "articles",
+      "filter": null,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      },
+      "per_field": {
+        "num": {
+          "rendered": 1231148,
+          "other": 1086206,
+          "sum": 2317354,
+          "top": [
+            {
+              "count": 198287,
+              "value": "2"
+            },
+            {
+              "count": 193154,
+              "value": "1"
+            },
+            {
+              "count": 151892,
+              "value": "3"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B4",
+      "index": "articles",
+      "filter": null,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      },
+      "per_field": {
+        "code": {
+          "rendered": 433613,
+          "other": 2043102,
+          "sum": 2476715,
+          "top": [
+            {
+              "count": 49993,
+              "value": "Code de la santé publique"
+            },
+            {
+              "count": 43310,
+              "value": "Code du travail"
+            },
+            {
+              "count": 38003,
+              "value": "Code de la sécurité sociale"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B5",
+      "index": "articles",
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      },
+      "per_field": {
+        "num": {
+          "rendered": 558251,
+          "other": 346201,
+          "sum": 904452,
+          "top": [
+            {
+              "count": 108364,
+              "value": "2"
+            },
+            {
+              "count": 79614,
+              "value": "3"
+            },
+            {
+              "count": 75422,
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B6",
+      "index": "articles",
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      },
+      "per_field": {
+        "code": {
+          "rendered": 126718,
+          "other": 859326,
+          "sum": 986044,
+          "top": [
+            {
+              "count": 14069,
+              "value": "Code de la santé publique"
+            },
+            {
+              "count": 11727,
+              "value": "Code du travail"
+            },
+            {
+              "count": 10086,
+              "value": "Code rural et de la pêche maritime"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "B7",
+      "index": "decisions",
+      "filter": null,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      },
+      "per_field": {
+        "section": {
+          "rendered": 3589776,
+          "other": 0,
+          "sum": 3589776,
+          "top": [
+            {
+              "count": 1780548,
+              "value": "INCA"
+            },
+            {
+              "count": 1346667,
+              "value": "JADE"
+            },
+            {
+              "count": 253888,
+              "value": "CAPP"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "B8",
+      "index": "decisions",
+      "filter": null,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      },
+      "per_field": {
+        "juridiction": {
+          "rendered": 3133911,
+          "other": 423243,
+          "sum": 3557154,
+          "top": [
+            {
+              "count": 1930636,
+              "value": "Cour de cassation"
+            },
+            {
+              "count": 202425,
+              "value": "Conseil d'État"
+            },
+            {
+              "count": 146574,
+              "value": "Conseil d'Etat"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "B9",
+      "index": "decisions",
+      "filter": null,
+      "count": {
+        "documents": 1196623,
+        "passages": 3589776
+      },
+      "per_field": {
+        "numero": {
+          "rendered": 4695,
+          "other": 2439694,
+          "sum": 2444389,
+          "top": [
+            {
+              "count": 1449,
+              "value": "-"
+            },
+            {
+              "count": 310,
+              "value": "42100664"
+            },
+            {
+              "count": 228,
+              "value": "51701280"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "B10",
+      "index": "decisions",
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      },
+      "per_field": {
+        "numero": {
+          "rendered": 4597,
+          "other": 2069042,
+          "sum": 2073639,
+          "top": [
+            {
+              "count": 1414,
+              "value": "-"
+            },
+            {
+              "count": 310,
+              "value": "42100664"
+            },
+            {
+              "count": 228,
+              "value": "51701280"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "B11",
+      "index": "decisions",
+      "filter": {
+        "partie": {
+          "exists": true
+        }
+      },
+      "count": {
+        "documents": 618373,
+        "passages": 2999580
+      },
+      "per_field": {
+        "juridiction": {
+          "rendered": 2654375,
+          "other": 312583,
+          "sum": 2966958,
+          "top": [
+            {
+              "count": 1706450,
+              "value": "Cour de cassation"
+            },
+            {
+              "count": 181092,
+              "value": "Conseil d'État"
+            },
+            {
+              "count": 106703,
+              "value": "CAA de NANTES"
+            }
+          ]
+        }
+      },
+      "live": 3589776,
+      "state_documents": 1196623
+    },
+    {
+      "id": "C1",
+      "index": "articles",
+      "filter": null,
+      "count": {
+        "documents": 2135023,
+        "passages": 2476715
+      },
+      "per_field": {
+        "texte_cid": {
+          "rendered": 433613,
+          "other": 2043060,
+          "sum": 2476673,
+          "top": [
+            {
+              "count": 49993,
+              "value": "LEGITEXT000006072665"
+            },
+            {
+              "count": 43310,
+              "value": "LEGITEXT000006072050"
+            },
+            {
+              "count": 38003,
+              "value": "LEGITEXT000006073189"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    },
+    {
+      "id": "C2",
+      "index": "articles",
+      "filter": {
+        "etat": {
+          "in": [
+            "VIGUEUR",
+            "VIGUEUR_DIFF",
+            "VIGUEUR_ETEN",
+            "VIGUEUR_NON_ETEN"
+          ]
+        }
+      },
+      "count": {
+        "documents": 885200,
+        "passages": 986044
+      },
+      "per_field": {
+        "texte_cid": {
+          "rendered": 126718,
+          "other": 859325,
+          "sum": 986043,
+          "top": [
+            {
+              "count": 14069,
+              "value": "LEGITEXT000006072665"
+            },
+            {
+              "count": 11727,
+              "value": "LEGITEXT000006072050"
+            },
+            {
+              "count": 10086,
+              "value": "LEGITEXT000006071367"
+            }
+          ]
+        }
+      },
+      "live": 2476715,
+      "state_documents": 2135023
+    }
+  ],
+  "verdict": {
+    "criterion": "CRITERE TENU",
+    "p95_ms": 46.432,
+    "threshold_ms": 250,
+    "documents_bytes": 38400420,
+    "documents_mib": 36.621,
+    "threshold_bytes": 67108864
+  }
+}

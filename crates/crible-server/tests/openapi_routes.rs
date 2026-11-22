@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 /// The tests that walk every operation count them: a loop that visits nothing
 /// would pass. `docs/05-api.md` is the reference (ADR-0111, decision 5).
-const OPERATIONS: usize = 20;
+const OPERATIONS: usize = 21;
 
 /// The reference document, read at compile time.
 const DOCS: &str = include_str!("../../../docs/05-api.md");

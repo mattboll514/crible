@@ -88,6 +88,14 @@ La décision 2 dit que `done` vaut `total` à la fin de la dernière étape d'un
 
 Le test `a_replayed_batch_publishes_no_progress` (`crates/crible-server/tests/job_progress.rs:392`) fige ce comportement. Le corps de l'ADR et les autres décisions ne changent pas.
 
+## Note du 2026-11-12 (remplacement partiel par ADR-0153)
+
+Les décisions 1, 2 et 4 sont **remplacées en partie par ADR-0153, pour le seul `kind` `snapshot`**. Ce job publie désormais `progress` en **octets entiers**, aux étapes `copy`, `attest` et `rename`, avec une publication après chaque fichier copié ; `total` est estimé pendant `copy` puis exact à partir de `attest`, et la règle `done ≤ total` s'ajoute à celle des frontières d'étape.
+
+Le reste ne change pas. La décision 1 garde ses noms d'étapes pour l'attache et le patch, et le nouveau job n'emploie pas le nom `snapshot`, précisément parce qu'il désigne déjà l'étape 6 de l'attache (`docs/02-architecture.md:131`). La décision 2 reste vraie pour les autres types, y compris la règle d'un job `failed` qui garde sa dernière progression publiée. La décision 4 garde son principe — seuls les `kind` qu'elle nomme publient —, et sa liste compte désormais quatre `kind`, `snapshot` compris. Les décisions 3 et 5 sont intactes. La ligne d'avancement de la CLI hors ligne, décidée par ADR-0153, ne remplace rien ici : elle n'appartient à aucun job.
+
+Le corps de l'ADR n'est pas modifié.
+
 ## Références
 
 - `docs/05-api.md`, section « Jobs » (`:429-451`), en particulier l'exemple `:432-440` et la puce `:443`.

@@ -1,0 +1,1776 @@
+#!/usr/bin/env python3
+"""MES-17 harness: attribute the retained anonymous memory.
+
+Second campaign protocol: ADR-0157 (accepted 2026-11-21), decisions 2, 3, 4, 8
+and 9, with the reading rule of ADR-0158 (accepted 2026-11-22): an effect is a
+*drop* of the retained anonymous memory by at least the dispersion between the
+two V0 runs.
+Seven states on one container and one volume:
+
+  (a) fresh process, no index
+  (b) index created (and its `session_load` line)
+  (c) six lots attached
+  (d) 300 queries of `queries.jsonl`, `hybrid`, `k = 10`, on the full index
+  (e) restart with the index present
+  (f) `DELETE` of the throwaway index
+  (g) restart without index
+
+Each state is read three times, three seconds apart. Sources: `/proc/1/status`,
+`/proc/1/smaps_rollup`, `/proc/1/smaps` (parsed, not kept), `memory.current`,
+`memory.swap.current` and `memory.stat` of the container cgroup, the VM's
+`/proc/meminfo`, and the `memory` lines of the journal.
+
+The container is created by `up`, which is the ONLY place where the variant is
+applied (`docker run -e GLIBC_TUNABLES=...`), never in the image nor in
+`crible.toml` (ADR-0157, decision 4). The exact value is read back from the
+container environment and written to the run's `run.json`.
+
+Standard library only. Paths are relative to the repository root. The admin key
+is read at run time from `data/mes17/raw/key.txt` (gitignored).
+
+Third campaign (ADR-0159, accepted 2026-11-22): the same harness runs one
+trimmed walk per process, in this order, with no variant:
+
+  (a) fresh process, no index
+  (b) index created (and its `session_load` line)
+  (c) six lots attached
+  trim   `gdb -p 1 -batch -ex 'call (int) malloc_trim(0)'`, value recorded
+  (c1) reading after the first trim
+  trim   second call, idempotence check
+  (c2) reading after the second call
+  (f)  `DELETE` of the throwaway index
+  trim   `malloc_trim(0)` after the `DELETE`, value recorded
+  (f1) reading after that trim
+
+States (d) and (e) of ADR-0157 are not replayed. The trim runs in a throwaway
+annex container built from `gdb.Dockerfile` (`--pid=container:<measured>`,
+`--cap-add SYS_PTRACE`, `--rm`), only when the server is at rest (no queued and
+no running job), and under a bounded timeout. A blocked or failed `gdb` fails
+the run: no reading is ever replaced by a zero. Nothing here enters the image,
+`crible.toml` or the server code.
+
+Control campaign (ADR-0160, decision 6, accepted 2026-11-22): the trim is now in
+the server, so the same harness walks two images, two processes each, over the
+three states only:
+
+  (a) fresh process, no index
+  (b) index created (and its `session_load` line)
+  (c) six lots attached, while 300 hybrid queries (`k = 10`) are in flight
+
+The `trim` lines of level `debug` are made visible on both images by the same
+filter, `RUST_LOG=info,crible_server::trim=debug`, which leaves every other
+line at the image default of `info` (ADR-0096). `trim-lines` counts them, and
+`summary --campaign control` reads (a), (b), (c).
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import datetime
+import json
+import math
+import pathlib
+import re
+import statistics
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+
+REPO = pathlib.Path(__file__).resolve().parents[3]
+DATA = REPO / "data"
+MES17 = DATA / "mes17"
+RAW_ROOT = MES17 / "raw"
+KEY_FILE = RAW_ROOT / "key.txt"
+QUERIES = DATA / "legifacile-sample" / "queries.jsonl"
+EXCHANGE = MES17 / "exchange"
+TOML = MES17 / "crible.toml"
+
+CONTAINER = "crible-mes17"
+VOLUME = "crible-mes17-data"
+PORT = 18017
+BASE = f"http://127.0.0.1:{PORT}"
+INDEX = "mes17"
+PROBE_IMAGE = "postgres:17"
+LOADER = "/lib/ld-linux-aarch64.so.1"
+PAGE = 1048576.0  # bytes per MiB
+
+# Annex image of the third campaign (ADR-0159, decision 2), built from
+# `gdb.Dockerfile` and never pulled: it exists locally only.
+GDB_IMAGE = "crible-mes17-gdb:2026-11-22"
+GDB_BASE_DIGEST = "sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc"
+TRIM_TIMEOUT = 120  # seconds, bounded delay of one `gdb call`
+
+LOTS = [
+    "mes17-legifacile-sample-articles-v1",
+    "mes17-legifacile-sample-jorf-v1",
+    "mes17-legifacile-sample-decisions-v1",
+    "mes17-legifacile-sample-titres-v1",
+    "mes17-legifacile-sample-sarde-v1",
+    "mes17-legifacile-sample-dole-v1",
+]
+
+# ADR-0157, decision 4. V4 is the combination of the variants that had an
+# effect and is passed explicitly with --tunables.
+VARIANTS = {
+    "V0": None,
+    "V1": "glibc.malloc.arena_max=1",
+    "V2": "glibc.malloc.trim_threshold=0:glibc.malloc.top_pad=0",
+    "V3": "glibc.malloc.mmap_threshold=131072",
+}
+
+STATES = [
+    ("a-fresh", "fresh process, no index"),
+    ("b-index-open", "index created"),
+    ("c-after-attach", "six lots attached"),
+    ("d-after-queries", "300 queries on the full index"),
+    ("e-after-restart-index", "restart with the index present"),
+    ("f-after-delete", "index deleted"),
+    ("g-after-restart", "restart without index"),
+]
+STATE_KEYS = [key for key, _ in STATES]
+
+# Third campaign (ADR-0159, decision 4): (d) and (e) are not replayed, and the
+# three trims sit between the states they are read against.
+TRIM_STATES = [
+    ("a-fresh", "fresh process, no index"),
+    ("b-index-open", "index created"),
+    ("c-after-attach", "six lots attached"),
+    ("c1-after-trim", "after the first malloc_trim(0)"),
+    ("c2-after-trim2", "after the second call, idempotence"),
+    ("f-after-delete", "index deleted"),
+    ("f1-after-trim3", "after malloc_trim(0) on the deleted index"),
+]
+TRIM_STATE_KEYS = [key for key, _ in TRIM_STATES]
+ALL_STATE_KEYS = STATE_KEYS + [key for key in TRIM_STATE_KEYS if key not in STATE_KEYS]
+
+TRIM_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+    ("c->c1", "c-after-attach", "c1-after-trim", "first malloc_trim(0)"),
+    ("c1->c2", "c1-after-trim", "c2-after-trim2", "second malloc_trim(0)"),
+    ("c2->f", "c2-after-trim2", "f-after-delete", "DELETE"),
+    ("f->f1", "f-after-delete", "f1-after-trim3", "malloc_trim(0) after the DELETE"),
+]
+
+SECOND_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+    ("c->d", "c-after-attach", "d-after-queries", "300 queries, full index"),
+    ("d->e", "d-after-queries", "e-after-restart-index", "restart with index"),
+    ("e->f", "e-after-restart-index", "f-after-delete", "DELETE"),
+    ("f->g", "f-after-delete", "g-after-restart", "restart without index"),
+]
+
+# Control campaign of ADR-0160, decision 6: two images (the correction and its
+# parent), two processes each, and the three states only. The trim is inside
+# the server, so no `gdb` ring buffer is used and the run stops at (c).
+CONTROL_STATES = [
+    ("a-fresh", "fresh process, no index"),
+    ("b-index-open", "index created"),
+    ("c-after-attach", "six lots attached"),
+]
+CONTROL_STATE_KEYS = [key for key, _ in CONTROL_STATES]
+CONTROL_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+]
+
+# The `trim` line is a `debug` line of the module `crible_server::trim`
+# (ADR-0160, decision 4). This filter adds that target and changes nothing else:
+# every other line keeps the image default of `info` (ADR-0096). The same value
+# is applied to both images, including the reference one, where the target
+# simply emits nothing because the module does not exist.
+CONTROL_RUST_LOG = "info,crible_server::trim=debug"
+
+# 300 hybrid queries, `k = 10`, spread over the attach phase so that they are in
+# flight while the six `job_end` of the attach happen (ADR-0160, decision 6).
+LOAD_QUERIES = 300
+LOAD_K = 10
+
+CAMPAIGN_LABELS = {
+    "second": "MES-17 second campaign (ADR-0157)",
+    "trim": "MES-17 third campaign (ADR-0159)",
+    "control": "MES-17 control campaign (ADR-0160)",
+}
+
+STATUS_FIELDS = [
+    "VmRSS", "RssAnon", "RssFile", "RssShmem", "VmHWM", "VmSwap", "VmData",
+    "VmStk", "VmExe", "VmLib", "VmPTE",
+]
+SMAPS_FIELDS = [
+    "Rss", "Pss", "Pss_Anon", "Pss_File", "Shared_Clean", "Shared_Dirty",
+    "Private_Clean", "Private_Dirty", "Anonymous", "Swap", "SwapPss",
+    "Locked", "KernelPageSize", "MMUPageSize",
+]
+STAT_FIELDS = [
+    "anon", "file", "kernel", "kernel_stack", "pagetables", "sec_pagetables",
+    "sock", "vmalloc", "shmem", "zswap", "zswapped", "file_mapped",
+    "file_dirty", "file_writeback", "swapcached", "slab", "slab_reclaimable",
+    "slab_unreclaimable", "inactive_anon", "active_anon", "inactive_file",
+    "active_file", "unevictable",
+]
+MEMINFO_FIELDS = ["MemTotal", "MemAvailable", "SwapTotal", "SwapFree"]
+
+# glibc arena signature (ADR-0157, decision 3, as implemented here): a group of
+# consecutive anonymous mappings (no pathname) whose `Size` values sum to
+# exactly 65 536 kB is one arena; its `Rss` is the sum of the group. A group
+# whose sizes do not sum to 65 536 kB is not an arena.
+ARENA_SIZE_KB = 65536
+
+HEADER = re.compile(r"^[0-9a-f]+-[0-9a-f]+ ")
+GUARD_MEM_AVAILABLE_KB = 1048576  # 1 GiB
+GUARD_SWAP_DROP_KB = 262144  # 256 MiB
+
+
+# --------------------------------------------------------------------------
+# plumbing
+
+
+def sh(*args, timeout=180):
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+
+
+def fail(message):
+    raise SystemExit(message)
+
+
+def key() -> str:
+    line = KEY_FILE.read_text().splitlines()[0]
+    if ": " not in line:
+        fail(f"unreadable key file {KEY_FILE.relative_to(REPO)}")
+    return line.split(": ", 1)[1].strip()
+
+
+def api(method: str, path: str, body=None, timeout=180):
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(
+        BASE + path,
+        data=data,
+        method=method,
+        headers={"Authorization": f"Bearer {key()}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            return response.status, (json.loads(raw) if raw else None)
+    except urllib.error.HTTPError as error:
+        raw = error.read()
+        return error.code, (json.loads(raw) if raw else None)
+
+
+def run_dir(value: str) -> pathlib.Path:
+    path = (REPO / value).resolve()
+    if not str(path).startswith(str(RAW_ROOT.resolve())):
+        fail(f"run directory must live under {RAW_ROOT.relative_to(REPO)}")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def container_id(name: str = CONTAINER) -> str:
+    out = sh("docker", "inspect", "-f", "{{.Id}}", name).stdout.strip()
+    if not out:
+        fail(f"container {name} is not running")
+    return out
+
+
+def container_env() -> str | None:
+    out = sh(
+        "docker", "inspect", "-f",
+        "{{range .Config.Env}}{{println .}}{{end}}", CONTAINER,
+    ).stdout
+    for line in out.splitlines():
+        if line.startswith("GLIBC_TUNABLES="):
+            return line.split("=", 1)[1]
+    return None
+
+
+def container_env_var(name: str) -> str | None:
+    """The exact value of one variable in the container environment, or None.
+
+    It is read back from the container, never from the command that created it,
+    so `run.json` records what the process actually received (ADR-0157,
+    decision 4, for `GLIBC_TUNABLES`; ADR-0160, decision 6, for `RUST_LOG`).
+    """
+    out = sh(
+        "docker", "inspect", "-f",
+        "{{range .Config.Env}}{{println .}}{{end}}", CONTAINER,
+    ).stdout
+    for line in out.splitlines():
+        if line.startswith(f"{name}="):
+            return line.split("=", 1)[1]
+    return None
+
+
+def image_id() -> str:
+    return sh("docker", "inspect", "-f", "{{.Image}}", CONTAINER).stdout.strip()
+
+
+def wait_ready(timeout=300) -> float:
+    started = time.time()
+    deadline = started + timeout
+    while time.time() < deadline:
+        code = sh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                  BASE + "/ready").stdout.strip()
+        if code == "200":
+            return time.time() - started
+        time.sleep(2)
+    fail("server never ready")
+
+
+# --------------------------------------------------------------------------
+# trim (third campaign, ADR-0159)
+
+
+def require_rest() -> dict:
+    """Refuse to trim unless no job is queued and none is running.
+
+    `gdb call` freezes the process and takes the arena locks: it is only called
+    at rest, with no job in flight and no query on its way (ADR-0159, decision
+    6). The check is `GET /v1/jobs`, filtered by state.
+    """
+    counts = {}
+    for state in ("queued", "running"):
+        code, body = api("GET", f"/v1/jobs?state={state}", timeout=60)
+        if code != 200:
+            fail(f"cannot check jobs in state {state}: {code}")
+        counts[state] = len((body or {}).get("jobs") or [])
+    print(f"  at rest: queued={counts['queued']} running={counts['running']}",
+          flush=True)
+    if counts["queued"] or counts["running"]:
+        fail("not at rest: a job is queued or running, trim refused")
+    return counts
+
+
+def call_trim(target: str, label: str) -> dict:
+    """One `malloc_trim(0)` in `target`'s PID 1, from a throwaway annex.
+
+    The annex image is local and never pulled; the PID namespace of the annex
+    is the measured container's, and `SYS_PTRACE` is the only added capability.
+    The call is bounded by `TRIM_TIMEOUT`; a block or a failure kills the annex
+    and fails the run, and no value is ever substituted (ADR-0159, decisions 3
+    and 6).
+    """
+    annex = f"{target}-gdb"
+    sh("docker", "rm", "-f", annex, timeout=120)
+    # `set sysroot` and `file` are needed for the call to resolve at all: with
+    # the annex's own rootfs, gdb refuses `target:/usr/bin/...`
+    # ("Operation not permitted") and knows no `malloc_trim` symbol. Both make
+    # gdb read the symbols from the measured container's own rootfs through
+    # `/proc/1/root`, which needs no capability beyond `SYS_PTRACE` and no
+    # Docker option beyond `--pid` and `--cap-add`.
+    command = [
+        "docker", "run", "--rm", "--pull=never", "--name", annex,
+        "--pid", f"container:{target}", "--cap-add", "SYS_PTRACE",
+        "--entrypoint", "gdb", GDB_IMAGE,
+        "-p", "1", "-batch",
+        "-ex", "set sysroot /proc/1/root",
+        "-ex", "file /proc/1/root/proc/1/exe",
+        "-ex", "call (int) malloc_trim(0)",
+    ]
+    print(f"  trim {label}: " + " ".join(command), flush=True)
+    started = time.time()
+    try:
+        result = sh(*command, timeout=TRIM_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        sh("docker", "rm", "-f", annex, timeout=120)
+        fail(f"trim {label}: gdb still running after {TRIM_TIMEOUT} s; annex "
+             f"killed and removed. Restart the container: this run is failed "
+             f"and no value is substituted (ADR-0159, decision 6)")
+    elapsed = round(time.time() - started, 1)
+    output = result.stdout + result.stderr
+    found = re.search(r"\$\d+\s*=\s*(-?\d+)", result.stdout)
+    if result.returncode != 0 or not found:
+        fail(f"trim {label}: gdb failed ({result.returncode}) or returned no "
+             f"value: {output[-1200:]}")
+    value = int(found.group(1))
+    print(f"  trim {label}: malloc_trim(0) returned {value} in {elapsed} s",
+          flush=True)
+    return {
+        "label": label,
+        "target": target,
+        "command": command,
+        "annex_image": GDB_IMAGE,
+        "timeout_s": TRIM_TIMEOUT,
+        "returncode": result.returncode,
+        "value": value,
+        "seconds": elapsed,
+        "stdout": result.stdout[-2000:],
+        "stderr": result.stderr[-2000:],
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+
+
+# --------------------------------------------------------------------------
+# readings
+
+
+def probe_script(cgroup: str) -> str:
+    return (
+        'echo "@@status"; cat /proc/1/status; '
+        'echo "@@smaps_rollup"; cat /proc/1/smaps_rollup; '
+        'echo "@@smaps"; cat /proc/1/smaps; '
+        f'echo "@@current"; cat /sys/fs/cgroup/docker/{cgroup}/memory.current; '
+        f'echo "@@swap_current"; cat /sys/fs/cgroup/docker/{cgroup}/memory.swap.current; '
+        f'echo "@@stat"; cat /sys/fs/cgroup/docker/{cgroup}/memory.stat; '
+        'echo "@@meminfo"; cat /proc/meminfo; '
+        'echo "@@page"; getconf PAGESIZE; '
+        'echo "@@environ"; tr "\\0" "\\n" < /proc/1/environ'
+    )
+
+
+def sections_of(text: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    name = None
+    for line in text.splitlines():
+        if line.startswith("@@"):
+            name = line[2:].strip()
+            sections[name] = []
+        elif name:
+            sections[name].append(line)
+    return sections
+
+
+def read_once(cgroup: str, target: str = CONTAINER) -> dict:
+    script = probe_script(cgroup)
+    # Three attempts: the first smaps_rollup of a freshly attached pid
+    # namespace was once refused, and a missing reading must never become a
+    # silent zero (ADR-0151, decision 1).
+    last = ""
+    for attempt in range(3):
+        result = sh(
+            "docker", "run", "--rm", "--pull=never",
+            "--pid", f"container:{target}", "--cgroupns=host",
+            "--cap-add", "SYS_PTRACE", PROBE_IMAGE, "sh", "-c", script,
+            timeout=300,
+        )
+        last = result.stdout + result.stderr
+        if (result.returncode == 0 and "@@smaps" in result.stdout
+                and "@@meminfo" in result.stdout
+                and "Permission denied" not in result.stdout):
+            break
+        if attempt == 2:
+            # Never echo the whole probe output: `@@environ` holds the complete
+            # `/proc/1/environ`, which rule 11 and ADR-0032 keep out of logs.
+            diagnostic = last.split("@@environ", 1)[0]
+            fail(f"reading failed: {diagnostic[-2000:]}")
+        time.sleep(1)
+
+    sections = sections_of(last)
+    for needed in ("status", "smaps_rollup", "smaps", "current", "swap_current",
+                   "stat", "meminfo", "page", "environ"):
+        if not sections.get(needed):
+            fail(f"reading has no {needed} section")
+
+    reading: dict = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+
+    status = {}
+    for line in sections["status"]:
+        if ":" in line:
+            name, value = line.split(":", 1)
+            status[name.strip()] = value.strip()
+    missing = [name for name in STATUS_FIELDS if name not in status]
+    if missing:
+        fail(f"status is missing {', '.join(missing)}")
+    reading["status"] = {name: status[name] for name in STATUS_FIELDS}
+
+    rollup = {}
+    for line in sections["smaps_rollup"]:
+        if ":" in line:
+            name, value = line.split(":", 1)
+            rollup[name.strip()] = value.strip()
+    reading["smaps_rollup"] = {name: rollup.get(name) for name in SMAPS_FIELDS}
+    # `smaps_rollup` carries no KernelPageSize on this kernel (6.10-linuxkit),
+    # so the page size is read by `getconf` in the same probe (ADR-0135,
+    # decision 7). A missing value fails the reading rather than becoming a
+    # silent default.
+    page = sections["page"][0].strip() if sections.get("page") else ""
+    if not page.isdigit():
+        fail(f"page size unreadable: {page!r}")
+    reading["page_size_bytes"] = int(page)
+
+    reading["arenas"], reading["pathless"] = parse_smaps(sections["smaps"])
+    reading["memory_current_bytes"] = int(sections["current"][0].strip())
+    reading["memory_swap_current_bytes"] = int(sections["swap_current"][0].strip())
+
+    stat = {}
+    for line in sections["stat"]:
+        parts = line.split()
+        if len(parts) == 2:
+            stat[parts[0]] = int(parts[1])
+    missing = [name for name in STAT_FIELDS if name not in stat]
+    if missing:
+        fail(f"memory.stat is missing {', '.join(missing)}")
+    reading["memory_stat"] = {name: stat[name] for name in STAT_FIELDS}
+
+    meminfo = {}
+    for line in sections["meminfo"]:
+        if ":" in line:
+            name, value = line.split(":", 1)
+            number = value.split()
+            if number:
+                meminfo[name.strip()] = int(number[0])
+    missing = [name for name in MEMINFO_FIELDS if name not in meminfo]
+    if missing:
+        fail(f"meminfo is missing {', '.join(missing)}")
+    reading["meminfo"] = {name: meminfo[name] for name in MEMINFO_FIELDS}
+    # Proof that the variant is in the environment of PID 1 (ADR-0157,
+    # decision 4). Only this variable is kept, never the rest of the
+    # environment.
+    environment = {}
+    for line in sections["environ"]:
+        if "=" in line:
+            name, value = line.split("=", 1)
+            environment[name] = value
+    reading["glibc_tunables_env"] = environment.get("GLIBC_TUNABLES")
+    return reading
+
+
+def parse_smaps(lines: list[str]) -> tuple[dict, dict]:
+    """Count glibc arenas by the declared rule; keep aggregates only.
+
+    `/proc/1/smaps` is voluminous: it is read in full and analysed here, and
+    only the aggregate is written to disk (ADR-0157, `Conséquences`).
+    """
+    regions = []
+    current = None
+    for line in lines:
+        if HEADER.match(line):
+            parts = line.split()
+            path = " ".join(parts[5:]) if len(parts) > 5 else ""
+            current = {"perms": parts[1], "path": path, "size_kb": 0, "rss_kb": 0}
+            regions.append(current)
+        elif current is not None and ":" in line:
+            name, value = line.split(":", 1)
+            number = value.split()
+            if not number or not number[0].isdigit():
+                continue
+            if name == "Size":
+                current["size_kb"] = int(number[0])
+            elif name == "Rss":
+                current["rss_kb"] = int(number[0])
+
+    groups = []
+    pending = []
+    for region in regions:
+        if region["path"]:
+            if pending:
+                groups.append(pending)
+                pending = []
+            continue
+        pending.append(region)
+        if sum(item["size_kb"] for item in pending) >= ARENA_SIZE_KB:
+            groups.append(pending)
+            pending = []
+    if pending:
+        groups.append(pending)
+
+    arenas = {"count": 0, "rss_kb": 0, "groups": []}
+    other = {"count": 0, "size_kb": 0, "rss_kb": 0}
+    pathless = {
+        "regions": sum(1 for region in regions if not region["path"]),
+        "size_kb": sum(region["size_kb"] for region in regions if not region["path"]),
+        "rss_kb": sum(region["rss_kb"] for region in regions if not region["path"]),
+    }
+    for group in groups:
+        size = sum(item["size_kb"] for item in group)
+        rss = sum(item["rss_kb"] for item in group)
+        if size == ARENA_SIZE_KB:
+            arenas["count"] += 1
+            arenas["rss_kb"] += rss
+            arenas["groups"].append(
+                {"sizes_kb": [item["size_kb"] for item in group],
+                 "perms": [item["perms"] for item in group],
+                 "rss_kb": rss}
+            )
+        else:
+            other["count"] += len(group)
+            other["size_kb"] += size
+            other["rss_kb"] += rss
+    return arenas, {"other_groups": other, **pathless}
+
+
+# --------------------------------------------------------------------------
+# journal
+
+
+def journal(path: pathlib.Path) -> None:
+    result = sh("docker", "logs", CONTAINER, timeout=300)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(result.stdout + result.stderr)
+
+
+def memory_lines(text: str) -> list[dict]:
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        fields = entry.get("fields") or {}
+        if fields.get("message") != "memory":
+            continue
+        lines.append({
+            "ts": entry.get("timestamp"),
+            "step": fields.get("step"),
+            "kind": fields.get("kind"),
+            "index": fields.get("index"),
+            "job_id": fields.get("job_id"),
+            "rss_anon_bytes": fields.get("rss_anon_bytes"),
+            "rss_file_bytes": fields.get("rss_file_bytes"),
+            "cgroup_current_bytes": fields.get("cgroup_current_bytes"),
+            "cgroup_anon_bytes": fields.get("cgroup_anon_bytes"),
+            "cgroup_file_bytes": fields.get("cgroup_file_bytes"),
+        })
+    return lines
+
+
+# --------------------------------------------------------------------------
+# commands
+
+
+def cmd_up(args) -> None:
+    existing = sh("docker", "ps", "-a", "-q", "--filter", f"name=^{CONTAINER}$").stdout.strip()
+    if existing:
+        sh("docker", "rm", "-f", CONTAINER, timeout=180)
+    tunables = args.tunables
+    if tunables is None and args.variant is not None:
+        if args.variant in VARIANTS:
+            tunables = VARIANTS[args.variant]
+        else:
+            fail(f"variant {args.variant} needs an explicit --tunables")
+    if not TOML.exists():
+        fail(f"missing {TOML.relative_to(REPO)}")
+    command = [
+        "docker", "run", "-d", "--name", CONTAINER, "--pull=never",
+        "-p", f"{PORT}:8080", "--stop-timeout", "65",
+        "-v", f"{VOLUME}:/data",
+        "-v", f"{REPO / 'data' / 'models'}:/models:ro",
+        "-v", f"{EXCHANGE}:/exchange",
+        "-v", f"{TOML}:/etc/crible/crible.toml:ro",
+    ]
+    if tunables:
+        command += ["-e", f"GLIBC_TUNABLES={tunables}"]
+    if args.rust_log is not None:
+        rust_log = args.rust_log
+    elif args.campaign == "control":
+        rust_log = CONTROL_RUST_LOG
+    else:
+        rust_log = None
+    if rust_log is not None:
+        command += ["-e", f"RUST_LOG={rust_log}"]
+    command.append(args.image)
+    print(" ".join(command), flush=True)
+    result = sh(*command, timeout=300)
+    if result.returncode != 0:
+        fail(f"docker run failed: {result.stdout}{result.stderr}")
+    elapsed = wait_ready()
+    print(f"ready after {elapsed:.1f} s", flush=True)
+
+
+def cmd_down(_args) -> None:
+    sh("docker", "stop", "-t", "65", CONTAINER, timeout=180)
+    sh("docker", "rm", "-f", CONTAINER, timeout=180)
+    print("container removed", flush=True)
+
+
+def cmd_init(args) -> None:
+    out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "second")
+    control = campaign == "control"
+    role = getattr(args, "image_role", None)
+    if control and role is None:
+        fail("--campaign control needs --image-role reference|correction: "
+             "the presence of the `trim` module is a property of the image, "
+             "not of the campaign")
+    cgroup = container_id()
+    reading = read_once(cgroup)
+    info = sh("docker", "info", "--format", "{{.MemTotal}} {{.NCPU}}").stdout.split()
+    disk = sh("df", "-h", str(REPO)).stdout.splitlines()
+    commit = sh("git", "-C", str(REPO), "rev-parse", "HEAD").stdout.strip()
+    branch = sh("git", "-C", str(REPO), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    page = reading["page_size_bytes"]
+    third = campaign == "trim"
+    image_commit = None
+    if control:
+        # The image commit is the one Docker recorded, not the tree commit:
+        # during the control campaign the two differ, and only this one says
+        # what the binary was built from. `docker/Dockerfile` sets no
+        # `org.opencontainers.image.revision` label, so the field stays null
+        # and the image digest in `image_id` identifies the build.
+        label = sh("docker", "image", "inspect", "-f",
+                   '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                   args.image, timeout=120).stdout.strip()
+        image_commit = None if label in ("", "<no value>") else label
+    document = {
+        "campaign": CAMPAIGN_LABELS[campaign],
+        "variant": args.variant or args.tunables or "custom",
+        "glibc_tunables": container_env(),
+        "rust_log": container_env_var("RUST_LOG"),
+        "image": args.image,
+        "image_id": image_id(),
+        "image_role": role,
+        "image_commit": image_commit,
+        "annex_image": GDB_IMAGE if third else None,
+        "annex_image_id": sh("docker", "image", "inspect", "-f", "{{.Id}}",
+                             GDB_IMAGE, timeout=120).stdout.strip() if third else None,
+        "annex_base_digest": GDB_BASE_DIGEST if third else None,
+        "trim_timeout_s": TRIM_TIMEOUT if third else None,
+        "trim_in_server": (role == "correction") if control else False,
+        "load_queries": LOAD_QUERIES if control else None,
+        "load_k": LOAD_K if control else None,
+        "container_id": cgroup,
+        "container_created": sh(
+            "docker", "inspect", "-f", "{{.Created}}", CONTAINER).stdout.strip(),
+        "vm_mem_total_bytes": int(info[0]) if info else None,
+        "vm_ncpu": int(info[1]) if len(info) > 1 else None,
+        "page_size_bytes": page,
+        "kernel": sh("docker", "run", "--rm", "--pull=never", PROBE_IMAGE,
+                     "uname", "-r", timeout=120).stdout.strip(),
+        "harness_commit": commit,
+        "harness_branch": branch,
+        "df_start": disk,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "guard": {"mem_available_kb": reading["meminfo"]["MemAvailable"],
+                  "swap_free_kb": reading["meminfo"]["SwapFree"]},
+        "queries_sha256_source": QUERIES.relative_to(REPO).as_posix(),
+        "queries_count": sum(1 for line in QUERIES.read_text().splitlines() if line.strip()),
+        "exchange": EXCHANGE.relative_to(REPO).as_posix(),
+        "config": TOML.relative_to(REPO).as_posix(),
+    }
+    (out / "run.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(json.dumps(document, indent=2), flush=True)
+
+
+def guard(out: pathlib.Path, reading: dict) -> None:
+    run = json.loads((out / "run.json").read_text())
+    baseline = run["guard"]
+    meminfo = reading["meminfo"]
+    available = meminfo.get("MemAvailable")
+    free = meminfo.get("SwapFree")
+    print(f"  guard: MemAvailable={available} kB SwapFree={free} kB "
+          f"(baseline {baseline['mem_available_kb']} / {baseline['swap_free_kb']})",
+          flush=True)
+    if available is None or free is None:
+        fail("MEMORY GUARD: meminfo lacks MemAvailable or SwapFree")
+    if baseline["mem_available_kb"] is None or baseline["swap_free_kb"] is None:
+        fail("MEMORY GUARD: baseline lacks MemAvailable or SwapFree")
+    if available < GUARD_MEM_AVAILABLE_KB:
+        fail(f"MEMORY GUARD: MemAvailable {available} kB below 1 GiB")
+    if baseline["swap_free_kb"] - free > GUARD_SWAP_DROP_KB:
+        fail(f"MEMORY GUARD: SwapFree dropped by "
+             f"{baseline['swap_free_kb'] - free} kB, above 256 MiB")
+
+
+def cmd_state(args) -> None:
+    out = run_dir(args.run)
+    if args.name not in ALL_STATE_KEYS:
+        fail(f"unknown state {args.name}")
+    cgroup = container_id()
+    readings = []
+    for number in range(args.reps):
+        reading = read_once(cgroup)
+        readings.append(reading)
+        status = reading["status"]
+        arenas = reading["arenas"]
+        print(
+            f"  {args.name} {number + 1}/{args.reps}: "
+            f"current={reading['memory_current_bytes']} "
+            f"anon={reading['memory_stat'].get('anon')} "
+            f"file={reading['memory_stat'].get('file')} "
+            f"rss_anon={status.get('RssAnon')} swap={status.get('VmSwap')} "
+            f"arenas={arenas['count']}/{arenas['rss_kb']} kB "
+            f"swap_current={reading['memory_swap_current_bytes']}",
+            flush=True,
+        )
+        guard(out, reading)
+        if number + 1 < args.reps:
+            time.sleep(args.gap)
+    journal(out / "logs" / f"{args.name}.jsonl")
+    (out / "states").mkdir(parents=True, exist_ok=True)
+    (out / "states" / f"{args.name}.json").write_text(
+        json.dumps(readings, indent=2) + "\n")
+    print(f"  state {args.name} written", flush=True)
+
+
+def cmd_trim(args) -> None:
+    out = run_dir(args.run)
+    at_rest = require_rest()
+    record = call_trim(CONTAINER, args.label)
+    # Proof of the at-rest check: `require_rest` fails before the call, so a
+    # recorded non-zero counter can only come from an older format.
+    record["at_rest"] = at_rest
+    history = out / "trims.json"
+    previous = json.loads(history.read_text()) if history.exists() else []
+    previous.append(record)
+    history.write_text(json.dumps(previous, indent=2) + "\n")
+    print(f"  trim {args.label} recorded in {(history).relative_to(REPO)}", flush=True)
+
+
+def cmd_trim_selftest(args) -> None:
+    """Auto-test of the annex on a disposable process, without Crible.
+
+    A container of the annex image itself allocates 40 000 chunks of 4 KiB in
+    one `awk` array (about 156 MiB of heap), frees them, then sleeps. The probe
+    reads the anonymous memory before and after one `malloc_trim(0)`: the test
+    shows that the annex reaches the target process, that `gdb` returns a
+    value, that the call is bounded in time, and that the anonymous reading
+    follows (ADR-0159, decision 3).
+    """
+    out = run_dir(args.out)
+    target = f"{CONTAINER}-selftest"
+    sh("docker", "rm", "-f", target, timeout=120)
+    program = (
+        'BEGIN { for (i = 0; i < 40000; i++) a[i] = sprintf("%4096s", "x"); '
+        'print "allocated"; fflush(); system("sleep 3"); '
+        'for (i = 0; i < 40000; i++) delete a[i]; '
+        'print "freed"; fflush(); system("sleep 600") }'
+    )
+    command = ["docker", "run", "-d", "--name", target, "--pull=never",
+               "--entrypoint", "awk", GDB_IMAGE, program]
+    print("  selftest: " + " ".join(command), flush=True)
+    result = sh(*command, timeout=180)
+    if result.returncode != 0:
+        fail(f"selftest container refused: {result.stdout}{result.stderr}")
+    started = time.time()
+    deadline = started + 180
+    freed = False
+    while time.time() < deadline:
+        logs = sh("docker", "logs", target, timeout=120)
+        print(f"  selftest: waiting for allocation and release, "
+              f"{time.time() - started:.0f} s", flush=True)
+        if "freed" in logs.stdout:
+            freed = True
+            break
+        if "allocated" not in logs.stdout and time.time() - started > 60:
+            fail(f"selftest: the target never allocated: "
+                 f"{logs.stdout[-500:]}{logs.stderr[-500:]}")
+        time.sleep(10)
+    if not freed:
+        sh("docker", "rm", "-f", target, timeout=120)
+        fail("selftest: the target never released its memory within 180 s")
+    cgroup = container_id(target)
+    before = read_once(cgroup, target)
+    record = call_trim(target, "selftest")
+    after = read_once(cgroup, target)
+    before_anon = before["memory_stat"]["anon"]
+    after_anon = after["memory_stat"]["anon"]
+    document = {
+        "target": target,
+        "annex_image": GDB_IMAGE,
+        "annex_base_digest": GDB_BASE_DIGEST,
+        "trim": record,
+        "anon_before_bytes": before_anon,
+        "anon_after_bytes": after_anon,
+        "anon_delta_bytes": after_anon - before_anon,
+        "anon_before_mib": round(before_anon / PAGE, 1),
+        "anon_after_mib": round(after_anon / PAGE, 1),
+        "seconds": round(time.time() - started, 1),
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "selftest.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(f"  selftest: value={record['value']} "
+          f"anon {document['anon_before_mib']} -> {document['anon_after_mib']} MiB "
+          f"(delta {document['anon_delta_bytes']} bytes)", flush=True)
+    sh("docker", "rm", "-f", target, timeout=120)
+    if document["anon_delta_bytes"] > 0:
+        fail("selftest: the anonymous memory did not follow the trim")
+    print("  selftest passed: process reached, value returned, call bounded, "
+          "anonymous memory followed", flush=True)
+
+
+def poll(job_id: str, label: str, timeout=1800) -> dict:
+    deadline = time.time() + timeout
+    last = None
+    shown = time.time()
+    while time.time() < deadline:
+        code, body = api("GET", f"/v1/jobs/{job_id}")
+        state = (body or {}).get("state")
+        if state != last or time.time() - shown > 30:
+            print(f"  {label}: state={state} progress={(body or {}).get('progress')}",
+                  flush=True)
+            last = state
+            shown = time.time()
+        if state in {"succeeded", "failed"}:
+            if state == "failed":
+                print(f"  {label}: error {json.dumps((body or {}).get('error'))}", flush=True)
+            return body
+        time.sleep(3)
+    fail(f"job {job_id} of {label} never ended")
+
+
+def cmd_create(args) -> None:
+    out = run_dir(args.run)
+    keywords = [
+        "fonds", "etat", "code", "num", "texte_cid", "section",
+        "juridiction", "numero", "nature", "theme", "type",
+    ]
+    config = {
+        "name": INDEX,
+        "model": "mdenseon",
+        "reference_precision": "fp16",
+        "schema": {
+            "document_fields": {name: {"type": "keyword"} for name in keywords}
+            | {"annee": {"type": "integer"}},
+            "passage_fields": {"partie": {"type": "keyword"}},
+        },
+        "cluster_by": [],
+        "lexical": {"enabled": True, "language": "fr", "positions": False},
+        "search": {
+            "scan": "binary",
+            "rescore_candidates": 5000,
+            "exact_threshold": 5000,
+            "candidates_per_branch": 100,
+            "fusion": {"method": "rrf"},
+        },
+        "ingest": {"acceptance_sample": 200, "acceptance_min_cosine": 0.999},
+        "compaction": {"dead_ratio": 0.1},
+    }
+    started = time.time()
+    code, body = api("POST", "/v1/indexes", config, timeout=600)
+    print(f"  POST /v1/indexes -> {code} {json.dumps(body)[:300]}", flush=True)
+    if code != 201:
+        fail("index creation failed")
+    (out / "create.json").write_text(json.dumps(
+        {"status": code, "body": body, "wall_s": round(time.time() - started, 1)},
+        indent=2) + "\n")
+
+
+def run_load(out: pathlib.Path, window: float, threads: int) -> list[dict]:
+    """300 hybrid queries, spread over `window` seconds, on the throwaway index.
+
+    ADR-0160, decision 6, asks for "300 requêtes hybrides `k = 10` en vol pendant
+    les fins de job". The query load is issued by this harness, in Python
+    threads, never as a shell job: query number `i` is scheduled at
+    `t0 + i * window / 300`, and the window is meant to span the whole attach
+    phase. A window shorter than the attach leaves the last `job_end`, and so
+    the last trim, outside the load: `trim-lines` measures that overlap and
+    publishes it, it never assumes it. The load is also sparse by
+    construction, so a trim can fall between two queries. A query crossing a
+    trim is therefore not guaranteed, and the duration of a trim only bounds
+    the exposure.
+
+    Each request records its own start, in epoch seconds and in RFC 3339, and
+    its end, in epoch seconds only, so `trim-lines` can count the queries that
+    were in flight at each `trim` line of the journal.
+
+    The load is on the same index, `mes17`: it is the index the campaign
+    attaches to, and the only one the instance knows.
+    """
+    entries = [json.loads(line) for line in QUERIES.read_text().splitlines()
+               if line.strip()]
+    if len(entries) < LOAD_QUERIES:
+        fail(f"{QUERIES.name} holds {len(entries)} queries, "
+             f"{LOAD_QUERIES} needed")
+    entries = entries[:LOAD_QUERIES]
+    interval = window / len(entries)
+    records: list[dict] = []
+    lock = threading.Lock()
+    started = time.time()
+    rows_file = out / "queries" / "load-rows.jsonl"
+    rows_file.parent.mkdir(parents=True, exist_ok=True)
+    rows_file.write_text("")
+
+    def one(entry: dict) -> None:
+        at = time.time()
+        code, body = api(
+            "POST", f"/v1/indexes/{INDEX}/search",
+            {"query": entry["question"], "mode": "hybrid", "k": LOAD_K},
+            timeout=180,
+        )
+        ended = time.time()
+        error = (body or {}).get("error") if isinstance(body, dict) else None
+        row = {
+            "id": entry["id"],
+            "status": code,
+            "error": ({"code": error.get("code"), "message": error.get("message")}
+                      if isinstance(error, dict) else error),
+            "took_ms": (body or {}).get("took_ms"),
+            "wall_ms": round((ended - at) * 1000, 1),
+            "pool_size": (body or {}).get("pool_size"),
+            "started_epoch": round(at, 6),
+            "ended_epoch": round(ended, 6),
+            "started_at": datetime.datetime.fromtimestamp(
+                at, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+        }
+        with lock:
+            records.append(row)
+            # Appended and flushed as it arrives: a refusal is data, and a run
+            # that ends badly must not lose the 299 rows already measured.
+            with rows_file.open("a") as handle:
+                handle.write(json.dumps(row) + "\n")
+            if len(records) % 25 == 0:
+                print(f"  load {len(records)}/{len(entries)} queries, "
+                      f"{time.time() - started:.0f} s elapsed", flush=True)
+
+    print(f"  load: {len(entries)} queries, mode hybrid, k = {LOAD_K}, "
+          f"{threads} threads, one every {interval:.2f} s over {window:.0f} s",
+          flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as pool:
+        futures = []
+        for number, entry in enumerate(entries):
+            wait = started + number * interval - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            futures.append(pool.submit(one, entry))
+            if number % 10 == 0:
+                print(f"  load: scheduled {number + 1}/{len(entries)} at "
+                      f"{time.time() - started:.0f} s", flush=True)
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
+    records.sort(key=lambda row: row["started_epoch"])
+    return records
+
+
+def percentile(ordered: list[float], value: float) -> float:
+    return ordered[max(0, math.ceil(value / 100 * len(ordered)) - 1)]
+
+
+def write_load(out: pathlib.Path, records: list[dict], window: float,
+               threads: int) -> dict:
+    """Write the load report: every row, the refusals, and the percentiles.
+
+    A refused request is kept and counted, never dropped: it carries no
+    `pool_size`, and its 2 000 ms wall is the deadline of `crible.toml`, not a
+    search. The percentiles are therefore computed over the **successful**
+    queries only, and the count of refusals is reported beside them, on the
+    same footing for both images (INV-02, ADR-0160, decision 6).
+    """
+    ok = [row for row in records if row["status"] == 200]
+    refused = [row for row in records if row["status"] != 200]
+    if not ok:
+        fail("every load query was refused: no latency to report")
+    walls = sorted(row["wall_ms"] for row in ok)
+    pools = [row["pool_size"] for row in ok if row["pool_size"] is not None]
+    document = {
+        "index": INDEX,
+        "mode": "hybrid",
+        "k": LOAD_K,
+        "count": len(records),
+        "successful": len(ok),
+        "failures": len(refused),
+        "refused": [{"id": row["id"], "status": row["status"],
+                     "error": row["error"], "wall_ms": row["wall_ms"],
+                     "started_at": row["started_at"]} for row in refused],
+        "percentiles_over": "successful queries only",
+        "threads": threads,
+        "window_s": round(window, 1),
+        "wall_ms": {
+            "p50": percentile(walls, 50),
+            "p95": percentile(walls, 95),
+            "p99": percentile(walls, 99),
+            "max": walls[-1],
+        },
+        "pool_size": {"min": min(pools), "max": max(pools),
+                      "over": "successful queries only"},
+        "records": records,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "queries").mkdir(parents=True, exist_ok=True)
+    (out / "queries" / "load.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(f"  load: {len(records)} queries, {len(refused)} refused, "
+          f"p50 {document['wall_ms']['p50']:.1f} ms "
+          f"p95 {document['wall_ms']['p95']:.1f} ms "
+          f"p99 {document['wall_ms']['p99']:.1f} ms "
+          f"max {document['wall_ms']['max']:.1f} ms "
+          f"(percentiles over the {len(ok)} successful queries)", flush=True)
+    for row in refused:
+        print(f"  load refused: {row['id']} -> {row['status']} "
+              f"{json.dumps(row['error'])[:120]} at {row['started_at']}",
+              flush=True)
+    return document
+
+
+def cmd_load(args) -> None:
+    out = run_dir(args.run)
+    window = args.window if args.window else float(LOAD_QUERIES)
+    records = run_load(out, window, args.threads)
+    write_load(out, records, window, args.threads)
+
+
+def cmd_attach(args) -> None:
+    out = run_dir(args.run)
+    campaign = out / "attach" / "campaign.json"
+    report = []
+    if campaign.exists() and not args.reset:
+        report = json.loads(campaign.read_text())
+    lots = args.lot or LOTS
+    unknown = [lot for lot in lots if lot not in LOTS]
+    if unknown:
+        fail(f"unknown lot {unknown[0]}")
+    # The query load starts with the first attach and runs in its own Python
+    # threads: it is never a shell job and never waits for the attach to end
+    # (ADR-0160, decision 6). Its records are written when every query is done.
+    load_thread = None
+    load_state: dict = {}
+    if args.load_window:
+        def load() -> None:
+            load_state["records"] = run_load(out, args.load_window,
+                                              args.load_threads)
+        load_thread = threading.Thread(target=load, name="load")
+        load_thread.start()
+    campaign_started = time.time()
+    for lot in lots:
+        print(f"  attach {LOTS.index(lot) + 1}/{len(LOTS)} {lot}", flush=True)
+        started = time.time()
+        code, body = api("POST", f"/v1/indexes/{INDEX}/batches",
+                         {"directory": lot}, timeout=180)
+        print(f"  POST batches -> {code} {json.dumps(body)[:200]}", flush=True)
+        if code != 202:
+            fail(f"attach of {lot} refused")
+        job = poll(body["id"], lot)
+        report = [row for row in report if row["lot"] != lot]
+        report.append({"lot": lot, "job": job, "wall_s": round(time.time() - started, 1),
+                       "campaign_s": round(time.time() - campaign_started, 1)})
+        report.sort(key=lambda row: LOTS.index(row["lot"]))
+        print(f"  {lot}: {job.get('state')} in {time.time() - started:.1f} s "
+              f"{json.dumps(job.get('result'))[:300]}", flush=True)
+        (out / "attach").mkdir(parents=True, exist_ok=True)
+        (out / "attach" / "campaign.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"  attach campaign done in {time.time() - campaign_started:.1f} s", flush=True)
+    if load_thread is not None:
+        print("  attach done, waiting for the query load to finish", flush=True)
+        load_thread.join()
+        write_load(out, load_state["records"], args.load_window,
+                   args.load_threads)
+
+
+def cmd_queries(args) -> None:
+    out = run_dir(args.run)
+    entries = [json.loads(line) for line in QUERIES.read_text().splitlines() if line.strip()]
+    report = []
+    durations = []
+    started = time.time()
+    for number, entry in enumerate(entries, 1):
+        at = time.time()
+        code, body = api("POST", f"/v1/indexes/{INDEX}/search",
+                         {"query": entry["question"], "mode": "hybrid", "k": 10},
+                         timeout=120)
+        wall = (time.time() - at) * 1000
+        durations.append(wall)
+        report.append({"id": entry["id"], "status": code,
+                       "took_ms": (body or {}).get("took_ms"),
+                       "wall_ms": round(wall, 1),
+                       "pool_size": (body or {}).get("pool_size")})
+        if code != 200:
+            print(f"  query {entry['id']} -> {code} {json.dumps(body)[:200]}", flush=True)
+        if number % 50 == 0:
+            print(f"  queries {number}/{len(entries)}", flush=True)
+    (out / "queries").mkdir(parents=True, exist_ok=True)
+    (out / "queries" / "pass.json").write_text(json.dumps(report, indent=2) + "\n")
+    failures = [row for row in report if row["status"] != 200]
+    missing_pools = [row["id"] for row in report if row["pool_size"] is None]
+    if missing_pools:
+        fail(f"pool_size missing for {len(missing_pools)} queries: {missing_pools[:5]}")
+    ordered = sorted(durations)
+    def percentile(value: float) -> float:
+        return ordered[max(0, math.ceil(value / 100 * len(ordered)) - 1)]
+    print(f"  {len(entries)} queries, {len(failures)} failures, "
+          f"p50 {percentile(50):.1f} ms p95 {percentile(95):.1f} ms "
+          f"p99 {percentile(99):.1f} ms, total {time.time() - started:.1f} s", flush=True)
+    print(f"  pool_size min={min(row['pool_size'] for row in report)} "
+          f"max={max(row['pool_size'] for row in report)}", flush=True)
+
+
+def cmd_delete(args) -> None:
+    out = run_dir(args.run)
+    started = time.time()
+    code, body = api("DELETE", f"/v1/indexes/{INDEX}?confirm={INDEX}", timeout=180)
+    print(f"  DELETE -> {code} {json.dumps(body)[:200]}", flush=True)
+    if code != 202:
+        fail("delete refused")
+    job = poll(body["id"], "delete_index")
+    (out / "delete.json").write_text(json.dumps(
+        {"job": job, "wall_s": round(time.time() - started, 1)}, indent=2) + "\n")
+    print(f"  delete job: {job.get('state')} in {time.time() - started:.1f} s", flush=True)
+
+
+def cmd_restart(args) -> None:
+    out = run_dir(args.run)
+    started = time.time()
+    result = sh("docker", "restart", "-t", "65", CONTAINER, timeout=300)
+    print(f"  docker restart -> {result.returncode} {result.stdout.strip()}", flush=True)
+    elapsed = wait_ready()
+    record = {"restart_s": round(time.time() - started, 1), "ready_s": round(elapsed, 1)}
+    history = out / "restarts.json"
+    previous = json.loads(history.read_text()) if history.exists() else []
+    previous.append(record)
+    history.write_text(json.dumps(previous, indent=2) + "\n")
+    print(f"  ready after restart in {elapsed:.1f} s", flush=True)
+
+
+def cmd_summary(args) -> None:
+    out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "second")
+    third = campaign == "trim"
+    control = campaign == "control"
+    if control:
+        states, keys, pairs = CONTROL_STATES, CONTROL_STATE_KEYS, CONTROL_TRANSITIONS
+    elif third:
+        states, keys, pairs = TRIM_STATES, TRIM_STATE_KEYS, TRIM_TRANSITIONS
+    else:
+        states, keys, pairs = STATES, STATE_KEYS, SECOND_TRANSITIONS
+    readings = {}
+    for key_name in keys:
+        path = out / "states" / f"{key_name}.json"
+        if not path.exists():
+            fail(f"missing state {key_name}")
+        readings[key_name] = json.loads(path.read_text())
+
+    def values(reading: dict) -> dict:
+        status = reading["status"]
+        stat = reading["memory_stat"]
+        rollup = reading["smaps_rollup"]
+        return {
+            "current": reading["memory_current_bytes"] / PAGE,
+            "anon": stat["anon"] / PAGE,
+            "file": stat["file"] / PAGE,
+            "unvented": (reading["memory_current_bytes"]
+                         - stat["anon"] - stat["file"]) / PAGE,
+            "rss_anon": int(status["RssAnon"].split()[0]) / 1024,
+            "rss_file": int(status["RssFile"].split()[0]) / 1024,
+            "rss": int(status["VmRSS"].split()[0]) / 1024,
+            "rss_shmem": int(status["RssShmem"].split()[0]) / 1024,
+            "hwm": int(status["VmHWM"].split()[0]) / 1024,
+            "vmswap": int(status["VmSwap"].split()[0]) / 1024,
+            "swap_current": reading["memory_swap_current_bytes"] / PAGE,
+            "swapcached": stat["swapcached"] / PAGE,
+            "zswapped": stat["zswapped"] / PAGE,
+            "arena_count": reading["arenas"]["count"],
+            "arena_rss": reading["arenas"]["rss_kb"] / 1024,
+            "pathless_rss": reading["pathless"]["rss_kb"] / 1024,
+            "slab": stat["slab"] / PAGE,
+            "pagetables": stat["pagetables"] / PAGE,
+            "kernel_stack": stat["kernel_stack"] / PAGE,
+            "shmem": stat["shmem"] / PAGE,
+            "file_mapped": stat["file_mapped"] / PAGE,
+            "smaps_rss": int(rollup["Rss"].split()[0]) / 1024,
+            "smaps_anon": int(rollup["Anonymous"].split()[0]) / 1024,
+            "mem_available": reading["meminfo"]["MemAvailable"] / 1024,
+            "swap_free": reading["meminfo"]["SwapFree"] / 1024,
+        }
+
+    table = []
+    for key_name, label in states:
+        rows = [values(reading) for reading in readings[key_name]]
+        medians = {}
+        spreads = {}
+        for name in rows[0]:
+            column = [row[name] for row in rows]
+            medians[name] = round(statistics.median(column), 1)
+            spreads[name] = round(max(column) - min(column), 1)
+        table.append({
+            "state": key_name,
+            "label": label,
+            "at": [reading["at"] for reading in readings[key_name]],
+            "median": medians,
+            "spread": spreads,
+            "arenas": {
+                "count": medians["arena_count"],
+                "rss_mib": medians["arena_rss"],
+                "groups": [reading["arenas"]["groups"] for reading in readings[key_name]],
+            },
+        })
+
+    transitions = []
+    by_state = {row["state"]: row for row in table}
+    for name, before, after, what in pairs:
+        delta = {}
+        for field in ("current", "anon", "file", "rss_anon", "rss_file", "vmswap",
+                      "swap_current", "arena_count", "arena_rss", "pathless_rss"):
+            if field == "arena_count":
+                delta[field] = by_state[after]["median"][field] - by_state[before]["median"][field]
+            else:
+                delta[field] = round(
+                    by_state[after]["median"][field] - by_state[before]["median"][field], 1)
+        transitions.append({"transition": name, "what": what,
+                            "from": before, "to": after, "delta": delta})
+
+    queries = None
+    load_file = out / "queries" / "load.json"
+    pass_file = out / "queries" / "pass.json"
+    if load_file.exists():
+        load = json.loads(load_file.read_text())
+        queries = {
+            "count": load["count"],
+            "failures": load["failures"],
+            "successful": load.get("successful"),
+            "refused": load.get("refused"),
+            "percentiles_over": load.get("percentiles_over"),
+            "wall_ms": load["wall_ms"],
+            "pool_size": load["pool_size"],
+            "mode": load["mode"],
+            "k": load["k"],
+            "threads": load["threads"],
+            "window_s": load["window_s"],
+        }
+    elif pass_file.exists():
+        rows = json.loads(pass_file.read_text())
+        walls = sorted(row["wall_ms"] for row in rows)
+        pools = [row["pool_size"] for row in rows]
+        if any(value is None for value in pools):
+            fail("queries/pass.json has rows without pool_size")
+        queries = {
+            "count": len(rows),
+            "failures": sum(1 for row in rows if row["status"] != 200),
+            "wall_ms": {"p50": percentile(walls, 50), "p95": percentile(walls, 95),
+                        "p99": percentile(walls, 99), "max": walls[-1]},
+            "pool_size": {"min": min(pools), "max": max(pools)},
+        }
+
+    summary = {
+        "campaign": CAMPAIGN_LABELS[campaign],
+        "run": json.loads((out / "run.json").read_text()),
+        "states": table,
+        "transitions": transitions,
+        "queries": queries,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    if third or control:
+        # Only the campaigns after the second record the closing `df`: the output
+        # of the second campaign stays the one written on 2026-11-22.
+        summary["df_end"] = sh("df", "-h", str(REPO)).stdout.splitlines()
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+    print(f"{'state':22} {'current':>9} {'anon':>9} {'file':>9} {'rss_anon':>9} "
+          f"{'vmswap':>7} {'arenas':>7} {'arena_rss':>9} {'disp':>5}", flush=True)
+    for row in table:
+        med = row["median"]
+        spread = max(row["spread"][name] for name in
+                     ("current", "anon", "file", "rss_anon", "arena_rss"))
+        print(f"{row['state']:22} {med['current']:9.1f} {med['anon']:9.1f} "
+              f"{med['file']:9.1f} {med['rss_anon']:9.1f} {med['vmswap']:7.1f} "
+              f"{int(med['arena_count']):7d} {med['arena_rss']:9.1f} {spread:5.1f}",
+              flush=True)
+    for row in transitions:
+        delta = row["delta"]
+        print(f"{row['transition']:22} {delta['anon']:+9.1f} anon "
+              f"{delta['current']:+9.1f} current {delta['vmswap']:+7.1f} vmswap "
+              f"arenas {delta['arena_count']:+d}/{delta['arena_rss']:+.1f} MiB", flush=True)
+    print(f"summary written to {(out / 'summary.json').relative_to(REPO)}", flush=True)
+
+
+def cmd_journal_check(args) -> None:
+    out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "second")
+    third = campaign == "trim"
+    control = campaign == "control"
+    if control:
+        keys = CONTROL_STATE_KEYS
+    elif third:
+        keys = TRIM_STATE_KEYS
+    else:
+        keys = STATE_KEYS
+    cumulative = {}
+    final = []
+    for key_name in keys:
+        path = out / "logs" / f"{key_name}.jsonl"
+        if not path.exists():
+            fail(f"missing journal {key_name}")
+        lines = memory_lines(path.read_text())
+        counts = {}
+        for line in lines:
+            counts[line["step"]] = counts.get(line["step"], 0) + 1
+        cumulative[key_name] = counts
+        final = lines
+
+    steps = {line["step"] for line in final}
+    if control:
+        # No `DELETE` is replayed in the control campaign: the two delete steps
+        # of ADR-0151 have no job to come from, and the four-step check of the
+        # second and third campaigns does not apply.
+        required = {"job_end", "session_load"}
+    else:
+        required = {"job_end", "delete_before_rename", "delete_after_removal",
+                    "session_load"}
+    job_ends = [line for line in final if line["step"] == "job_end"]
+    deletes = [line for line in final if line["step"] in
+               {"delete_before_rename", "delete_after_removal"}]
+    sessions = [line for line in final if line["step"] == "session_load"]
+
+    attach_file = out / "attach" / "campaign.json"
+    attach_jobs = []
+    if attach_file.exists():
+        attach_jobs = [row["job"]["id"] for row in json.loads(attach_file.read_text())]
+    delete_file = out / "delete.json"
+    delete_job = None
+    if delete_file.exists():
+        delete_job = json.loads(delete_file.read_text())["job"]["id"]
+
+    verdict = {
+        "one_job_end_per_lot": bool(attach_jobs)
+        and sum(1 for job in attach_jobs
+                if any(line["job_id"] == job for line in job_ends)) == len(attach_jobs),
+    }
+    if control:
+        verdict["required_steps"] = sorted(required)
+        verdict["required_steps_present"] = not (required - steps)
+        verdict["session_load_expected"] = 1
+        verdict["session_load_conforme"] = len(sessions) == 1
+    elif third:
+        # One `session_load`, at (b): no restart is replayed.
+        verdict["four_steps"] = not (required - steps)
+        verdict["session_load_expected"] = 1
+        verdict["session_load_conforme"] = len(sessions) == 1
+    else:
+        # The second campaign's verdict keeps the key written on 2026-11-22.
+        verdict["four_steps"] = not (required - steps)
+        verdict["two_session_load"] = len(sessions) == 2
+
+    report = {
+        "states": cumulative,
+        "steps_present": sorted(steps),
+        "steps_missing": sorted(required - steps),
+        "job_end": {
+            "count": len(job_ends),
+            "kinds": sorted({line["kind"] for line in job_ends if line["kind"]}),
+            "attach_lots_seen": sum(1 for job in attach_jobs
+                                    if any(line["job_id"] == job for line in job_ends)),
+            "attach_lots_expected": len(attach_jobs),
+            "delete_seen": bool(delete_job and any(
+                line["job_id"] == delete_job for line in job_ends)),
+        },
+        "delete_steps": {
+            "count": len(deletes),
+            "same_job": len({line["job_id"] for line in deletes}) == 1,
+            "job_id": deletes[0]["job_id"] if deletes else None,
+        },
+        "session_load": {
+            "count": len(sessions),
+            "indexes": [line["index"] for line in sessions],
+            "at_b": cumulative["b-index-open"].get("session_load", 0),
+            "at_e": cumulative.get("e-after-restart-index", {}).get("session_load", 0),
+            "at_g": cumulative.get("g-after-restart", {}).get("session_load", 0),
+        },
+        "verdict": verdict,
+    }
+    (out / "journal-check.json").write_text(json.dumps(report, indent=2) + "\n")
+    (out / "memory-lines.json").write_text(json.dumps(final, indent=2) + "\n")
+    print(json.dumps(report, indent=2), flush=True)
+
+
+def trim_lines(text: str) -> list[dict]:
+    """The `trim` lines of a journal text, with their six fields (ADR-0160)."""
+    lines = []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        fields = entry.get("fields") or {}
+        if fields.get("message") != "trim":
+            continue
+        lines.append({
+            "ts": entry.get("timestamp"),
+            "level": entry.get("level"),
+            "target": entry.get("target"),
+            "pad": fields.get("pad"),
+            "trimmed": fields.get("trimmed"),
+            "duration_us": fields.get("duration_us"),
+            "job_id": fields.get("job_id"),
+            "kind": fields.get("kind"),
+            "index": fields.get("index"),
+        })
+    return lines
+
+
+def epoch_of(text: str) -> float:
+    return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+def describe(values: list) -> dict:
+    """Count, min, median and max of a list of numbers, or None when empty."""
+    if not values:
+        return {"count": 0, "min": None, "median": None, "max": None,
+                "values": []}
+    ordered = sorted(values)
+    return {
+        "count": len(ordered),
+        "min": ordered[0],
+        "median": statistics.median(ordered),
+        "max": ordered[-1],
+        "values": ordered,
+    }
+
+
+def cmd_trim_lines(args) -> None:
+    """Count the `trim` lines, their durations, and the queries in flight.
+
+    A journal captured by `docker logs` is cumulative: the text of the last
+    state holds every line written since the container started, so the last
+    state is the one read, and the per-state counts are the running totals.
+
+    The overlap is read from the journal timestamp of each `trim` line against
+    the start and end of each load query: a query is in flight at a trim when
+    `start <= trim_ts <= end`. The count is what says whether the 300 queries
+    were really "in flight during the job ends" (ADR-0160, decision 6); it is
+    reported as a number, never assumed: a zero says that no query crossed a
+    trim, and the measured duration of a trim then only bounds the exposure.
+    """
+    out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "control")
+    if campaign == "control":
+        keys = CONTROL_STATE_KEYS
+    elif campaign == "trim":
+        keys = TRIM_STATE_KEYS
+    else:
+        keys = STATE_KEYS
+    per_state = {}
+    final = []
+    for key_name in keys:
+        path = out / "logs" / f"{key_name}.jsonl"
+        if not path.exists():
+            fail(f"missing journal {key_name}")
+        lines = trim_lines(path.read_text())
+        per_state[key_name] = {"count": len(lines),
+                               "trimmed_one": sum(1 for line in lines
+                                                  if line["trimmed"] == 1),
+                               "trimmed_zero": sum(1 for line in lines
+                                                   if line["trimmed"] == 0)}
+        final = lines
+
+    load_file = out / "queries" / "load.json"
+    if campaign == "control" and not load_file.exists():
+        fail("missing queries/load.json: the overlap would read as zero")
+    rows = json.loads(load_file.read_text())["records"] if load_file.exists() else []
+
+    overlap = []
+    for line in final:
+        at = epoch_of(line["ts"]) if line["ts"] else None
+        in_flight = [row["id"] for row in rows
+                     if at is not None and row["started_epoch"] <= at
+                     <= row["ended_epoch"]]
+        inside = [row["id"] for row in rows
+                  if at is not None and line["duration_us"] is not None
+                  and row["started_epoch"] <= at + line["duration_us"] / 1e6
+                  and row["ended_epoch"] >= at]
+        overlap.append({"ts": line["ts"], "kind": line["kind"],
+                        "in_flight_at_call": len(in_flight),
+                        "in_flight_during_call": len(inside),
+                        "query_ids": in_flight})
+
+    # The same count on the `job_end` lines of the `memory` journal, which both
+    # images emit: it is the only symmetric datum, the reference having no
+    # `trim` line at all. A `trim` line follows its `job_end` by a few tens of
+    # milliseconds in this campaign (6.8 to 31.2 ms), never by microseconds.
+    # The file is written by `memory-lines`; without it the overlap would be
+    # empty and would print as "0/0", so its absence is an error.
+    job_end_overlap = []
+    memory_file = out / "memory-lines.json"
+    if not memory_file.exists():
+        fail("missing memory-lines.json: the job_end overlap would read as 0/0")
+    for line in json.loads(memory_file.read_text()):
+        if line.get("step") != "job_end" or not line.get("ts"):
+            continue
+        at = epoch_of(line["ts"])
+        in_flight = [row["id"] for row in rows
+                     if row["started_epoch"] <= at <= row["ended_epoch"]]
+        job_end_overlap.append({"ts": line["ts"], "kind": line.get("kind"),
+                                "job_id": line.get("job_id"),
+                                "in_flight": len(in_flight),
+                                "query_ids": in_flight})
+
+    report = {
+        "campaign": CAMPAIGN_LABELS.get(campaign, campaign),
+        "lines": final,
+        "count": len(final),
+        "trimmed_one": sum(1 for line in final if line["trimmed"] == 1),
+        "trimmed_zero": sum(1 for line in final if line["trimmed"] == 0),
+        "duration_us": describe([line["duration_us"] for line in final
+                                 if line["duration_us"] is not None]),
+        "kinds": sorted({line["kind"] for line in final if line["kind"]}),
+        "per_state": per_state,
+        "overlap": overlap,
+        "job_end_overlap": job_end_overlap,
+        "load": {
+            "queries": len(rows),
+            "trims_with_a_query_in_flight": sum(
+                1 for row in overlap if row["in_flight_at_call"] > 0),
+            "job_ends_with_a_query_in_flight": sum(
+                1 for row in job_end_overlap if row["in_flight"] > 0),
+        },
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "trim-lines.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"  trim lines: {report['count']}, "
+          f"trimmed=1: {report['trimmed_one']}, "
+          f"trimmed=0: {report['trimmed_zero']}, "
+          f"duration_us {report['duration_us']['min']} to "
+          f"{report['duration_us']['max']}", flush=True)
+    print(f"  trims with a load query in flight: "
+          f"{report['load']['trims_with_a_query_in_flight']}/{report['count']}; "
+          f"job_end with a load query in flight: "
+          f"{report['load']['job_ends_with_a_query_in_flight']}/"
+          f"{len(job_end_overlap)}", flush=True)
+
+
+def cmd_tunables(args) -> None:
+    out = run_dir(args.out)
+    if not re.fullmatch(r"[a-z0-9-]+", args.name):
+        fail(f"invalid output name {args.name!r}")
+    if args.tunables is not None:
+        value = args.tunables
+    elif args.variant in VARIANTS:
+        value = VARIANTS[args.variant]
+    else:
+        fail(f"unknown variant {args.variant}; pass --tunables")
+    # The image has no shell: the dynamic loader itself is the entry point, so
+    # no server is started and nothing but `--list-tunables` runs.
+    command = ["docker", "run", "--rm", "--pull=never", "--entrypoint", LOADER]
+    if value:
+        command += ["-e", f"GLIBC_TUNABLES={value}"]
+    command += [args.image, "--list-tunables"]
+    result = sh(*command, timeout=120)
+    if result.returncode != 0 or "glibc." not in result.stdout:
+        fail(f"tunables probe failed ({result.returncode}): {result.stderr[-500:]}")
+    # `image_id()` reads the campaign container's image, which no longer exists
+    # after `down`; ask Docker for the image itself, by name.
+    inspected = sh("docker", "image", "inspect", "-f", "{{.Id}}", args.image,
+                   timeout=120)
+    image_id_value = inspected.stdout.strip()
+    if inspected.returncode != 0 or not image_id_value:
+        fail(f"image {args.image} not found or has no identifier")
+    (out / f"{args.name}.txt").write_text(result.stdout)
+    document = {
+        "variant": args.variant,
+        "glibc_tunables": value,
+        "image": args.image,
+        "image_id": image_id_value,
+        "loader": LOADER,
+        "command": command,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / f"{args.name}.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(f"  {args.name}: glibc_tunables={value!r} in "
+          f"{(out / f'{args.name}.txt').relative_to(REPO)}", flush=True)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    up = sub.add_parser("up", help="create the container (variant applied here only)")
+    up.add_argument("--variant", default="V0")
+    up.add_argument("--tunables", default=None)
+    up.add_argument("--campaign", choices=["second", "trim", "control"],
+                    default="second",
+                    help="control: RUST_LOG defaults to CONTROL_RUST_LOG")
+    up.add_argument("--rust-log", default=None,
+                    help="exact RUST_LOG of the container (control campaign)")
+    up.add_argument("--image", default="crible:t05-suite-mes17")
+    up.set_defaults(func=cmd_up)
+
+    down = sub.add_parser("down", help="stop and remove the container")
+    down.set_defaults(func=cmd_down)
+
+    init = sub.add_parser("init", help="record machine, image, variant, baseline")
+    init.add_argument("--run", required=True)
+    init.add_argument("--variant", default=None)
+    init.add_argument("--tunables", default=None)
+    init.add_argument("--campaign", choices=["second", "trim", "control"],
+                      default="second",
+                      help="trim: third campaign (ADR-0159); control: ADR-0160")
+    init.add_argument("--image", default="crible:t05-suite-mes17")
+    init.add_argument("--image-role", choices=["reference", "correction"],
+                      default=None,
+                      help="control campaign: which image this run measures")
+    init.set_defaults(func=cmd_init)
+
+    state = sub.add_parser("state", help="read and record one state")
+    state.add_argument("name")
+    state.add_argument("--run", required=True)
+    state.add_argument("--reps", type=int, default=3)
+    state.add_argument("--gap", type=float, default=3.0)
+    state.set_defaults(func=cmd_state)
+
+    create = sub.add_parser("create", help="create the throwaway index")
+    create.add_argument("--run", required=True)
+    create.set_defaults(func=cmd_create)
+
+    attach = sub.add_parser("attach", help="attach the six derived lots")
+    attach.add_argument("--run", required=True)
+    attach.add_argument("--lot", action="append",
+                        help="attach only this lot (repeatable); default: all six")
+    attach.add_argument("--reset", action="store_true",
+                        help="start the campaign report from scratch")
+    attach.add_argument("--load-window", type=float, default=None,
+                        help="run 300 hybrid queries spread over this many "
+                             "seconds, in Python threads, with the attach")
+    attach.add_argument("--load-threads", type=int, default=8)
+    attach.set_defaults(func=cmd_attach)
+
+    load = sub.add_parser(
+        "load", help="300 hybrid queries, k = 10, spread over a window")
+    load.add_argument("--run", required=True)
+    load.add_argument("--window", type=float, default=None,
+                      help="seconds over which the 300 queries are spread")
+    load.add_argument("--threads", type=int, default=8)
+    load.set_defaults(func=cmd_load)
+
+    queries = sub.add_parser("queries", help="300 queries, hybrid, k = 10")
+    queries.add_argument("--run", required=True)
+    queries.set_defaults(func=cmd_queries)
+
+    delete = sub.add_parser("delete", help="delete the throwaway index")
+    delete.add_argument("--run", required=True)
+    delete.set_defaults(func=cmd_delete)
+
+    restart = sub.add_parser("restart", help="docker restart -t 65 then wait /ready")
+    restart.add_argument("--run", required=True)
+    restart.set_defaults(func=cmd_restart)
+
+    summary = sub.add_parser("summary", help="medians, spreads, transitions")
+    summary.add_argument("--run", required=True)
+    summary.add_argument("--campaign", choices=["second", "trim", "control"],
+                         default="second")
+    summary.set_defaults(func=cmd_summary)
+
+    check = sub.add_parser("journal-check", help="four steps, six job_end, two session_load")
+    check.add_argument("--run", required=True)
+    check.add_argument("--campaign", choices=["second", "trim", "control"],
+                       default="second")
+    check.set_defaults(func=cmd_journal_check)
+
+    trims = sub.add_parser(
+        "trim-lines", help="count the trim lines, their durations and the "
+                           "queries in flight")
+    trims.add_argument("--run", required=True)
+    trims.add_argument("--campaign", choices=["second", "trim", "control"],
+                       default="control")
+    trims.set_defaults(func=cmd_trim_lines)
+
+    trim = sub.add_parser(
+        "trim", help="one malloc_trim(0) by gdb in the measured PID 1, at rest")
+    trim.add_argument("--run", required=True)
+    trim.add_argument("--label", required=True, help="e.g. after-c, idempotence, after-delete")
+    trim.set_defaults(func=cmd_trim)
+
+    selftest = sub.add_parser(
+        "trim-selftest", help="auto-test of the annex on a disposable process, no Crible")
+    selftest.add_argument("--out", required=True, help="directory under data/mes17/raw")
+    selftest.set_defaults(func=cmd_trim_selftest)
+
+    tun = sub.add_parser("tunables", help="prove glibc read the tunables (loader only)")
+    tun.add_argument("--out", required=True, help="directory under data/mes17/raw")
+    tun.add_argument("--variant", default="V0", help="variant whose value is passed")
+    tun.add_argument("--tunables", default=None,
+                     help="value overriding the variant (V4, or a proof)")
+    tun.add_argument("--name", default="tunables", help="base name of the two output files")
+    tun.add_argument("--image", default="crible:t05-suite-mes17")
+    tun.set_defaults(func=cmd_tunables)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

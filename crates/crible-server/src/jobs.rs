@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crible_core::config::IndexConfig;
 use crible_core::error::{CribleError, ErrorCode};
@@ -74,6 +74,15 @@ pub struct JobView {
     pub generation: Option<u64>,
     /// Fine progression, `{ "step", "done", "total" }`.
     pub progress: Option<Value>,
+    /// Durations of an attach, six whole-millisecond steps, kept in memory and
+    /// never persisted (ADR-0149).
+    ///
+    /// It is `None` when there is nothing to render: a job that is not
+    /// `succeeded` yet, a failed attach, a replay, another kind, or a job read
+    /// back from the table after a restart. It carries exactly the numbers the
+    /// `attach durations` line publishes for the same job, as both come from
+    /// the same conversion, `DurationsMillis`.
+    pub durations: Option<Value>,
     /// Report of the job, when it is persisted elsewhere.
     pub result: Option<Value>,
     /// Error of a failed job.
@@ -93,6 +102,9 @@ impl JobView {
             finished_at: record.finished_at,
             generation: record.generation,
             progress: parse_optional("progress", record.progress.as_deref(), &record.id)?,
+            // The member lives in memory only: the table has no column for it
+            // (ADR-0149, decisions 2 and 4), so a row read back renders `null`.
+            durations: None,
             result: parse_optional("result", record.result.as_deref(), &record.id)?,
             error: parse_optional("error", record.error.as_deref(), &record.id)?,
         })
@@ -114,6 +126,7 @@ impl JobView {
             "finished_at": self.finished_at,
             "generation": self.generation,
             "progress": self.progress,
+            "durations": self.durations,
             "result": self.result,
             "error": self.error,
         })
@@ -172,8 +185,9 @@ impl JobProgress {
     ///
     /// The step is a name of the write protocol — `validation`, `segment`,
     /// `transaction`, `lexical`, `manifest`, `snapshot` —; `done` and `total`
-    /// count passages for an attach and documents for a patch
-    /// (`docs/05-api.md`, "Jobs"; ADR-0134).
+    /// count passages for an attach, documents for a patch, and bytes for a
+    /// snapshot, whose steps are `copy`, `attest` and `rename` (`docs/05-api.md`,
+    /// "Jobs"; ADR-0134, ADR-0153).
     ///
     /// The value is published **in memory** at once, so `GET /v1/jobs/{id}` and
     /// `GET /v1/jobs` read it while the job runs; the table is written only at
@@ -219,9 +233,66 @@ impl JobProgress {
 pub struct JobOutcome {
     /// Generation published by the job, when it has one.
     pub generation: Option<u64>,
+    /// Durations of an attach, when its call measured them (ADR-0149).
+    ///
+    /// The member lives in memory only: the board publishes it with the
+    /// terminal transition and never writes it to the table. It is `None` for
+    /// every other kind and for the replay of an applied batch, which plays no
+    /// step.
+    pub durations: Option<Value>,
     /// Report kept with the job, when it is persisted elsewhere (ADR-0042,
     /// ADR-0060).
     pub result: Option<Value>,
+}
+
+/// The six steps of an attach in whole milliseconds: the single source of the
+/// member `durations` of a job and of the fields of its `attach durations`
+/// line (ADR-0149, decisions 1 and 2).
+///
+/// [`millis`] is the only conversion, so a step cannot render one number in the
+/// object and another in the journal line. A step that did not run is `0`, never
+/// absent: [`AttachDurations`] measures it and the line writes `0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DurationsMillis {
+    /// `validation` step.
+    validation_ms: u64,
+    /// `segment` step.
+    segment_ms: u64,
+    /// `transaction` step.
+    transaction_ms: u64,
+    /// `lexical` step, zero when it does not run.
+    lexical_ms: u64,
+    /// `manifest` step.
+    manifest_ms: u64,
+    /// `snapshot` step.
+    snapshot_ms: u64,
+}
+
+impl DurationsMillis {
+    /// Converts the durations of the call that ran the attach.
+    pub(crate) fn of(durations: AttachDurations) -> Self {
+        Self {
+            validation_ms: millis(durations.validation),
+            segment_ms: millis(durations.segment),
+            transaction_ms: millis(durations.transaction),
+            lexical_ms: millis(durations.lexical),
+            manifest_ms: millis(durations.manifest),
+            snapshot_ms: millis(durations.snapshot),
+        }
+    }
+
+    /// Renders the closed object of six keys of the member `durations`
+    /// (ADR-0149, decision 1).
+    pub(crate) fn to_json(self) -> Value {
+        json!({
+            "validation_ms": self.validation_ms,
+            "segment_ms": self.segment_ms,
+            "transaction_ms": self.transaction_ms,
+            "lexical_ms": self.lexical_ms,
+            "manifest_ms": self.manifest_ms,
+            "snapshot_ms": self.snapshot_ms,
+        })
+    }
 }
 
 /// Work of a job, run on the writer of its index with the exclusive access to
@@ -250,6 +321,17 @@ pub struct JobBoard {
     store: JobStore,
     jobs: RwLock<HashMap<String, watch::Sender<JobView>>>,
     pending: AtomicUsize,
+    /// Guard of the trim of the allocator: `true` while a call runs, so a
+    /// second end of job skips its own and writes no line (ADR-0160,
+    /// decision 3).
+    trimming: AtomicBool,
+    /// Counter of the trims admitted, read by the unit test of decision 5.
+    #[cfg(test)]
+    trim_calls: crate::trim::seam::Calls,
+    /// Pause armed by the unit test of decision 5, so the admitted trim holds
+    /// the guard while the other attempt reaches it.
+    #[cfg(test)]
+    trim_pause: Mutex<Option<crate::trim::seam::Pause>>,
     finished: Notify,
     /// Resume point of the drain wait, armed by a unit test only: it stops
     /// [`JobBoard::drained`] between its second count and its `await`, so the
@@ -298,6 +380,11 @@ impl JobBoard {
             store,
             jobs: RwLock::new(jobs),
             pending: AtomicUsize::new(pending),
+            trimming: AtomicBool::new(false),
+            #[cfg(test)]
+            trim_calls: crate::trim::seam::Calls::default(),
+            #[cfg(test)]
+            trim_pause: Mutex::new(None),
             finished: Notify::new(),
             #[cfg(test)]
             resume: Mutex::new(None),
@@ -346,6 +433,7 @@ impl JobBoard {
             finished_at: None,
             generation: None,
             progress: None,
+            durations: None,
             result: None,
             error: None,
         };
@@ -380,13 +468,21 @@ impl JobBoard {
     /// ADR-0103, decision 3, say it is never persisted, so a job read back after a
     /// restart carries none. Every other report is already persisted elsewhere
     /// (the `batches` history for an attach), so it is written to the table.
+    ///
+    /// The job end is also where the `memory` line of ADR-0151 is emitted, for
+    /// every kind and every outcome: the job has done its work, and the line
+    /// names it. The trim of the allocator runs last, after the terminal state
+    /// is published, and emits its own `trim` line (ADR-0160, decisions 2 and
+    /// 4).
     fn mark_finished(
         &self,
         id: &str,
         kind: JobKind,
+        index: &str,
         outcome: Result<JobOutcome, CribleError>,
         progress: &JobProgress,
     ) {
+        crate::memory::log(crate::memory::Point::job_end(id, kind.as_str(), index));
         let progress = progress.current();
         match outcome {
             Ok(outcome) => {
@@ -395,6 +491,11 @@ impl JobBoard {
                 } else {
                     None
                 };
+                // The durations of an attach appear with the terminal
+                // transition, in the same published view, so a reader never
+                // sees a succeeded attach without them when its call measured
+                // some (ADR-0149, decision 2).
+                let durations = outcome.durations;
                 let persisted = if kind == JobKind::PatchDocuments {
                     None
                 } else {
@@ -406,7 +507,7 @@ impl JobBoard {
                     progress.as_deref(),
                     persisted.as_deref(),
                 ) {
-                    Ok(record) => self.publish_with(record, in_memory),
+                    Ok(record) => self.publish_with(record, in_memory, durations),
                     Err(failure) => self.fail_transition(id, failure),
                 }
             }
@@ -427,6 +528,71 @@ impl JobBoard {
                     Err(failure) => self.fail_transition(id, failure),
                 }
             }
+        }
+        // The terminal state is published in both branches above, so every
+        // waiter of the job is awake before the trim runs: a `?wait=true` does
+        // not wait for it (ADR-0160, decision 2).
+        self.trim_after_job(id, kind.as_str(), index);
+    }
+
+    /// Takes the trim guard of the instance, or reports that a trim already
+    /// runs (ADR-0160, decision 3).
+    fn try_begin_trim(&self) -> bool {
+        self.trimming
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Releases the trim guard, once the call it protected is over.
+    fn end_trim(&self) {
+        self.trimming.store(false, Ordering::Release);
+    }
+
+    /// Gives the free pages of the allocator back, once per job end.
+    ///
+    /// A trim already in progress makes this one skip, and a skipped trim calls
+    /// nothing and writes no line: `trimmed = 0` then keeps a single sense, that
+    /// of a call which released nothing (ADR-0160, decisions 3 and 4). The
+    /// duration measures the call alone, so the guard is released before the
+    /// caller renders the line.
+    ///
+    /// The call runs on the thread that ends the job, which is not a
+    /// `spawn_blocking` thread. Two precedents sit at the same point: the
+    /// `memory` line of `job_end` reads `/proc` and its cgroup, and the purge
+    /// that follows talks to SQLite. The cost in service is not known yet: the
+    /// control measure of ADR-0160, decision 6, reads it against INV-02, and a
+    /// p99 that crossed 3× its reference would move this call to
+    /// `spawn_blocking` through an amendment of the ADR.
+    fn trim_after_job(&self, job_id: &str, kind: &str, index: &str) {
+        if !self.try_begin_trim() {
+            return;
+        }
+        #[cfg(test)]
+        self.hold_trim_pause();
+        let started = Instant::now();
+        let trimmed = crate::trim::trim_allocator(0);
+        #[cfg(test)]
+        self.trim_calls.record();
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.end_trim();
+        crate::trim::log_call(job_id, kind, index, trimmed, duration_us);
+    }
+
+    /// Holds an armed pause of the unit tests, while the trim guard is taken
+    /// (ADR-0160, decision 5); a test build only.
+    #[cfg(test)]
+    fn hold_trim_pause(&self) {
+        let pause = self.trim_pause.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(pause) = pause {
+            pause.hold();
+        }
+    }
+
+    /// Arms the pause of the next trim, for the unit test of decision 5.
+    #[cfg(test)]
+    fn arm_trim_pause(&self, pause: crate::trim::seam::Pause) {
+        if let Ok(mut slot) = self.trim_pause.lock() {
+            *slot = Some(pause);
         }
     }
 
@@ -452,18 +618,21 @@ impl JobBoard {
 
     /// Publishes a row and decrements the pending count when it is terminal.
     fn publish(&self, record: JobRecord) {
-        self.publish_with(record, None);
+        self.publish_with(record, None, None);
     }
 
     /// Publishes a row, adding `in_memory` as the result when the row carries
-    /// none. This is how the report of a `patch_documents` job reaches its
-    /// author without being persisted (ADR-0060, ADR-0103).
-    fn publish_with(&self, record: JobRecord, in_memory: Option<Value>) {
+    /// none, and `durations` as the in-memory durations of an attach. This is
+    /// how the report of a `patch_documents` job and the durations of an attach
+    /// reach the reader without being persisted (ADR-0060, ADR-0103,
+    /// ADR-0149).
+    fn publish_with(&self, record: JobRecord, in_memory: Option<Value>, durations: Option<Value>) {
         match JobView::from_record(record) {
             Ok(mut view) => {
                 if view.result.is_none() {
                     view.result = in_memory;
                 }
+                view.durations = durations;
                 self.store_and_notify(view);
             }
             Err(failure) => error!(
@@ -553,6 +722,28 @@ impl JobBoard {
             .into_iter()
             .filter(|view| !view.state.is_terminal())
             .collect()
+    }
+
+    /// The `delete_index` job that holds `index`, if any (ADR-0150,
+    /// decision 3).
+    ///
+    /// A job holds the name until it is terminal: the name is released at the
+    /// deregistration, which precedes the terminal state (ADR-0150, decision 4).
+    /// When several of them are not terminal, the oldest is returned —
+    /// `created_at` ascending, then `id`, the order the jobs of one index run
+    /// in (ADR-0103, decision 7; ADR-0150, decision 3, rule 6). It reads the
+    /// table in memory only: no file, no snapshot, and no state to reconcile
+    /// after a restart (ADR-0150, decisions 3 and 6).
+    #[must_use]
+    pub fn deleting(&self, index: &str) -> Option<JobView> {
+        self.unfinished()
+            .into_iter()
+            .filter(|view| view.kind == JobKind::DeleteIndex && view.index == index)
+            .min_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            })
     }
 
     /// Waits until every accepted job is terminal.
@@ -1121,6 +1312,7 @@ impl IndexWriter {
                 self.board.mark_finished(
                     &command.id,
                     command.kind,
+                    &self.index,
                     Err(error::internal(BROKEN_MESSAGE)),
                     &command.progress,
                 );
@@ -1131,6 +1323,7 @@ impl IndexWriter {
                 self.board.mark_finished(
                     &command.id,
                     command.kind,
+                    &self.index,
                     Err(error::internal(BROKEN_MESSAGE)),
                     &command.progress,
                 );
@@ -1159,7 +1352,7 @@ impl IndexWriter {
                         command.progress.complete();
                     }
                     self.board
-                        .mark_finished(&id, kind, outcome, &command.progress);
+                        .mark_finished(&id, kind, &self.index, outcome, &command.progress);
                     if failed && kind == JobKind::Compact {
                         holder = self.reopen_off_threads(holder.take()).await;
                     }
@@ -1174,6 +1367,7 @@ impl IndexWriter {
                     self.board.mark_finished(
                         &id,
                         kind,
+                        &self.index,
                         Err(error::internal(format!(
                             "the blocking task of a write job failed: {join}"
                         ))),
@@ -1331,6 +1525,7 @@ async fn fail_queued(receiver: &mut mpsc::Receiver<Command>, board: &JobBoard, i
         board.mark_finished(
             &command.id,
             command.kind,
+            index,
             Err(CribleError::new(
                 ErrorCode::UnknownIndex,
                 format!("unknown index '{index}'"),
@@ -1368,17 +1563,18 @@ fn fill_readers(
     Ok(Arc::new(filled))
 }
 
-/// Logs the durations of an attach once, at the end of its job (ADR-0107,
-/// decision 4).
+/// Logs the durations of an attach once, at the end of its job (ADR-0149;
+/// replaces ADR-0107, decision 4, for the response only).
 ///
-/// No response and no job body carries them (ADR-0042): this line is the only
-/// place they are read back. It names the job, its kind and its index, never a
-/// document, a field value or a passage text (INV-13, ADR-0096).
+/// The six numbers come from [`DurationsMillis`], the same value the member
+/// `durations` of the job renders, so the line and the member cannot diverge.
+/// It names the job, its kind and its index, never a document, a field value or
+/// a passage text (INV-13, ADR-0096).
 pub(crate) fn log_attach_durations(
     job_id: &str,
     kind: JobKind,
     index: &str,
-    durations: Option<AttachDurations>,
+    durations: Option<DurationsMillis>,
 ) {
     let Some(durations) = durations else {
         return;
@@ -1387,18 +1583,18 @@ pub(crate) fn log_attach_durations(
         job_id = %job_id,
         kind = kind.as_str(),
         index = %index,
-        validation_ms = millis(durations.validation),
-        segment_ms = millis(durations.segment),
-        transaction_ms = millis(durations.transaction),
-        lexical_ms = millis(durations.lexical),
-        manifest_ms = millis(durations.manifest),
-        snapshot_ms = millis(durations.snapshot),
+        validation_ms = durations.validation_ms,
+        segment_ms = durations.segment_ms,
+        transaction_ms = durations.transaction_ms,
+        lexical_ms = durations.lexical_ms,
+        manifest_ms = durations.manifest_ms,
+        snapshot_ms = durations.snapshot_ms,
         "attach durations"
     );
 }
 
-/// One duration in whole milliseconds, for the line of
-/// [`log_attach_durations`].
+/// One duration in whole milliseconds, the unit of [`DurationsMillis`], so of
+/// the member `durations` and of the line `attach durations` (ADR-0149).
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -1427,13 +1623,38 @@ fn poisoned(what: &str) -> CribleError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::Duration;
 
     use tokio::sync::mpsc;
 
     use super::{DrainResume, JobBoard};
+    use crate::test_sink::Sink;
+
+    /// The fields of the `trim` lines of a journal text.
+    fn trim_lines(journal_text: &str) -> Vec<serde_json::Value> {
+        let mut lines = Vec::new();
+        for line in journal_text.lines() {
+            let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let fields = &entry["fields"];
+            if fields["message"] == "trim" {
+                lines.push(fields.clone());
+            }
+        }
+        lines
+    }
+
+    /// A job board on a temporary table.
+    fn board() -> (tempfile::TempDir, JobBoard) {
+        let directory = tempfile::tempdir().expect("a temporary directory is creatable");
+        let board = JobBoard::open(&directory.path().join("jobs.sqlite"))
+            .expect("the job table is creatable");
+        (directory, board)
+    }
 
     /// A notification sent after the last count of `pending` is not lost.
     ///
@@ -1480,5 +1701,164 @@ mod tests {
             .await
             .expect("the armed wait is woken by the notification of the last job")
             .expect("the wait task joins");
+    }
+
+    /// The trim guard of ADR-0160, decision 3, admits one call at a time: a
+    /// second take while the first is held fails, and the guard is free again
+    /// once the first released it.
+    ///
+    /// The test reads the guard itself and never depends on timing: no job runs,
+    /// no thread races, and the two takes are ordered by the test.
+    #[test]
+    fn the_trim_guard_admits_one_call_at_a_time() {
+        let (_directory, board) = board();
+        assert!(board.try_begin_trim(), "the guard is free at rest");
+        assert!(
+            !board.try_begin_trim(),
+            "a trim already in progress makes the next one skip"
+        );
+        assert!(
+            !board.try_begin_trim(),
+            "a skipped trim changes nothing, so the guard stays taken"
+        );
+        board.end_trim();
+        assert!(
+            board.try_begin_trim(),
+            "the guard is free again once the running trim released it"
+        );
+        board.end_trim();
+    }
+
+    /// A skipped trim writes no `trim` line: there was no call, so there is
+    /// nothing to measure, and `trimmed = 0` keeps a single sense, that of a call
+    /// which released nothing (ADR-0160, decision 4).
+    ///
+    /// A made call, by contrast, writes exactly one line: that second half keeps
+    /// the empty journal of the skipped call from being vacuous, and it holds on
+    /// glibc only, where a call is actually made.
+    #[test]
+    fn a_skipped_trim_writes_no_trim_line() {
+        let (_directory, board) = board();
+        let sink = Sink::default();
+        assert!(board.try_begin_trim(), "the guard is taken by this test");
+        let subscriber = crate::logging::log_subscriber(sink.clone(), "debug")
+            .expect("the fixed filter of the test is valid");
+        tracing::subscriber::with_default(subscriber, || {
+            board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+        });
+        assert!(
+            trim_lines(&sink.contents()).is_empty(),
+            "a trim the guard skipped writes no line: {}",
+            sink.contents()
+        );
+        board.end_trim();
+
+        // The call that the guard now admits: one line on glibc, none off glibc,
+        // where no allocator is called.
+        let subscriber = crate::logging::log_subscriber(sink.clone(), "debug")
+            .expect("the fixed filter of the test is valid");
+        tracing::subscriber::with_default(subscriber, || {
+            board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+        });
+        let expected = usize::from(cfg!(all(target_os = "linux", target_env = "gnu")));
+        assert_eq!(
+            trim_lines(&sink.contents()).len(),
+            expected,
+            "one line for a made call, none where no call is made: {}",
+            sink.contents()
+        );
+    }
+
+    /// Under contention, two trim attempts reach the guard together and exactly
+    /// one is admitted (ADR-0160, decision 3).
+    ///
+    /// The barrier of the attempts sits **before** the release of the winner, so
+    /// no thread can attempt after a release: the count is deterministic, and the
+    /// test holds when it is looped.
+    #[test]
+    fn exactly_one_of_two_concurrent_trim_attempts_is_admitted() {
+        let (_directory, board) = board();
+        let board = Arc::new(board);
+        let start = Arc::new(Barrier::new(2));
+        let attempted = Arc::new(Barrier::new(2));
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let board = Arc::clone(&board);
+                let start = Arc::clone(&start);
+                let attempted = Arc::clone(&attempted);
+                thread::spawn(move || {
+                    start.wait();
+                    let admitted = board.try_begin_trim();
+                    attempted.wait();
+                    if admitted {
+                        board.end_trim();
+                    }
+                    admitted
+                })
+            })
+            .collect();
+        let admitted = threads
+            .into_iter()
+            .map(|handle| handle.join().expect("the attempt thread joins"))
+            .filter(|admitted| *admitted)
+            .count();
+        assert_eq!(
+            admitted, 1,
+            "one trim at a time: one of the two attempts is admitted, the other is skipped"
+        );
+        assert!(
+            board.try_begin_trim(),
+            "the winner released the guard, so the next trim is admitted"
+        );
+        board.end_trim();
+    }
+
+    /// Two ends of job that reach the trim together produce **one** real call,
+    /// and the skipped one writes no line (ADR-0160, decisions 3, 4 and 5,
+    /// test 4).
+    ///
+    /// The admitted trim is held at an armed pause while it owns the guard, and
+    /// a `Barrier` releases both attempts together: whichever thread wins holds
+    /// the guard when the other reaches it, so exactly one call is counted
+    /// whatever the scheduling, and the test holds when it is looped. The
+    /// journal half of decision 5, test 4, is
+    /// `a_skipped_trim_writes_no_trim_line`.
+    #[test]
+    fn two_concurrent_ends_of_job_make_one_trim_call() {
+        let (_directory, board) = board();
+        let board = Arc::new(board);
+        let (reached, in_trim) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        board.arm_trim_pause(crate::trim::seam::Pause::new(reached, released));
+        let start = Arc::new(Barrier::new(2));
+        let (done, ended) = std::sync::mpsc::channel();
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let board = Arc::clone(&board);
+                let start = Arc::clone(&start);
+                let done = done.clone();
+                thread::spawn(move || {
+                    start.wait();
+                    board.trim_after_job("job_0123456789abcdef", "compact", "alpha");
+                    done.send(()).expect("the test receives every end of job");
+                })
+            })
+            .collect();
+        drop(done);
+
+        // The winner sits in the trim and owns the guard; the other returned.
+        in_trim.recv().expect("the admitted trim reaches the pause");
+        ended.recv().expect("the skipped trim returns");
+        release.send(()).expect("the admitted trim resumes");
+        ended.recv().expect("the admitted trim returns");
+
+        for handle in threads {
+            handle.join().expect("the attempt thread joins");
+        }
+        assert_eq!(
+            board.trim_calls.count(),
+            1,
+            "two concurrent ends of job make one trim call, never two"
+        );
     }
 }

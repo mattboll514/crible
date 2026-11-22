@@ -205,8 +205,10 @@ pub async fn run_server(
         let requests = tokio::time::timeout(drain, &mut handle);
         let writes = async {
             match state.jobs() {
-                Some(board) => tokio::time::timeout(jobs, board.drained()).await.is_ok(),
-                None => true,
+                Ok(board) => tokio::time::timeout(jobs, board.drained()).await.is_ok(),
+                // The registry is published until the exit, so this arm is the
+                // one of a state that never opened its table: nothing to drain.
+                Err(_) => true,
             }
         };
         tokio::join!(requests, writes)
@@ -238,7 +240,7 @@ pub async fn run_server(
             if !writes {
                 let abandoned = state
                     .jobs()
-                    .map_or_else(Vec::new, |board| board.unfinished());
+                    .map_or_else(|_| Vec::new(), |board| board.unfinished());
                 warn!(
                     abandoned = abandoned.len(),
                     bound_ms = jobs.as_millis(),

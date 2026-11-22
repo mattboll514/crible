@@ -133,13 +133,37 @@ impl LexicalFixture {
 
     /// Creates an empty index under `temp`, with or without the lexical branch.
     pub fn create_in(temp: tempfile::TempDir, lexical: bool) -> Self {
+        Self::create_in_with_identifiers(temp, lexical, None)
+    }
+
+    /// Creates an empty index whose lexical branch runs under `identifiers`
+    /// (ADR-0148): `Some("v1")` asks for the canonical identifier token,
+    /// `None` writes the key absent, which is the stored form of `"none"`.
+    pub fn create_with_identifiers(identifiers: Option<&str>) -> Self {
+        Self::create_in_with_identifiers(
+            tempfile::tempdir().unwrap_or_else(|error| {
+                panic!("a temporary directory for the index must be creatable: {error}")
+            }),
+            true,
+            identifiers,
+        )
+    }
+
+    /// [`Self::create_in`], with `lexical.identifiers` written when it is
+    /// `Some` (ADR-0148).
+    pub fn create_in_with_identifiers(
+        temp: tempfile::TempDir,
+        lexical: bool,
+        identifiers: Option<&str>,
+    ) -> Self {
         let index = temp.path().join("indexes").join("lexical");
         let schema = fixture_schema();
-        let config = super::test_config_with_precision_and_lexical(
+        let config = super::test_config_with_precision_lexical_and_identifiers(
             "lexical",
             &schema,
             ReferencePrecision::Fp16,
             lexical,
+            identifiers,
         );
         write_index_config(&index, &config)
             .unwrap_or_else(|error| panic!("the index configuration must be written: {error}"));

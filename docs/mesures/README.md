@@ -4,7 +4,7 @@
 
 - **Un fichier par mesure** : `MES-xx-<slug>.md`. Une nouvelle campagne sur la même mesure ajoute une section datée ; on n'écrase jamais l'ancienne.
 - **Données brutes** : en JSON ou CSV à côté du rapport (`MES-xx-<slug>.<date>.json`) si elles sont petites ; sinon, le chemin dans `data/` est cité.
-- **Rapports d'éval** : `crible eval` écrit ici ses deux rapports, `eval-<jeu>-<AAAA-MM-JJ>.json` et `eval-<jeu>-<AAAA-MM-JJ>.md` (ADR-0125). Le Markdown suit le modèle ci-dessous, avec le but, la machine, les données, les paramètres, les résultats et la lecture. Un rapport daté n'est **jamais écrasé** : la commande refuse un fichier existant, et une nouvelle campagne prend un nouveau nom.
+- **Rapports d'éval** : `crible eval` écrit ici ses deux rapports, `eval-<jeu>-<AAAA-MM-JJ>.json` et `eval-<jeu>-<AAAA-MM-JJ>.md` (ADR-0125). Le Markdown suit le modèle ci-dessous, avec le but, la machine, les données, les paramètres, les résultats et la lecture. Le JSON porte, par requête, `doc_ids`, la liste ordonnée du top-k ; le Markdown rend, dans ses résultats, la section de recouvrement de top-k que `--baseline` compare, et il dit quand la comparaison n'a pas été faite (ADR-0155). Un rapport daté n'est **jamais écrasé** : la commande refuse un fichier existant, et une nouvelle campagne prend un nouveau nom.
 - **Interdit** : modifier du code pour améliorer un chiffre dans la même session que la mesure. On mesure, on consigne, puis l'optimisation devient une tâche à part.
 
 ## Modèle

@@ -359,14 +359,18 @@ fn pool_size(
 /// build time are linear in **indexed tokens**, not in passages. The text read
 /// here is the one `records.sqlite` stores — the encoder input, the exact text
 /// tantivy indexed — and the chain is the one the index declares, rebuilt by
-/// `crible_store::lexical::analyzer` from `lexical.language`.
+/// `crible_store::lexical::analyzer` from `lexical.language` and
+/// `lexical.identifiers`.
 ///
 /// The risk ADR-0091 names is a count that does not follow the analyser
 /// exactly: it is the same function `analyzer::analyzer`, but the count is the
 /// harness's, so it is declared as such in the report.
 fn tokens_mode(data: &Path, index: &str, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let opened = Opened::read(data, index)?;
-    let mut analyzer = crible_store::lexical::analyzer::analyzer(&opened.config.lexical.language)?;
+    let mut analyzer = crible_store::lexical::analyzer::analyzer(
+        &opened.config.lexical.language,
+        opened.config.lexical.identifiers,
+    )?;
     let connection = rusqlite::Connection::open_with_flags(
         opened.records_path(),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

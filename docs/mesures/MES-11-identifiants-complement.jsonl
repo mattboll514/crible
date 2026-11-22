@@ -1,0 +1,6 @@
+{"id":"T14-DEC-10-13-625","query":"10-13.625","expected":["JURITEXT000023607955"]}
+{"id":"T14-DEC-81-70-489","query":"81-70.489","expected":["JURITEXT000007009951"]}
+{"id":"T14-ART-L1132-1","query":"L1132-1","expected":["LEGIARTI000045391841"]}
+{"id":"T14-ART-L-1132-1-CITE","query":"L. 1132-1","expected":["LEGIARTI000045391841"]}
+{"id":"T14-ART-NEGATIF-l1132-11","query":"l1132-11"}
+{"id":"T14-SARDE-NOR","query":"SANP0422530D","expected":["SARDBLOC000007251655"]}

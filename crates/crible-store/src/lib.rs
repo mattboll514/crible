@@ -8,6 +8,7 @@ pub mod batch_reader;
 pub mod codes;
 pub mod compact;
 pub mod debug_journal;
+pub mod document_ordinals;
 pub mod export;
 pub(crate) mod file_lock;
 pub mod filters_index;

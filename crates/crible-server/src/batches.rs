@@ -44,7 +44,7 @@ use crate::analytics::{self, Operation};
 use crate::auth::Client;
 use crate::error;
 use crate::http::{RequestId, accepted};
-use crate::jobs::{JobOutcome, log_attach_durations};
+use crate::jobs::{DurationsMillis, JobOutcome, log_attach_durations};
 
 /// Body of `POST /v1/indexes/{index}/batches`.
 #[derive(Debug, Deserialize)]
@@ -77,7 +77,7 @@ struct BatchBody {
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index, or absent directory", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Write queue full, server draining or SQLite lock", body = crate::openapi::Error)
+        (status = 503, description = "Write queue full, server draining, SQLite lock, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error)
     )
 )]
 pub async fn post_batch(
@@ -168,7 +168,7 @@ async fn post_batch_inner(
         crate::barriers::wait("batch");
         let directory = inbox_directory(&exchange, &directory)?;
         let index_config = writer.configuration()?;
-        let model = holder.model(&index_config.model)?;
+        let model = holder.model_for(&name, &index_config.model)?;
         let token_counter = match model.config.kind {
             crible_core::model::ModelKind::Onnx => Some(model.token_counter()?),
             crible_core::model::ModelKind::External => None,
@@ -189,14 +189,11 @@ async fn post_batch_inner(
                 format!("index '{name}': {}", failure.message()),
             )
         })?;
-        log_attach_durations(
-            progress.job_id(),
-            JobKind::AttachBatch,
-            &name,
-            report.durations,
-        );
+        let durations = report.durations.map(DurationsMillis::of);
+        log_attach_durations(progress.job_id(), JobKind::AttachBatch, &name, durations);
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: durations.map(DurationsMillis::to_json),
             result: Some(json!({ "report": report.to_json() })),
         })
     });

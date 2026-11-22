@@ -6,6 +6,8 @@
 - **Proposé par** : agent greffier, tâche ROUTES-DOCUMENTS-ET-LOTS (phase P6), sur demande de l'orchestrateur et les verdicts de `@architecte` du 2026-10-29
 - **Remplace** : — (complète ADR-0055 et ADR-0042, dont le corps n'est pas réécrit : la route prend le `batch_id` du corps et porte des `deletions`, et le serveur ne rend les durées par aucune réponse)
 
+**Note du 2026-11-11.** La **décision 4** de cet ADR est **remplacée en partie par ADR-0149 le 2026-11-11** : l'objet `Job` porte un membre `durations`, gardé en mémoire et jamais persisté, lisible par toute clé qui peut lire le job. La ligne de journal `attach durations` reste, ainsi que l'interdiction de persister les durées et l'identité clé pour clé du rapport rejoué (INV-10). Le corps ci-dessous n'est pas réécrit.
+
 ## Contexte
 
 La fiche `ROUTES-DOCUMENTS-ET-LOTS` (`docs/phases/P6-serveur-et-api.md:84-97`) demande d'écrire par l'API : `POST` et `PATCH` sur `/documents`, `GET /documents/{doc_id}`, `POST /batches` avec un chemin limité à `exchange/inbox`, et `POST /compact`, `/exports` et `/snapshots`. Les routes existent déjà en une ligne chacune dans `docs/05-api.md:64-73`, mais ces lignes décrivent l'intention, pas le contrat. Le reste de P6 en dépend : `PUBLIER-OPENAPI` et `CLIENT-PYTHON-HTTP` suivent cette tâche (`:131,139`), et le client Python doit exposer `get_document`, `attach_batch`, `upsert_documents`, `patch_documents` (`:141`).
@@ -52,6 +54,8 @@ Ce qui est conforme et n'est pas rouvert : le mode `upsert` seulement et le refu
 
 - **Raison** : un job est asynchrone et peut être relu par d'autres que son auteur ; la télémétrie d'exploitation est le journal, et les métriques de P7.
 - La CLI continue de les afficher à son appelant : elle n'a qu'un destinataire, et ADR-0042 le lui permet.
+
+**Remplacement partiel du 2026-11-11.** La première phrase de cette décision — « les durées de l'attache (ADR-0042) ne sont rendues par **aucune réponse de l'API**, y compris `?wait=true` » — est **remplacée par ADR-0149 le 2026-11-11**. L'objet `Job` porte désormais un membre `durations`, gardé en mémoire et jamais persisté, rendu par `GET /v1/jobs/{job_id}`, par `GET /v1/jobs` et par la réponse de `?wait=true` ; il vaut `null` quand il n'y a rien à rendre, notamment pour un rejeu (INV-10). Le reste de la décision 4 tient : la ligne de journal `attach durations` est publiée une fois, à la fin du job, et `batches.report` ne porte aucune durée, pas plus que la table `jobs.sqlite`.
 
 **Décision 5 — `POST /v1/indexes/{index}/batches`.** Le corps est `{ "directory": "<nom>" }`. `<nom>` est **un seul composant de chemin** sous `[paths].exchange`/`inbox` : `path_component` refuse la chaîne vide, `.`, `..` et les séparateurs `/` et `\` (`crates/crible-core/src/path.rs`). Avant la mise en file :
 

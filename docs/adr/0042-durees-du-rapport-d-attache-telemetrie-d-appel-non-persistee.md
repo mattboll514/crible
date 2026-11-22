@@ -87,6 +87,8 @@ Un renvoi, sans changement de la décision ci-dessus.
 
 **Raison.** Un job est asynchrone et peut être relu par d'autres que son auteur ; la télémétrie d'exploitation est le journal, et les métriques de P7.
 
+**Note du 2026-11-11.** Le renvoi ci-dessus à ADR-0107, décision 4, est **remplacé en partie par ADR-0149 le 2026-11-11** : le serveur rend les six durées de l'attache dans un membre `durations` de l'objet `Job`, gardé **en mémoire** et **jamais persisté**, lisible par toute clé qui peut lire le job. La décision du présent ADR ne change pas : `batches.report` ne porte aucune durée, et un rejeu n'en rend aucune. La ligne de journal `attach durations` reste.
+
 ## Références
 
 - `docs/04-donnees-et-ingestion.md` : `:159` (pas de seconde écriture après le point de commit), `:162` (idempotence, rapport d'origine, INV-10), `:176-180` (recette), `:184-200` (rapport d'attache).

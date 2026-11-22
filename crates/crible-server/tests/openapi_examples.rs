@@ -354,6 +354,224 @@ fn the_debug_query_list_is_closed_and_carries_the_cap_counters() {
     );
 }
 
+/// `durations` is a closed object of six whole-millisecond integers, `null` when
+/// there is nothing to render (ADR-0149, decision 1).
+///
+/// The examples of `docs/05-api.md` carry the member; this test fixes its shape,
+/// so a member added to it, or a fraction, is refused.
+#[test]
+fn the_job_schema_describes_durations_as_a_closed_object() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let properties = &specification["components"]["schemas"]["Job"]["properties"];
+    assert!(
+        properties.get("durations").is_some(),
+        "the component `Job` declares `durations` (ADR-0149, application table)"
+    );
+    let required = specification["components"]["schemas"]["Job"]["required"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the component `Job` declares its required members"));
+    assert!(
+        required
+            .iter()
+            .any(|name| name.as_str() == Some("durations")),
+        "`durations` is required: the member is always present, `null` when there is nothing \
+         to render (ADR-0149, decision 1)"
+    );
+
+    let validator = validator("Job");
+    let documented = serde_json::json!({
+        "id": "job_0000000000000000000000000000000a",
+        "kind": "attach_batch",
+        "index": "alpha",
+        "state": "succeeded",
+        "created_at": "2026-11-11T00:00:00Z",
+        "started_at": null,
+        "finished_at": null,
+        "generation": 1,
+        "progress": null,
+        "durations": {
+            "validation_ms": 1,
+            "segment_ms": 2,
+            "transaction_ms": 3,
+            "lexical_ms": 0,
+            "manifest_ms": 4,
+            "snapshot_ms": 5,
+        },
+        "result": null,
+        "error": null,
+    });
+    assert!(
+        validator.validate(&documented).is_ok(),
+        "the documented object of six keys is accepted"
+    );
+
+    let mut empty = documented.clone();
+    empty["durations"] = serde_json::Value::Null;
+    assert!(
+        validator.validate(&empty).is_ok(),
+        "`durations: null` is accepted: it is the answer of every other kind"
+    );
+
+    let mut extra = documented.clone();
+    extra["durations"]["total_ms"] = serde_json::json!(15);
+    assert!(
+        validator.validate(&extra).is_err(),
+        "the object is closed: a seventh key is refused"
+    );
+
+    for missing in [
+        "validation_ms",
+        "segment_ms",
+        "transaction_ms",
+        "lexical_ms",
+        "manifest_ms",
+        "snapshot_ms",
+    ] {
+        let mut without = documented.clone();
+        without["durations"]
+            .as_object_mut()
+            .expect("the documented durations are an object")
+            .remove(missing);
+        assert!(
+            validator.validate(&without).is_err(),
+            "`{missing}` is always rendered, worth 0 when the step did not run"
+        );
+    }
+
+    for (label, value) in [
+        ("a fraction", serde_json::json!(1.5)),
+        ("a negative number", serde_json::json!(-1)),
+        ("a string", serde_json::json!("1")),
+        ("null in place of a step", serde_json::Value::Null),
+    ] {
+        let mut wrong = documented.clone();
+        wrong["durations"]["lexical_ms"] = value;
+        assert!(
+            validator.validate(&wrong).is_err(),
+            "a step is a whole non-negative number of milliseconds: `{label}` is refused"
+        );
+    }
+}
+
+/// `sizes.live_bytes` is a required unsigned integer of `IndexSizes`, and the
+/// example of `docs/05-api.md` is validated against it by
+/// [`json_examples_conform_to_the_specification`] (ADR-0152, decisions 2 and
+/// 7).
+///
+/// The member is always present and worth `0` for an index without a segment,
+/// so it is required and refuses a negative value; an unknown member is refused
+/// by the closed body of `IndexState` (ADR-0105, decision 3).
+#[test]
+fn the_sizes_component_declares_live_bytes_as_a_required_unsigned_integer() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let sizes = &specification["components"]["schemas"]["IndexSizes"];
+    let required = sizes["required"].as_array().unwrap_or_else(|| {
+        panic!("the component `IndexSizes` declares its required members: {sizes}")
+    });
+    for member in ["disk_bytes", "live_bytes"] {
+        assert!(
+            required.iter().any(|name| name.as_str() == Some(member)),
+            "`{member}` is required: the member is always present (ADR-0152, decision 2): {sizes}"
+        );
+    }
+
+    let live = &sizes["properties"]["live_bytes"];
+    assert_eq!(
+        live["type"], "integer",
+        "`live_bytes` is an integer number of bytes: {live}"
+    );
+    assert_eq!(
+        live["minimum"], 0,
+        "an unsigned number of bytes refuses a negative value: {live}"
+    );
+    let description = live["description"]
+        .as_str()
+        .unwrap_or_else(|| panic!("`live_bytes` carries a description: {live}"));
+    assert!(
+        description.contains("ADR-0152"),
+        "the description names the decision that defines the member: {description}"
+    );
+
+    let validator = validator("IndexSizes");
+    let documented = serde_json::json!({
+        "disk_bytes": 21_474_836_480_u64,
+        "live_bytes": 0,
+        "filter_memory_bytes": 41_943_040,
+        "codes_memory_bytes": 1_287_000_000,
+    });
+    assert!(
+        validator.validate(&documented).is_ok(),
+        "the documented body is accepted, `live_bytes: 0` included"
+    );
+    let mut missing = documented.clone();
+    missing
+        .as_object_mut()
+        .expect("the documented body is an object")
+        .remove("live_bytes");
+    assert!(
+        validator.validate(&missing).is_err(),
+        "`live_bytes` is required, so its absence is refused"
+    );
+    for (label, value) in [
+        ("a negative number", serde_json::json!(-1)),
+        ("a fraction", serde_json::json!(1.5)),
+        ("a string", serde_json::json!("0")),
+    ] {
+        let mut wrong = documented.clone();
+        wrong["live_bytes"] = value;
+        assert!(
+            validator.validate(&wrong).is_err(),
+            "`live_bytes` is an unsigned integer: `{label}` is refused"
+        );
+    }
+}
+
+/// The error component admits the refusal of ADR-0150 and documents it.
+///
+/// `details` is a free object: the closed vocabulary of its keys lives in
+/// `docs/05-api.md` and in the description of the member (ADR-0101, decision 3).
+/// The refusal of a name held by a `delete_index` job adds two keys, `reason`
+/// with the new value `index_deleting` and `job_id`, and no `path` (ADR-0150,
+/// decision 1). This test fixes both halves: the description of `details` names
+/// the pair, so a client generated from the specification can read it, and the
+/// schema accepts the body the server renders.
+#[test]
+fn the_error_schema_documents_reason_index_deleting_with_its_job_id() {
+    let specification = crible_server::openapi::specification()
+        .expect("the specification of the server is serialisable");
+    let details = &specification["components"]["schemas"]["ErrorBody"]["properties"]["details"];
+    let description = details["description"].as_str().unwrap_or_else(|| {
+        panic!("the member `details` of `ErrorBody` carries a description: {details}")
+    });
+    for value in ["index_deleting", "job_id"] {
+        assert!(
+            description.contains(value),
+            "the description of `details` names `{value}` for the refusal of a name held by \
+             a deletion (ADR-0150, decision 7): {description}"
+        );
+    }
+
+    let validator = validator("Error");
+    let refusal = serde_json::json!({
+        "error": {
+            "code": "invalid_request",
+            "message": "index already exists: 'decisions'",
+            "details": { "reason": "index_deleting", "job_id": "job_7f3c0a1b2c3d4e5f60718293a4b5c6d7" },
+            "request_id": "openapi-examples-1",
+        }
+    });
+    assert!(
+        validator.validate(&refusal).is_ok(),
+        "the schema admits the refusal of ADR-0150, decision 1: {refusal}"
+    );
+    assert!(
+        refusal["error"]["details"].get("path").is_none(),
+        "the refusal carries no `path`: no field of the body is faulty"
+    );
+}
+
 #[test]
 fn every_marker_is_a_valid_component_or_none() {
     let specification = crible_server::openapi::specification()

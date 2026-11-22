@@ -103,7 +103,7 @@ query_precision = "fp32"      # "fp32" | "int8" : précision des requêtes (ADR-
 
 [limits]
 writer_queue = 16             # jobs en attente par index, le job en cours exclu ; au-delà, 503 overloaded (ADR-0103)
-default_timeout_ms = 2000
+default_timeout_ms = 2000     # 1 à 30000 ; hors bornes, refusé au démarrage ; surcharge CRIBLE_LIMITS__DEFAULT_TIMEOUT_MS (ADR-0147)
 wait_timeout_ms = 60000       # attente au plus de ?wait=true, puis 202 avec le job en cours (ADR-0067) ; borne aussi l'attente des jobs à l'arrêt (ADR-0104)
 query_cache_entries = 1024    # cache LRU des requêtes, par instance, jamais persisté (ADR-0051)
 ```
@@ -139,6 +139,8 @@ Pas d'image CUDA : les producteurs sont en Python (ADR-0013).
 | `/models` | volume nommé | Modèles ONNX et tokenizers, vérifiés par hash au démarrage |
 | `/exchange` | dossier monté depuis l'hôte | Lots (`inbox`), exports (`outbox`), instantanés : lectures et écritures séquentielles |
 | `/etc/crible/crible.toml` | fichier monté, en lecture seule | Configuration |
+
+**Montée et retour arrière.** Une instance se met à jour en épinglant l'image par sa version ou son empreinte, jamais par `:cpu`, étiquette mobile (ADR-0133, décision 4), après avoir pris un instantané de chaque index et gardé la configuration et l'image en place ; les contrôles sont la version rendue, les comptes de chaque index et `crible eval` sur le jeu de référence. Le retour arrière repart de l'image précédente et, quand la note de version le demande, des instantanés et de la configuration d'avant. Les commandes sont dans `docker/README.md`, sections « Monter de version » et « Revenir en arrière » ; la politique de version de la ligne 1.x qui encadre ces gestes est ADR-0143, et chaque mineure a sa note de version dans `docs/versions/<version>.md` (ADR-0143, décision 4).
 
 **Compose d'exemple** (Legifacile) : le service `crible` et le MCP de Legifacile partagent un réseau interne. Crible n'est **jamais exposé publiquement** : seul le MCP lui parle.
 

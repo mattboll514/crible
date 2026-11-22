@@ -29,7 +29,11 @@
 //! - the work step of the search route needs `<dir>/armed-search`, and the one
 //!   of the multi-index route `<dir>/armed-search-multi`, for the same reason:
 //!   every server test sends searches, so a test that arms only another scope
-//!   must not stop them on their token;
+//!   must not stop them on their token; the work step of the facets route needs
+//!   `<dir>/armed-facets`, for the same reason;
+//! - the step of `delete_index` that follows the rename is named by
+//!   `<dir>/delete-after-rename-path`: every server test deletes indexes, so a
+//!   test arms the one directory it quarantines (ADR-0150, decision 4);
 //! - the head of the loop of the analytics writer needs
 //!   `<dir>/armed-analytics-flush`, so a test that holds a write job or a search
 //!   never holds the analytics (ADR-0118, decision 7); that barrier is async, so
@@ -158,6 +162,22 @@ pub(crate) fn wait_search_multi() {
     wait_armed(SEARCH_MULTI_ARMED, "search-multi");
 }
 
+/// Name of the mark a test writes to arm the work step of the facets route.
+///
+/// Every server test sends facets requests once this route exists, so the step
+/// is opt-in like the ones of the searches: without this mark a facets request
+/// of an armed directory runs at full speed.
+const FACETS_ARMED: &str = "armed-facets";
+
+/// Holds the calling facets request inside its blocking task, before its work.
+///
+/// A test proves here that the deadline of `timeout_ms` answers `504` with no
+/// truncated result (ADR-0154, decision 8). The step is opt-in through
+/// [`FACETS_ARMED`].
+pub(crate) fn wait_facets() {
+    wait_armed(FACETS_ARMED, "facets");
+}
+
 /// Name of the file that names the index whose search must fail.
 ///
 /// With the readers of a served generation cached, a search of that generation
@@ -184,6 +204,34 @@ pub(crate) fn fault_search(index: &str) -> Option<CribleError> {
             format!("the search of the index '{index}' fails at the armed fault"),
         )
     })
+}
+
+/// Name of the file that names the directory whose `delete_index` is held after
+/// its rename.
+///
+/// Every server test deletes indexes, and several of them delete an index of the
+/// same name in their own data root, so the step is opt-in **and targeted**: the
+/// file holds the directory a test quarantines, and a deletion of another
+/// instance runs at full speed (ADR-0150, decision 4).
+const DELETE_AFTER_RENAME_PATH: &str = "delete-after-rename-path";
+
+/// Holds the calling `delete_index` between the rename of its directory and its
+/// deregistration, when the test armed that directory (ADR-0150, decision 4).
+///
+/// In that window the registry still holds the name while the directory is
+/// gone: a `POST /v1/indexes` of the same name must answer `index_deleting` with
+/// the job identifier (ADR-0150, decisions 1 and 4).
+pub(crate) fn wait_delete_after_rename(source: &Path) {
+    let Ok(directory) = std::env::var(BARRIER_ENV) else {
+        return;
+    };
+    let Ok(named) = fs::read_to_string(Path::new(&directory).join(DELETE_AFTER_RENAME_PATH)) else {
+        return;
+    };
+    if Path::new(named.trim()) != source {
+        return;
+    }
+    hold(&directory, "delete-after-rename");
 }
 
 /// Name of the mark a test writes to arm the analytics writer's hold point.

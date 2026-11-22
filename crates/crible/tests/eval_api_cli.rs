@@ -9,16 +9,16 @@
 //! References: the task sheet (`docs/phases/P8-docker-et-deploiement.md:124-146`
 //! and its note of 2026-11-02), ADR-0131 (the interface: `--url`, the simple
 //! search route, `CRIBLE_EVAL_API_KEY`, plain HTTP, named refusals, fixed
-//! deadlines, `format_version: 2`, `source`, `latency_basis`), ADR-0125 (the
-//! local mode this one must stay comparable with) and `docs/08`
-//! (`INV-13`).
+//! deadlines, `format_version: 3`, `source`, `latency_basis`), ADR-0125 (the
+//! local mode this one must stay comparable with), ADR-0155 (the replayable
+//! top-k, written in both modes) and `docs/08` (`INV-13`).
 //!
 //! | Test | Criterion / decision |
 //! |---|---|
 //! | `inv_13_eval_api_mode_never_writes_query_text_or_key` | no query text and no key in stdout, stderr, server journal, JSON or Markdown (INV-13, decisions 4 and 16) |
 //! | `eval_api_and_local_reports_agree_on_fidelity_and_quality` | same fidelity and quality figures, server at `exact_threshold = 0` against a local `--exact-threshold 0` (acceptance criterion 1, decision 10) |
 //! | `eval_api_stops_when_the_generation_moves_during_the_campaign` | an answer of another generation stops the campaign naming both (decision 10) |
-//! | `eval_api_report_names_its_source_and_client_latency` | `format_version: 2`, `source.mode`/`source.url`, `latency_basis`, `total` only in API (criterion 2, decision 7) |
+//! | `eval_api_report_names_its_source_and_client_latency` | `format_version: 3`, `source.mode`/`source.url`, `latency_basis`, `total` only in API (criterion 2, decision 7) |
 //! | `eval_api_names_a_refused_connection_without_panicking` | a refused connection is a named error, exit 1, no panic, no partial report (criterion 4, decision 5) |
 //! | `eval_api_returns_the_401_of_a_wrong_key_without_panicking` | a non-2xx answer is a named error, exit 1, no panic (criterion 4, decision 5) |
 //! | `eval_api_refuses_https_before_any_io` | `https://` refused in `invalid_request`, naming the scheme and TLS (decision 3) |
@@ -459,6 +459,24 @@ fn read_report(path: &Path) -> Value {
         .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
     serde_json::from_str(&raw)
         .unwrap_or_else(|error| panic!("{} must be valid JSON: {error}", path.display()))
+}
+
+/// Asserts `value` is a bare, lowercase, 64-character blake3 digest (ADR-0028).
+fn assert_fingerprint(value: &Value, label: &str) -> String {
+    let text = value
+        .as_str()
+        .unwrap_or_else(|| panic!("{label} must be a bare hexadecimal string: {value}"));
+    assert_eq!(
+        text.len(),
+        64,
+        "{label} is the blake3 of the canonical JSON, so 64 characters: {text}"
+    );
+    assert!(
+        text.chars()
+            .all(|character| character.is_ascii_digit() || ('a'..='f').contains(&character)),
+        "{label} is lowercase hexadecimal, with no prefix: {text}"
+    );
+    text.to_owned()
 }
 
 /// Files written into `directory`, sorted; an absent directory holds none.
@@ -925,6 +943,27 @@ fn inv_13_eval_api_mode_never_writes_query_text_or_key() {
         !written.contains(READ_KEY),
         "no key may reach stdout, stderr, the server journal or a report (ADR-0032, INV-13)"
     );
+
+    // ADR-0155, decisions 4 and 8: the row carries `doc_ids`, and the member
+    // holds external `doc_id`s of results only — no `doc_id#ord` key and no
+    // internal id. The marked query matches no passage, so its measured top-k
+    // is `[]`: the member is written even when the run renders nothing.
+    let row = &report["modes"]["lexical"]["queries"][0];
+    let doc_ids = row["doc_ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the row carries `doc_ids` (ADR-0155, decision 2): {report}"));
+    assert!(
+        doc_ids.is_empty(),
+        "the marked query matches no passage, so its top-k is empty: {row}"
+    );
+    assert!(
+        json_text.contains("\"doc_ids\""),
+        "the member under test is really written: {json_text}"
+    );
+    assert!(
+        !json_text.contains('#'),
+        "no `doc_id#ord` key nor passage key reaches the JSON report (INV-13): {json_text}"
+    );
 }
 
 // --- The same figures in both modes ---
@@ -1006,7 +1045,7 @@ fn eval_api_and_local_reports_agree_on_fidelity_and_quality() {
 #[test]
 fn eval_api_report_names_its_source_and_client_latency() {
     let _serial = common::SerialGuard::acquire();
-    // Criterion 2 and ADR-0131, decision 7: `format_version: 2`, a `source`
+    // Criterion 2 and ADR-0131, decision 7: `format_version: 3`, a `source`
     // member, `latency_basis` per mode, and in API mode a `latency` that carries
     // `total` only.
     let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
@@ -1039,8 +1078,8 @@ fn eval_api_report_names_its_source_and_client_latency() {
     let api_report = read_report(&api_json);
 
     assert_eq!(
-        local_report["format_version"], 2,
-        "the local report passes to format_version 2 too: {local_report}"
+        local_report["format_version"], 3,
+        "the local report passes to format_version 3 too: {local_report}"
     );
     assert_eq!(
         local_report["source"]["mode"], "local",
@@ -1052,8 +1091,8 @@ fn eval_api_report_names_its_source_and_client_latency() {
     );
 
     assert_eq!(
-        api_report["format_version"], 2,
-        "the API report carries format_version 2: {api_report}"
+        api_report["format_version"], 3,
+        "the API report carries format_version 3: {api_report}"
     );
     assert_eq!(
         api_report["source"]["mode"], "api",
@@ -1106,6 +1145,66 @@ fn eval_api_report_names_its_source_and_client_latency() {
     assert!(
         local_latency.len() > 2,
         "the local latency keeps its stages beside `latency_basis` and `total`: {local_report}"
+    );
+}
+
+// --- The replayable top-k of the API report (ADR-0155) ---------------------
+
+#[test]
+fn eval_api_report_v3_carries_doc_ids_and_queries_fingerprint_without_model_fingerprint() {
+    let _serial = common::SerialGuard::acquire();
+    // ADR-0155, decision 4: `doc_ids` applies to the API mode, `queries_fingerprint`
+    // is written in both modes, and neither `model_fingerprint` nor
+    // `query_precision` is written here: the encoder is a precondition of the
+    // instance, not a value the campaign read or imposed.
+    let fixture = Fixture::new(&small_entries(), false, 5_000, 0);
+    let game = fixture.game(
+        "queries.jsonl",
+        &[json!({ "id": "q1", "vector": [1.0, 0.0, 0.0, 0.0], "expected": ["A"] })],
+    );
+    let out = fixture.out("out-api");
+
+    let server = Server::start(&fixture);
+    server.wait_ready();
+    let output = api_eval(&game, &out, &url_of(&server), Some(READ_KEY), &[]);
+    assert!(
+        output.status.success(),
+        "the API campaign must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let (json_path, _) = reports(&output);
+    let report = read_report(&json_path);
+
+    assert_eq!(
+        report["format_version"], 3,
+        "the replayable top-k is a version 3 report (ADR-0155, decision 1): {report}"
+    );
+    let row = &report["modes"]["dense"]["queries"][0];
+    let doc_ids = row["doc_ids"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the row carries `doc_ids` (decision 4): {report}"));
+    assert_eq!(
+        &row["doc_ids"],
+        &json!(["A", "B", "C"]),
+        "the grouped run's ordered external `doc_id`s are written as they are: {report}"
+    );
+    for doc_id in doc_ids {
+        let doc_id = doc_id
+            .as_str()
+            .unwrap_or_else(|| panic!("a `doc_id` is a string: {row}"));
+        assert!(
+            !doc_id.contains('#'),
+            "the list holds external `doc_id`s, not `doc_id#ord` keys: {row}"
+        );
+    }
+    assert_fingerprint(&report["queries_fingerprint"], "queries_fingerprint");
+    assert!(
+        report.get("model_fingerprint").is_none(),
+        "the API mode does not write the encoder's fingerprint: {report}"
+    );
+    assert!(
+        report.get("query_precision").is_none(),
+        "the API mode does not write `query_precision`: {report}"
     );
 }
 
@@ -1317,7 +1416,7 @@ fn eval_api_baseline_reads_format_version_1_and_names_uncomparable_latencies() {
     );
     let (json_path, _) = reports(&output);
     let report = read_report(&json_path);
-    assert_eq!(report["format_version"], 2);
+    assert_eq!(report["format_version"], 3);
     assert_eq!(report["baseline"]["regression"], false);
     let mode = &report["baseline"]["modes"]["dense"];
     assert!(

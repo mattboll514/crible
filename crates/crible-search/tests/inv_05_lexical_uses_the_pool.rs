@@ -261,6 +261,88 @@ fn inv_05_dense_and_lexical_branches_share_the_same_pool() {
     }
 }
 
+/// INV-05, under `lexical.identifiers = "v1"` (ADR-0148, decision 4): the term
+/// the canonical token adds never lets a passage leave the pool, and never lets
+/// one enter it.
+///
+/// The corpus holds the same pourvoi twice, once inside the filter and once
+/// outside it: without the pool, the lexical branch returns both, because the
+/// canonical term `10-13-625` matches both texts. With the filter, only the
+/// passage of the pool may come back, whatever the score of the other one is.
+#[test]
+fn inv_05_an_identifier_query_under_v1_never_leaves_the_pool() {
+    let mut fixture = LexicalFixture::create_with_identifiers(Some("v1"));
+    fixture.add_generation(&[
+        Doc {
+            fonds: "civil".to_owned(),
+            ..doc(
+                "civil-pourvoi",
+                "pourvoi 10-13.625 chambre sociale",
+                [1.0, 0.0, 0.0, 0.0],
+            )
+        },
+        Doc {
+            fonds: "travail".to_owned(),
+            ..doc(
+                "travail-pourvoi",
+                "pourvoi 10-13.625 chambre sociale et contrat",
+                [0.8, 0.6, 0.0, 0.0],
+            )
+        },
+        Doc {
+            fonds: "civil".to_owned(),
+            ..doc(
+                "civil-article",
+                "article L. 1132-1 du code du travail",
+                [0.0, 1.0, 0.0, 0.0],
+            )
+        },
+    ]);
+
+    let snapshot = fixture.snapshot();
+    let pool = crible_search::pool::Pool::evaluate(snapshot.filters(), &civil_filter())
+        .unwrap_or_else(|error| panic!("the fixture filter must evaluate: {error}"));
+    assert_eq!(
+        common::sorted(pool.bitmap()),
+        vec![0, 2],
+        "the fixture must keep the two `civil` passages and exclude the `travail` one"
+    );
+
+    let hits = lexical::search(&snapshot, &pool, "10-13.625", 10)
+        .unwrap_or_else(|error| panic!("the lexical search must run: {}", error.message()));
+    assert!(
+        !hits.is_empty(),
+        "a filtered lexical search that returns nothing proves no subset relation"
+    );
+    for hit in &hits {
+        assert!(
+            pool.bitmap().contains(hit.iid.get()),
+            "INV-05 under \"v1\": the lexical branch returned iid {} at score {}, which the \
+             filter excluded",
+            hit.iid.get(),
+            hit.score
+        );
+    }
+
+    // Control: on the whole live set, the same canonical term returns both
+    // passages, the excluded one included, so the filter above is what removes
+    // it and not a missing match.
+    let whole = crible_search::pool::Pool::evaluate(snapshot.filters(), &match_all())
+        .unwrap_or_else(|error| panic!("the empty conjunction must evaluate: {error}"));
+    let unfiltered = lexical::search(&snapshot, &whole, "10-13.625", 10).unwrap_or_else(|error| {
+        panic!(
+            "the unfiltered lexical search must run: {}",
+            error.message()
+        )
+    });
+    let returned = iids(&unfiltered);
+    assert!(
+        returned.contains(&0) && returned.contains(&1),
+        "the canonical term of the pourvoi must match both passages, otherwise the subset \
+         assertion above proves nothing; the whole index returned {returned:?}"
+    );
+}
+
 /// Acceptance criterion: no dead passage appears, even when tantivy has not
 /// removed it yet.
 ///

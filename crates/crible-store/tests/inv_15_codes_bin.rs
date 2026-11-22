@@ -700,7 +700,7 @@ fn inv_15_restored_snapshot_rebuilds_identical_codes_on_write_open() {
     let config =
         IndexConfig::from_json_str(&common::test_config("test", &common::fixture_schema()))
             .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
-    let report = snapshot::create(&mut store, &config, &exchange)
+    let report = snapshot::create(&mut store, &config, &exchange, &mut |_| {})
         .unwrap_or_else(|error| panic!("the snapshot must be taken: {error}"));
     drop(store);
 

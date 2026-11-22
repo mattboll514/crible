@@ -32,7 +32,7 @@ use axum::http::header::RETRY_AFTER;
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use crible_core::error::{CribleError, ErrorCode};
+use crible_core::error::{CribleError, ErrorCode, ErrorReason};
 use serde_json::{Value, json};
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -63,6 +63,53 @@ pub(crate) fn invalid(message: impl Into<String>) -> CribleError {
 /// Builds an [`ErrorCode::Internal`] error.
 pub(crate) fn internal(message: impl Into<String>) -> CribleError {
     CribleError::new(ErrorCode::Internal, message.into())
+}
+
+/// Fixed message of the `503` of a route read before the startup published the
+/// index registry or the state opened with it (ADR-0146, decisions 1 and 2).
+pub const STARTING_MESSAGE: &str = "the server is starting";
+
+/// Builds the `503 overloaded` of a route that runs before the startup
+/// published the registry or the published state (ADR-0146, decisions 1 to 3).
+///
+/// The message is fixed and names neither an index, nor a path, nor a duration:
+/// the window is bounded by the loading, not by a count the server would
+/// announce. It is the **single** constructor of that case, so every route
+/// inherits the same body through [`rendered`]: `details: {}`, `x-request-id` and
+/// `Retry-After: 1` (ADR-0101, ADR-0098, ADR-0103 decision 9).
+///
+/// The refusal is decided at the access itself, never by a layer and never on
+/// `is_ready()`: a layer would answer `503` before the `401` of ADR-0100 and
+/// before the `400` of ADR-0110, and `is_ready()` is false during the drainage
+/// of ADR-0104, which keeps serving the reads.
+pub(crate) fn starting() -> CribleError {
+    CribleError::new(ErrorCode::Overloaded, STARTING_MESSAGE)
+}
+
+/// Builds the refusal of a lexical branch that the index disables.
+///
+/// `lexical` and `hybrid` are inapplicable to an index whose `lexical.enabled`
+/// is false (ADR-0089, decisions 3 and 4). The body carries the stable
+/// discriminant `{"path": "$.mode", "reason": "lexical_branch_disabled"}`,
+/// while the code and the message stay those of `invalid_request`; on the
+/// multi-index route the message keeps naming the faulty index (ADR-0145,
+/// decision 1).
+pub(crate) fn lexical_branch_disabled(message: impl Into<String>) -> CribleError {
+    invalid(message)
+        .with_path("$.mode")
+        .with_reason(ErrorReason::LexicalBranchDisabled)
+}
+
+/// Builds the refusal of a name that a `delete_index` job still holds.
+///
+/// The code and the message stay those of ADR-0105, decision 2, and the body
+/// carries the pair `{"reason": "index_deleting", "job_id": "job_…"}` with no
+/// `path`: no field of the request is faulty, the state of the instance is
+/// (ADR-0150, decision 1; ADR-0145, decision 3).
+pub(crate) fn index_deleting(message: impl Into<String>, job_id: impl Into<String>) -> CribleError {
+    invalid(message)
+        .with_reason(ErrorReason::IndexDeleting)
+        .with_job_id(job_id)
 }
 
 /// Builds the JSON body of an error, in the format of `docs/05-api.md`.
@@ -123,9 +170,20 @@ pub(crate) fn response(
 ///
 /// The message is the one of the error, except for `internal`, which keeps
 /// [`INTERNAL_MESSAGE`]: an unexpected failure names a server path or an
-/// internal structure (ADR-0101, decision 2). `details` is empty, except
-/// `path` for the `invalid_filter` error that carries one: `docs/05` documents
-/// that key for that code only (decision 3, ADR-0109, ADR-0110).
+/// internal structure (ADR-0101, decision 2). `details` is empty, except the
+/// keys that `docs/05` documents for that code (decision 3): `path` alone for
+/// `invalid_filter`, `path` with `reason` for an `invalid_request` that
+/// carries one (ADR-0145, decision 3), and `reason` with `job_id` for a name
+/// held by a `delete_index` job (ADR-0150, decision 1). An `invalid_request`
+/// that names a path without a reason, or a `reason` without its locator,
+/// publishes nothing: its message stays its only location. The pair of
+/// ADR-0150 is never split: `index_deleting` without a `job_id`, or a `job_id`
+/// without `index_deleting`, publishes `{}`. A `path` beside the pair drops it
+/// too, and the body then says the name is really taken where the job will free
+/// it; no producer reaches that shape — [`index_deleting`] attaches no path,
+/// and the one reason that carries a path is the lexical branch — and the unit
+/// test of this module freezes it, so a future producer that adds a path is
+/// caught there instead of by a client.
 ///
 /// The message of an `internal` is not lost: it travels as a [`Cause`] in the
 /// extension of the response, and [`render_layer_errors`] journals it under the
@@ -137,8 +195,16 @@ pub(crate) fn rendered(failure: &CribleError, request_id: &str) -> Response {
         ErrorCode::Internal => INTERNAL_MESSAGE,
         _ => failure.message(),
     };
-    let details = match (code, failure.path()) {
-        (ErrorCode::InvalidFilter, Some(path)) => json!({ "path": path }),
+    let details = match (code, failure.reason(), failure.path(), failure.job_id()) {
+        (ErrorCode::InvalidFilter, _, Some(path), _) => json!({ "path": path }),
+        (ErrorCode::InvalidRequest, Some(ErrorReason::IndexDeleting), None, Some(job_id)) => {
+            json!({ "reason": ErrorReason::IndexDeleting.as_str(), "job_id": job_id })
+        }
+        (ErrorCode::InvalidRequest, Some(reason), Some(path), None)
+            if reason != ErrorReason::IndexDeleting =>
+        {
+            json!({ "path": path, "reason": reason.as_str() })
+        }
         _ => json!({}),
     };
     let mut answer = response(code, message, details, request_id);
@@ -358,7 +424,7 @@ struct Preserved;
 mod tests {
     use super::{INTERNAL_MESSAGE, Rendered, rendered};
     use axum::response::Response;
-    use crible_core::error::{CribleError, ErrorCode};
+    use crible_core::error::{CribleError, ErrorCode, ErrorReason};
     use serde_json::{Value, json};
 
     /// Decodes the JSON body of a response.
@@ -438,5 +504,91 @@ mod tests {
             !INTERNAL_MESSAGE.contains("a message of the failure"),
             "the generic message hides the cause"
         );
+    }
+
+    #[tokio::test]
+    async fn details_carry_only_the_keys_documented_for_the_code() {
+        // `invalid_filter` keeps `path` alone; an `invalid_request` publishes
+        // `path` only together with a `reason`, so an undocumented path is
+        // hidden and the message stays its only location (ADR-0145,
+        // decision 3).
+        let failure =
+            CribleError::new(ErrorCode::InvalidFilter, "a filter").with_path("$.filter.numero");
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({ "path": "$.filter.numero" }),
+            "invalid_filter publishes its path alone: {body}"
+        );
+
+        let failure =
+            CribleError::new(ErrorCode::InvalidRequest, "a path alone").with_path("$.mode");
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({}),
+            "an invalid_request without a reason publishes nothing: {body}"
+        );
+
+        let failure = CribleError::new(ErrorCode::InvalidRequest, "a reason")
+            .with_path("$.mode")
+            .with_reason(ErrorReason::LexicalBranchDisabled);
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(
+            body["error"]["details"],
+            json!({ "path": "$.mode", "reason": "lexical_branch_disabled" }),
+            "an invalid_request with a reason publishes both keys: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn index_deleting_is_never_rendered_without_its_job_id() {
+        // ADR-0150, decision 1: `reason: index_deleting` and `job_id` travel
+        // together or not at all, and the refusal carries no `path`: no field
+        // of the request is faulty.
+        let failure = super::index_deleting(
+            "index already exists: 'decisions'",
+            "job_7f3c0a1b2c3d4e5f60718293a4b5c6d7",
+        );
+        let body = json_body(rendered(&failure, "request-1")).await;
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(
+            body["error"]["message"], "index already exists: 'decisions'",
+            "the message of ADR-0105, decision 2, does not change: {body}"
+        );
+        assert_eq!(
+            body["error"]["details"],
+            json!({
+                "reason": "index_deleting",
+                "job_id": "job_7f3c0a1b2c3d4e5f60718293a4b5c6d7"
+            }),
+            "the pair is published together: {body}"
+        );
+
+        let halves = [
+            (
+                "a reason without its job",
+                CribleError::new(ErrorCode::InvalidRequest, "a reason")
+                    .with_reason(ErrorReason::IndexDeleting),
+            ),
+            (
+                "a job without its reason",
+                CribleError::new(ErrorCode::InvalidRequest, "a job")
+                    .with_job_id("job_7f3c0a1b2c3d4e5f60718293a4b5c6d7"),
+            ),
+            (
+                "a reason and a job with a path",
+                super::index_deleting("a path", "job_7f3c0a1b2c3d4e5f60718293a4b5c6d7")
+                    .with_path("$.name"),
+            ),
+        ];
+        for (label, half) in halves {
+            let body = json_body(rendered(&half, "request-1")).await;
+            assert_eq!(
+                body["error"]["details"],
+                json!({}),
+                "{label} publishes nothing (ADR-0150, decision 1): {body}"
+            );
+        }
     }
 }

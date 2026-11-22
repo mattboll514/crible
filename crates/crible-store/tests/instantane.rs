@@ -19,6 +19,8 @@
 //! | `inv_14_restore_rolls_back_and_keeps_the_replaced_epoch` | a higher-generation target is accepted, the replaced epoch stays (ADR-0065 §3, §4; INV-14) |
 //! | `restore_creates_an_absent_index_at_the_initial_epoch` | the absent target gets the initial epoch, generation G (ADR-0065 §2, §3) |
 //! | `restore_refuses_a_divergent_index_json` | a different `index.json` is refused, the setting named (ADR-0065 §3) |
+//! | `snapshot_round_trip_of_an_index_without_identifiers_restores` | an index without `lexical.identifiers` snapshots and restores (ADR-0148 §6) |
+//! | `restore_refuses_a_target_that_names_identifiers_none_explicitly` | an explicitly named `"none"` differs from the omitted form, and the key is named (ADR-0148 §6) |
 //! | `restore_refuses_a_snapshot_that_names_another_index_in_its_index_json` | the attestation and the copied `index.json` must name the same index (ADR-0064 §1, ADR-0065 §3) |
 //! | `restore_refuses_an_absent_attestation` | no `snapshot.json` (ADR-0064 §1) |
 //! | `inv_15_restore_refuses_an_unknown_format_version` | unknown `format_version` (ADR-0064 §1, INV-15) |
@@ -35,14 +37,20 @@
 //! | `a_refused_restore_leaves_the_stale_online_batches_alone` | a refused restore writes nothing, batch residues included (ADR-0065 §3, §5) |
 //! | `a_restore_removes_the_stale_online_batches_once_it_writes` | a restore that writes sweeps the batch residues (ADR-0065 §5) |
 //! | `the_attestation_is_deterministic` | two snapshots of one epoch are byte-identical (ADR-0064 §1) |
+//! | `a_snapshot_publishes_copy_then_attest_then_rename_in_bytes` | the copy publishes three steps in bytes, `done ≤ total`, and ends at the report's bytes (ADR-0153 §1 to §4) |
+//! | `a_snapshot_that_fails_keeps_the_last_published_progress` | a failure keeps the last publication (ADR-0153 §5) |
+//! | `inv_15_a_snapshot_attestation_keeps_its_format_version_and_its_files` | `format_version` and the attested files unchanged (INV-15, ADR-0153 §7) |
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crible_core::config::IndexConfig;
 use crible_core::error::ErrorCode;
 use crible_core::ids::{Epoch, Generation, Iid};
 use crible_store::generation::{GenerationStore, INDEX_CONFIG_FILE_NAME};
-use crible_store::snapshot::{self, RestoreReport, SNAPSHOT_FILE_NAME, SnapshotReport};
+use crible_store::snapshot::{
+    self, RestoreReport, SNAPSHOT_FILE_NAME, SnapshotProgress, SnapshotReport, SnapshotStep,
+};
 use serde_json::{Value, json};
 
 mod common;
@@ -121,12 +129,7 @@ impl Instance {
     /// Takes the snapshot of the fixture index and returns its report.
     fn snapshot(&self) -> SnapshotReport {
         let mut store = common::open_store(&self.index);
-        let config = crible_core::config::IndexConfig::from_json_str(&common::test_config(
-            INDEX,
-            &common::fixture_schema(),
-        ))
-        .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
-        snapshot::create(&mut store, &config, &self.exchange)
+        snapshot::create(&mut store, &fixture_config(), &self.exchange, &mut |_| {})
             .unwrap_or_else(|error| panic!("the snapshot must be taken: {error}"))
     }
 
@@ -160,6 +163,12 @@ fn create_fixture(index: &Path) -> GenerationStore {
         .unwrap_or_else(|error| panic!("the fixture configuration must be written: {error}"));
     GenerationStore::create(index, Epoch::new(1), &schema)
         .unwrap_or_else(|error| panic!("the fixture index must be created: {error}"))
+}
+
+/// Configuration of the fixture index, as [`Instance`] stores it.
+fn fixture_config() -> IndexConfig {
+    IndexConfig::from_json_str(&common::test_config(INDEX, &common::fixture_schema()))
+        .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"))
 }
 
 /// Reads the attestation of a snapshot as a mutable JSON value.
@@ -413,6 +422,103 @@ fn restore_refuses_a_divergent_index_json() {
 }
 
 #[test]
+fn snapshot_round_trip_of_an_index_without_identifiers_restores() {
+    // ADR-0148, decision 6: the stored form of `"none"` is the **absence** of
+    // the key, so an index created by this build snapshots and restores without
+    // any special case, and its restored configuration still omits the key.
+    let instance = Instance::new();
+    instance.snapshot();
+    let directory = instance.snapshot_directory();
+    let path = instance.index.join(INDEX_CONFIG_FILE_NAME);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the target configuration must be readable: {error}"));
+    let value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the target configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "the fixture must omit identifiers, which is the stored form of \"none\": {value}"
+    );
+
+    let report = restore_into(&instance.data, &directory);
+    assert_eq!(
+        report.replaced_generation,
+        Some(Generation::new(1)),
+        "the restore must accept an index without lexical.identifiers"
+    );
+
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the restored configuration must be readable: {error}"));
+    let value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the restored configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "a restore must not materialise \"none\": {value}"
+    );
+    let store = common::open_store(&instance.index);
+    assert_eq!(
+        store.generation(),
+        Generation::new(1),
+        "the restored index must open at the generation of the snapshot"
+    );
+}
+
+#[test]
+fn restore_refuses_a_target_that_names_identifiers_none_explicitly() {
+    // ADR-0148, decision 6: the comparison of ADR-0065 compares the JSON tree,
+    // so a target that spells `"none"` out differs from a snapshot that omits it
+    // and the restore is refused, with the key named. This is why the stored
+    // form has to omit the default.
+    let instance = Instance::new();
+    instance.snapshot();
+    let directory = instance.snapshot_directory();
+    let path = instance.index.join(INDEX_CONFIG_FILE_NAME);
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("the target configuration must be readable: {error}"));
+    let mut value: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|error| panic!("the target configuration must be valid: {error}"));
+    assert!(
+        value["lexical"].get("identifiers").is_none(),
+        "the target must start without the key: {value}"
+    );
+    value["lexical"]["identifiers"] = json!("none");
+    fs::write(
+        &path,
+        serde_json::to_vec(&value)
+            .unwrap_or_else(|error| panic!("the configuration must serialize: {error}")),
+    )
+    .unwrap_or_else(|error| panic!("the target configuration must be written: {error}"));
+
+    // The refusal must come from the comparison of the two trees, not from the
+    // parsing of the target: `"none"` is a valid value (decision 6), so the
+    // message names the divergent setting of ADR-0065, decision 3.
+    let pointer = instance.pointer();
+    let error = instance
+        .restore(&directory)
+        .err()
+        .unwrap_or_else(|| panic!("the restore must be refused"));
+    assert_eq!(
+        error.code(),
+        ErrorCode::InvalidRequest,
+        "a snapshot Crible cannot use is refused in invalid_request: {}",
+        error.message()
+    );
+    let message = error.message();
+    assert!(
+        message.contains("$.lexical.identifiers"),
+        "the refusal must name the key: {message}"
+    );
+    assert!(
+        message.contains("differs from the snapshot"),
+        "the refusal must be the divergence of ADR-0065, not a parse error: {message}"
+    );
+    assert_eq!(
+        instance.pointer(),
+        pointer,
+        "a refused restore must not move CURRENT_EPOCH"
+    );
+}
+
+#[test]
 fn restore_refuses_a_snapshot_that_names_another_index_in_its_index_json() {
     // The name of `snapshot.json` and the name its `index.json` declares must
     // agree, or the restore would install an index under a directory its own
@@ -549,7 +655,7 @@ fn a_second_snapshot_of_the_same_epoch_is_refused() {
         &common::fixture_schema(),
     ))
     .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
-    let error = snapshot::create(&mut store, &config, &instance.exchange)
+    let error = snapshot::create(&mut store, &config, &instance.exchange, &mut |_| {})
         .err()
         .unwrap_or_else(|| panic!("a second snapshot of the same epoch must be refused"));
     assert_eq!(error.code(), ErrorCode::InvalidRequest);
@@ -825,7 +931,7 @@ fn the_attestation_is_deterministic() {
         &common::fixture_schema(),
     ))
     .unwrap_or_else(|error| panic!("the fixture configuration must be valid: {error}"));
-    let second = snapshot::create(&mut store, &config, &second_exchange)
+    let second = snapshot::create(&mut store, &config, &second_exchange, &mut |_| {})
         .unwrap_or_else(|error| panic!("the second snapshot must be taken: {error}"));
     assert_eq!(
         fs::read(first.directory.join(SNAPSHOT_FILE_NAME))
@@ -860,5 +966,187 @@ fn the_attestation_is_deterministic() {
     assert!(
         !paths.contains(&"manifests/2.json"),
         "the manifests of later generations are not: {paths:?}"
+    );
+}
+
+// --- Progression du job `snapshot`, en octets (ADR-0153) ---
+
+/// The copy publishes `copy`, `attest` then `rename`, in bytes, and a successful
+/// snapshot ends at `done = total = bytes` of its report (ADR-0153, decisions 1
+/// to 4).
+#[test]
+fn a_snapshot_publishes_copy_then_attest_then_rename_in_bytes() {
+    let instance = Instance::new();
+    let mut store = common::open_store(&instance.index);
+    let mut published: Vec<SnapshotProgress> = Vec::new();
+    let report = snapshot::create(
+        &mut store,
+        &fixture_config(),
+        &instance.exchange,
+        &mut |progress| published.push(progress),
+    )
+    .unwrap_or_else(|error| panic!("the snapshot must be taken: {error}"));
+
+    let steps: Vec<SnapshotStep> = published.iter().map(|progress| progress.step).collect();
+    assert_eq!(
+        steps.first(),
+        Some(&SnapshotStep::Copy),
+        "the first publication precedes the first copied file: {published:?}"
+    );
+    assert_eq!(
+        steps.last(),
+        Some(&SnapshotStep::Rename),
+        "the last publication is the rename into place: {published:?}"
+    );
+    assert!(
+        steps.contains(&SnapshotStep::Attest),
+        "the attestation of the copy is a step of its own: {published:?}"
+    );
+    assert!(
+        steps.windows(2).all(|pair| rank(pair[0]) <= rank(pair[1])),
+        "the steps only move forward: {published:?}"
+    );
+    assert!(
+        steps
+            .iter()
+            .filter(|step| **step == SnapshotStep::Copy)
+            .count()
+            > 1,
+        "the copy publishes more than its first boundary: {published:?}"
+    );
+    assert!(
+        published
+            .windows(2)
+            .all(|pair| pair[0].done <= pair[1].done),
+        "done never decreases: {published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .all(|progress| progress.done <= progress.total),
+        "done never exceeds total at a publication: {published:?}"
+    );
+    let last = published
+        .last()
+        .unwrap_or_else(|| panic!("the copy publishes its progression"));
+    assert_eq!(
+        (last.done, last.total),
+        (report.bytes, report.bytes),
+        "a successful snapshot ends at the bytes of its report: {published:?}"
+    );
+}
+
+/// Rank of a step in the order of the copy, for the monotonicity assertions.
+fn rank(step: SnapshotStep) -> u8 {
+    match step {
+        SnapshotStep::Copy => 0,
+        SnapshotStep::Attest => 1,
+        SnapshotStep::Rename => 2,
+    }
+}
+
+/// A copy that fails keeps the last progression it published (ADR-0153,
+/// decision 5): the failure comes after the first segment, so `done` is not zero.
+#[test]
+fn a_snapshot_that_fails_keeps_the_last_published_progress() {
+    let instance = Instance::new();
+    instance.advance();
+    // The store opens with both segments of generation 2; the second one is then
+    // made uncopyable by removing its vector file, which no commit produces.
+    let mut store = common::open_store(&instance.index);
+    let vector = instance
+        .index
+        .join("epochs")
+        .join("1")
+        .join("segments")
+        .join("seg-2")
+        .join("vectors.f16");
+    fs::remove_file(&vector)
+        .unwrap_or_else(|error| panic!("{} must be removable: {error}", vector.display()));
+
+    let mut published: Vec<SnapshotProgress> = Vec::new();
+    let error = snapshot::create(
+        &mut store,
+        &fixture_config(),
+        &instance.exchange,
+        &mut |progress| published.push(progress),
+    )
+    .err()
+    .unwrap_or_else(|| panic!("a copy whose segment is gone must fail"));
+    assert_eq!(error.code(), ErrorCode::Internal, "{error}");
+
+    let last = published
+        .last()
+        .unwrap_or_else(|| panic!("the copy published before it failed"));
+    assert_eq!(
+        last.step,
+        SnapshotStep::Copy,
+        "a failure during the copy leaves the copy step in place: {published:?}"
+    );
+    assert!(
+        last.done > 0,
+        "the files copied before the failure are counted: {published:?}"
+    );
+    assert!(
+        last.done <= last.total,
+        "the last publication keeps done ≤ total: {published:?}"
+    );
+}
+
+/// INV-15: a snapshot keeps its `format_version` and attests exactly its files —
+/// path, size and blake3 — without a member the progression could have added
+/// (ADR-0064, decision 1; ADR-0153, decision 7).
+#[test]
+fn inv_15_a_snapshot_attestation_keeps_its_format_version_and_its_files() {
+    let instance = Instance::new();
+    let report = instance.snapshot();
+    let value = attestation(&report.directory);
+    assert_eq!(
+        value["format_version"],
+        json!(1),
+        "the attestation's format is the version 1 of ADR-0064: {value}"
+    );
+    assert_eq!(value["index"], json!(INDEX), "{value}");
+    assert_eq!(value["epoch"], json!(1), "{value}");
+    assert_eq!(value["generation"], json!(1), "{value}");
+
+    let files = value["files"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the attestation lists its files: {value}"));
+    assert!(!files.is_empty(), "{value}");
+    let mut total = 0_u64;
+    for file in files {
+        assert_eq!(
+            file.as_object().map(serde_json::Map::len),
+            Some(3),
+            "a listed file carries exactly path, size and blake3: {file}"
+        );
+        assert!(
+            file["path"].as_str().is_some_and(|path| !path.is_empty()),
+            "{file}"
+        );
+        assert!(
+            file["blake3"]
+                .as_str()
+                .is_some_and(|digest| digest.starts_with("blake3:")),
+            "{file}"
+        );
+        total = total
+            .checked_add(
+                file["size"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("a listed file carries its size: {file}")),
+            )
+            .unwrap_or_else(|| panic!("the attestation sums its files"));
+    }
+    assert_eq!(
+        total, report.bytes,
+        "the attested sizes sum to the bytes the report counts: {value}"
+    );
+    assert!(
+        files
+            .iter()
+            .any(|file| file["path"] == json!("records.sqlite")),
+        "the copied reference database is attested: {value}"
     );
 }

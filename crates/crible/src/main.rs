@@ -299,6 +299,10 @@ enum Command {
         /// `compact`, `export`, `snapshot` or `index_admin`.
         #[arg(long)]
         operation: Option<String>,
+        /// Only the events of that mode: `dense`, `lexical` or `hybrid`;
+        /// absent, every mode is aggregated (ADR-0156, decision 1).
+        #[arg(long, value_name = "dense|lexical|hybrid")]
+        mode: Option<String>,
         /// Width of the buckets: `minute`, `hour` (default) or `day`.
         #[arg(long, value_name = "minute|hour|day")]
         group_by: Option<String>,
@@ -513,6 +517,7 @@ fn run_command(command: Command) -> Result<(), CribleError> {
             to,
             index,
             operation,
+            mode,
             group_by,
             format,
         } => commands::stats(&commands::StatsRequest {
@@ -521,6 +526,7 @@ fn run_command(command: Command) -> Result<(), CribleError> {
             to: to.as_deref(),
             index: index.as_deref(),
             operation: operation.as_deref(),
+            mode: mode.as_deref(),
             group_by: group_by.as_deref(),
             format,
         }),

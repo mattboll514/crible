@@ -120,6 +120,7 @@ async fn compact_inner(
         let report = compact_for_job(store, &index_config)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "from_epoch": report.from_epoch.get(),
@@ -174,12 +175,14 @@ async fn exports_inner(
     };
     let holder = Arc::clone(&state);
     let destination = exchange.clone();
+    let name = index.clone();
     let work: crate::jobs::JobWork = Box::new(move |store, _progress, writer| {
         let index_config = writer.configuration()?;
-        let model = holder.model(&index_config.model)?;
+        let model = holder.model_for(&name, &index_config.model)?;
         let report = export(store, &index_config, &model.config, &destination)?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "generation": report.generation.get(),
@@ -239,11 +242,16 @@ async fn snapshots_inner(
         Err(failure) => return error::rendered(&failure, &identifier.0),
     };
     let destination = exchange.clone();
-    let work: crate::jobs::JobWork = Box::new(move |store, _progress, writer| {
+    let work: crate::jobs::JobWork = Box::new(move |store, progress, writer| {
         let index_config = writer.configuration()?;
-        let report = snapshot::create(store, &index_config, &destination)?;
+        // The job publishes the copy's progress in bytes, at the three step
+        // boundaries and after each copied file (ADR-0153, decisions 1 to 4).
+        let report = snapshot::create(store, &index_config, &destination, &mut |copied| {
+            progress.set(copied.step.as_str(), copied.done, copied.total)
+        })?;
         Ok(JobOutcome {
             generation: Some(report.generation.get()),
+            durations: None,
             result: Some(json!({
                 "report": {
                     "index": report.index,

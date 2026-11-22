@@ -136,7 +136,7 @@ pub(crate) const DEFAULT_K: usize = 10;
         (status = 403, description = "Insufficient role", body = crate::openapi::Error),
         (status = 404, description = "Unknown index", body = crate::openapi::Error),
         (status = 500, description = "Unexpected failure", body = crate::openapi::Error),
-        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable", body = crate::openapi::Error),
+        (status = 503, description = "Search limit reached, server draining or lexical branch unavailable, or the fixed message \"the server is starting\" before the registry is published (ADR-0146)", body = crate::openapi::Error),
         (status = 504, description = "`timeout_ms` reached", body = crate::openapi::Error)
     )
 )]
@@ -206,7 +206,7 @@ async fn search_inner(
         .unwrap_or_else(|| Mode::default_for(published.config.lexical.enabled));
     if mode.uses_lexical() && !published.config.lexical.enabled {
         return observed.refused(
-            &error::invalid("lexical branch is disabled for this index"),
+            &error::lexical_branch_disabled("lexical branch is disabled for this index"),
             &identifier.0,
         );
     }
@@ -1143,7 +1143,7 @@ pub(crate) fn check_vector(
     published: &Published,
     vector: Vec<f32>,
 ) -> Result<Vec<f32>, CribleError> {
-    let access = state.model(&published.config.model)?;
+    let access = state.model_for(&published.config.name, &published.config.model)?;
     check_dimensions(&vector, access.config.dims)?;
     Ok(vector)
 }
@@ -1159,7 +1159,7 @@ pub(crate) fn encode_query(
     published: &Published,
     query: &str,
 ) -> Result<(Vec<f32>, bool), CribleError> {
-    let access = state.model(&published.config.model)?;
+    let access = state.model_for(&published.config.name, &published.config.model)?;
     #[cfg(feature = "failpoints")]
     if let Some(encoded) = crate::test_encoding::encode(access.config.dims) {
         return encoded;
@@ -1175,8 +1175,15 @@ pub(crate) fn encode_query(
         .loaded()
         .ok_or_else(|| error::internal("the instance has not loaded its indexes"))?
         .query_precision();
+    // ADR-0151, decision 2: the query encoder loads the fp32 session on its
+    // first use, or the INT8 one when `[encoder].query_precision` asks for it;
+    // the index that triggered the load names it here.
+    let before = state.encoder_loads();
     let encoder = state.query_encoder(&access)?;
     let encoded = encoder.encode_query(query, precision)?;
+    if state.encoder_loads() > before {
+        crate::memory::log(crate::memory::Point::session_load(&published.config.name));
+    }
     Ok((encoded.vector, encoded.truncated))
 }
 
@@ -1855,7 +1862,7 @@ pub(crate) fn optional_string(
 }
 
 /// An optional non-negative integer member.
-fn optional_unsigned(
+pub(crate) fn optional_unsigned(
     object: &Map<String, Value>,
     path: &str,
     name: &str,
@@ -1887,7 +1894,7 @@ fn optional_bool(
 
 /// Converts a JSON unsigned value to `usize`, saturating above the platform
 /// maximum so the range checks of the caller speak last.
-fn as_usize(value: u64) -> usize {
+pub(crate) fn as_usize(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 

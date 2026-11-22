@@ -74,6 +74,14 @@ class _Core:
         body["targets"] = [_target(target) for target in targets]
         return _Call("POST", "/v1/search", body)
 
+    def facets(
+        self, index: str, fields: Sequence[str], options: Mapping[str, Any]
+    ) -> _Call:
+        """``POST /v1/indexes/{index}/facets``; ``fields`` is mandatory (ADR-0154)."""
+        body: dict[str, Any] = {"fields": list(fields)}
+        body.update({key: value for key, value in options.items() if value is not None})
+        return _Call("POST", f"/v1/indexes/{_component(index)}/facets", body)
+
     def get_document(self, index: str, doc_id: str, text: bool) -> _Call:
         """``GET /v1/indexes/{index}/documents/{doc_id}``."""
         params = {"text": "true"} if text else {}
@@ -135,6 +143,22 @@ class _Core:
     def export(self, index: str) -> _Call:
         """``POST /v1/indexes/{index}/exports``; the route takes no body."""
         return _Call("POST", f"/v1/indexes/{_component(index)}/exports")
+
+    def delete_index(self, index: str, confirm: str) -> _Call:
+        """``DELETE /v1/indexes/{index}?confirm=...``.
+
+        ``confirm`` is sent as given: the server checks it against the name
+        (ADR-0105), and the client neither verifies nor fills it (ADR-0144).
+        """
+        return _Call(
+            "DELETE",
+            f"/v1/indexes/{_component(index)}",
+            params={"confirm": confirm},
+        )
+
+    def snapshot(self, index: str) -> _Call:
+        """``POST /v1/indexes/{index}/snapshots``; the route takes no body."""
+        return _Call("POST", f"/v1/indexes/{_component(index)}/snapshots")
 
     def decode(self, response: httpx.Response) -> dict[str, Any]:
         """Returns the JSON body of a success, or raises the typed error."""
@@ -219,6 +243,23 @@ class Client:
         """Searches several indexes in one request (``docs/05``, ADR-0110)."""
         return self._send(self._core.search_multi(targets, options))
 
+    def facets(
+        self,
+        index: str,
+        fields: Sequence[str],
+        *,
+        filter: Mapping[str, Any] | None = None,
+        limit: int | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Returns the frequent values and the counts of a filtered pool (ADR-0154).
+
+        Only the options that are given are sent: an absent ``limit`` or
+        ``timeout_ms`` lets the server apply its default.
+        """
+        options = {"filter": filter, "limit": limit, "timeout_ms": timeout_ms}
+        return self._send(self._core.facets(index, fields, options))
+
     def get_document(self, index: str, doc_id: str, *, text: bool = False) -> dict[str, Any]:
         """Reads a document and its live passages, with their text if ``text``."""
         return self._send(self._core.get_document(index, doc_id, text))
@@ -283,6 +324,18 @@ class Client:
         """Starts an export to ``exchange/outbox``; returns its job."""
         return self._send(self._core.export(index))
 
+    def delete_index(self, index: str, *, confirm: str) -> dict[str, Any]:
+        """Starts the deletion of an index; returns its job.
+
+        ``confirm`` is mandatory and sent as given: the server refuses it if it
+        does not repeat the name of the index (ADR-0105, ADR-0144).
+        """
+        return self._send(self._core.delete_index(index, confirm))
+
+    def snapshot(self, index: str) -> dict[str, Any]:
+        """Starts a snapshot to ``exchange/snapshots``; returns its job."""
+        return self._send(self._core.snapshot(index))
+
     def _send(self, call: _Call) -> dict[str, Any]:
         try:
             response = self._http.request(
@@ -327,6 +380,19 @@ class AsyncClient:
     ) -> dict[str, Any]:
         """Searches several indexes in one request (``docs/05``, ADR-0110)."""
         return await self._send(self._core.search_multi(targets, options))
+
+    async def facets(
+        self,
+        index: str,
+        fields: Sequence[str],
+        *,
+        filter: Mapping[str, Any] | None = None,
+        limit: int | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Returns the frequent values and the counts of a filtered pool (ADR-0154)."""
+        options = {"filter": filter, "limit": limit, "timeout_ms": timeout_ms}
+        return await self._send(self._core.facets(index, fields, options))
 
     async def get_document(
         self, index: str, doc_id: str, *, text: bool = False
@@ -390,6 +456,14 @@ class AsyncClient:
     async def export(self, index: str) -> dict[str, Any]:
         """Starts an export to ``exchange/outbox``; returns its job."""
         return await self._send(self._core.export(index))
+
+    async def delete_index(self, index: str, *, confirm: str) -> dict[str, Any]:
+        """Starts the deletion of an index; same contract as :meth:`Client.delete_index`."""
+        return await self._send(self._core.delete_index(index, confirm))
+
+    async def snapshot(self, index: str) -> dict[str, Any]:
+        """Starts a snapshot to ``exchange/snapshots``; returns its job."""
+        return await self._send(self._core.snapshot(index))
 
     async def _send(self, call: _Call) -> dict[str, Any]:
         try:

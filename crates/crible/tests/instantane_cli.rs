@@ -23,6 +23,7 @@
 //! | `a_second_snapshot_of_the_same_epoch_is_refused` | ADR-0064 §3; `invalid_request` |
 //! | `restore_into_a_fresh_data_root_creates_the_index` | ADR-0065 §2, §3 |
 //! | `restore_refuses_an_incomplete_snapshot` | task criterion 2; ADR-0064 §1 |
+//! | `the_snapshot_command_writes_its_progress_on_stderr_and_one_report_line_on_stdout` | `stderr` carries the progression, `stdout` one line (ADR-0153 §6) |
 //!
 //! # Why the tests of this binary are serialised
 //!
@@ -539,5 +540,48 @@ fn restore_refuses_an_incomplete_snapshot() {
     assert!(
         !instance.index().join("epochs").join("2").exists(),
         "a refused restore writes no epoch"
+    );
+}
+
+/// `crible snapshot` writes its progress on `stderr`, outside the JSON journal,
+/// and keeps `stdout` for the single report line (ADR-0153, decision 6).
+#[test]
+fn the_snapshot_command_writes_its_progress_on_stderr_and_one_report_line_on_stdout() {
+    let _serial = common::SerialGuard::acquire();
+    let instance = Instance::new();
+    let output = instance.snapshot();
+    assert!(
+        output.status.success(),
+        "snapshot failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "stdout keeps the single report line, so a script parses it unchanged: {stdout:?}"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("crible snapshot: "))
+        .collect();
+    assert!(
+        !lines.is_empty(),
+        "the command reports its copy on stderr: {stderr:?}"
+    );
+    for line in &lines {
+        assert!(
+            line.contains("bytes copied") && line.contains("s elapsed"),
+            "a progress line carries the bytes and the elapsed time: {line:?}"
+        );
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("copy,") || line.contains("copy ")),
+        "the copy is named on stderr: {lines:?}"
     );
 }
