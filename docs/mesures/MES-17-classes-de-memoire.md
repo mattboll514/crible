@@ -858,3 +858,384 @@ décision 7). Aucune n'est décidée ici.
 - Les images `crible:t05-suite-mes17` et `crible-mes17-gdb:2026-11-22` sont conservées ; le volume
   `crible-mes17-data` a été supprimé après la campagne, et aucun conteneur `crible-mes17*` ne
   subsiste.
+
+## Campagne de contrôle d'ADR-0160, 2026-11-22
+
+- **Tâche** : `T05-CORRIGER-MALLOC-TRIM` (v1.1), correction du ticket 05 de Legifacile. Campagne de
+  contrôle d'ADR-0160, décision 6, accepté le 2026-11-22 : c'est la mesure qui précède la fusion du
+  `malloc_trim(0)` appelé par le serveur à la fin de chaque job.
+- **Commit** : `3f334c940246380199158c97ec18ee868b4828d7`, branche
+  `tache/T05-CORRIGER-MALLOC-TRIM`. Aucun code de production n'a été modifié : les seuls fichiers
+  écrits sont cette section, le harnais `tools/bench/mes17/` et les données brutes sous
+  `data/mes17/raw/2026-11-22/ctl-ref-p1/`, `ctl-ref-p2/`, `ctl-fix-p1/` et `ctl-fix-p2/`
+  (gitignorées).
+- **Machine** : MacBook Air M3 (`Mac15,12`, 8 cœurs, 24 Go), macOS 15.7.7. **En conteneur** : Docker
+  Desktop 28.5.1, VM `aarch64` de **10 420 109 312 octets (9,71 Gio)**, 8 vCPU, **aucune limite
+  `--memory`** (ADR-0135, décision 5), noyau `6.10.14-linuxkit`, taille de page **4 096 octets** lue
+  par `getconf PAGESIZE` dans la sonde. Même machine et même VM que les deux campagnes précédentes.
+- **Disque** : **72 Gio** libres avant la campagne, **74 Gio** au démarrage du premier parcours et
+  **73 Gio** à la fin du dernier (`df -h .`, `df_start` de `run.json`, `df_end` de `summary.json`),
+  tous au-dessus du plancher de 15 Gio.
+- **Images** : la référence est `crible:t05-suite-mes17`,
+  `sha256:dc800f534ff50589038b0ca5d7a4fd9336a3259c45b70fdb00408b84366a8080`, construite par
+  l'orchestrateur depuis `31e9804` et **non reconstruite**. La correction est `crible:t05-trim-fix`,
+  `sha256:bcfad74627a38dd55838c58c83761b5a80f991a399cbd17954a48e622ff4c363`, construite depuis
+  l'arbre propre (`3f334c9`) par `docker buildx build --platform linux/arm64 --load -t
+  crible:t05-trim-fix -f docker/Dockerfile .`, le cache de `cargo chef` servant les étages de
+  dépendances (journal `data/mes17/build-t05-trim-fix.log`, 7 min 45 s dont 17 s de compilation du
+  workspace). L'orchestrateur a vérifié qu'aucun fichier de `crates/`, `Cargo.toml`, `Cargo.lock`,
+  `rust-toolchain.toml` ni `docker/` n'a changé entre `31e9804` et `07b3a05` : la correction est donc
+  la seule différence entre les deux images.
+- **Réglage de journal** : `RUST_LOG=info,crible_server::trim=debug`, **le même sur les deux
+  images**, posé par `docker run -e` et relu par `docker inspect` dans les quatre `run.json`. Il
+  laisse toutes les autres lignes au défaut `info` de l'image (ADR-0096) et n'allume que la cible de
+  la ligne `trim` ; l'image de référence ne contient pas ce module et n'émet donc aucune ligne
+  `trim`, ce que les relevés confirment.
+- **Jeu de données** : l'échantillon Legifacile de la première campagne, `data/legifacile-sample`,
+  six lots réels, **205 261 documents et 257 626 passages** ; `queries.jsonl`, 300 requêtes ; modèle
+  `mdenseon` monté en lecture seule.
+- **Configuration** : `data/mes17/crible.toml`, identique aux deux campagnes précédentes, sans
+  variante `GLIBC_TUNABLES` (`null` dans les quatre `run.json`).
+- **Exploitation** : `legifacile-dev-crible-1` était **arrêté** (`Exited (0)`) au début et à la fin de
+  la campagne, et n'a jamais été touché. Les deux conteneurs de base de données au repos
+  (`poc-presidio-db-1`, `legifacile-dev-postgres-1`) n'ont pas été touchés : 13,4 puis 13,4 MiB et
+  226,3 puis 226,3 MiB de mémoire, relevés par `docker stats --no-stream` au début et à la fin.
+  Seuls `crible-mes17`, le volume `crible-mes17-data`, les sondes `postgres:17 --rm` et le port
+  18017 ont servi. La production n'a été ni lue ni approchée (ADR-0032).
+
+### Protocole
+
+**Deux images, deux processus chacune**, sur le même jeu, la même configuration et la même machine
+(ADR-0160, décision 6). Chaque parcours part d'un conteneur neuf et d'un **volume neuf** :
+
+| Étape | Description |
+|---|---|
+| (a) | processus neuf, aucun index |
+| (b) | index créé, avec la ligne `session_load` |
+| (c) | six lots attachés, pendant une charge de 300 requêtes hybrides `k = 10` |
+
+Les états (d), (e), (f) et (g) d'ADR-0157 ne sont pas rejoués, et la campagne s'arrête à (c). Un
+relevé d'état garde la forme des campagnes précédentes : **trois lectures à 3 secondes
+d'intervalle**, mêmes sources, même sonde, et le chiffre qui fait foi reste l'anonyme du cgroup
+(`anon` de `memory.stat`) lu par `read_once` ; les écarts sont calculés sur les octets avant arrondi.
+
+**Volume neuf par processus, et non volume réutilisé.** La troisième campagne supprimait l'index à
+l'état (f), ce qui lui permettait de garder le volume entre deux parcours. La présente campagne
+s'arrête à (c) : l'index n'est pas supprimé, et le volume est donc détruit puis recréé entre deux
+processus, de sorte que l'état (a) n'ait aucun index dans les quatre parcours. Les fichiers
+d'exploitation (`jobs.sqlite`, `analytics.sqlite`) repartent avec lui ; c'est un écart déclaré avec
+les deux campagnes précédentes. Le protocole est **identique sur les quatre parcours**, donc il ne
+biaise pas la lecture de (b)→(c) ; il déplace des niveaux absolus, il n'en compare pas.
+
+**Charge de requêtes.** Les 300 requêtes de `queries.jsonl`, une fois chacune, en mode `hybrid`,
+`k = 10`, sur l'index `mes17` — le seul que l'instance connaisse et celui que la campagne attache.
+Elles sont lancées **par le harnais**, en 8 fils Python, à raison d'une toutes les 1,80 s sur une
+fenêtre de **540 s** ouverte au premier `POST batches` de l'attache. Aucune requête ne tourne en
+arrière-plan du shell. Chaque requête enregistre son début, en secondes epoch et en RFC 3339, et sa
+fin, en secondes epoch seulement, dans `queries/load.json` et `queries/load-rows.jsonl` ;
+`trim-lines` compte ensuite, d'après l'horodatage de chaque ligne `trim` du journal, combien de
+requêtes étaient **en vol à cet instant**.
+
+**La fenêtre de 540 s est plus courte que l'attache, écart déclaré.** L'attache dure 546 à 636 s
+selon le parcours : la sixième fin de job tombe donc **hors charge** dans les quatre parcours — la
+dernière requête se termine 4,3 s (correction, processus 2), 9,4 s (référence, processus 1), 13,6 s
+(référence, processus 2) et 96,3 s (correction, processus 1) **avant** ce `job_end`. **Aucune des 20
+fins de job de la fenêtre n'a eu de requête en vol**, et aucun des six trims non plus : les six
+trims sont mesurés, la sixième fin de job tombe hors charge, et la campagne ne l'affirme pas
+couverte.
+
+Trois points de cette charge sont des **choix déclarés**, que ni ADR-0160 ni la consigne ne fixent :
+
+1. **La fenêtre de 540 s** visait la durée de l'attache des six lots, mesurée entre 546 s et 636 s
+   dans cette campagne : elle est trop courte de 6 à 96 s. L'écart est déclaré ci-dessus et laissé
+   tel quel, la campagne n'est pas rejouée. Pour un passage futur, le harnais est corrigé : prendre
+   `--load-window` au moins égal à la durée de l'attache (640 s ici) ; `trim-lines` publie le
+   recouvrement mesuré, il ne le suppose pas.
+2. **Le débit d'une requête toutes les 1,80 s** avec 8 fils donne une charge répartie, pas continue :
+   le temps cumulé en vol vaut 182,8 s sur 538,7 s dans le premier parcours, soit un rapport cyclique
+   de 34 %. Avec 300 requêtes pour 540 s, aucune répartition ne peut couvrir la phase en continu.
+3. **Les percentiles portent sur les requêtes réussies** (`200`), et les refus sont comptés à part :
+   quelques recherches dépassent l'échéance de 2 000 ms de `crible.toml` et sont refusées en `504`
+   `timeout`. Compter un refus à 2 000 ms comme une latence de recherche confondrait l'échéance avec
+   le temps de recherche ; l'exclure sans le dire serait pire. Le nombre de refus est donc publié
+   pour chaque image, à côté des percentiles.
+
+Le harnais `tools/bench/mes17/measure.py` a reçu pour cela : l'option `--campaign control` (`up`,
+`init`, `summary`, `journal-check`, `trim-lines`), l'option `--image-role` d'`init`, les options
+`--load-window` et `--load-threads` d'`attach`, les sous-commandes `load` et `trim-lines`, et
+l'enregistrement incrémental des requêtes. `trim-lines` écrit `trim-lines.json` (lignes `trim`,
+compte des `trimmed = 1`, durées, recouvrement avec la charge). Aucun relevé, aucun état et aucune
+transition des campagnes précédentes ne change : `--campaign second` et `--campaign trim` gardent
+leurs états et leurs transitions ; les clés ajoutées aux `run.json` sont **additives**, sauf le
+renommage de `commit` et `branch` en `harness_commit` et `harness_branch`, qui distingue le commit
+de l'arbre du harnais de celui de l'image.
+
+### Résultats
+
+MiB = 1 048 576 octets. Chaque valeur est la **médiane des trois lectures** ; « disp. » est la plus
+grande dispersion des trois lectures sur `current`, `anon`, `file`, `RssAnon` et `Rss` des arènes.
+Les écarts sont calculés sur les octets, avant arrondi. Les comparaisons sont internes à cette
+campagne (ADR-0157, `:101-102`) : ni 45,3 MiB ni 272,96 MiB ne sont réutilisés.
+
+**Référence, processus 1 (`ctl-ref-p1`, `crible:t05-suite-mes17`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,0 | 7,8 | 0,1 | 7,4 | 0,0 | 16 | 0,4 | 0,1 |
+| (b) index créé | 2 704,5 | 1 493,1 | 1 204,1 | 1 492,7 | 0,0 | 33 | 734,7 | 0,1 |
+| (c) six lots | 5 200,5 | 2 769,7 | 2 394,2 | 2 769,2 | 0,0 | 60 | 1 711,2 | 0,0 |
+
+**Référence, processus 2 (`ctl-ref-p2`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,4 | 8,2 | 0,1 | 7,8 | 0,0 | 17 | 0,4 | 0,5 |
+| (b) index créé | 2 697,7 | 1 486,4 | 1 204,1 | 1 486,2 | 0,0 | 34 | 727,9 | 0,1 |
+| (c) six lots | 5 182,0 | 2 752,7 | 2 394,2 | 2 752,4 | 0,0 | 58 | 1 694,6 | 0,0 |
+
+**Correction, processus 1 (`ctl-fix-p1`, `crible:t05-trim-fix`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,0 | 7,8 | 0,1 | 7,4 | 0,0 | 16 | 0,4 | 0,1 |
+| (b) index créé | 2 704,1 | 1 492,7 | 1 204,1 | 1 492,4 | 0,0 | 33 | 734,6 | 0,1 |
+| (c) six lots | 4 748,0 | 2 113,0 | 2 394,2 | 2 112,7 | 0,0 | 63 | 1 058,5 | 0,0 |
+
+**Correction, processus 2 (`ctl-fix-p2`)**
+
+| État | `current` | `anon` | `file` | `RssAnon` | `VmSwap` | arènes | `Rss` arènes | disp. |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| (a) neuf | 9,0 | 7,8 | 0,1 | 7,4 | 0,0 | 16 | 0,4 | 0,1 |
+| (b) index créé | 2 717,6 | 1 506,2 | 1 204,1 | 1 505,9 | 0,0 | 35 | 748,2 | 0,1 |
+| (c) six lots | 4 727,7 | 2 140,1 | 2 394,2 | 2 139,8 | 0,0 | 65 | 1 085,7 | 0,0 |
+
+**Transitions en anonyme, par processus (MiB)**
+
+| Parcours | Image | (a)→(b) | **(b)→(c)** | (b)→(c), octets exacts |
+|---|---|---:|---:|---:|
+| `ctl-ref-p1` | référence | +1 485,3 | **+1 276,6** | 1 338 589 184 |
+| `ctl-ref-p2` | référence | +1 478,2 | **+1 266,4** | 1 327 894 528 |
+| `ctl-fix-p1` | correction | +1 484,9 | **+620,3** | 650 412 032 |
+| `ctl-fix-p2` | correction | +1 498,4 | **+633,9** | 664 686 592 |
+
+**Dispersion intra-état** : sur l'anonyme, la plus grande dispersion des trois lectures vaut
+**0,42 MiB** (référence, processus 2, état (a)) et 0,04 MiB ou moins dans tous les autres états ; sur
+les cinq champs du tableau, 0,5 MiB à ce même état. Les trois lectures sont stables.
+
+**Garde mémoire** : jamais déclenchée. Le minimum de `MemAvailable` de la VM vaut **6 438 096 kB**
+(référence, processus 1, état (c)) et 6 464 888, 6 886 772 et 6 919 736 kB dans les trois autres
+parcours, tous très au-dessus de 1 Gio. Aucun échange : `VmSwap` vaut 0 à tous les états des quatre
+parcours, et `SwapFree` reste à **4 178 260 kB** du début à la fin.
+
+**Contrôle du journal** : les quatre parcours sont conformes. Chaque parcours porte 6 lignes
+`job_end` (six `attach_batch`), **un `job_end` par lot attaché** (6/6), et **une seule** ligne
+`session_load`, à l'état (b) : aucun redémarrage n'est rejoué. Les deux `step` de suppression
+d'ADR-0151 sont absents, comme le prévoit une campagne qui s'arrête à (c) : `journal-check
+--campaign control` vérifie `job_end` et `session_load` seulement, et le déclare dans
+`journal-check.json` (`required_steps`).
+
+**Durées** (aucune conclusion de latence n'en est tirée) : le relevé va de la première lecture (a) à
+la dernière lecture (c) en **9 min 36 s**, **9 min 41 s**, **11 min 4 s** et **9 min 32 s**. Attache
+des six lots : **549 s**, **555 s**, **636 s** et **546 s** (articles 75,5 / 81,4 / 105,6 / 75,4 s ;
+jorf 108,6 / 120,8 / 147,8 / 105,5 s ; decisions 126,7 / 126,8 / 129,5 / 129,7 s ; titres 18,1 /
+18,2 / 18,1 / 18,1 s ; sarde 39,2 / 36,2 / 39,1 / 39,2 s ; dole 180,8 / 171,9 / 196,0 / 177,9 s).
+Création de l'index : 2,3 / 2,5 / 2,3 / 2,8 s. Un relevé d'état dure environ 7 secondes.
+
+### Lecture : seuil, gain, et critère d'INV-02
+
+**Le seuil est la dispersion entre les deux processus de référence de cette campagne sur
+(c)−(b)**, calculée sur les octets : **10 694 656 octets, soit 10,20 MiB** (1 276,58 contre
+1 266,36 MiB). C'est la lecture qu'en fait l'orchestrateur d'ADR-0157, décision 5 : les deux
+processus de référence tiennent le rôle de V0. **Aucun chiffre antérieur n'est repris comme
+seuil** ; les 272,96 MiB de la troisième campagne ne sont cités que pour situer l'ordre de grandeur,
+et l'étroitesse des 10,20 MiB est une propriété de cette campagne-ci, non un resserrement de la
+règle.
+
+**Le sens est la baisse** (ADR-0158). Moyennes des deux processus, sur les octets : référence
+**1 271,48 MiB**, correction **627,09 MiB**.
+
+| Lecture | Référence | Correction | Gain (baisse de (c)−(b)) |
+|---|---:|---:|---:|
+| moyenne des deux processus | 1 271,48 MiB | 627,09 MiB | **644,39 MiB** (675 692 544 octets) |
+| processus 1 | 1 276,58 MiB | 620,28 MiB | **656,30 MiB** |
+| processus 2 | 1 266,36 MiB | 633,89 MiB | **632,47 MiB** |
+
+Le gain vaut **63,2 fois le seuil** de cette campagne, et **chacun** des deux processus de la
+correction dépasse le seuil à lui seul. La part de l'anonyme retenu par l'attache que la correction
+rend vaut **50,7 %** (644,39 sur 1 271,48 MiB). Les deux comparaisons sont internes à cette
+campagne. L'état (c) de la correction vaut 2 113,0 et 2 140,1 MiB, contre 2 769,7 et 2 752,7 MiB pour
+la référence, avec des états (b) comparables (1 492,7 et 1 506,2 contre 1 493,1 et 1 486,4 MiB) : la
+baisse porte donc bien sur la croissance de l'attache, pas sur le chargement de l'index.
+
+**Lignes `trim`.** La correction émet **6 lignes `trim` par processus**, une par `job_end` d'attache,
+toutes de niveau `DEBUG`, cible `crible_server::trim`, et **toutes avec `trimmed = 1`** : aucun appel
+n'a été sauté, et chaque appel a rendu des pages. L'image de référence n'émet **aucune** ligne
+`trim`, comme attendu. Les durées sont données **dans l'ordre chronologique** des six fins de job,
+c'est-à-dire l'ordre des lots ; `trim-lines.json` les range, lui, par ordre croissant :
+
+| Parcours | `duration_us`, ordre chronologique | médiane | maximum |
+|---|---|---:|---:|
+| `ctl-fix-p1` | 29 394 / 10 065 / 6 820 / 5 308 / 8 186 / 12 419 | 9 125,5 | 29 394 |
+| `ctl-fix-p2` | 7 609 / 8 792 / 8 072 / 7 602 / 8 468 / 11 332 | 8 270,0 | 11 332 |
+
+Chaque ligne suit son `job_end` de 6,8 à 31,2 ms à l'horloge du journal : par exemple
+`13:14:01.596` pour le `job_end` et `13:14:01.627` pour le `trim` du premier lot du premier
+processus, soit 31,2 ms. **Le coût en service d'un appel est donc de 5,3 à 29,4 ms**, mesuré dans le
+processus du serveur, là où les 0,3 à 0,6 s de la troisième campagne mesuraient `gdb` et non la
+correction (ADR-0160, « Conséquences »).
+
+**Latence des 300 requêtes, et critère d'INV-02** (`docs/08:10` : aucune requête au-delà du p99 de
+référence × 3). Percentiles sur les requêtes réussies, refus comptés à part :
+
+| Parcours | Réussies | Refusées (`504 timeout`) | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| `ctl-ref-p1` | 296 | 4 | 415,3 ms | 1 500,3 ms | **1 731,2 ms** |
+| `ctl-ref-p2` | 298 | 2 | 543,5 ms | 1 530,9 ms | **1 821,9 ms** |
+| `ctl-fix-p1` | 283 | 17 | 499,5 ms | 1 549,0 ms | **1 950,6 ms** |
+| `ctl-fix-p2` | 295 | 5 | 439,9 ms | 1 459,3 ms | **1 658,6 ms** |
+
+Le p99 de référence le plus haut vaut 1 821,9 ms ; trois fois cette valeur vaut **5 465,7 ms**. Le
+p99 de la correction le plus haut vaut 1 950,6 ms, soit **1,07 fois le p99 de référence** et 36 % de
+la borne. La plus lente des requêtes **réussies** vaut 2 012,2 ms (`ctl-fix-p1`), et la plus lente
+des requêtes refusées 2 052,0 ms (`ctl-fix-p1`, `Q53`) : la forme **par requête** de la même borne
+d'ADR-0160, décision 6 — trois fois le p99 de l'image de référence sous attache — tient donc aussi,
+aucune requête ne dépassant 5 465,7 ms. (La borne d'ADR-0113, décision 1, vaut 3 × le p99 de la
+phase de repos et n'est pas mesurée ici.) Les p50 et p95 des deux images
+se recouvrent.
+
+**Le critère d'INV-02 est satisfait sur la charge concurrente de l'attache**, et sur elle seule :
+aucune requête n'a traversé un trim (réserve 1), donc l'effet d'un trim sur une requête en vol
+**n'est pas observé** ; il est seulement **borné** par les durées mesurées, 5,3 à 29,4 ms.
+
+**Ce que la campagne ne conclut pas.** Rien sur l'échelle de Legifacile (l'échantillon fait
+257 626 passages pour 9,6 M), rien sur le pic pendant une attache, rien sur l'OOM du ticket 05, rien
+sur les 627,09 MiB de (c)−(b) qui restent dans la correction — le trim les laisse en place, comme
+ADR-0160, décision 8, l'annonce.
+
+### Réserves
+
+1. **Aucune requête n'était en vol à l'instant exact d'un `trim`.** Le recouvrement est mesuré, pas
+   supposé : sur les six `job_end` de chaque parcours, **aucun** n'avait de requête en vol dans les
+   quatre parcours. Le plus proche est à **5,3 ms** — une requête qui **se termine** juste avant un
+   `job_end`, dans la référence processus 1 (`12:58:00.933` contre `12:58:00.938`) — mais cette
+   distance est celle d'un `job_end`, pas d'un `trim` : pour les six trims de la correction, la
+   requête la plus proche est à **41,8 ms**. De plus, la fenêtre de 540 s est plus courte que
+   l'attache, si bien que le sixième `job_end` tombe hors charge dans les quatre parcours. Le zéro
+   est un **résultat mesuré**, pas une conséquence de requêtes courtes : les requêtes durent
+   415,3 à 543,5 ms en p50 selon le parcours (minimum 38,1 ms, 0,63 s en moyenne sur les 1 172
+   requêtes réussies), et le rapport cyclique de la charge vaut 34 %. Le recouvrement nul porte sur
+   les **20 fins de job de la fenêtre**, référence et correction confondues, cinq par parcours :
+   avec ce rapport cyclique, un zéro dû au hasard aurait un ordre de grandeur de 0,66²⁰ ≈ **0,02 %**,
+   donc il est **très improbable par hasard**. Ce calcul compare deux horloges : `started_epoch` et
+   `ended_epoch` viennent de l'horloge de l'hôte, l'horodatage des lignes `job_end` et `trim` de
+   celle du conteneur. **Leur écart n'a pas été contrôlé pendant la campagne** : aucune donnée brute
+   ne le mesure (`wall_ms − took_ms` borne la surcharge du client, pas le décalage d'horloges), les
+   distances voisines de 5,3 ms et 41,8 ms ne font que plaider pour un alignement approximatif. Cela
+   suggère une cause systématique, côté serveur ou côté harnais, que cette campagne **n'identifie
+   pas** et sur laquelle elle **ne conclut pas**.
+   L'effet d'un trim sur une requête en vol reste donc **non observé**, seulement **borné** par les
+   durées mesurées des trims, 5,3 à 29,4 ms. Un protocole qui voudrait garantir le recouvrement
+   demanderait une charge calée sur les fins de job, ce que 300 requêtes réparties sur
+   neuf minutes ne permettent pas ; c'est une
+   proposition, pas une décision.
+2. **Les refus `504` diffèrent d'un parcours à l'autre** : 4 et 2 pour la référence, 17 et 5 pour la
+   correction. Ils ne sont pas attribués au trim. Dans `ctl-fix-p1`, les 17 refus se répartissent en
+   **5 avant `13:14:01`** (`13:13:37` à `13:13:51`), **7 de `13:14:09` à `13:14:47`** et **5 de
+   `13:20:54` à `13:21:12`** ; **aucun ne recouvre un trim**. Les deux groupes encadrant les 17
+   refus sont donc le **groupe de 5 avant le premier trim** (`13:13:37` à `13:13:51`) et le **groupe
+   de 7 après lui** (`13:14:09` à `13:14:47`) ; ensemble ils couvrent 70 s autour du trim de
+   `13:14:01`, et le **groupe de 5** de `13:20:54` à `13:21:12` reste à part. Cette attache est la
+   plus lente des quatre (636 s contre 546 à 555 s) ; `ctl-fix-p2`, à 5 refus, est proche de la
+   référence. Les refus de toute la campagne
+   durent **2 005,6 à 2 071,6 ms**, tous sous la borne de 5 465,7 ms : les inclure dans les
+   percentiles ne changerait pas le critère d'INV-02. La lecture retenue est celle d'une variance de
+   la machine hôte pendant cette campagne, sans preuve. Un contrôle à l'échelle réelle dirait s'il
+   en est autrement.
+3. **Le seuil de cette campagne est étroit** (10,20 MiB ; les 45,3 MiB de V0 et les 272,96 MiB de la
+   troisième campagne ne sont cités que pour situer l'ordre de grandeur, aucun n'est repris comme
+   seuil). C'est une propriété de cette campagne : les deux processus de référence
+   donnent 1 276,58 et 1 266,36 MiB, à 0,8 % l'un de l'autre. Un seuil étroit rend le gain plus
+   facile à dépasser ; il ne change pas la lecture, puisque chacun des deux processus de la
+   correction dépasse le seuil à lui seul.
+4. **Les niveaux absolus de l'état (c) diffèrent de la troisième campagne** : 2 769,7 et 2 752,7 MiB
+   pour la référence ici, contre 2 714,4 et 2 441,7 MiB alors. C'est une **observation** : les
+   comparaisons sont internes à la campagne, et aucun chiffre de la troisième campagne n'est
+   réutilisé, ni comme valeur, ni comme seuil.
+5. **Les arènes ne suivent pas l'anonyme.** À l'état (c), les 63 et 65 arènes de la correction
+   portent 1 058,5 et 1 085,7 MiB de `Rss`, contre 1 711,2 et 1 694,6 MiB pour les 60 et 58 arènes de
+   la référence : la correction a **plus** d'arènes et **moins** de `Rss` d'arènes, alors que son
+   anonyme est plus bas de 630 MiB environ. Le nombre et le `Rss` des arènes ne sont donc pas une
+   mesure de la rétention, ce que les deux campagnes précédentes avaient déjà observé.
+6. **Deux processus seulement.** Deux parcours ne donnent pas de distribution : la dispersion est un
+   écart entre deux valeurs, pas un écart type, comme dans les campagnes précédentes.
+7. **Le volume est recréé entre deux processus**, écart déclaré avec les deux campagnes précédentes
+   (voir « Protocole ») : l'index n'étant pas supprimé à (c), le volume est détruit pour que l'état
+   (a) n'ait aucun index. Les niveaux de (a) en sont comparables d'un parcours à l'autre, et les
+   transitions (b)→(c) ne dépendent pas du volume.
+8. **Un premier essai du premier parcours a été abandonné.** Le harnais échouait quand une requête
+   refusée n'avait pas de `pool_size`, au lieu d'enregistrer le refus ; les 300 lignes de cet essai
+   ont été perdues et le parcours rejoué. La vérification a été remplacée par un comptage des refus
+   et par un enregistrement incrémental des requêtes (`queries/load-rows.jsonl`) ; les **quatre
+   parcours retenus** ont tous tourné avec la version corrigée, et le parcours abandonné n'entre dans
+   aucun chiffre de cette section.
+9. **`pool_size` vaut 0 sur les premières requêtes** de chaque parcours : l'index existe à l'état (b)
+   mais aucun passage n'y est encore visible, et la charge démarre avec la première attache. Le
+   maximum vaut 249 998, soit les 257 626 passages moins les 7 628 du dernier lot, encore en cours
+   d'attache à la fin de la charge. Ce n'est pas un défaut de mesure : le pool est bien celui de la
+   génération visible à cet instant.
+10. **Écarts d'exécution déjà consignés** et reconduits : attache des six lots en une seule commande
+    (546 à 636 s, sous la borne de 30 minutes), lots dérivés de la première campagne non re-dérivés,
+    `smaps` non conservé, taille de page lue par `getconf`, `df -h` brut gardé dans les données brutes
+    (gitignorées) et aucun chemin absolu de la machine dans les fichiers versionnés.
+11. **Harnais étendu pendant la campagne** : `--campaign control` (dont le défaut de `RUST_LOG`
+    d'`up`), `--image-role` d'`init`, `--load-window` et `--load-threads` d'`attach`,
+    sous-commandes `load` et `trim-lines`, enregistrement incrémental des requêtes, et
+    `job_end_overlap` ajouté à `trim-lines` après les trois premiers parcours — cet ajout ne lit que
+    des fichiers déjà écrits et ne change aucun chiffre. Aucune autre modification : ni le code de
+    production, ni l'image, ni `crible.toml`.
+12. **Deux champs des `run.json` de référence de cette campagne sont faux, et la donnée brute n'est
+    pas corrigée.** Ils portent `commit: 3f334c9`, le commit de l'arbre du harnais au moment du
+    relevé, et `trim_in_server: true`, déduit à tort de la campagne et non de l'image. Or l'image de
+    référence vient de `31e9804` et ne contient pas le module `trim`. Le harnais est corrigé pour
+    les passages futurs : `init --campaign control` exige `--image-role reference|correction`,
+    `trim_in_server` en découle, `image_role` et `image_commit` sont enregistrés, et le commit de
+    l'arbre passe sous `harness_commit`. La présente campagne n'est pas rejouée ; c'est
+    `image_id` (`dc800f534ff5`) qui identifie l'image mesurée.
+
+### Recommandations, sans décision
+
+Le propriétaire choisit la suite. Aucune de ces propositions n'est décidée ici, et aucune ne modifie
+ADR-0160.
+
+1. **La fusion de la correction** : le gain de 644,39 MiB vaut 63,2 fois le seuil de la campagne, les
+   deux processus dépassent le seuil à eux seuls et chaque fin de job a rendu des pages
+   (`trimmed = 1`, 6 sur 6). Le critère d'INV-02 est satisfait **sur la charge concurrente de
+   l'attache** ; l'effet d'un trim sur une requête en vol n'est **pas observé**, il est seulement
+   borné par 5,3 à 29,4 ms (réserve 1). ADR-0160, décision 6, n'arrête la tâche que si le gain manque
+   le seuil ou si le critère de latence échoue : ni l'un ni l'autre n'est arrivé. La décision de
+   fusionner reste celle du propriétaire, sur ce rapport.
+2. **Un suivi du nombre de refus `504` à l'échelle réelle** : 17 refus sur 300 dans un parcours de la
+   correction, contre 4 et 2 pour la référence, sans attribution possible dans cette campagne. Une
+   mesure sur `decisions` dirait s'il s'agit de la machine ou d'un effet de la correction ; elle
+   reste un choix du propriétaire (ADR-0160, décision 7).
+3. **Un protocole de charge calé sur les fins de job**, si le recouvrement exact doit être garanti :
+   il demanderait de déclencher une fin de job pendant une charge courte et dense, donc un ADR de
+   protocole. La présente campagne déclare le recouvrement mesuré (0 sur les 20 fins de job de la
+   fenêtre) et s'en tient là.
+4. **Les 627,09 MiB qui restent** dans (c)−(b) de la correction ne sont pas attribués : c'est le
+   reste déjà renvoyé à la v2 par ADR-0160, décision 7, et il ne demande rien avant la 1.1.0.
+
+### Données brutes
+
+- `data/mes17/raw/2026-11-22/ctl-ref-p1/`, `ctl-ref-p2/`, `ctl-fix-p1/`, `ctl-fix-p2/` — un processus
+  chacun, avec `run.json` (campagne, image et identifiant, `RUST_LOG` relu, variante `null`, VM,
+  garde, `df_start` ; pour la référence, `commit` et `trim_in_server` sont faux, voir réserve 12),
+  `states/*.json` (trois lectures par état), `logs/*.jsonl`,
+  `attach/campaign.json`, `create.json`, `queries/load.json` (percentiles, refus, 300 lignes),
+  `queries/load-rows.jsonl` (les mêmes lignes, écrites à l'arrivée), `summary.json` (médianes,
+  dispersions, transitions, `df_end`), `journal-check.json`, `memory-lines.json` et
+  `trim-lines.json` (lignes `trim`, `trimmed`, durées, recouvrement avec la charge).
+- `data/mes17/build-t05-trim-fix.log` — la construction de l'image de correction, cache servi.
+- Les images `crible:t05-suite-mes17`, `crible:t05-trim-fix` et `crible-mes17-gdb:2026-11-22` sont
+  conservées ; le volume `crible-mes17-data` a été supprimé après la campagne, et aucun conteneur
+  `crible-mes17*` ne subsiste.

@@ -48,11 +48,26 @@ annex container built from `gdb.Dockerfile` (`--pid=container:<measured>`,
 no running job), and under a bounded timeout. A blocked or failed `gdb` fails
 the run: no reading is ever replaced by a zero. Nothing here enters the image,
 `crible.toml` or the server code.
+
+Control campaign (ADR-0160, decision 6, accepted 2026-11-22): the trim is now in
+the server, so the same harness walks two images, two processes each, over the
+three states only:
+
+  (a) fresh process, no index
+  (b) index created (and its `session_load` line)
+  (c) six lots attached, while 300 hybrid queries (`k = 10`) are in flight
+
+The `trim` lines of level `debug` are made visible on both images by the same
+filter, `RUST_LOG=info,crible_server::trim=debug`, which leaves every other
+line at the image default of `info` (ADR-0096). `trim-lines` counts them, and
+`summary --campaign control` reads (a), (b), (c).
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import datetime
 import json
 import math
 import pathlib
@@ -60,6 +75,7 @@ import re
 import statistics
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -139,6 +155,47 @@ TRIM_TRANSITIONS = [
     ("c2->f", "c2-after-trim2", "f-after-delete", "DELETE"),
     ("f->f1", "f-after-delete", "f1-after-trim3", "malloc_trim(0) after the DELETE"),
 ]
+
+SECOND_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+    ("c->d", "c-after-attach", "d-after-queries", "300 queries, full index"),
+    ("d->e", "d-after-queries", "e-after-restart-index", "restart with index"),
+    ("e->f", "e-after-restart-index", "f-after-delete", "DELETE"),
+    ("f->g", "f-after-delete", "g-after-restart", "restart without index"),
+]
+
+# Control campaign of ADR-0160, decision 6: two images (the correction and its
+# parent), two processes each, and the three states only. The trim is inside
+# the server, so no `gdb` ring buffer is used and the run stops at (c).
+CONTROL_STATES = [
+    ("a-fresh", "fresh process, no index"),
+    ("b-index-open", "index created"),
+    ("c-after-attach", "six lots attached"),
+]
+CONTROL_STATE_KEYS = [key for key, _ in CONTROL_STATES]
+CONTROL_TRANSITIONS = [
+    ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
+    ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
+]
+
+# The `trim` line is a `debug` line of the module `crible_server::trim`
+# (ADR-0160, decision 4). This filter adds that target and changes nothing else:
+# every other line keeps the image default of `info` (ADR-0096). The same value
+# is applied to both images, including the reference one, where the target
+# simply emits nothing because the module does not exist.
+CONTROL_RUST_LOG = "info,crible_server::trim=debug"
+
+# 300 hybrid queries, `k = 10`, spread over the attach phase so that they are in
+# flight while the six `job_end` of the attach happen (ADR-0160, decision 6).
+LOAD_QUERIES = 300
+LOAD_K = 10
+
+CAMPAIGN_LABELS = {
+    "second": "MES-17 second campaign (ADR-0157)",
+    "trim": "MES-17 third campaign (ADR-0159)",
+    "control": "MES-17 control campaign (ADR-0160)",
+}
 
 STATUS_FIELDS = [
     "VmRSS", "RssAnon", "RssFile", "RssShmem", "VmHWM", "VmSwap", "VmData",
@@ -227,6 +284,23 @@ def container_env() -> str | None:
     ).stdout
     for line in out.splitlines():
         if line.startswith("GLIBC_TUNABLES="):
+            return line.split("=", 1)[1]
+    return None
+
+
+def container_env_var(name: str) -> str | None:
+    """The exact value of one variable in the container environment, or None.
+
+    It is read back from the container, never from the command that created it,
+    so `run.json` records what the process actually received (ADR-0157,
+    decision 4, for `GLIBC_TUNABLES`; ADR-0160, decision 6, for `RUST_LOG`).
+    """
+    out = sh(
+        "docker", "inspect", "-f",
+        "{{range .Config.Env}}{{println .}}{{end}}", CONTAINER,
+    ).stdout
+    for line in out.splitlines():
+        if line.startswith(f"{name}="):
             return line.split("=", 1)[1]
     return None
 
@@ -583,6 +657,14 @@ def cmd_up(args) -> None:
     ]
     if tunables:
         command += ["-e", f"GLIBC_TUNABLES={tunables}"]
+    if args.rust_log is not None:
+        rust_log = args.rust_log
+    elif args.campaign == "control":
+        rust_log = CONTROL_RUST_LOG
+    else:
+        rust_log = None
+    if rust_log is not None:
+        command += ["-e", f"RUST_LOG={rust_log}"]
     command.append(args.image)
     print(" ".join(command), flush=True)
     result = sh(*command, timeout=300)
@@ -600,6 +682,13 @@ def cmd_down(_args) -> None:
 
 def cmd_init(args) -> None:
     out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "second")
+    control = campaign == "control"
+    role = getattr(args, "image_role", None)
+    if control and role is None:
+        fail("--campaign control needs --image-role reference|correction: "
+             "the presence of the `trim` module is a property of the image, "
+             "not of the campaign")
     cgroup = container_id()
     reading = read_once(cgroup)
     info = sh("docker", "info", "--format", "{{.MemTotal}} {{.NCPU}}").stdout.split()
@@ -607,19 +696,35 @@ def cmd_init(args) -> None:
     commit = sh("git", "-C", str(REPO), "rev-parse", "HEAD").stdout.strip()
     branch = sh("git", "-C", str(REPO), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     page = reading["page_size_bytes"]
-    third = getattr(args, "campaign", "second") == "trim"
+    third = campaign == "trim"
+    image_commit = None
+    if control:
+        # The image commit is the one Docker recorded, not the tree commit:
+        # during the control campaign the two differ, and only this one says
+        # what the binary was built from. `docker/Dockerfile` sets no
+        # `org.opencontainers.image.revision` label, so the field stays null
+        # and the image digest in `image_id` identifies the build.
+        label = sh("docker", "image", "inspect", "-f",
+                   '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                   args.image, timeout=120).stdout.strip()
+        image_commit = None if label in ("", "<no value>") else label
     document = {
-        "campaign": ("MES-17 third campaign (ADR-0159)" if third
-                     else "MES-17 second campaign (ADR-0157)"),
+        "campaign": CAMPAIGN_LABELS[campaign],
         "variant": args.variant or args.tunables or "custom",
         "glibc_tunables": container_env(),
+        "rust_log": container_env_var("RUST_LOG"),
         "image": args.image,
         "image_id": image_id(),
+        "image_role": role,
+        "image_commit": image_commit,
         "annex_image": GDB_IMAGE if third else None,
         "annex_image_id": sh("docker", "image", "inspect", "-f", "{{.Id}}",
                              GDB_IMAGE, timeout=120).stdout.strip() if third else None,
         "annex_base_digest": GDB_BASE_DIGEST if third else None,
         "trim_timeout_s": TRIM_TIMEOUT if third else None,
+        "trim_in_server": (role == "correction") if control else False,
+        "load_queries": LOAD_QUERIES if control else None,
+        "load_k": LOAD_K if control else None,
         "container_id": cgroup,
         "container_created": sh(
             "docker", "inspect", "-f", "{{.Created}}", CONTAINER).stdout.strip(),
@@ -628,8 +733,8 @@ def cmd_init(args) -> None:
         "page_size_bytes": page,
         "kernel": sh("docker", "run", "--rm", "--pull=never", PROBE_IMAGE,
                      "uname", "-r", timeout=120).stdout.strip(),
-        "commit": commit,
-        "branch": branch,
+        "harness_commit": commit,
+        "harness_branch": branch,
         "df_start": disk,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "guard": {"mem_available_kb": reading["meminfo"]["MemAvailable"],
@@ -837,6 +942,158 @@ def cmd_create(args) -> None:
         indent=2) + "\n")
 
 
+def run_load(out: pathlib.Path, window: float, threads: int) -> list[dict]:
+    """300 hybrid queries, spread over `window` seconds, on the throwaway index.
+
+    ADR-0160, decision 6, asks for "300 requêtes hybrides `k = 10` en vol pendant
+    les fins de job". The query load is issued by this harness, in Python
+    threads, never as a shell job: query number `i` is scheduled at
+    `t0 + i * window / 300`, and the window is meant to span the whole attach
+    phase. A window shorter than the attach leaves the last `job_end`, and so
+    the last trim, outside the load: `trim-lines` measures that overlap and
+    publishes it, it never assumes it. The load is also sparse by
+    construction, so a trim can fall between two queries. A query crossing a
+    trim is therefore not guaranteed, and the duration of a trim only bounds
+    the exposure.
+
+    Each request records its own start, in epoch seconds and in RFC 3339, and
+    its end, in epoch seconds only, so `trim-lines` can count the queries that
+    were in flight at each `trim` line of the journal.
+
+    The load is on the same index, `mes17`: it is the index the campaign
+    attaches to, and the only one the instance knows.
+    """
+    entries = [json.loads(line) for line in QUERIES.read_text().splitlines()
+               if line.strip()]
+    if len(entries) < LOAD_QUERIES:
+        fail(f"{QUERIES.name} holds {len(entries)} queries, "
+             f"{LOAD_QUERIES} needed")
+    entries = entries[:LOAD_QUERIES]
+    interval = window / len(entries)
+    records: list[dict] = []
+    lock = threading.Lock()
+    started = time.time()
+    rows_file = out / "queries" / "load-rows.jsonl"
+    rows_file.parent.mkdir(parents=True, exist_ok=True)
+    rows_file.write_text("")
+
+    def one(entry: dict) -> None:
+        at = time.time()
+        code, body = api(
+            "POST", f"/v1/indexes/{INDEX}/search",
+            {"query": entry["question"], "mode": "hybrid", "k": LOAD_K},
+            timeout=180,
+        )
+        ended = time.time()
+        error = (body or {}).get("error") if isinstance(body, dict) else None
+        row = {
+            "id": entry["id"],
+            "status": code,
+            "error": ({"code": error.get("code"), "message": error.get("message")}
+                      if isinstance(error, dict) else error),
+            "took_ms": (body or {}).get("took_ms"),
+            "wall_ms": round((ended - at) * 1000, 1),
+            "pool_size": (body or {}).get("pool_size"),
+            "started_epoch": round(at, 6),
+            "ended_epoch": round(ended, 6),
+            "started_at": datetime.datetime.fromtimestamp(
+                at, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+        }
+        with lock:
+            records.append(row)
+            # Appended and flushed as it arrives: a refusal is data, and a run
+            # that ends badly must not lose the 299 rows already measured.
+            with rows_file.open("a") as handle:
+                handle.write(json.dumps(row) + "\n")
+            if len(records) % 25 == 0:
+                print(f"  load {len(records)}/{len(entries)} queries, "
+                      f"{time.time() - started:.0f} s elapsed", flush=True)
+
+    print(f"  load: {len(entries)} queries, mode hybrid, k = {LOAD_K}, "
+          f"{threads} threads, one every {interval:.2f} s over {window:.0f} s",
+          flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as pool:
+        futures = []
+        for number, entry in enumerate(entries):
+            wait = started + number * interval - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            futures.append(pool.submit(one, entry))
+            if number % 10 == 0:
+                print(f"  load: scheduled {number + 1}/{len(entries)} at "
+                      f"{time.time() - started:.0f} s", flush=True)
+        for future in concurrent.futures.as_completed(futures):
+            future.result()
+    records.sort(key=lambda row: row["started_epoch"])
+    return records
+
+
+def percentile(ordered: list[float], value: float) -> float:
+    return ordered[max(0, math.ceil(value / 100 * len(ordered)) - 1)]
+
+
+def write_load(out: pathlib.Path, records: list[dict], window: float,
+               threads: int) -> dict:
+    """Write the load report: every row, the refusals, and the percentiles.
+
+    A refused request is kept and counted, never dropped: it carries no
+    `pool_size`, and its 2 000 ms wall is the deadline of `crible.toml`, not a
+    search. The percentiles are therefore computed over the **successful**
+    queries only, and the count of refusals is reported beside them, on the
+    same footing for both images (INV-02, ADR-0160, decision 6).
+    """
+    ok = [row for row in records if row["status"] == 200]
+    refused = [row for row in records if row["status"] != 200]
+    if not ok:
+        fail("every load query was refused: no latency to report")
+    walls = sorted(row["wall_ms"] for row in ok)
+    pools = [row["pool_size"] for row in ok if row["pool_size"] is not None]
+    document = {
+        "index": INDEX,
+        "mode": "hybrid",
+        "k": LOAD_K,
+        "count": len(records),
+        "successful": len(ok),
+        "failures": len(refused),
+        "refused": [{"id": row["id"], "status": row["status"],
+                     "error": row["error"], "wall_ms": row["wall_ms"],
+                     "started_at": row["started_at"]} for row in refused],
+        "percentiles_over": "successful queries only",
+        "threads": threads,
+        "window_s": round(window, 1),
+        "wall_ms": {
+            "p50": percentile(walls, 50),
+            "p95": percentile(walls, 95),
+            "p99": percentile(walls, 99),
+            "max": walls[-1],
+        },
+        "pool_size": {"min": min(pools), "max": max(pools),
+                      "over": "successful queries only"},
+        "records": records,
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "queries").mkdir(parents=True, exist_ok=True)
+    (out / "queries" / "load.json").write_text(json.dumps(document, indent=2) + "\n")
+    print(f"  load: {len(records)} queries, {len(refused)} refused, "
+          f"p50 {document['wall_ms']['p50']:.1f} ms "
+          f"p95 {document['wall_ms']['p95']:.1f} ms "
+          f"p99 {document['wall_ms']['p99']:.1f} ms "
+          f"max {document['wall_ms']['max']:.1f} ms "
+          f"(percentiles over the {len(ok)} successful queries)", flush=True)
+    for row in refused:
+        print(f"  load refused: {row['id']} -> {row['status']} "
+              f"{json.dumps(row['error'])[:120]} at {row['started_at']}",
+              flush=True)
+    return document
+
+
+def cmd_load(args) -> None:
+    out = run_dir(args.run)
+    window = args.window if args.window else float(LOAD_QUERIES)
+    records = run_load(out, window, args.threads)
+    write_load(out, records, window, args.threads)
+
+
 def cmd_attach(args) -> None:
     out = run_dir(args.run)
     campaign = out / "attach" / "campaign.json"
@@ -847,6 +1104,17 @@ def cmd_attach(args) -> None:
     unknown = [lot for lot in lots if lot not in LOTS]
     if unknown:
         fail(f"unknown lot {unknown[0]}")
+    # The query load starts with the first attach and runs in its own Python
+    # threads: it is never a shell job and never waits for the attach to end
+    # (ADR-0160, decision 6). Its records are written when every query is done.
+    load_thread = None
+    load_state: dict = {}
+    if args.load_window:
+        def load() -> None:
+            load_state["records"] = run_load(out, args.load_window,
+                                              args.load_threads)
+        load_thread = threading.Thread(target=load, name="load")
+        load_thread.start()
     campaign_started = time.time()
     for lot in lots:
         print(f"  attach {LOTS.index(lot) + 1}/{len(LOTS)} {lot}", flush=True)
@@ -866,6 +1134,11 @@ def cmd_attach(args) -> None:
         (out / "attach").mkdir(parents=True, exist_ok=True)
         (out / "attach" / "campaign.json").write_text(json.dumps(report, indent=2) + "\n")
     print(f"  attach campaign done in {time.time() - campaign_started:.1f} s", flush=True)
+    if load_thread is not None:
+        print("  attach done, waiting for the query load to finish", flush=True)
+        load_thread.join()
+        write_load(out, load_state["records"], args.load_window,
+                   args.load_threads)
 
 
 def cmd_queries(args) -> None:
@@ -934,9 +1207,15 @@ def cmd_restart(args) -> None:
 
 def cmd_summary(args) -> None:
     out = run_dir(args.run)
-    third = getattr(args, "campaign", "second") == "trim"
-    states = TRIM_STATES if third else STATES
-    keys = TRIM_STATE_KEYS if third else STATE_KEYS
+    campaign = getattr(args, "campaign", "second")
+    third = campaign == "trim"
+    control = campaign == "control"
+    if control:
+        states, keys, pairs = CONTROL_STATES, CONTROL_STATE_KEYS, CONTROL_TRANSITIONS
+    elif third:
+        states, keys, pairs = TRIM_STATES, TRIM_STATE_KEYS, TRIM_TRANSITIONS
+    else:
+        states, keys, pairs = STATES, STATE_KEYS, SECOND_TRANSITIONS
     readings = {}
     for key_name in keys:
         path = out / "states" / f"{key_name}.json"
@@ -1000,14 +1279,6 @@ def cmd_summary(args) -> None:
         })
 
     transitions = []
-    pairs = TRIM_TRANSITIONS if third else [
-        ("a->b", "a-fresh", "b-index-open", "index creation, session load"),
-        ("b->c", "b-index-open", "c-after-attach", "six lots attached"),
-        ("c->d", "c-after-attach", "d-after-queries", "300 queries, full index"),
-        ("d->e", "d-after-queries", "e-after-restart-index", "restart with index"),
-        ("e->f", "e-after-restart-index", "f-after-delete", "DELETE"),
-        ("f->g", "f-after-delete", "g-after-restart", "restart without index"),
-    ]
     by_state = {row["state"]: row for row in table}
     for name, before, after, what in pairs:
         delta = {}
@@ -1022,35 +1293,48 @@ def cmd_summary(args) -> None:
                             "from": before, "to": after, "delta": delta})
 
     queries = None
+    load_file = out / "queries" / "load.json"
     pass_file = out / "queries" / "pass.json"
-    if pass_file.exists():
+    if load_file.exists():
+        load = json.loads(load_file.read_text())
+        queries = {
+            "count": load["count"],
+            "failures": load["failures"],
+            "successful": load.get("successful"),
+            "refused": load.get("refused"),
+            "percentiles_over": load.get("percentiles_over"),
+            "wall_ms": load["wall_ms"],
+            "pool_size": load["pool_size"],
+            "mode": load["mode"],
+            "k": load["k"],
+            "threads": load["threads"],
+            "window_s": load["window_s"],
+        }
+    elif pass_file.exists():
         rows = json.loads(pass_file.read_text())
         walls = sorted(row["wall_ms"] for row in rows)
-        def percentile(value: float) -> float:
-            return walls[max(0, math.ceil(value / 100 * len(walls)) - 1)]
         pools = [row["pool_size"] for row in rows]
         if any(value is None for value in pools):
             fail("queries/pass.json has rows without pool_size")
         queries = {
             "count": len(rows),
             "failures": sum(1 for row in rows if row["status"] != 200),
-            "wall_ms": {"p50": percentile(50), "p95": percentile(95),
-                        "p99": percentile(99), "max": walls[-1]},
+            "wall_ms": {"p50": percentile(walls, 50), "p95": percentile(walls, 95),
+                        "p99": percentile(walls, 99), "max": walls[-1]},
             "pool_size": {"min": min(pools), "max": max(pools)},
         }
 
     summary = {
-        "campaign": "MES-17 third campaign (ADR-0159)" if third
-                    else "MES-17 second campaign (ADR-0157)",
+        "campaign": CAMPAIGN_LABELS[campaign],
         "run": json.loads((out / "run.json").read_text()),
         "states": table,
         "transitions": transitions,
         "queries": queries,
         "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
-    if third:
-        # Only the third campaign records the closing `df`: the output of the
-        # second campaign stays the one written on 2026-11-22.
+    if third or control:
+        # Only the campaigns after the second record the closing `df`: the output
+        # of the second campaign stays the one written on 2026-11-22.
         summary["df_end"] = sh("df", "-h", str(REPO)).stdout.splitlines()
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
@@ -1074,8 +1358,15 @@ def cmd_summary(args) -> None:
 
 def cmd_journal_check(args) -> None:
     out = run_dir(args.run)
-    third = getattr(args, "campaign", "second") == "trim"
-    keys = TRIM_STATE_KEYS if third else STATE_KEYS
+    campaign = getattr(args, "campaign", "second")
+    third = campaign == "trim"
+    control = campaign == "control"
+    if control:
+        keys = CONTROL_STATE_KEYS
+    elif third:
+        keys = TRIM_STATE_KEYS
+    else:
+        keys = STATE_KEYS
     cumulative = {}
     final = []
     for key_name in keys:
@@ -1090,7 +1381,14 @@ def cmd_journal_check(args) -> None:
         final = lines
 
     steps = {line["step"] for line in final}
-    required = {"job_end", "delete_before_rename", "delete_after_removal", "session_load"}
+    if control:
+        # No `DELETE` is replayed in the control campaign: the two delete steps
+        # of ADR-0151 have no job to come from, and the four-step check of the
+        # second and third campaigns does not apply.
+        required = {"job_end", "session_load"}
+    else:
+        required = {"job_end", "delete_before_rename", "delete_after_removal",
+                    "session_load"}
     job_ends = [line for line in final if line["step"] == "job_end"]
     deletes = [line for line in final if line["step"] in
                {"delete_before_rename", "delete_after_removal"}]
@@ -1106,17 +1404,23 @@ def cmd_journal_check(args) -> None:
         delete_job = json.loads(delete_file.read_text())["job"]["id"]
 
     verdict = {
-        "four_steps": not (required - steps),
         "one_job_end_per_lot": bool(attach_jobs)
         and sum(1 for job in attach_jobs
                 if any(line["job_id"] == job for line in job_ends)) == len(attach_jobs),
     }
-    if third:
+    if control:
+        verdict["required_steps"] = sorted(required)
+        verdict["required_steps_present"] = not (required - steps)
+        verdict["session_load_expected"] = 1
+        verdict["session_load_conforme"] = len(sessions) == 1
+    elif third:
         # One `session_load`, at (b): no restart is replayed.
+        verdict["four_steps"] = not (required - steps)
         verdict["session_load_expected"] = 1
         verdict["session_load_conforme"] = len(sessions) == 1
     else:
         # The second campaign's verdict keeps the key written on 2026-11-22.
+        verdict["four_steps"] = not (required - steps)
         verdict["two_session_load"] = len(sessions) == 2
 
     report = {
@@ -1149,6 +1453,164 @@ def cmd_journal_check(args) -> None:
     (out / "journal-check.json").write_text(json.dumps(report, indent=2) + "\n")
     (out / "memory-lines.json").write_text(json.dumps(final, indent=2) + "\n")
     print(json.dumps(report, indent=2), flush=True)
+
+
+def trim_lines(text: str) -> list[dict]:
+    """The `trim` lines of a journal text, with their six fields (ADR-0160)."""
+    lines = []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw.startswith("{"):
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        fields = entry.get("fields") or {}
+        if fields.get("message") != "trim":
+            continue
+        lines.append({
+            "ts": entry.get("timestamp"),
+            "level": entry.get("level"),
+            "target": entry.get("target"),
+            "pad": fields.get("pad"),
+            "trimmed": fields.get("trimmed"),
+            "duration_us": fields.get("duration_us"),
+            "job_id": fields.get("job_id"),
+            "kind": fields.get("kind"),
+            "index": fields.get("index"),
+        })
+    return lines
+
+
+def epoch_of(text: str) -> float:
+    return datetime.datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+
+
+def describe(values: list) -> dict:
+    """Count, min, median and max of a list of numbers, or None when empty."""
+    if not values:
+        return {"count": 0, "min": None, "median": None, "max": None,
+                "values": []}
+    ordered = sorted(values)
+    return {
+        "count": len(ordered),
+        "min": ordered[0],
+        "median": statistics.median(ordered),
+        "max": ordered[-1],
+        "values": ordered,
+    }
+
+
+def cmd_trim_lines(args) -> None:
+    """Count the `trim` lines, their durations, and the queries in flight.
+
+    A journal captured by `docker logs` is cumulative: the text of the last
+    state holds every line written since the container started, so the last
+    state is the one read, and the per-state counts are the running totals.
+
+    The overlap is read from the journal timestamp of each `trim` line against
+    the start and end of each load query: a query is in flight at a trim when
+    `start <= trim_ts <= end`. The count is what says whether the 300 queries
+    were really "in flight during the job ends" (ADR-0160, decision 6); it is
+    reported as a number, never assumed: a zero says that no query crossed a
+    trim, and the measured duration of a trim then only bounds the exposure.
+    """
+    out = run_dir(args.run)
+    campaign = getattr(args, "campaign", "control")
+    if campaign == "control":
+        keys = CONTROL_STATE_KEYS
+    elif campaign == "trim":
+        keys = TRIM_STATE_KEYS
+    else:
+        keys = STATE_KEYS
+    per_state = {}
+    final = []
+    for key_name in keys:
+        path = out / "logs" / f"{key_name}.jsonl"
+        if not path.exists():
+            fail(f"missing journal {key_name}")
+        lines = trim_lines(path.read_text())
+        per_state[key_name] = {"count": len(lines),
+                               "trimmed_one": sum(1 for line in lines
+                                                  if line["trimmed"] == 1),
+                               "trimmed_zero": sum(1 for line in lines
+                                                   if line["trimmed"] == 0)}
+        final = lines
+
+    load_file = out / "queries" / "load.json"
+    if campaign == "control" and not load_file.exists():
+        fail("missing queries/load.json: the overlap would read as zero")
+    rows = json.loads(load_file.read_text())["records"] if load_file.exists() else []
+
+    overlap = []
+    for line in final:
+        at = epoch_of(line["ts"]) if line["ts"] else None
+        in_flight = [row["id"] for row in rows
+                     if at is not None and row["started_epoch"] <= at
+                     <= row["ended_epoch"]]
+        inside = [row["id"] for row in rows
+                  if at is not None and line["duration_us"] is not None
+                  and row["started_epoch"] <= at + line["duration_us"] / 1e6
+                  and row["ended_epoch"] >= at]
+        overlap.append({"ts": line["ts"], "kind": line["kind"],
+                        "in_flight_at_call": len(in_flight),
+                        "in_flight_during_call": len(inside),
+                        "query_ids": in_flight})
+
+    # The same count on the `job_end` lines of the `memory` journal, which both
+    # images emit: it is the only symmetric datum, the reference having no
+    # `trim` line at all. A `trim` line follows its `job_end` by a few tens of
+    # milliseconds in this campaign (6.8 to 31.2 ms), never by microseconds.
+    # The file is written by `memory-lines`; without it the overlap would be
+    # empty and would print as "0/0", so its absence is an error.
+    job_end_overlap = []
+    memory_file = out / "memory-lines.json"
+    if not memory_file.exists():
+        fail("missing memory-lines.json: the job_end overlap would read as 0/0")
+    for line in json.loads(memory_file.read_text()):
+        if line.get("step") != "job_end" or not line.get("ts"):
+            continue
+        at = epoch_of(line["ts"])
+        in_flight = [row["id"] for row in rows
+                     if row["started_epoch"] <= at <= row["ended_epoch"]]
+        job_end_overlap.append({"ts": line["ts"], "kind": line.get("kind"),
+                                "job_id": line.get("job_id"),
+                                "in_flight": len(in_flight),
+                                "query_ids": in_flight})
+
+    report = {
+        "campaign": CAMPAIGN_LABELS.get(campaign, campaign),
+        "lines": final,
+        "count": len(final),
+        "trimmed_one": sum(1 for line in final if line["trimmed"] == 1),
+        "trimmed_zero": sum(1 for line in final if line["trimmed"] == 0),
+        "duration_us": describe([line["duration_us"] for line in final
+                                 if line["duration_us"] is not None]),
+        "kinds": sorted({line["kind"] for line in final if line["kind"]}),
+        "per_state": per_state,
+        "overlap": overlap,
+        "job_end_overlap": job_end_overlap,
+        "load": {
+            "queries": len(rows),
+            "trims_with_a_query_in_flight": sum(
+                1 for row in overlap if row["in_flight_at_call"] > 0),
+            "job_ends_with_a_query_in_flight": sum(
+                1 for row in job_end_overlap if row["in_flight"] > 0),
+        },
+        "written_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    (out / "trim-lines.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"  trim lines: {report['count']}, "
+          f"trimmed=1: {report['trimmed_one']}, "
+          f"trimmed=0: {report['trimmed_zero']}, "
+          f"duration_us {report['duration_us']['min']} to "
+          f"{report['duration_us']['max']}", flush=True)
+    print(f"  trims with a load query in flight: "
+          f"{report['load']['trims_with_a_query_in_flight']}/{report['count']}; "
+          f"job_end with a load query in flight: "
+          f"{report['load']['job_ends_with_a_query_in_flight']}/"
+          f"{len(job_end_overlap)}", flush=True)
 
 
 def cmd_tunables(args) -> None:
@@ -1199,6 +1661,11 @@ def main() -> None:
     up = sub.add_parser("up", help="create the container (variant applied here only)")
     up.add_argument("--variant", default="V0")
     up.add_argument("--tunables", default=None)
+    up.add_argument("--campaign", choices=["second", "trim", "control"],
+                    default="second",
+                    help="control: RUST_LOG defaults to CONTROL_RUST_LOG")
+    up.add_argument("--rust-log", default=None,
+                    help="exact RUST_LOG of the container (control campaign)")
     up.add_argument("--image", default="crible:t05-suite-mes17")
     up.set_defaults(func=cmd_up)
 
@@ -1209,9 +1676,13 @@ def main() -> None:
     init.add_argument("--run", required=True)
     init.add_argument("--variant", default=None)
     init.add_argument("--tunables", default=None)
-    init.add_argument("--campaign", choices=["second", "trim"], default="second",
-                      help="trim: third campaign (ADR-0159), records the annex image")
+    init.add_argument("--campaign", choices=["second", "trim", "control"],
+                      default="second",
+                      help="trim: third campaign (ADR-0159); control: ADR-0160")
     init.add_argument("--image", default="crible:t05-suite-mes17")
+    init.add_argument("--image-role", choices=["reference", "correction"],
+                      default=None,
+                      help="control campaign: which image this run measures")
     init.set_defaults(func=cmd_init)
 
     state = sub.add_parser("state", help="read and record one state")
@@ -1231,7 +1702,19 @@ def main() -> None:
                         help="attach only this lot (repeatable); default: all six")
     attach.add_argument("--reset", action="store_true",
                         help="start the campaign report from scratch")
+    attach.add_argument("--load-window", type=float, default=None,
+                        help="run 300 hybrid queries spread over this many "
+                             "seconds, in Python threads, with the attach")
+    attach.add_argument("--load-threads", type=int, default=8)
     attach.set_defaults(func=cmd_attach)
+
+    load = sub.add_parser(
+        "load", help="300 hybrid queries, k = 10, spread over a window")
+    load.add_argument("--run", required=True)
+    load.add_argument("--window", type=float, default=None,
+                      help="seconds over which the 300 queries are spread")
+    load.add_argument("--threads", type=int, default=8)
+    load.set_defaults(func=cmd_load)
 
     queries = sub.add_parser("queries", help="300 queries, hybrid, k = 10")
     queries.add_argument("--run", required=True)
@@ -1247,13 +1730,23 @@ def main() -> None:
 
     summary = sub.add_parser("summary", help="medians, spreads, transitions")
     summary.add_argument("--run", required=True)
-    summary.add_argument("--campaign", choices=["second", "trim"], default="second")
+    summary.add_argument("--campaign", choices=["second", "trim", "control"],
+                         default="second")
     summary.set_defaults(func=cmd_summary)
 
     check = sub.add_parser("journal-check", help="four steps, six job_end, two session_load")
     check.add_argument("--run", required=True)
-    check.add_argument("--campaign", choices=["second", "trim"], default="second")
+    check.add_argument("--campaign", choices=["second", "trim", "control"],
+                       default="second")
     check.set_defaults(func=cmd_journal_check)
+
+    trims = sub.add_parser(
+        "trim-lines", help="count the trim lines, their durations and the "
+                           "queries in flight")
+    trims.add_argument("--run", required=True)
+    trims.add_argument("--campaign", choices=["second", "trim", "control"],
+                       default="control")
+    trims.set_defaults(func=cmd_trim_lines)
 
     trim = sub.add_parser(
         "trim", help="one malloc_trim(0) by gdb in the measured PID 1, at rest")
