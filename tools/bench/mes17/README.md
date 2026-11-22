@@ -25,6 +25,9 @@ Elle garde l'identifiant MES-17, tourne sur deux processus, et ne corrige rien
 
 La première campagne et sa méthode sont dans
 [`docs/mesures/MES-17-classes-de-memoire.md`](../../../docs/mesures/MES-17-classes-de-memoire.md).
+La campagne de contrôle d'ADR-0160 (accepté le 2026-11-22) vient après : le trim entre dans le
+serveur, et le harnais compare deux images, deux processus chacune, sur trois états seulement, avec
+300 requêtes en vol pendant l'attache (voir « Campagne de contrôle » plus bas).
 
 ## Prérequis
 
@@ -50,7 +53,8 @@ La première campagne et sa méthode sont dans
 Toutes les commandes se lancent depuis la racine du dépôt.
 
 ```sh
-# volume jetable, une seule fois par campagne
+# volume jetable, créé puis détruit pour chaque parcours de la campagne de
+# contrôle (l'index n'y est pas supprimé : voir plus bas)
 docker volume create crible-mes17-data
 docker run --rm -u 0 -v crible-mes17-data:/data --pull=never postgres:17 \
   sh -c 'chown -R 1000:1000 /data'
@@ -276,3 +280,121 @@ de chaque appel (`1` : des pages ont été rendues ; `0` : rien) est écrite dan
 Sous `data/mes17/raw/<date>/trim-p1/` et `trim-p2/` (gitignoré) : les fichiers
 d'un parcours, plus `trims.json` (les trois appels : commande, valeur, durée) et
 `selftest.json` dans `trim-selftest/`.
+
+## Campagne de contrôle : le trim dans le serveur (ADR-0160)
+
+[ADR-0160](../../../docs/adr/0160-rendre-la-memoire-libre-de-l-allocateur-par-malloc-trim-0-en-fin-de-job.md)
+(accepté le 2026-11-22) met `malloc_trim(0)` dans la fin de chaque job du serveur, derrière une ligne
+`trim` de niveau `debug`. Sa décision 6 demande une campagne de contrôle **avant la fusion** : deux
+images, deux processus chacune, les états (a), (b) et (c) seulement, avec 300 requêtes hybrides en
+vol pendant les fins de job. Elle garde l'identifiant MES-17. Le harnais ne corrige rien et ne
+mesure que des images déjà construites.
+
+### Images et réglage de journal
+
+| Rôle | Image | Provenance |
+|---|---|---|
+| référence | `crible:t05-suite-mes17` | commit parent, **ne pas reconstruire** |
+| correction | `crible:t05-trim-fix` | arbre de la tâche, `docker/Dockerfile` |
+
+```sh
+docker buildx build --platform linux/arm64 --progress=plain --load \
+  -t crible:t05-trim-fix -f docker/Dockerfile .
+```
+
+Le cache de `cargo chef` sert les étages de dépendances ; seule la compilation du workspace est
+refaite. La ligne `trim` est une ligne `debug` de la cible `crible_server::trim` : `up --campaign
+control` pose `RUST_LOG=info,crible_server::trim=debug` par défaut sur **les deux** images, et le
+harnais relit la valeur par `docker inspect` dans `run.json` (`rust_log`). Rien d'autre ne change de
+niveau : toutes les autres lignes gardent le défaut `info` de l'image (ADR-0096). L'image de
+référence ne contient pas le module et n'émet donc aucune ligne `trim`.
+
+### Parcours
+
+Un parcours par processus, sur un **volume neuf** (l'index n'est pas supprimé, la campagne s'arrête
+à (c)) : le volume est **détruit puis recréé** avant chaque parcours, jamais réutilisé.
+
+```sh
+# premier parcours
+docker volume create crible-mes17-data
+docker run --rm -u 0 -v crible-mes17-data:/data --pull=never postgres:17 \
+  sh -c 'chown -R 1000:1000 /data'
+
+python3 tools/bench/mes17/measure.py up --variant V0 --campaign control \
+  --image crible:t05-suite-mes17
+RUN=data/mes17/raw/<date>/ctl-ref-p1
+python3 tools/bench/mes17/measure.py init --run "$RUN" --variant V0 \
+  --campaign control --image-role reference --image crible:t05-suite-mes17
+python3 tools/bench/mes17/measure.py state a-fresh --run "$RUN"
+python3 tools/bench/mes17/measure.py create --run "$RUN"
+python3 tools/bench/mes17/measure.py state b-index-open --run "$RUN"
+python3 tools/bench/mes17/measure.py attach --run "$RUN" \
+  --load-window 640 --load-threads 8
+python3 tools/bench/mes17/measure.py state c-after-attach --run "$RUN"
+python3 tools/bench/mes17/measure.py summary --run "$RUN" --campaign control
+python3 tools/bench/mes17/measure.py journal-check --run "$RUN" --campaign control
+python3 tools/bench/mes17/measure.py trim-lines --run "$RUN" --campaign control
+python3 tools/bench/mes17/measure.py down
+
+# parcours suivant : volume détruit, puis recréé, puis les mêmes commandes
+docker volume rm crible-mes17-data
+docker volume create crible-mes17-data
+docker run --rm -u 0 -v crible-mes17-data:/data --pull=never postgres:17 \
+  sh -c 'chown -R 1000:1000 /data'
+```
+
+`init --campaign control` exige `--image-role reference|correction` : la présence du module `trim`
+est une propriété de l'image, pas de la campagne, et `trim_in_server` en découle. Il enregistre
+`image_role`, `image_commit` (étiquette `org.opencontainers.image.revision` de l'image, `null` si
+absente, comme pour ces deux images) et le commit de l'arbre du harnais sous `harness_commit`.
+
+`--campaign control` fait choisir au résumé les trois états ci-dessus et deux transitions, (a)→(b)
+et (b)→(c) ; `journal-check` y vérifie `job_end` et `session_load` seulement, les deux `step` de
+suppression n'ayant pas de job dans une campagne qui s'arrête à (c). Aucun relevé, aucun état et
+aucune transition des campagnes précédentes ne change : les clés ajoutées aux `run.json` sont
+**additives**, sauf le renommage de `commit` et `branch` en `harness_commit` et `harness_branch`,
+qui sépare le commit de l'arbre du harnais de celui de l'image.
+
+### Charge de requêtes
+
+`attach --load-window <s> --load-threads <n>` lance les 300 requêtes de `queries.jsonl`, une fois
+chacune, en `hybrid`, `k = 10`, sur l'index `mes17`, **dans des fils Python du harnais** — jamais en
+arrière-plan du shell. La requête numéro `i` part à `t0 + i × fenêtre / 300`. **La fenêtre doit
+couvrir la durée de l'attache** : plus courte, elle laisse les derniers `job_end`, et donc les
+derniers trims, hors charge. `trim-lines` publie ce recouvrement mesuré, il ne le suppose jamais. La
+charge étant répartie, rien ne garantit non plus qu'une requête traverse un trim : son effet sur une
+requête en vol n'est pas observé, et la durée mesurée d'un trim borne seulement l'exposition. Chaque
+requête enregistre son début (epoch et RFC 3339) et sa fin (epoch) dans `queries/load.json` et
+`queries/load-rows.jsonl`, écrits au fur et à mesure : un refus est une donnée et n'est jamais perdu.
+
+Les percentiles portent sur les requêtes **réussies** (`200`), et les refus `504 timeout` sont
+comptés et publiés à part : quelques recherches dépassent l'échéance de 2 000 ms de `crible.toml`
+pendant l'attache, et compter un refus comme une latence de recherche confondrait l'échéance avec le
+temps de recherche.
+
+`measure.py load --run <dossier> --window <s> --threads <n>` rejoue la même charge seule, hors
+attache, pour vérifier le harnais.
+
+### Lignes `trim` et recouvrement
+
+`trim-lines` lit le journal du dernier état — `docker logs` est cumulatif — et écrit
+`trim-lines.json` : les lignes `trim` avec leurs six champs, le compte des `trimmed = 1` et des
+`trimmed = 0`, les durées `duration_us` (minimum, médiane, maximum, liste), les comptes par état, et
+le **recouvrement** avec la charge : pour chaque ligne `trim`, et pour chaque `job_end` de la ligne
+`memory` (que les deux images émettent), le nombre de requêtes dont l'intervalle
+`[début, fin]` contient cet horodatage. Un journal d'état absent, `memory-lines.json` absent (le
+recouvrement s'afficherait « 0/0 »), ou `queries/load.json` absent en campagne de contrôle,
+**fait échouer** la commande, comme `journal-check` : un parcours cassé ne doit pas se lire « aucun
+trim ». Le recouvrement est ainsi mesuré, jamais supposé : une charge
+répartie sur neuf minutes ne garantit pas qu'une requête traverse l'instant d'un appel de quelques
+millisecondes, et le rapport doit le dire.
+
+### Données brutes de la campagne de contrôle
+
+Sous `data/mes17/raw/<date>/ctl-ref-p1/`, `ctl-ref-p2/`, `ctl-fix-p1/` et `ctl-fix-p2/`
+(gitignoré) : `run.json` (campagne, image, identifiant, `rust_log` relu, garde, `df_start` — et,
+pour les passages futurs seulement, `image_role` et `image_commit` : les quatre dossiers de cette
+campagne ne les contiennent pas, voir réserve 12 du rapport), `states/*.json`, `logs/*.jsonl`,
+`attach/campaign.json`, `create.json`,
+`queries/load.json`, `queries/load-rows.jsonl`, `summary.json` (avec `df_end`),
+`journal-check.json`, `memory-lines.json` et `trim-lines.json`.

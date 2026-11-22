@@ -56,6 +56,13 @@ pub mod openapi;
 mod search;
 mod search_multi;
 pub mod state;
+// The in-memory journal sink of the unit tests, shared by the test modules of
+// `trim` and of `jobs`; a test build only.
+#[cfg(test)]
+mod test_sink;
+// The trim of the allocator at the end of a job and its `trim` line, under
+// Linux glibc only (ADR-0160).
+mod trim;
 // Test double of the query encoder, `failpoints` build only: it proves that a
 // multi-index request encodes once (ADR-0110, decision 11).
 #[cfg(feature = "failpoints")]
